@@ -366,6 +366,13 @@ internal static class ChatKeys
             ["en"] = "The program that sent task \"{0}\" over CluadeX's pipe asks to let the AI create and change files in\n{1}\nWITHOUT asking you. If you allow it, every task sent over the pipe for this folder may do the same until CluadeX restarts.\n\nCommands, MCP tools, files outside the folder and files that run code later still ask.\n\nAllow it?",
             ["th"] = "โปรแกรมที่ส่งงาน \"{0}\" มาทาง pipe ของ CluadeX ขอให้ AI สร้างและแก้ไขไฟล์ใน\n{1}\nโดยไม่ถามคุณ ถ้าอนุญาต งานทุกงานที่ส่งมาทาง pipe สำหรับโฟลเดอร์นี้จะทำแบบเดียวกันได้จนกว่าจะเปิด CluadeX ใหม่\n\nการรันคำสั่ง เครื่องมือ MCP ไฟล์นอกโฟลเดอร์ และไฟล์ที่จะรันโค้ดภายหลังยังถามเหมือนเดิม\n\nอนุญาตหรือไม่?",
         },
+        // The same question when the owner's own Allow rule already lets commands run unasked (Settings ▸ Permissions):
+        // "Commands still ask" was untrue then — flutter ran with no permission row (TPIX run, 2026-11-01).
+        ["chat.acceptEdits.pipeConfirmRuns"] = new()
+        {
+            ["en"] = "The program that sent task \"{0}\" over CluadeX's pipe asks to let the AI create and change files in\n{1}\nWITHOUT asking you. If you allow it, every task sent over the pipe for this folder may do the same until CluadeX restarts.\n\nCommands already run WITHOUT asking here, because of your own Allow rule for commands (Settings ▸ Permissions) — this answer does not change that. MCP tools, files outside the folder and files that run code later still ask.\n\nAllow it?",
+            ["th"] = "โปรแกรมที่ส่งงาน \"{0}\" มาทาง pipe ของ CluadeX ขอให้ AI สร้างและแก้ไขไฟล์ใน\n{1}\nโดยไม่ถามคุณ ถ้าอนุญาต งานทุกงานที่ส่งมาทาง pipe สำหรับโฟลเดอร์นี้จะทำแบบเดียวกันได้จนกว่าจะเปิด CluadeX ใหม่\n\nการรันคำสั่งที่นี่ไม่ถามอยู่แล้ว เพราะคุณตั้งกฎอนุญาตการรันคำสั่งไว้เอง (การตั้งค่า ▸ สิทธิ์) คำตอบนี้ไม่เปลี่ยนเรื่องนั้น ส่วนเครื่องมือ MCP ไฟล์นอกโฟลเดอร์ และไฟล์ที่จะรันโค้ดภายหลังยังถามเหมือนเดิม\n\nอนุญาตหรือไม่?",
+        },
         ["chat.acceptEdits.pipeOn"] = new()
         {
             ["en"] = "The program that sent this task turned on Accept edits for {0} (you allowed it): file edits inside it run without asking during this run.",

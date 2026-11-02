@@ -2591,9 +2591,11 @@ public partial class ChatViewModel : ViewModelBase
         try
         {
             if (CurrentSession?.Id != chatId) return;   // the user moved on before it started
+            _splitTurnPending = chatId;                 // its run: started by the asking chat's agent, not the owner
             await SendMessageCore(message, null);
         }
         catch (Exception ex) { _debugLog?.Warn("Chat", $"new_chat: the first turn of {chatId} failed: {ex.Message}"); }
+        finally { if (_splitTurnPending == chatId) _splitTurnPending = null; }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -2626,6 +2628,8 @@ public partial class ChatViewModel : ViewModelBase
         int? maxSteps = null,
         bool? acceptEdits = null)
     {
+        // A new run of a task id: what task_status says about it is this run, not an earlier one of the same id.
+        _pipeTasks.TryRemove(taskId, out _);
         var outcome = await RunMcpTaskCoreAsync(taskId, spec, lessons, contextFiles, workingDirectory, ct, maxSteps, acceptEdits);
         // cluadex.task_status: how the call ended, for a caller that lost it. A run that never got a chat has nothing to tie it to.
         if (_pipeTasks.TryGetValue(taskId, out var task)) _pipeTasks[taskId] = task with { Outcome = outcome };
@@ -2705,7 +2709,7 @@ public partial class ChatViewModel : ViewModelBase
                     decision = await dispatcher.InvokeAsync(() =>
                         _pipeAcceptEditsApproved.Contains(key) ? 1
                         : _permissionService.AcceptsEditsIn(target) ? 2
-                        : Confirm(LocF("chat.acceptEdits.pipeConfirm", taskId, target), Loc("chat.acceptEdits.pipeConfirmTitle"))
+                        : Confirm(LocF(PipeConsentKey(_permissionService, target), taskId, target), Loc("chat.acceptEdits.pipeConfirmTitle"))
                             && _pipeAcceptEditsApproved.Add(key) ? 1 : 0);
                 }
                 finally { _pipeConsents.TryRemove(taskId, out _); }
@@ -3090,7 +3094,7 @@ public partial class ChatViewModel : ViewModelBase
                 snapshot = newStep || _throttle.Due ? _text.ToString() : "";
                 count = ++_tokens;
             }
-            if (Run is { } r) r.StreamingTokenCount++;
+            if (Run is { } r) { r.StreamingTokenCount++; r.Touch(); }
             if (newStep) Ui(() => OpenBubble(snapshot, step, previousText), wait: true);
             else if (snapshot.Length > 0) _throttle.Post(() => { if (!_finished && _bubble != null && _bubbleStep == step) _bubble.Content = snapshot; });
         }
@@ -4209,11 +4213,13 @@ public partial class ChatViewModel : ViewModelBase
                     ScrollToBottom?.Invoke();
                 });
                 run.StreamingTokenCount++;
+                run.Touch();
                 return;
             }
 
             streamSb.Append(token);
             run.StreamingTokenCount++;
+            run.Touch();
 
             // Paced UI updates (~12/s, below keyboard input — see UiThrottle)
             if (tokenThrottle.Due)
@@ -4482,6 +4488,9 @@ public partial class ChatViewModel : ViewModelBase
         var run = Cur;   // the run whose tool is starting, captured at event time (its chat may not be on screen)
         if (run == null) return;
         if (toolName != "agent") run.ToolStarts.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp());
+        // For a supervisor on the pipe: the tool's name only — its arguments (paths, commands) stay in the chat.
+        if (toolName != "agent") run.LastTool = toolName;
+        run.Touch();
         App.Current?.Dispatcher.BeginInvoke(async () =>
         {
             DropDraft(run);   // the call it was writing is now running: its own row/status takes over
@@ -4675,6 +4684,7 @@ public partial class ChatViewModel : ViewModelBase
         // The run whose tool finished, captured at event time: the row goes into ITS chat's live list whether or not
         // that chat is on screen. Without a run (a callback after the run ended, a tool run by hand) it goes on screen.
         var run = Cur;
+        run?.Touch();
         ChatSession? target = run?.Session;
         App.Current?.Dispatcher.BeginInvoke(() =>
         {

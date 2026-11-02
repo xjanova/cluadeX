@@ -270,6 +270,15 @@ internal static partial class Program
         Fake = new FakeProvider();
         SetField(Providers, "_activeProvider", Fake);
 
+        // CHATTEST_ONLY=SUP: just the pipe supervision checks (late sub-agent results, consent wait, progress, poll limit).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SUP")
+        {
+            await TestSupervision();
+            Log($"\n## Result (CHATTEST_ONLY=SUP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PP: just the plain-language permission prompt and the live model chip (quick renders to look at).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") is "PP" or "PB")
         {
@@ -302,6 +311,7 @@ internal static partial class Program
         TestPureHelpers();                    // L3 classifier, L8 dedupe, U9 redaction, U2 palette
         await TestPipeRuns();                 // T5: pipe runs watched live, isError, project restored
         await TestPipeChats();                // T6: list_chats / continue_chat over the pipe
+        await TestSupervision();              // SUP: late sub-agent results, consent wait, progress, who started, poll limit
         await TestAcceptEdits();              // T5: Accept edits switch
         await TestAutonomousBuildGate();      // T5: the Autonomous loop's build/test after unseen edits
         await TestThumbnail();                // T5: tool-row image thumbnail

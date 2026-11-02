@@ -620,8 +620,12 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
             description = "Delegate a coding task to CluadeX. Opens a new chat in the CluadeX window (brought to the " +
                           "front) where the run streams live, and runs the same agent loop, tools and permission " +
                           "prompts as a typed chat in that project. Returns the agent's final reply as text. isError is " +
-                          "true when the run failed, hit its step limit, was stopped in CluadeX, or the caller " +
-                          "disconnected. Requests on one connection run one at a time; the call blocks until the run ends.",
+                          "true when the run failed, hit its step limit, was stopped in CluadeX, the caller " +
+                          "disconnected, or the agent's background sub-agents finished after its last reply and their results " +
+                          "were still unread after one follow-up turn. Requests on one connection run one at a time; the call " +
+                          "blocks until the run ends — unless wait is false: then it answers at once with JSON { taskId, chatId, " +
+                          "status (running or waiting_consent), poll }, the run goes on without this connection, and " +
+                          "cluadex.task_status with the taskId shows its progress and, once it ends, callResult / callFailed.",
             inputSchema = new
             {
                 type = "object",
@@ -634,6 +638,7 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
                     lessons = new { type = "array", items = new { type = "string" }, description = "Optional 'lessons learned' from past corrections — appended to the task message" },
                     workingDirectory = new { type = "string", description = "Optional project folder for this run — CluadeX switches to it for the run and back afterwards. Default: the open project" },
                     maxSteps = new { type = "integer", description = "Optional step limit for this run (1-100000, 0 = no limit). Default: the Max agent steps setting. When this build cannot apply a per-run limit, the result says so" },
+                    wait = new { type = "boolean", description = "Optional. false = start the run and return a handle at once (at most 4 such runs at a time; a taskId still going is refused); poll cluadex.task_status. Default true: the call returns the final reply" },
                     acceptEdits = new { type = "boolean", description = "Optional. true = ask the user in CluadeX (once per folder per session) to let file edits inside the project run without a prompt for this run. Never for a drive root, the user folder or a system folder; never covers commands, MCP tools, paths outside, or build/hook/CI files; the automatic build check after such edits still asks. The result says when it was declined or refused. Default: the user's Accept-edits default (off)" },
                 }
             }
@@ -682,8 +687,11 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
                           "Read-only: nothing in the CluadeX window changes. Returns JSON text: an array of " +
                           "{ id, title, project, updatedAt (ISO 8601), running (a turn is going on in it now), " +
                           "paused (its last reply is a Pause — it can be resumed), activity (waiting_consent, running, paused " +
-                          "or idle), waitingFor (what the owner is being asked), doing (the step it is on) }. A task held at " +
-                          "its Accept-edits dialog has no chat yet: it is listed with an empty id and waiting_consent.",
+                          "or idle), waitingFor (what the owner is being asked), doing (the step it is on), and for a running " +
+                          "turn: startedBy (pipe, user or split_parent — another chat's agent opened it with new_chat), lastTool " +
+                          "(the tool's name only), step, elapsedSeconds, sinceProgressSeconds (since its last token or tool), " +
+                          "subAgentsRunning }. A task held at its Accept-edits dialog has no chat yet: it is listed with an empty " +
+                          "id, waiting_consent, and what it waits on. At most 10 calls at once, then 2 a second.",
             inputSchema = new
             {
                 type = "object",
@@ -727,10 +735,12 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
             description = "How a task or chat stands now, and what its latest turn said — also a turn that ended after the call " +
                           "that started it returned, or after that caller went away. Read-only: nothing in the CluadeX window " +
                           "changes. Returns JSON text: { chatId, title, project, taskId, activity (waiting_consent, running, paused " +
-                          "or idle), waitingFor, doing, startedBy (pipe or user), provider, model, step, inputTokens, outputTokens, " +
-                          "cacheReadTokens, cacheWriteTokens, costUsd, subAgents [{ Label, Kind, Task, State, Action, Model, " +
-                          "ToolCalls, CostUsd }], lastReply, callResult, callFailed }. The numbers are null for a chat with no run " +
-                          "since CluadeX started.",
+                          "or idle), waitingFor, doing, startedBy (pipe, user or split_parent), provider, model, step, inputTokens, " +
+                          "outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, subAgents [{ Label, Kind, Task, State, Action, " +
+                          "Model, ToolCalls, CostUsd }], lastTool, elapsedSeconds, sinceProgressSeconds, plan { done, total, current }, " +
+                          "lastReply, callResult, callFailed }. The numbers are null for a chat with no run since CluadeX started; " +
+                          "lastTool, the times and plan only while a turn runs. Cheap to poll (a running chat is answered from memory): " +
+                          "at most 10 calls at once, then 2 a second.",
             inputSchema = new
             {
                 type = "object",

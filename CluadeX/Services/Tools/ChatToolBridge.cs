@@ -505,7 +505,10 @@ public static class ChatToolBridge
         var input = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("input", out var i) && i.ValueKind == JsonValueKind.Object
             ? i : default;
         if (name == CliAskToolName && reg.Ask != null) return await AnswerCliQuestionsAsync(input, reg).ConfigureAwait(false);
-        if (RefusalFor(name, reg.Approve != null) is { } refusal) return Verdict(false, input, refusal);
+        string? path = input.ValueKind == JsonValueKind.Object
+            && (input.TryGetProperty("file_path", out var fp) || input.TryGetProperty("notebook_path", out fp)) && fp.ValueKind == JsonValueKind.String
+            ? fp.GetString() : null;
+        if (RefusalFor(name, reg.Approve != null, path) is { } refusal) return Verdict(false, input, refusal);
         if (reg.Cts.Token.IsCancellationRequested) return Verdict(false, input, "CluadeX: this Claude Dev turn is over.");
         var callArgs = new Dictionary<string, string>();
         if (input.ValueKind == JsonValueKind.Object)
@@ -604,11 +607,32 @@ public static class ChatToolBridge
         return JsonSerializer.Serialize(new { behavior = "allow", updatedInput = updated }, Json);
     }
 
+    /// <summary>Claude Code's own file tools: one comes here only when the CLI itself asks before a write (the grant
+    /// allows the tool).</summary>
+    private static readonly HashSet<string> CliFileTools = new(StringComparer.Ordinal) { "Edit", "Write", "MultiEdit", "NotebookEdit" };
+
+    /// <summary>Claude Code's own shell tools (the run grant opens both: ClaudeDevProvider.ShellTools).</summary>
+    private static readonly HashSet<string> CliShellTools = new(StringComparer.Ordinal) { "Bash", "PowerShell" };
+
     /// <summary>Why a permission question is refused without asking anyone (null = put it to CluadeX's gate).
-    /// Pure: the harness checks it.</summary>
-    public static string? RefusalFor(string toolName, bool canAsk)
+    /// <paramref name="path"/>: the file a CLI file tool would write. Pure: the harness checks it.
+    /// The CLI's own tools reach here only when the CLI itself decided to ask: a write that its safety check guards (.git,
+    /// .claude, .vscode, .idea, shell start-up files, odd Windows path forms) or that lands outside the folders this turn
+    /// may write, or a tool the turn was not given. It used to answer "'X' is not open in this turn" for all of them, so an
+    /// Edit refused beside a parallel Edit that worked (one was in .claude) read like a broken turn (TPIX, 2026-11-01).</summary>
+    public static string? RefusalFor(string toolName, bool canAsk, string? path = null)
     {
         if (!canAsk) return "CluadeX: this turn has no permission prompt — only the tools CluadeX gave it can run.";
+        if (CliFileTools.Contains(toolName))
+            return $"CluadeX: Claude Code asked before this {toolName}" + (string.IsNullOrWhiteSpace(path) ? "" : $" of {OneLine(path)}")
+                 + " — it asks for a path it protects (.git, .claude, .vscode, .idea, shell start-up files, unusual Windows path "
+                 + "forms) or one outside the folders this turn may write, and CluadeX answers no for the CLI's own tools. Other "
+                 + "edits keep working; tell the user which file you need changed and why, or ask them to open its folder for this chat.";
+        if (CliShellTools.Contains(toolName))
+            return $"CluadeX: Claude Code asked before this {toolName} command — either the user's rules do not allow commands "
+                 + "(run_command) in this folder, or the command reaches outside the folders this turn may work in or has a form "
+                 + "Claude Code's own safety check flags. CluadeX answers no for the CLI's own tools. Commands that ran before keep "
+                 + "working; tell the user what you wanted to run.";
         if (!toolName.StartsWith("mcp__", StringComparison.Ordinal) || toolName.Length <= 5)
             return $"CluadeX: '{toolName}' is not open in this turn. CluadeX gives the CLI's own tools (edit, shell, web) from "
                  + "your rules and Accept edits for the folder; only MCP tools are asked about here.";

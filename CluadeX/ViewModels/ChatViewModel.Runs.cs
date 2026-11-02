@@ -44,7 +44,22 @@ public partial class ChatViewModel
         /// <summary>Send now on a run that cannot stop one reply (a CLI agent, the [ACTION:] loop): it was stopped, and
         /// what was typed goes out as the next turn instead of back into the box.</summary>
         public bool SendNotesAfterStop;
+
+        /// <summary>Who started the turn, for a supervisor: "pipe" (a program over the pipe), "split_parent" (new_chat from
+        /// another chat's agent) or "user". The pipe flag is read live: it is set right after the run begins.</summary>
+        public string StartedBy => Scope?.FromPipe == true ? "pipe" : StartedBySplit ? "split_parent" : "user";
+        public bool StartedBySplit;
+        /// <summary>The last tool it started (its name only — never its arguments).</summary>
+        public volatile string? LastTool;
+        private long _lastProgressTicks = DateTime.UtcNow.Ticks;
+        /// <summary>The last sign of work: a token, a tool starting or ending (UTC).</summary>
+        public DateTime LastProgressUtc => new(Interlocked.Read(ref _lastProgressTicks), DateTimeKind.Utc);
+        public void Touch() => Interlocked.Exchange(ref _lastProgressTicks, DateTime.UtcNow.Ticks);
     }
+
+    /// <summary>new_chat's first turn is about to begin in this chat (UI thread): its run is marked as started by the
+    /// asking chat's agent.</summary>
+    private string? _splitTurnPending;
 
     /// <summary>Runs in progress (UI thread only).</summary>
     private readonly List<ChatRun> _runs = new();
@@ -379,6 +394,7 @@ public partial class ChatViewModel
     private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
     {
         var run = new ChatRun { Session = session, Messages = messages };
+        if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
