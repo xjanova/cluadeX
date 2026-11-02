@@ -40,6 +40,9 @@ internal static partial class Program
         // This harness checks real command output, so it opts out of the default dry-run on purpose (ProcessLaunchPolicy).
         // A new harness must not copy this line unless real runs are its point; the guards still check every command.
         CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = false;
+        // This exe copied to brainx-mcp.exe is the fake BrainX of LiveTests.
+        if (Path.GetFileNameWithoutExtension(Environment.ProcessPath ?? "").Equals("brainx-mcp", StringComparison.OrdinalIgnoreCase)
+            || args is ["--fake-brain"]) return FakeBrain.Run();
         if (args.Length > 0 && args[0] == "--stub-mcp") return StubMcp.Run(args);
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
@@ -116,6 +119,7 @@ internal static partial class Program
             return 3;
         }
         LocalizedResources.Instance.Initialize(provider.GetRequiredService<LocalizationService>());
+        if (Environment.GetCommandLineArgs() is [_, "--real-launcher", var folder]) return await RealLauncher(settings, provider.GetRequiredService<LocalizationService>(), folder);
 
         string project = Path.Combine(exeDir, "mcp-project");
         if (Directory.Exists(project)) DeleteTree(project);
@@ -1205,6 +1209,7 @@ internal static partial class Program
         });
 
         await HttpTransportTests();
+        await LiveTests(settings, provider.GetRequiredService<LocalizationService>(), exeDir);
 
         await mcp.StopServerAsync("stub");
         mcp.RemoveConfig("stub");
