@@ -307,6 +307,44 @@ public class ChatMessage : INotifyPropertyChanged
 
     /// <summary>A help line dropped in beside the tool rows (ChromeHelp): tool rows on either side of it still fold together.</summary>
     public bool IsSideNote { get; set; }
+
+    // ─── Orchestration rows (docs/agent-orchestration.md): System rows tagged in ToolName, their data in ToolOutput — the
+    //     columns every row already has, so a reloaded chat draws them again with no schema change. The view each one
+    //     shows is built on first use by the chat page (it holds the services), from the row's own data. ───
+
+    public const string WorkflowTag = "cx:workflow", SplitsTag = "cx:splits", NextStepTag = "cx:nextstep", NoticeTag = "cx:notice";
+
+    /// <summary>Builds a row's view (set by the chat page). Null result = the row shows its text.</summary>
+    public static Func<ChatMessage, ViewModels.WorkflowCard?>? WorkflowCardFor;
+    public static Func<ChatMessage, System.Collections.ObjectModel.ObservableCollection<ChatSession>?>? SplitChipsFor;
+    public static Func<ChatMessage, ViewModels.NextStepView?>? NextStepFor;
+
+    private ViewModels.WorkflowCard? _workflow;
+    /// <summary>A workflow card (ToolOutput = the workflow's id).</summary>
+    public ViewModels.WorkflowCard? Workflow => _workflow ??= ToolName == WorkflowTag ? WorkflowCardFor?.Invoke(this) : null;
+    public bool IsWorkflow => ToolName == WorkflowTag;
+
+    private System.Collections.ObjectModel.ObservableCollection<ChatSession>? _splitChips;
+    /// <summary>The split chats this command opened (ToolOutput = their ids, one per line) — the sidebar's own session
+    /// objects, so each chip's state is the sidebar's RunStatus.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<ChatSession>? SplitChips =>
+        _splitChips ??= ToolName == SplitsTag ? SplitChipsFor?.Invoke(this) : null;
+    public bool IsSplitChips => ToolName == SplitsTag;
+
+    private ViewModels.NextStepView? _nextStep;
+    /// <summary>The next-step box (ToolOutput = the wrap_up's JSON, with "picked" once answered).</summary>
+    public ViewModels.NextStepView? NextStep => _nextStep ??= ToolName == NextStepTag ? NextStepFor?.Invoke(this) : null;
+    public bool IsNextStep => ToolName == NextStepTag;
+
+    /// <summary>A notice the model also sees on its next turn (a background command or a split chat finished).</summary>
+    public bool IsNotice => ToolName == NoticeTag;
+
+    /// <summary>The card can be drawn (a workflow whose state file is gone, or an unreadable box, shows its text instead).</summary>
+    public bool ShowsWorkflowCard => IsWorkflow && Workflow != null;
+    public bool ShowsNextStep => IsNextStep && NextStep != null;
+
+    /// <summary>A row with its own card instead of the chat bubble.</summary>
+    public bool IsOrchestrationCard => ShowsWorkflowCard || IsSplitChips || ShowsNextStep;
     /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:
     /// a reloaded group shows its merged output instead).</summary>
     public System.Collections.ObjectModel.ObservableCollection<ToolStepView> GroupSteps { get; } = new();

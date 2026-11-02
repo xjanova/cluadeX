@@ -449,6 +449,7 @@ public partial class ChatViewModel
 
     private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)
     {
+        if (e.WorkflowId != null) return;   // a workflow's agents are on its card
         var list = run?.Messages ?? Messages;
         var map = run?.AgentMapMsg;
         if (map == null || !list.Contains(map))

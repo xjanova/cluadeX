@@ -1251,6 +1251,14 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- ═══ Workflow card (docs/agent-orchestration.md §3) ═══ -->
+                                <ContentControl Grid.Row="1" Content="{Binding Workflow}" Focusable="False"
+                                                Visibility="{Binding ShowsWorkflowCard, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate><views:WorkflowCardView/></DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
+
                                 <!-- ═══ Agent map: the sub-agents this command started, as a live tree (open by default, folds) ═══ -->
                                 <Border Grid.Row="1" Margin="20,6,0,4" Padding="14,10" CornerRadius="10" BorderThickness="1"
                                         Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Accent.1.Border.Soft}"
@@ -1405,6 +1413,9 @@
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsAgentMap}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsOrchestrationCard}" Value="True">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
