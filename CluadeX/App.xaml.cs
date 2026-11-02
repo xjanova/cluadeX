@@ -1076,6 +1076,7 @@ public partial class App : Application
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.ProjectToolModule(sp.GetService<SettingsService>(), sp.GetService<ProjectRegistryService>()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AppRestartToolModule());
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AttachmentToolModule(sp.GetService<SettingsService>()));
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.OrchestrationToolModule());
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 

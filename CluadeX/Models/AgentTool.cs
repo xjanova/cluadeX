@@ -167,6 +167,10 @@ public enum ToolType
     DesktopWindowAction, // focus / maximize / minimize / restore / move / resize / close a window
     DesktopRead,         // An element's whole text (Text / Value pattern), a page at a time
     DesktopClipboard,    // Read or set the clipboard's text
+
+    // Orchestration (Services/Tools/OrchestrationToolModule) — appended last: a ToolType is stored by number
+    Workflow,            // A declarative multi-agent workflow (opt-in: the chat's Ultra switch or the owner's words)
+    WrapUp,              // The next-step box at the end of a turn: recap, one question, one or two answer buttons
 }
 
 /// <summary>

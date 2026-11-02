@@ -20,6 +20,14 @@ public partial class ChatViewModel
     private void InitOrchestration()
     {
         RunActivity.Changed += chat => App.Current?.Dispatcher.BeginInvoke(() => QueueActivity(chat));
+
+        WorkflowGate.Load(_settingsService.DataRoot);
+        WorkflowGate.UltraChanged += _ => App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(IsUltra)));
+        PropertyChanged += (_, e) => { if (e.PropertyName == nameof(CurrentSession)) OnPropertyChanged(nameof(IsUltra)); };
+
+        var svc = WorkflowService.Current ??= new WorkflowService(_settingsService.DataRoot);
+        svc.MarkInterrupted();   // a workflow the last app run left "running" is stopped (its card offers Resume)
+        _agentService.ConnectWorkflows(svc);
     }
 
     // ─── the "N running" line ───
@@ -54,6 +62,15 @@ public partial class ChatViewModel
             if (CurrentSession?.Id == chat)
                 foreach (var item in StickyPlanItems) item.Running = item.IsActive ? line : "";
         }
+    }
+
+    // ─── Ultra (the per-chat workflow opt-in) ───
+
+    /// <summary>The composer's Ultra switch, for the chat on screen.</summary>
+    public bool IsUltra
+    {
+        get => WorkflowGate.IsUltra(CurrentSession?.Id);
+        set { if (CurrentSession is { } s) WorkflowGate.SetUltra(s.Id, value); OnPropertyChanged(); }
     }
 
 }

@@ -3311,7 +3311,13 @@ public partial class ChatViewModel : ViewModelBase
     }
 
     // ─── Send Message ───
-    private Task SendMessage() => SendMessageCore(UserInput?.Trim() ?? "", pipe: null);
+    private Task SendMessage()
+    {
+        string input = UserInput?.Trim() ?? "";
+        // The owner's own words, for the workflow opt-in (a pipe caller's or an agent's text never counts).
+        if (CurrentSession is { } s && input.Length > 0) Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+        return SendMessageCore(input, pipe: null);
+    }
 
     /// <summary>Pressing Send: <paramref name="input"/> is what the box holds. <paramref name="pipe"/> set = the same
     /// path for a message a pipe caller sent (cluadex.continue_chat): the box and its attached images are the user's

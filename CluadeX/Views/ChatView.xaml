@@ -2944,6 +2944,15 @@
                                     </StackPanel>
                                 </CheckBox>
 
+                                <!-- Ultra: this chat may run multi-agent workflows (off by default, per chat) -->
+                                <CheckBox x:Name="UltraToggle" IsChecked="{Binding IsUltra}" Foreground="{DynamicResource Accent.2}"
+                                          VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc orch.ultraTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8B9;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{services:Loc orch.ultra}" FontSize="12" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
+
                                 <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center"
                                             Visibility="{Binding EffortVisible, Converter={StaticResource BoolVis}}">
                                     <TextBlock x:Name="EffortLabel" Text="{services:Loc chat.effort}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
