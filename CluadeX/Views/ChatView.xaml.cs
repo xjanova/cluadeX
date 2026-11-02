@@ -82,6 +82,12 @@ public partial class ChatView : UserControl
             }
             if (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
             {
+                // Ctrl+Enter while the reply runs: "Send now" — the agent reads it at once instead of at its next step.
+                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && DataContext is ChatViewModel nowVm && nowVm.SendNowFromBox())
+                {
+                    e.Handled = true;
+                    return;
+                }
                 if (DataContext is ChatViewModel vm && vm.SendMessageCommand.CanExecute(null))
                 {
                     vm.SendMessageCommand.Execute(null);

@@ -41,6 +41,9 @@ public partial class ChatViewModel
         public int? MaxSteps;
         /// <summary>The agent loop's result when this turn ran it (null = it answered another way).</summary>
         public AgentLoopResult? LoopResult;
+        /// <summary>Send now on a run that cannot stop one reply (a CLI agent, the [ACTION:] loop): it was stopped, and
+        /// what was typed goes out as the next turn instead of back into the box.</summary>
+        public bool SendNotesAfterStop;
     }
 
     /// <summary>Runs in progress (UI thread only).</summary>
@@ -379,6 +382,7 @@ public partial class ChatViewModel
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
         run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
+        run.Scope.UserNotesTaken += tags => OnUserNotesTaken(run, tags);
         // The chat's first request in full — the model's view may hold only a compaction summary of it (AgentHandoff).
         run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;
         foreach (var extra in session.ExtraFolders.ToList())
@@ -511,10 +515,13 @@ public partial class ChatViewModel
     {
         try
         {
+            // Moves up the history only with new rows: this runs on every autosave tick (as AutoSave does).
+            bool changed = run.Session.Messages.Count != run.Messages.Count
+                           || !ReferenceEquals(run.Session.Messages.LastOrDefault(), run.Messages.LastOrDefault());
             run.Session.Messages = run.Messages.ToList();
             if (run.Session.Title == "New Chat" && run.Session.Messages.Count > 0)
                 run.Session.Title = ChatPersistenceService.GenerateTitle(run.Session.Messages);
-            run.Session.UpdatedAt = DateTime.Now;
+            if (changed) TouchSession(run.Session);
             _persistenceService.SaveSession(run.Session);
         }
         catch (Exception ex)

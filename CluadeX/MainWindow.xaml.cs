@@ -43,6 +43,10 @@ public partial class MainWindow : Window
         AddHandler(System.Windows.Controls.Primitives.ToggleButton.CheckedEvent, new RoutedEventHandler(OnActivityChecked));
         StateChanged += OnStateChanged;
         Closing += OnClosing;
+        // The user's own key, click or wheel: follow mode must not take the page from under them (FollowBack).
+        PreviewKeyDown += (_, _) => _viewModel.NoteUserInput();
+        PreviewMouseDown += (_, _) => _viewModel.NoteUserInput();
+        PreviewMouseWheel += (_, _) => _viewModel.NoteUserInput();
         // The pet is its own top-level window (not owned, so it stays out when CluadeX is minimized): it must go
         // with the main window, or the app would keep running with only the pet on screen.
         Closed += (_, _) => _viewModel.Pet.Shutdown();

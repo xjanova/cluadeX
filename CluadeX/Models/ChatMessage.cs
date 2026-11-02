@@ -113,6 +113,17 @@ public class ChatMessage : INotifyPropertyChanged
         set { if (_isInterrupted != value) { _isInterrupted = value; OnPropertyChanged(); } }
     }
 
+    private bool _isQueuedNote;
+    /// <summary>Typed while the agent was running and not read by it yet: the bubble offers "Send now". Not saved.</summary>
+    public bool IsQueuedNote
+    {
+        get => _isQueuedNote;
+        set { if (_isQueuedNote != value) { _isQueuedNote = value; OnPropertyChanged(); } }
+    }
+
+    /// <summary>The system row under a queued bubble that says where it stands (queued, sending now, read).</summary>
+    public ChatMessage? QueueRow { get; set; }
+
     // ─── Thinking Block ───
     /// <summary>Extended thinking content (collapsible).</summary>
     public string ThinkingContent
@@ -547,7 +558,16 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string Title { get; set; } = "New Chat";
     public DateTime CreatedAt { get; set; } = DateTime.Now;
-    public DateTime UpdatedAt { get; set; } = DateTime.Now;
+    private DateTime _updatedAt = DateTime.Now;
+    public DateTime UpdatedAt
+    {
+        get => _updatedAt;
+        set { if (_updatedAt != value) { _updatedAt = value; RaiseTimeLabels(); } }
+    }
+
+    /// <summary>The row's time and day group are drawn again (UpdatedAt changed, or midnight passed).</summary>
+    public void RaiseTimeLabels() { Raise(nameof(UpdatedAt)); Raise(nameof(ListTimeLabel)); Raise(nameof(DateGroupLabel)); }
+
     public List<ChatMessage> Messages { get; set; } = new();
 
     /// <summary>Absolute path of the project folder this session was created in (empty = no project).</summary>

@@ -463,7 +463,8 @@ public class MainViewModel : ViewModelBase
         // after FileMutatedByAgent has opened the file. Not gated on the current page: from
         // Home, Tasks or Settings the edit should come forward just the same. Settings'
         // AutoOpenEditorOnAgentEdit is the tick's default for chats nobody ticked.
-        chatVM.ShowEditorRequested += () => NavigateTo("Code");
+        chatVM.ShowEditorRequested += FollowEditToCode;
+        _followBackTimer.Tick += (_, _) => FollowBackTick();
 
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
 
@@ -802,6 +803,50 @@ public class MainViewModel : ViewModelBase
         win.Activate();
     }
 
+    // ─── Follow mode goes back to Chat once the agent's edits stop (FollowBack) ───
+    private readonly DispatcherTimer _followBackTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private bool _followBrought, _followNavigating;
+    private DateTime _followStart, _lastFollowEdit, _lastUserInput = DateTime.MinValue;
+
+    /// <summary>The chat's follow tick and an agent edit: bring the Code page forward (the editor docks the same chat on
+    /// the right). From any page — Home, Tasks or Settings too. Each edit starts the wait for going back again.</summary>
+    private void FollowEditToCode()
+    {
+        var now = DateTime.Now;
+        if (SelectedNavItem != "Code")
+        {
+            _followNavigating = true;
+            try { NavigateTo("Code"); }
+            finally { _followNavigating = false; }
+            if (SelectedNavItem == "Code") { _followBrought = true; _followStart = now; }
+        }
+        _lastFollowEdit = now;
+        if (_followBrought && _settingsService.Settings.FollowReturnToChat) { _followBackTimer.Stop(); _followBackTimer.Start(); }
+    }
+
+    /// <summary>A key, click or wheel anywhere in the window (MainWindow): the user is working on the page they are on.</summary>
+    public void NoteUserInput() => _lastUserInput = DateTime.Now;
+
+    private void FollowBackTick()
+    {
+        var s = _settingsService.Settings;
+        switch (FollowBack.Decide(s.FollowReturnToChat, SelectedNavItem == "Code", _followBrought, _followStart, _lastFollowEdit,
+                    _lastUserInput, DateTime.Now, s.FollowReturnSeconds))
+        {
+            case FollowBack.Verdict.Wait:
+                return;
+            case FollowBack.Verdict.Return:
+                _followBackTimer.Stop();
+                _followBrought = false;
+                NavigateTo("Chat");
+                return;
+            default:
+                _followBackTimer.Stop();
+                _followBrought = false;
+                return;
+        }
+    }
+
     private void NavigateTo(string? target)
     {
         if (target == null) return;
@@ -832,6 +877,7 @@ public class MainViewModel : ViewModelBase
         };
         // Already there: every chat opened from the sidebar asks for the page it is on, and "opening" it again is not free.
         if (target == SelectedNavItem && ReferenceEquals(view, CurrentView)) return;
+        if (!_followNavigating) _followBrought = false;   // the user (or anything else) chose the page: it is theirs
 
         CluadeX.Helpers.UiStallWatchdog.Note("opening page " + target);
         var navWatch = System.Diagnostics.Stopwatch.StartNew();

@@ -1556,6 +1556,29 @@
                                             </Grid>
                                         </Border>
 
+                                        <!-- Typed during the run, not read yet: Send now has the agent read it at once (a user
+                                             bubble is never the running balloon, so the two never share this row) -->
+                                        <Button Grid.Row="7" Margin="0,6,0,0" Padding="9,2" Cursor="Hand" HorizontalAlignment="Left"
+                                                ToolTip="{services:Loc chat.steer.sendNowTip}"
+                                                Visibility="{Binding IsQueuedNote, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                Command="{Binding DataContext.SendNowCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                CommandParameter="{Binding}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="Chip" CornerRadius="9" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                            BorderBrush="{DynamicResource Accent.1}" Background="{DynamicResource State.Fill.Faint}">
+                                                        <TextBlock Text="{services:Loc chat.steer.sendNow}" FontSize="11.5" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource Accent.1}"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+
 
                                         <!-- Row 0: Role label + Tool Badge + Success/Fail + Hover Actions -->
                                         <Grid>

@@ -276,24 +276,87 @@ public sealed class AgentRunScope
 
     public bool HasUserNotes => !_userNotes.IsEmpty;
 
+    /// <summary>Raised on the run's thread with the bubbles (tags) of the notes the agent just took, so the chat can stop
+    /// showing them as waiting.</summary>
+    public event Action<IReadOnlyList<object?>>? UserNotesTaken;
+
     /// <summary>Everything typed since the agent last looked, as one block for the model; null when nothing waits.</summary>
     public string? TakeUserNotes()
     {
+        bool urgent;
+        lock (_callGate) { urgent = _interrupt; _interrupt = false; }
         var notes = DrainUserNotes();
         if (notes.Count == 0) return null;
-        // Queued, not a detour: the owner wants the plan in hand finished first (2026-10-16). A correction to the
-        // current work or a "stop" still applies at once. And a request that stands on its own runs in parallel in its
-        // own chat (owner 2026-10-18: "ความฉลาดในการแตกแชทไปทำคู่ขนานของงาน เมื่อมีการสั่งเพิ่มเข้ามา") — it shows
-        // under this chat in the sidebar, and close_chat puts it away once its result is in.
-        return "[The user sent this while you were working. Decide which it is, say so in one short line, then carry on:\n"
+        try { UserNotesTaken?.Invoke(notes.Select(n => n.Tag).ToList()); }
+        catch { /* the chat's rows must never break the run */ }
+        // Owner 2026-11-02: what is typed mid-run is taken in as soon as it can be and goes into the plan where it fits
+        // ("มีการเพิ่มเข้าแผนกลางทางพิจารณาได้ว่าจะเพิ่มอย่างไร"), not only after the whole plan. A correction or a "stop"
+        // still applies at once, and a request that stands on its own still runs in parallel in its own chat (owner
+        // 2026-10-18) — it shows under this chat in the sidebar, and close_chat puts it away once its result is in.
+        return (urgent
+                   ? "[The user pressed \"Send now\": your reply in progress, or tool calls not started yet, were stopped so you "
+                     + "read this first. Decide which it is, "
+                   : "[The user sent this while you were working. Decide which it is, ")
+               + "say so in one short line, then carry on:\n"
                + "- It corrects the current work, or says stop/cancel: apply it now.\n"
-               + "- It builds on the current work or needs it done first: QUEUED — finish the plan you are on, then do it "
-               + "next, in the same turn.\n"
+               + "- It adds to the current work: put it into your plan with todo_write where it belongs — next, when it "
+               + "changes what you were about to do; otherwise after the items already there — say in one line where you put "
+               + "it, and do it in this turn.\n"
                + "- It is a NEW request that stands on its own (it does not need what you are doing and touches other files "
                + "or another project): start it now in its own chat with new_chat — a complete message, since that chat does "
                + "not see this one — so both run in parallel, and keep going with your plan here. Once its result is in, put "
                + "it away with close_chat.]\n"
                + string.Join("\n\n", notes.Select(n => n.Text));
+    }
+
+    // ─── "Send now": stop the model's reply in flight so it reads what was typed at once ───
+
+    private readonly object _callGate = new();
+    private CancellationTokenSource? _call;
+    private bool _interrupt;
+
+    /// <summary>The run's loop can stop one model reply and carry on with the next step (the native tool loop). When
+    /// false, "Send now" stops the run and sends what was typed as the next turn.</summary>
+    public bool AcceptsInterrupts { get; set; }
+
+    /// <summary>The loop is waiting on the model: <see cref="InterruptStep"/> cancels <paramref name="call"/>.</summary>
+    public void BeginCall(CancellationTokenSource call)
+    {
+        lock (_callGate)
+        {
+            _call = call;
+            // Pressed in the gap between two steps, with the note still waiting: this reply is the one to stop.
+            if (_interrupt && HasUserNotes) call.Cancel();
+        }
+    }
+
+    public void EndCall(CancellationTokenSource call)
+    {
+        lock (_callGate) { if (ReferenceEquals(_call, call)) _call = null; }
+    }
+
+    /// <summary>Send now: what was typed is read before anything else. The model's reply in flight is stopped (the run
+    /// goes on); tool calls not started yet are skipped. True when a reply was stopped.</summary>
+    public bool InterruptStep()
+    {
+        lock (_callGate)
+        {
+            if (!HasUserNotes) return false;
+            _interrupt = true;
+            if (_call is not { IsCancellationRequested: false } call) return false;
+            call.Cancel();
+            return true;
+        }
+    }
+
+    /// <summary>Send now was pressed and its note is not read yet: a tool call that has not started waits for it.</summary>
+    public bool InterruptPending { get { lock (_callGate) return _interrupt && HasUserNotes; } }
+
+    /// <summary>The loop caught its reply's cancel: was it Send now (true, and the flag stays for TakeUserNotes), or a
+    /// timeout / the user's Stop?</summary>
+    public bool WasInterrupted(CancellationTokenSource call)
+    {
+        lock (_callGate) return _interrupt && call.IsCancellationRequested;
     }
 
     /// <summary>What the agent never got to (the run ended first): the caller sends it as the next turn.</summary>

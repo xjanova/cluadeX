@@ -228,6 +228,10 @@ internal static class Program
         Check("S1b", "the agent's resolver routes desktop_act / desktop_click to the module",
             Svc.ResolveToolTypePublic("desktop_act") == ToolType.DesktopAct && Svc.ResolveToolTypePublic("desktop_click") == ToolType.DesktopAct
             && Svc.ToolModules.Any(m => m is DesktopToolModule));
+        Check("S1b2", "desktop_click with no action is a click (it used to fail as an unknown action); desktop_act still needs one",
+            DesktopToolModule.ActionOf("desktop_click", "") == "click" && DesktopToolModule.ActionOf("desktop_click", "Double-Click") == "double_click"
+            && DesktopToolModule.ActionOf("desktop_act", "") == "" && DesktopToolModule.ActionOf("desktop_act", "SetValue") == "set_value",
+            $"{DesktopToolModule.ActionOf("desktop_click", "")} / {DesktopToolModule.ActionOf("desktop_act", "")}");
         Check("S1c", "registered: the module and its prompt section (IPromptSectionProvider) are in App.ConfigureServices",
             sp.GetServices<IAgentToolModule>().OfType<DesktopToolModule>().Any()
             && sp.GetServices<IPromptSectionProvider>().OfType<DesktopPromptSection>().Any());

@@ -113,6 +113,11 @@ public class AppSettings
     public bool EnforceReadBeforeEdit { get; set; } = true;
     /// <summary>When the agent edits a file, auto-open/refresh it in the Code Editor and scroll to the change.</summary>
     public bool LiveEditFollow { get; set; } = true;
+    /// <summary>Follow mode took the window to the Code page for the agent's edits: go back to the Chat page once no
+    /// file has been edited for <see cref="FollowReturnSeconds"/> (owner 2026-11-02). Never while the user works there.</summary>
+    public bool FollowReturnToChat { get; set; } = true;
+    /// <summary>Seconds after the last edit before follow mode goes back to Chat (10–600).</summary>
+    public int FollowReturnSeconds { get; set; } = 10;
 
     /// <summary>When the API's credit/quota runs out mid-task, carry the same turn on with Claude Dev (the user's
     /// Claude login) and a handoff brief instead of stopping on a billing error.</summary>

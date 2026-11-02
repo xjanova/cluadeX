@@ -815,6 +815,113 @@ internal static partial class Program
         Check("W3 a reply that ended before reading it: the message moves after its answer and goes as the next turn",
             sent && answer >= 0 && more > answer && reply > more && order.Count(c => c == "[W2-more] also add tests") == 1,
             string.Join(" | ", order));
+
+        // W4 — Send now (owner 2026-11-02: "ปุ่มงับแชทใหม่มาคิดทันที เหมือน send now"): the model's reply in flight stops so
+        // the note is read first; the run goes on.
+        var now = new AgentRunScope("w-now", null);
+        Check("W4 Send now with nothing typed does nothing", !now.InterruptStep() && !now.InterruptPending);
+        var bubbleTag = new object();
+        var taken = new List<object>();
+        now.UserNotesTaken += tags => taken.AddRange(tags);
+        now.AddUserNote("stop, use SQLite instead", bubbleTag);
+        using (var call = new CancellationTokenSource())
+        {
+            now.BeginCall(call);
+            bool stopped = now.InterruptStep();
+            Check("W4 Send now stops the reply the run waits on, and knows it was Send now",
+                stopped && call.IsCancellationRequested && now.WasInterrupted(call) && now.InterruptPending);
+            now.EndCall(call);
+        }
+        string urgent = now.TakeUserNotes();
+        Check("W4 the note reads as Send now and asks for it in the plan; its bubble goes back to the chat; nothing stays pending",
+            urgent != null && urgent.StartsWith("[The user pressed \"Send now\"") && urgent.Contains("todo_write") && urgent.EndsWith("stop, use SQLite instead")
+            && taken.Count == 1 && ReferenceEquals(taken[0], bubbleTag) && !now.InterruptPending, urgent ?? "null");
+        using (var timedOut = new CancellationTokenSource())
+        {
+            timedOut.Cancel();
+            Check("W4 a reply stopped by its idle timeout is not taken for Send now", !now.WasInterrupted(timedOut));
+        }
+        now.AddUserNote("one more thing");
+        Check("W4 pressed between two steps: no reply to stop yet, the note waits as Send now", !now.InterruptStep() && now.InterruptPending);
+        using (var next = new CancellationTokenSource())
+        {
+            now.BeginCall(next);
+            Check("W4 …so the next reply is stopped the moment it starts", next.IsCancellationRequested && now.WasInterrupted(next));
+            now.EndCall(next);
+        }
+        Check("W4 …that note reads as Send now too, then the queue is empty", now.TakeUserNotes()!.StartsWith("[The user pressed") && now.TakeUserNotes() == null);
+        now.AddUserNote("later note");
+        Check("W4 Send now is used up once read: the next note, typed with Enter, has the ordinary wording",
+            now.TakeUserNotes()!.StartsWith("[The user sent this while you were working"));
+
+        // W5 — Send now on a provider that answers in one call (no step to stop): the reply stops and the message goes out
+        // at once as the next turn — not back into the box, as after the user's own Stop.
+        await FreshChat();
+        var gate5 = new SemaphoreSlim(0);
+        Fake.ScriptFor["[W5]"] = new Queue<FakeStep>([FakeStep.Gated(["W5 working"], gate5, [" — W5 done."])]);
+        Fake.ScriptFor["[W5-now]"] = new Queue<FakeStep>([FakeStep.Reply("Switched", " to SQLite.")]);
+        await Send("[W5] build the store");
+        await WaitUntil(() => Vm.IsGenerating && Vm.Messages.Any(m => m.Content.StartsWith("W5 working")));
+        Vm.UserInput = "[W5-now] use SQLite";
+        Vm.SendMessageCommand.Execute(null);
+        await Task.Delay(100); await Render();
+        var queued = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.User && m.Content == "[W5-now] use SQLite");
+        Check("W5 a message typed during the run waits with Send now and a row saying it is queued",
+            queued is { IsQueuedNote: true } && queued.QueueRow != null && Vm.Messages.Contains(queued.QueueRow), $"queued={queued?.IsQueuedNote}");
+        Vm.SendNowCommand.Execute(queued);
+        bool w5sent = await WaitUntil(() => Fake.Calls.Any(c => c.Input.Contains("[W5-now] use SQLite")), 15000);
+        bool w5done = await WaitUntil(() => !Vm.IsGenerating && Vm.Messages.Any(m => m.Content.Contains("Switched to SQLite.")), 15000);
+        var w5order = Vm.Messages.Where(m => m.Role is MessageRole.User or MessageRole.Assistant).Select(m => m.Content).ToList();
+        Check("W5 Send now there: the reply stops (never finishes) and the message goes at once as the next turn, the box stays empty",
+            w5sent && w5done && Vm.UserInput == "" && !w5order.Any(c => c.Contains("W5 done")) && w5order.Count(c => c == "[W5-now] use SQLite") == 1,
+            string.Join(" | ", w5order));
+        gate5.Release();
+
+        Vm.UserInput = "";
+        Check("W6 Ctrl+Enter with no reply running is an ordinary send (Send now declines)", !Vm.SendNowFromBox());
+
+        // W7 — typed during a run, then another chat opened before it ended. Nothing typed may vanish: it used to be taken
+        // off the chat and dropped when the run ended without reading it (only the debug log knew).
+        async Task<ChatSession?> TypedThenLeft(string tag)
+        {
+            await FreshChat();
+            var chat = Vm.CurrentSession!;
+            var gate7 = new SemaphoreSlim(0);
+            Fake.ScriptFor[$"[{tag}]"] = new Queue<FakeStep>([FakeStep.Gated([$"{tag} working"], gate7, [$" — {tag} done."])]);
+            await Send($"[{tag}] slow job");
+            await WaitUntil(() => Vm.IsGenerating && Vm.Messages.Any(m => m.Content.StartsWith($"{tag} working")));
+            Vm.UserInput = $"{tag} keep me";
+            Vm.SendMessageCommand.Execute(null);
+            await Task.Delay(100); await Render();
+            await FreshChat();   // another chat on screen; that run carries on in the background
+            gate7.Release();
+            await WaitUntil(() => Vm.Sessions.FirstOrDefault(s => s.Id == chat.Id)?.RunStatus == "done", 15000);
+            await Task.Delay(200); await Render();
+            return Persist.LoadSession(chat.Id);
+        }
+        string Rows7(ChatSession? s) => string.Join(" | ", s?.Messages.Select(m => $"{m.Role}:{m.Content}") ?? []);
+
+        // W7a — with a project the agent loop reads it before ending its turn, and answers it in the same run.
+        Directory.CreateDirectory(ProjA);
+        Vm.SetWorkingDirectory(ProjA);
+        var a7 = await TypedThenLeft("W7a");
+        int typedA = a7?.Messages.FindIndex(m => m.Role == MessageRole.User && m.Content == "W7a keep me") ?? -1;
+        Check("W7a a project chat left mid-run: its agent reads what was typed and answers it in the same run",
+            typedA >= 0 && a7!.Messages.Skip(typedA + 1).Any(m => m.Role == MessageRole.Assistant)
+            && a7.Messages.Any(m => m.Content == L("chat.steer.taken")), Rows7(a7));
+
+        // W7b — a run that ends without reading it (here its step limit; a CLI agent never reads it): the message stays in
+        // that chat, saying it was not sent.
+        Vm.SetWorkingDirectory("");
+        var stepSettings = Sp.GetRequiredService<SettingsService>();
+        int stepsBefore = stepSettings.Settings.MaxAgentIterations;
+        stepSettings.UpdateSettings(s => s.MaxAgentIterations = 1);
+        ChatSession? b7;
+        try { b7 = await TypedThenLeft("W7b"); }
+        finally { stepSettings.UpdateSettings(s => s.MaxAgentIterations = stepsBefore); }
+        Check("W7b a run that ended without reading it, its chat left: the message stays in that chat, saying it was not sent",
+            b7 != null && b7.Messages.Count(m => m.Role == MessageRole.User && m.Content == "W7b keep me") == 1
+            && b7.Messages.Any(m => m.Content == L("chat.steer.notSent")), Rows7(b7));
     }
 
     /// <summary>
@@ -1573,8 +1680,11 @@ internal static partial class Program
             var scope = new AgentRunScope("sc", null, null);
             scope.AddUserNote("also make a landing page for the other project");
             string note = scope.TakeUserNotes() ?? "";
-            Check("SC a request typed mid-task: stand-alone → its own chat with new_chat (parallel); corrections stay; close_chat after",
-                note.Contains("new_chat") && note.Contains("parallel") && note.Contains("close_chat") && note.Contains("QUEUED"), note);
+            // A follow-up was QUEUED after the whole plan; owner 2026-11-02: it goes into the plan where it fits
+            // ("มีการเพิ่มเข้าแผนกลางทางพิจารณาได้ว่าจะเพิ่มอย่างไร").
+            Check("SC a request typed mid-task: stand-alone → its own chat with new_chat (parallel); a follow-up into the plan where it fits; close_chat after",
+                note.Contains("new_chat") && note.Contains("parallel") && note.Contains("close_chat")
+                && note.Contains("todo_write") && note.Contains("where it belongs"), note);
         }
 
         Log("\n## L6 — the context meter uses the answering model's real window");

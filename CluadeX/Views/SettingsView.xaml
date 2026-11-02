@@ -1216,6 +1216,23 @@
                                     <TextBlock Text="{services:Loc settings.liveEditFollow}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center"/>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding LiveEditFollow}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.followReturn}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.followReturnDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding FollowReturnToChat}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" IsEnabled="{Binding FollowReturnToChat}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.followReturnSeconds}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.followReturnSecondsDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding FollowReturnSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
                                 <Grid Style="{StaticResource Row}" Margin="0">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <TextBlock Text="{services:Loc settings.liveCodingAnimation}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center"/>

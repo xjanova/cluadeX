@@ -489,10 +489,7 @@ public sealed class DesktopToolModule : IAgentToolModule
     private ToolResult Act(ToolCall call, ToolModuleContext context, CancellationToken ct)
     {
         var r = RefOf(call, context);
-        string action = call.GetArg("action").Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
-        if (action is "setvalue" or "set") action = "set_value";
-        if (action is "doubleclick") action = "double_click";
-        if (action is "rightclick") action = "right_click";
+        string action = ActionOf(call.ToolName, call.GetArg("action"));
         if (DesktopSafety.GuardRefusal(r.Element) is { } g) throw new InvalidOperationException(g);
         string name = SafeName(r.Element);
         string done = DesktopAutomation.Act(r, action, call.GetArg("value"), call.GetArg("direction"), IntArg(call, "amount", 3), ct);
@@ -505,6 +502,21 @@ public sealed class DesktopToolModule : IAgentToolModule
         var res = Ok(call, sb.ToString().TrimEnd());
         res.Summary = $"{action} {DesktopWindows.Trunc(name, 40)} ({r.ProcessName})";
         return res;
+    }
+
+    /// <summary>desktop_act's action as the automation layer names it ("Double-Click" → double_click). The desktop_click
+    /// alias names its action in its name: it came with none and failed as an unknown action.</summary>
+    internal static string ActionOf(string? toolName, string? action)
+    {
+        string a = (action ?? "").Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        if (a.Length == 0 && string.Equals(toolName, "desktop_click", StringComparison.OrdinalIgnoreCase)) a = "click";
+        return a switch
+        {
+            "setvalue" or "set" => "set_value",
+            "doubleclick" => "double_click",
+            "rightclick" => "right_click",
+            _ => a,
+        };
     }
 
     private static string SafeName(AutomationElement e)

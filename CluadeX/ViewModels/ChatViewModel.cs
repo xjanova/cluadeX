@@ -240,20 +240,31 @@ public partial class ChatViewModel : ViewModelBase
         var flat = new List<ChatSession>(active);
         _activeChatsShown = string.Join("|", active.Select(s => s.Id));
 
-        foreach (var s in Sessions)
+        // Newest first, by when the chat last got rows — not by where it sits in Sessions: an old chat that worked today
+        // stayed down among its old neighbours (owner 2026-11-02: today's work did not all show).
+        var activeIds = active.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        var rest = SidebarOrder(Sessions.Where(s => !activeIds.Contains(s.Id) && !Hidden(s)));
+        int todayOthers = 0;
+        if (filter)
         {
-            if (active.Contains(s) || Hidden(s)) continue;
-            if (filter)
+            // This project's chats. Legacy rows (empty ProjectPath) also pass so we don't hide the user's pre-migration
+            // history. A split chat follows its parent into view. Chats that worked TODAY in another project stay too:
+            // they showed while running and went once seen, so today's list came and went (owner 2026-11-02).
+            var shown = new HashSet<string>(activeIds, StringComparer.Ordinal);
+            foreach (var s in rest)
+                if (string.IsNullOrEmpty(s.ProjectPath) || PathEquals(s.ProjectPath, currentProject)) shown.Add(s.Id);
+            for (bool grew = true; grew;)
             {
-                // Match sessions for this project. Legacy rows (empty ProjectPath) also pass so
-                // we don't hide the user's pre-migration history. A split chat follows its parent into view.
-                bool matches = string.IsNullOrEmpty(s.ProjectPath)
-                    || PathEquals(s.ProjectPath, currentProject)
-                    || (s.ParentId is { } pid && flat.Any(p => p.Id == pid));
-                if (!matches) continue;
+                grew = false;
+                foreach (var s in rest)
+                    if (s.ParentId is { } pid && shown.Contains(pid) && shown.Add(s.Id)) grew = true;
             }
-            flat.Add(s);
+            var today = DateTime.Today;
+            foreach (var s in rest)
+                if (s.UpdatedAt >= today && shown.Add(s.Id)) todayOthers++;
+            rest = rest.Where(s => shown.Contains(s.Id)).ToList();
         }
+        flat.AddRange(rest);
 
         // Unchanged (a chat switch, a run's state, a title typed elsewhere): the sidebar keeps its rows. Changed: only what
         // differs is touched. Clearing and refilling re-grouped and re-templated everything on the UI thread, and threw the
@@ -278,6 +289,7 @@ public partial class ChatViewModel : ViewModelBase
         int total = Sessions.Count(s => !Hidden(s));
         SidebarFilterText = total == 0 ? ""
             : filter ? LocF("sidebar.filter.project", ProjectName, VisibleSessions.Count, total)
+                       + (todayOthers > 0 ? LocF("sidebar.filter.todayOthers", todayOthers) : "")
             : LocF("sidebar.filter.all", total);
         AllProjectsTip = !HasProject ? Loc("sidebar.filter.noProjectTip")
             : ShowAllProjectSessions ? LocF("sidebar.filter.onlyTip", ProjectName)
@@ -285,6 +297,42 @@ public partial class ChatViewModel : ViewModelBase
     }
 
     private Dictionary<ChatSession, string> _rowGroups = new();
+
+    /// <summary>The chat got new rows: it moves up the history (its day group, its row time, its place in the list).
+    /// Setting UpdatedAt alone left the row in its old day group and place until something else rebuilt the list.</summary>
+    private void TouchSession(ChatSession s)
+    {
+        s.UpdatedAt = DateTime.Now;
+        if (App.Current?.Dispatcher is { } d && !d.CheckAccess()) d.BeginInvoke(RebuildVisibleSessions);
+        else RebuildVisibleSessions();
+    }
+
+    private DateTime _sidebarDay = DateTime.Today;
+    /// <summary>Past midnight: today's chats are yesterday's — the groups and the rows' times are drawn again.</summary>
+    private void CheckSidebarDay()
+    {
+        if (DateTime.Today == _sidebarDay) return;
+        _sidebarDay = DateTime.Today;
+        foreach (var s in Sessions) s.RaiseTimeLabels();
+        RebuildVisibleSessions();
+    }
+
+    /// <summary>The sidebar's day groups in day order: today, yesterday, this week, earlier (labels in the UI language).</summary>
+    public sealed class DayGroupOrder : System.Collections.IComparer
+    {
+        private static readonly string[] Keys = { "sidebar.group.today", "sidebar.group.yesterday", "sidebar.group.week", "sidebar.group.earlier" };
+
+        public static int Rank(string? label)
+        {
+            for (int i = 0; i < Keys.Length; i++)
+                if (string.Equals(label, LocalizedResources.Instance[Keys[i]], StringComparison.Ordinal)) return i;
+            return Keys.Length;
+        }
+
+        public int Compare(object? x, object? y) =>
+            Rank((x as System.Windows.Data.CollectionViewGroup)?.Name?.ToString())
+                .CompareTo(Rank((y as System.Windows.Data.CollectionViewGroup)?.Name?.ToString()));
+    }
 
     private string _sidebarFilterText = "";
     /// <summary>The line above the chat list: whose chats it holds and how many (owner 2026-10-31: the all-projects button
@@ -296,6 +344,11 @@ public partial class ChatViewModel : ViewModelBase
     public string AllProjectsTip { get => _allProjectsTip; private set => SetProperty(ref _allProjectsTip, value); }
 
     private bool _bulkSessions;
+
+    /// <summary>The sidebar's order below the working chats: newest first by when each last got rows (a stable sort, so
+    /// chats with the same time keep their order).</summary>
+    public static List<ChatSession> SidebarOrder(IEnumerable<ChatSession> chats) =>
+        chats.OrderByDescending(s => s.UpdatedAt).ToList();
 
     /// <summary>
     /// The list as a tree (owner 2026-10-18: "ทำผังว่าแยกไปที่ไหนทำอะไร"): each split chat right under the chat that
@@ -1322,8 +1375,10 @@ public partial class ChatViewModel : ViewModelBase
         // Any Add/Remove/Replace/Reset on Sessions triggers a rebuild filtered by current project.
         Sessions.CollectionChanged += (_, _) => RebuildVisibleSessions();
         // The sidebar groups the list by day (today / yesterday / this week / earlier), newest first.
+        // The groups in day order, whichever row came first: unsorted, a group stood where its first row was, so a working
+        // chat from yesterday (working chats come first) put "Yesterday" above "Today".
         System.Windows.Data.CollectionViewSource.GetDefaultView(VisibleSessions)?.GroupDescriptions
-            .Add(new System.Windows.Data.PropertyGroupDescription(nameof(ChatSession.DateGroupLabel)));
+            .Add(new System.Windows.Data.PropertyGroupDescription(nameof(ChatSession.DateGroupLabel)) { CustomSort = new DayGroupOrder() });
 
         // Periodic context / cost refresh every 5 seconds. (It also ran nvidia-smi here — on the UI thread,
         // blocking up to 3 s every 5 s — to fill GPU properties nothing bound; MainViewModel already polls the GPU.)
@@ -1334,6 +1389,7 @@ public partial class ChatViewModel : ViewModelBase
             CostText = _costTracker.FormatCost();
             RefreshUsageStrip();
             ProbeOllamaForChatBox();   // throttled to 30 s: lists Ollama's models in the model box while it answers
+            CheckSidebarDay();
         };
         _memoryTimer.Start();
         InitControls(activation);
@@ -1584,7 +1640,7 @@ public partial class ChatViewModel : ViewModelBase
                 }
             }
 
-            if (changed) CurrentSession.UpdatedAt = DateTime.Now;
+            if (changed) TouchSession(CurrentSession);
             CluadeX.Helpers.UiStallWatchdog.Note("saving the chat");
             _persistenceService.SaveSession(CurrentSession);
             CluadeX.Helpers.UiStallWatchdog.Note("");
@@ -3336,14 +3392,70 @@ public partial class ChatViewModel : ViewModelBase
         var run = RunOf(CurrentSession);
         if (run?.Scope == null) return;
         if (text.StartsWith("/")) { StatusText = Loc("chat.steer.noSlash"); return; }
-        var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = text, IsQueuedNote = true };
         run.Messages.Add(bubble);
         // Said in the chat, not only the status bar: the user sees it was taken and when it will be done.
-        run.Messages.Add(new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") });
+        bubble.QueueRow = new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") };
+        run.Messages.Add(bubble.QueueRow);
         run.Scope.AddUserNote(text, bubble);
         UserInput = string.Empty;
         StatusText = Loc("chat.steer.queued");
         _pet?.NoteMessage(text);
+    }
+
+    /// <summary>
+    /// "Send now" on a message waiting for the running agent (owner 2026-11-02: "ปุ่มงับแชทใหม่มาคิดทันที เหมือน send now").
+    /// The native tool loop stops the reply it is waiting on and reads the message at once, the run going on; tool calls
+    /// not started yet wait for it. A run that cannot stop one reply (a CLI agent, the [ACTION:] loop) is stopped, and
+    /// what was typed goes out as the next turn — not back into the box, as after the user's own Stop.
+    /// </summary>
+    public ICommand SendNowCommand => _sendNowCommand ??= new RelayCommand<ChatMessage>(SendNow);
+    private ICommand? _sendNowCommand;
+
+    /// <summary>Ctrl+Enter while this chat's reply runs: what was typed is queued and sent now. False when no reply
+    /// runs — the key is then an ordinary send.</summary>
+    public bool SendNowFromBox()
+    {
+        if (!IsGenerating) return false;
+        string input = (UserInput ?? string.Empty).Trim();
+        if (input.Length > 0)
+        {
+            SendIntoRunningReply(input);
+            if (input.StartsWith("/")) return true;   // refused: it stays in the box, nothing to send now
+        }
+        SendNow(null);
+        return true;
+    }
+
+    private void SendNow(ChatMessage? bubble)
+    {
+        var run = bubble == null ? RunOf(CurrentSession) : _runs.FirstOrDefault(r => r.Messages.Contains(bubble)) ?? RunOf(CurrentSession);
+        if (run?.Scope == null || !run.Scope.HasUserNotes) return;
+        _debugLog?.Info("Chat", $"Send now · {(run.Scope.AcceptsInterrupts ? "stop this reply" : "stop the run, send next")}");
+        foreach (var m in run.Messages.Where(m => m.IsQueuedNote && m.QueueRow != null)) m.QueueRow!.Content = Loc("chat.steer.sendingNow");
+        if (run.Scope.AcceptsInterrupts)
+        {
+            run.Scope.InterruptStep();
+            StatusText = Loc("chat.steer.sendingNow");
+            return;
+        }
+        run.SendNotesAfterStop = true;
+        run.Cts?.Cancel();
+        StatusText = Loc("chat.steer.sendingNow");
+    }
+
+    /// <summary>The agent read what was typed (run thread): those bubbles stop waiting.</summary>
+    private void OnUserNotesTaken(ChatRun run, IReadOnlyList<object?> tags)
+    {
+        App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag is not ChatMessage bubble) continue;
+                bubble.IsQueuedNote = false;
+                if (bubble.QueueRow != null) bubble.QueueRow.Content = Loc("chat.steer.taken");
+            }
+        });
     }
 
     /// <summary>A run ended with something typed that its agent never read (it finished first, or the provider answers
@@ -3352,13 +3464,29 @@ public partial class ChatViewModel : ViewModelBase
     private void SendLeftoverNotes(ChatRun run, List<(string Text, object? Tag)> notes)
     {
         string text = string.Join("\n\n", notes.Select(n => n.Text));
-        foreach (var n in notes) if (n.Tag is ChatMessage b) run.Messages.Remove(b);
-        if (!ReferenceEquals(run.Session, CurrentSession) || run.Cts?.IsCancellationRequested == true)
+        if (!ReferenceEquals(run.Session, CurrentSession))
         {
-            if (ReferenceEquals(run.Session, CurrentSession))
-                UserInput = string.IsNullOrWhiteSpace(UserInput) ? text : UserInput + "\n" + text;
-            else
-                _debugLog?.Warn("Chat", "a message typed during a run that is no longer on screen was not sent");
+            // Its chat is not on screen: nothing can be sent there now, and nothing typed may vanish — the bubbles stay
+            // in that chat, saying they were not sent (they used to be removed, the text lost).
+            foreach (var n in notes)
+                if (n.Tag is ChatMessage b)
+                {
+                    b.IsQueuedNote = false;
+                    if (b.QueueRow != null) b.QueueRow.Content = Loc("chat.steer.notSent");
+                }
+            SaveRunChat(run);
+            _debugLog?.Warn("Chat", "a message typed during a run that is no longer on screen was kept in its chat, not sent");
+            return;
+        }
+        foreach (var n in notes)
+            if (n.Tag is ChatMessage b)
+            {
+                run.Messages.Remove(b);
+                if (b.QueueRow != null) run.Messages.Remove(b.QueueRow);
+            }
+        if (run.Cts?.IsCancellationRequested == true && !run.SendNotesAfterStop)
+        {
+            UserInput = string.IsNullOrWhiteSpace(UserInput) ? text : UserInput + "\n" + text;
             return;
         }
         var bubble = new ChatMessage { Role = MessageRole.User, Content = text };

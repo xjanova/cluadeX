@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Text;
 using CluadeX.Models;
@@ -2046,6 +2046,11 @@ public partial class CodeAgentService
                 }
                 throw;
             }
+            finally
+            {
+                // A fail-over that runs next may be a CLI agent, which cannot stop one reply: Send now stops the run.
+                if (AgentRunScope.Current is { } loopScope) loopScope.AcceptsInterrupts = false;
+            }
             var finalResult = await MaybeFailOverAsync(nativeResult, history, userMessage, ct);
             RecordRunStrategy(finalResult);
             return finalResult;
@@ -2782,7 +2787,7 @@ public partial class CodeAgentService
                     continue; // re-generate
                 }
 
-                if (AgentRunScope.Current?.TakeUserNotes() is { } lateNote && iteration < MaxAgentIterations - 1)
+                if (iteration < MaxAgentIterations - 1 && AgentRunScope.Current?.TakeUserNotes() is { } lateNote)   // out of steps: left for the next turn, not taken and dropped
                 {
                     result.Steps.Add(step);
                     OnThinkingUpdate?.Invoke(response, iteration + 1);
@@ -3106,7 +3111,11 @@ public partial class CodeAgentService
         CancellationToken ct)
     {
         var result = new AgentLoopResult();
-        if (AgentRunScope.Current is { } partialScope) partialScope.PartialResult = result;   // a stopped run still saves to the brain
+        if (AgentRunScope.Current is { } partialScope)
+        {
+            partialScope.PartialResult = result;   // a stopped run still saves to the brain
+            partialScope.AcceptsInterrupts = true; // Send now stops one reply here, not the run
+        }
         // Ask the backend whether this model sees images BEFORE the prompt is built (Ollama answers from
         // /api/show), so the prompt's vision line and what the loop does with images agree.
         await ProviderSeesImagesAsync(_providerManager.ActiveProvider, ct);
@@ -3543,8 +3552,10 @@ public partial class CodeAgentService
                     CompactionAvoidedTokens = compactBoundary > 0
                         ? Math.Max(0, EstimateNativeTokens(nativeMessages) - EstimateNativeTokens(outboundMessages)) : 0,
                 };
+                var callScope = AgentRunScope.Current;
                 try
                 {
+                    callScope?.BeginCall(callCts);
                     response = await loopProvider.ChatWithToolsAsync(
                         outboundMessages, systemPrompt, toolSchemas,
                         onTextDelta: token =>
@@ -3557,6 +3568,28 @@ public partial class CodeAgentService
                         },
                         ct: callCts.Token,
                         toolChoice: iterToolChoice);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested && callScope?.WasInterrupted(callCts) == true)
+                {
+                    // ─── Send now ───
+                    // The user wants what they typed read before this reply finishes. The reply is dropped (its tool
+                    // calls never ran, so nothing is half done), the note goes on the conversation's last user turn, and
+                    // the next step answers it. The run itself goes on.
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: reply stopped by Send now");
+                    OnAgenticStreamingToken?.Invoke("\n⏸ " + (isThai ? "หยุดตรงนี้ — อ่านข้อความใหม่ก่อน" : "Stopped here to read your new message"), nativeStreamStep);
+                    string? urgent = callScope.TakeUserNotes();
+                    if (urgent != null)
+                    {
+                        if (nativeMessages.Count > 0 && nativeMessages[^1].Role == "user")
+                            nativeMessages[^1].Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = urgent });
+                        else
+                            nativeMessages.Add(new Services.Providers.NativeMessage
+                            {
+                                Role = "user",
+                                Content = { new Services.Providers.ContentBlock { Type = "text", Text = urgent } },
+                            });
+                    }
+                    continue;
                 }
                 catch (OperationCanceledException) when (callCts.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
@@ -3609,6 +3642,10 @@ public partial class CodeAgentService
                         ? "Context ยาวเกินไปแม้หลังบีบอัดแล้ว กรุณาเริ่ม session ใหม่"
                         : "Context too long even after compaction. Please start a new session.";
                     break;
+                }
+                finally
+                {
+                    callScope?.EndCall(callCts);
                 }
             }
 
@@ -4045,7 +4082,7 @@ public partial class CodeAgentService
 
                 // The user sent something while this answer was being written: not the end of the turn — the model
                 // reads it and carries on.
-                if (AgentRunScope.Current?.TakeUserNotes() is { } lateNote && iteration < MaxAgentIterations - 1)
+                if (iteration < MaxAgentIterations - 1 && AgentRunScope.Current?.TakeUserNotes() is { } lateNote)   // out of steps: left for the next turn, not taken and dropped
                 {
                     if (!string.IsNullOrWhiteSpace(textContent)) OnThinkingUpdate?.Invoke(textContent, iteration + 1);
                     result.Steps.Add(step);
@@ -4248,7 +4285,22 @@ public partial class CodeAgentService
 
             // Run write tools sequentially
             foreach (var toolCall in writeCalls)
+            {
+                // Send now while this batch runs: what has not started waits for the user's message, which may change it.
+                if (AgentRunScope.Current?.InterruptPending == true)
+                {
+                    lock (userResultMsg.Content)
+                        userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                        {
+                            Type = "tool_result", ToolUseId = toolCall.Id, IsError = true,
+                            Content = "Not run: the user pressed Send now before this call started. Read their message, then make "
+                                      + "this call again only if it is still wanted.",
+                        });
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: {toolCall.Name} skipped by Send now");
+                    continue;
+                }
                 await ExecuteNativeToolCall(toolCall);
+            }
 
             // ─── open_project: the run now has a folder ───
             // The schemas and prompt were built for the folder (or none) the run started with — with no project

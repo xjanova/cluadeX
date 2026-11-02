@@ -112,6 +112,8 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(HuggingFaceToken)] = (vm, s) => s.HuggingFaceToken = string.IsNullOrWhiteSpace(vm.HuggingFaceToken) ? null : vm.HuggingFaceToken.Trim(),
         // General
         [nameof(LiveEditFollow)] = (vm, s) => s.LiveEditFollow = vm.LiveEditFollow,
+        [nameof(FollowReturnToChat)] = (vm, s) => s.FollowReturnToChat = vm.FollowReturnToChat,
+        [nameof(FollowReturnSeconds)] = (vm, s) => s.FollowReturnSeconds = Math.Clamp(vm.FollowReturnSeconds, 10, 600),
         [nameof(AutoOpenEditorOnAgentEdit)] = (vm, s) => s.AutoOpenEditorOnAgentEdit = vm.AutoOpenEditorOnAgentEdit,
         [nameof(LiveCodingAnimationEnabled)] = (vm, s) => s.LiveCodingAnimationEnabled = vm.LiveCodingAnimationEnabled,
         [nameof(TempDirectory)] = (vm, s) => s.TempDirectory = vm.TempDirectory,
@@ -261,6 +263,10 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _liveEditFollow = true, _autoOpenEditor = true, _liveCodingAnimation = true;
     private string _tempDirectory = "";
     public bool LiveEditFollow { get => _liveEditFollow; set => SetProperty(ref _liveEditFollow, value); }
+    private bool _followReturnToChat = true;
+    private int _followReturnSeconds = 10;
+    public bool FollowReturnToChat { get => _followReturnToChat; set => SetProperty(ref _followReturnToChat, value); }
+    public int FollowReturnSeconds { get => _followReturnSeconds; set => SetProperty(ref _followReturnSeconds, value); }
     public bool AutoOpenEditorOnAgentEdit { get => _autoOpenEditor; set => SetProperty(ref _autoOpenEditor, value); }
     public bool LiveCodingAnimationEnabled { get => _liveCodingAnimation; set => SetProperty(ref _liveCodingAnimation, value); }
     public string TempDirectory { get => _tempDirectory; set => SetProperty(ref _tempDirectory, value); }
@@ -710,6 +716,8 @@ public partial class SettingsViewModel : ViewModelBase
         CustomLlamaCppBackendPath = src.CustomLlamaCppBackendPath ?? "";
 
         LiveEditFollow = src.LiveEditFollow;
+        FollowReturnToChat = src.FollowReturnToChat;
+        FollowReturnSeconds = Math.Clamp(src.FollowReturnSeconds, 10, 600);
         AutoOpenEditorOnAgentEdit = src.AutoOpenEditorOnAgentEdit;
         LiveCodingAnimationEnabled = src.LiveCodingAnimationEnabled;
 
