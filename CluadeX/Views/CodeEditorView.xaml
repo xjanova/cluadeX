@@ -2436,8 +2436,8 @@
                             <RowDefinition Height="170"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
+                        <!-- No Text binding: the code-behind feeds this box chunk by chunk (OnTerminalText). -->
                         <TextBox x:Name="TerminalOut" Grid.Row="0"
-                                 Text="{Binding TerminalOutput, Mode=OneWay}"
                                  IsReadOnly="True" TextWrapping="NoWrap"
                                  Background="{DynamicResource Editor.Background}" BorderThickness="0"
                                  Foreground="{DynamicResource Text.Secondary}"

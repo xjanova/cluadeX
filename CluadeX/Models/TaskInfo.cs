@@ -83,11 +83,40 @@ public class TaskInfo : INotifyPropertyChanged
     }
 
     private string _output = "";
-    /// <summary>The newest output (bounded), ANSI-free, for the page's output pane.</summary>
+    /// <summary>The newest output (bounded), ANSI-free, for the page's output pane. Setting it replaces the whole
+    /// text and raises PropertyChanged; new lines at the end go through <see cref="AppendOutput"/> instead.</summary>
     public string Output
     {
         get => _output;
-        set { _output = value; OnPropertyChanged(); }
+        set { _output = value; _outputShift = -1; OnPropertyChanged(); }
+    }
+
+    private int _outputShift = -1;
+    /// <summary>After the last whole-text replace: how far the text that was kept moved toward the front (what was at
+    /// index i of the old text is at i - OutputShift now), or -1 when the new text is not a cut of the old one. Read it
+    /// in the PropertyChanged handler for <see cref="Output"/>; the page uses it to keep the reader's place.</summary>
+    public int OutputShift => _outputShift;
+
+    /// <summary>Replace the whole text with a cut of it (the front dropped, maybe a marker put in its place), saying how
+    /// far the kept text moved (see <see cref="OutputShift"/>). Raises PropertyChanged for <see cref="Output"/>.</summary>
+    public void ReplaceOutput(string text, int shift)
+    {
+        _output = text;
+        _outputShift = shift;
+        OnPropertyChanged(nameof(Output));
+    }
+
+    /// <summary>Raised by <see cref="AppendOutput"/> with only the new text (Output already ends with it), so the page
+    /// can add it to its pane instead of taking the whole 256K text again on every push.</summary>
+    public event Action<TaskInfo, string>? OutputAppended;
+
+    /// <summary>Add text to the end of <see cref="Output"/>. Raises <see cref="OutputAppended"/>, not PropertyChanged:
+    /// a listener that wants every change handles both.</summary>
+    public void AppendOutput(string text)
+    {
+        if (text.Length == 0) return;
+        _output += text;
+        OutputAppended?.Invoke(this, text);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

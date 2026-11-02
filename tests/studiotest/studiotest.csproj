@@ -41,4 +41,10 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
   </ItemGroup>
 
+  <!-- portable.txt next to the exe => SettingsService uses <exe>\Data as its data root, so this
+       harness never touches the user's real ~/.cluadex (settings, chat DB, buddy, license). -->
+  <ItemGroup>
+    <None Include="portable.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

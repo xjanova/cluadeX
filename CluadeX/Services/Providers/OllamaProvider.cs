@@ -278,10 +278,11 @@ public class OllamaProvider : ApiProviderBase
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        // ReadLineAsync, not the synchronous EndOfStream, so a silent stream never blocks a thread (see LlamaServerProvider).
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             string? content = null;

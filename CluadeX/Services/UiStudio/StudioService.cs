@@ -357,8 +357,12 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     {
         if (root.Length == 0 || !path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
         string rel = path[root.Length..];
-        foreach (var seg in rel.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
+        var segs = rel.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var seg in segs)
             if (seg.StartsWith('.') || IgnoredDirs.Contains(seg)) return false;
+        // Laravel's root `artisan` has no extension but is half of what makes a folder Laravel: an AI that writes it
+        // after composer.json must still get the folder detected again. It never reloads the page (ReloadsPage).
+        if (segs.Length == 1 && segs[0].Equals("artisan", StringComparison.OrdinalIgnoreCase)) return true;
         string ext = Path.GetExtension(path).ToLowerInvariant();
         return ext is not ("" or ".tmp" or ".swp" or ".bak" or ".log" or ".lock") && !path.EndsWith('~');
     }
@@ -399,7 +403,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     /// <summary>Does this file change what the preview shows, where the Studio (not a dev server) has to reload?</summary>
     private bool ReloadsPage(string path, string ext) => Project.Kind switch
     {
-        StudioProjectKind.Static => true,
+        StudioProjectKind.Static => ext.Length > 0,   // not the extensionless root `artisan` (IsSourceChange lets it through)
         // Blade views, routes and controllers render the page; CSS/JS count only where the site serves them as they are.
         StudioProjectKind.Server => ext == ".php"
             || ext is ".css" or ".js" && path.Contains(Path.DirectorySeparatorChar + "public" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
@@ -518,20 +522,31 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
 
     /// <summary>Put files back as they were (the review's "undo all"): each path gets its old text, a file that did
     /// not exist (null) is deleted. The undo stack is cleared — its entries no longer match the files. Returns the
-    /// paths that could not be restored.</summary>
+    /// paths that could not be restored.
+    /// Restores run first and recreate a folder the AI moved or removed. The deletes run only when every restore
+    /// worked: after `git mv lib/screens lib/pages` the moved files are the only other copy of that text, so they
+    /// are never deleted while an original could not be put back.</summary>
     public List<string> RestoreFiles(IReadOnlyDictionary<string, string?> before)
     {
         var failed = new List<string>();
         foreach (var (path, text) in before)
         {
+            if (text == null) continue;
             try
             {
-                if (text == null) { if (File.Exists(path)) File.Delete(path); continue; }
                 if (File.Exists(path) && CluadeX.Helpers.TextFileCodec.Read(path).Text == text) continue;
                 bool bom = File.Exists(path) && CluadeX.Helpers.TextFileCodec.Read(path).HasBom;
+                if (Path.GetDirectoryName(path) is { Length: > 0 } dir) Directory.CreateDirectory(dir);
                 CluadeX.Helpers.TextFileCodec.Write(path, text, bom);
                 SourceWritten?.Invoke(path);
             }
+            catch (Exception ex) { _log?.Warn("UiStudio", "restore failed " + path, ex); failed.Add(path); }
+        }
+        foreach (var (path, text) in before)
+        {
+            if (text != null) continue;
+            if (failed.Count > 0) { failed.Add(path); continue; }
+            try { if (File.Exists(path)) File.Delete(path); }
             catch (Exception ex) { _log?.Warn("UiStudio", "restore failed " + path, ex); failed.Add(path); }
         }
         _undo.Clear();

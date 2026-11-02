@@ -228,8 +228,22 @@ public sealed partial class DesktopToolModule : IAgentToolModule
         if (call.Type == ToolType.DesktopLaunch)
         {
             string path = call.GetArg("path").Trim().Trim('"');
+            string commandLine = (path + " " + call.GetArg("args")).Trim();
+            detail = L("desktop.perm.launch") + " " + commandLine;
+            // Arguments, a shell, an interpreter, a script or a console program run a command line: judged per command
+            // line like run_command, with its own key. Keyed by the app it shared "desktop:powershell" with every desktop
+            // tool on a console window, so one screenshot approval (or one "Allow in this chat") let any later
+            // `powershell -c …` start unasked — and one `reg query …` covered a later `reg delete …`.
+            if (DesktopSafety.LaunchesCommands(path, call.GetArg("args"), context.WorkingDirectory))
+                return new ToolPermission
+                {
+                    Scope = "execute",
+                    Resource = commandLine,
+                    Detail = detail,
+                    OnceKey = $"desktop-launch:{commandLine}@{RunKey()}",
+                    AskEvenWhenPermissionsOff = true,
+                };
             app = Path.GetFileNameWithoutExtension(path);
-            detail = L("desktop.perm.launch") + " " + (path + " " + call.GetArg("args")).Trim();
         }
         else
         {
@@ -297,11 +311,16 @@ public sealed partial class DesktopToolModule : IAgentToolModule
             }
             // Typed text / a set value can be a command (a console, the Run box): the run_command check first, off the
             // UI thread; a delete aimed at a drive, the root or a home folder goes ahead only on the user's yes (red prompt).
+            string? keysRefusal = null;
             string? typed = call.Type == ToolType.DesktopType ? call.GetArg("text")
                 : call.Type == ToolType.DesktopAct && call.GetArg("action").Trim().ToLowerInvariant().Replace('-', '_') is "set_value" or "setvalue" or "set" ? call.GetArg("value")
                 // Clipboard text is one ctrl+v away from a console: checked like typed text.
                 : call.Type == ToolType.DesktopClipboard && ClipboardWrites(call) ? call.GetArg("text")
+                // desktop_keys types a command one chord at a time ("d i r space …  Enter"): the same check on what it types,
+                // rebuilt from the keys that will really be sent in the target window's keyboard layout.
+                : call.Type == ToolType.DesktopKeys ? KeysCheckOf(call, context, out keysRefusal)
                 : null;
+            if (keysRefusal != null) return Fail(call, keysRefusal);
             if (!string.IsNullOrEmpty(typed)
                 && await Safety.DangerApproval.GateAsync(call.ToolName, typed,
                        Safety.CodeRunGuard.CheckCode(typed) ?? await Safety.CodeRunGuard.CheckAsync(typed, context.WorkingDirectory)) is { } unsafeText)
@@ -310,14 +329,14 @@ public sealed partial class DesktopToolModule : IAgentToolModule
             {
                 ToolType.DesktopWindows => await Ui(() => Windows(call), ct),
                 ToolType.DesktopScreenshot => await ScreenshotAsync(call, context, ct),
-                ToolType.DesktopInspect => await Ui(() => Inspect(call, context, ct), ct, 60_000),
-                ToolType.DesktopFind => await Ui(() => FindTool(call, context, ct), ct, 60_000),
-                ToolType.DesktopAct => await Ui(() => Act(call, context, ct), ct),
-                ToolType.DesktopType => await Ui(() => TypeText(call, context, ct), ct, 60_000),
-                ToolType.DesktopKeys => await Ui(() => Keys(call, context, ct), ct, 60_000),
+                ToolType.DesktopInspect => await Ui(t => Inspect(call, context, t), ct, 60_000),
+                ToolType.DesktopFind => await Ui(t => FindTool(call, context, t), ct, 60_000),
+                ToolType.DesktopAct => await Ui(t => Act(call, context, t), ct),
+                ToolType.DesktopType => await Ui(t => TypeText(call, context, t), ct, 60_000),
+                ToolType.DesktopKeys => await Ui(t => Keys(call, context, t), ct, 60_000),
                 ToolType.DesktopLaunch => await LaunchAsync(call, context, ct),
                 ToolType.DesktopWait => await WaitAsync(call, context, ct),
-                ToolType.DesktopMouse => await Ui(() => MouseTool(call, context, ct), ct, 60_000),
+                ToolType.DesktopMouse => await Ui(t => MouseTool(call, context, t), ct, 60_000),
                 ToolType.DesktopWindowAction => await Ui(() => WindowTool(call), ct),
                 ToolType.DesktopRead => await Ui(() => ReadTool(call, context), ct, 60_000),
                 ToolType.DesktopClipboard => await ClipboardAsync(call, ct),
@@ -345,12 +364,24 @@ public sealed partial class DesktopToolModule : IAgentToolModule
 
     /// <summary>Run UI Automation / Win32 work on its own per-monitor DPI aware thread (never the UI thread: acting
     /// on CluadeX's own window from its UI thread would deadlock), bounded by a timeout and the run's Stop.</summary>
-    private static Task<T> Ui<T>(Func<T> f, CancellationToken ct, int timeoutMs = 20_000) =>
-        Task.Factory.StartNew(() =>
+    private static Task<T> Ui<T>(Func<T> f, CancellationToken ct, int timeoutMs = 20_000) => Ui(_ => f(), ct, timeoutMs);
+
+    /// <summary>As above, for work that sends input: <paramref name="f"/> gets a token that is cancelled by the run's Stop
+    /// AND by the timeout. WaitAsync alone only stops waiting — the worker went on typing into the app in the background
+    /// while the tool had already reported a timeout and the agent moved on. Typing and key loops check the token
+    /// between pieces and chords, so a timed-out call stops sending at the next one.</summary>
+    private static async Task<T> Ui<T>(Func<CancellationToken, T> f, CancellationToken ct, int timeoutMs = 20_000)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var token = cts.Token;
+        var work = Task.Factory.StartNew(() =>
         {
             using var dpi = DesktopNative.PerMonitorDpi();
-            return f();
-        }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default).WaitAsync(TimeSpan.FromMilliseconds(timeoutMs), ct);
+            return f(token);
+        }, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        try { return await work.WaitAsync(TimeSpan.FromMilliseconds(timeoutMs), ct); }
+        catch (TimeoutException) { cts.Cancel(); throw; }
+    }
 
     private void Log(string tool, string app, string action, string? element) =>
         _log?.Info("Desktop", $"{tool} {action} app={app}{(element != null ? $" element=\"{DesktopWindows.Trunc(element, 80)}\"" : "")}");
@@ -545,6 +576,31 @@ public sealed partial class DesktopToolModule : IAgentToolModule
         var r = RefOf(call, context);
         string action = ActionOf(call.ToolName, call.GetArg("action"));
         if (DesktopSafety.GuardRefusal(r.Element) is { } g) throw new InvalidOperationException(g);
+        // Cancel / Close of a Run box only dismisses it (owner 2026-11-02: it must stay closable).
+        bool dismissing = action is "invoke" or "click" && DesktopSafety.IsDismiss(r.Element);
+        if (action is not ("scroll" or "expand" or "collapse"))
+        {
+            var rw = DesktopWindows.Describe(r.Window);
+            if (DesktopSafety.CommandSurfaceRefusal(rw, null, dismissing) is { } cs) throw new InvalidOperationException(cs);
+            // In an address bar only writing into it (set_value) and right-click ("Paste and go") are refused: its
+            // breadcrumb buttons are ordinary Explorer navigation. A terminal panel refuses every action.
+            if (DesktopSafety.CommandInputKind(r.Element, addressBar: action is "set_value" or "right_click") is { } kind)
+                throw new InvalidOperationException($"That element is in {kind}{(rw != null ? $" of {rw.ProcessName}" : "")}. " + DesktopSafety.CommandSurfaceReason);
+        }
+        // Choosing an entry of the address bar's history / suggestion list enters it, like Enter in the address bar.
+        if (action is "invoke" or "select" or "click" or "double_click" && DesktopSafety.IsAddressDropdownItem(r.Element))
+            throw new InvalidOperationException(DesktopSafety.AddressDropdownReason + DesktopSafety.CommandSurfaceReason);
+        // A palette row or menu item such as "Run Selected Text" sends text to the editor's terminal.
+        if (action is "invoke" or "select" or "click" or "double_click" && DesktopSafety.TerminalSendClickRefusal(r.Element) is { } sendsClick)
+            throw new InvalidOperationException(sendsClick);
+        // Invoking a .bat / .exe in Explorer's file list starts it, skipping the script check desktop_launch makes; so does
+        // a click on a context-menu command such as Open while one is selected. (select checks its invoke fallback itself.)
+        var openKind = action is "invoke" or "double_click" ? DesktopSafety.OpenKind.Item
+            : action is "click" or "right_click" ? DesktopSafety.OpenKind.Click : (DesktopSafety.OpenKind?)null;
+        if (openKind is { } ok && DesktopSafety.OpensFileRefusal(r.Element, ok) is { } run) throw new InvalidOperationException(run);
+        // A value written into an editor's command palette can select a command that runs text in its terminal. set_value
+        // replaces what the input holds, so the value is judged on its own.
+        if (action == "set_value" && DesktopSafety.TerminalSendRefusal(call.GetArg("value"), r.Element, appends: false) is { } sends) throw new InvalidOperationException(sends);
         string name = SafeName(r.Element);
         string done = DesktopAutomation.Act(r, action, call.GetArg("value"), call.GetArg("direction"), IntArg(call, "amount", 3), ct);
         Log("desktop_act", r.ProcessName, action, name);
@@ -620,6 +676,9 @@ public sealed partial class DesktopToolModule : IAgentToolModule
         CheckWindow(win);
         if (DesktopSafety.GuardRefusal(target) is { } g) throw new InvalidOperationException(g);
         if (DesktopSafety.PasswordRefusal(target) is { } pw) throw new InvalidOperationException(pw);
+        if (DesktopSafety.CommandSurfaceRefusal(win, target) is { } cs) throw new InvalidOperationException(cs);
+        // Judged after what the palette already holds too ("tas" then "k " is "task "), unless clear empties it first.
+        if (DesktopSafety.TerminalSendRefusal(text, target, appends: !clear) is { } sends) throw new InvalidOperationException(sends);
 
         string how;
         if (text.Length > 0 || clear)
@@ -638,10 +697,53 @@ public sealed partial class DesktopToolModule : IAgentToolModule
                     DesktopInput.SendChord(DesktopInput.Parse("ctrl+a")!);
                     DesktopInput.SendChord(DesktopInput.Parse("Delete")!);
                 }
-                // The focus must still be this field when the keys go out (nothing moved it into a password box).
-                var now = AutomationElement.FocusedElement;
-                if (now != null && DesktopSafety.PasswordRefusal(now) is { } pw2) throw new InvalidOperationException(pw2);
-                DesktopInput.SendText(text, ct);
+                // The focus is judged again wherever it can move, not once: a line can open and focus a terminal ("Terminal:
+                // Create New Terminal" + Enter in VS Code's palette) and the next line would land in it. Before every line
+                // break and Tab, and whenever the foreground window or the focused element changes; chunks typed into the
+                // same element skip the walk up its ancestors (thousands of characters into an editor were timing out).
+                IntPtr front = DesktopNative.GetForegroundWindow();
+                if (DesktopSafety.CommandSurfaceRefusal(DesktopWindows.Describe(front)) is { } csFront) throw new InvalidOperationException(csFront);
+                var verdicts = new Dictionary<string, FocusVerdict>(StringComparer.Ordinal);
+                string? judgedKey = null;
+                bool inExplorerMenu = false;
+                int typedChars = 0;
+                foreach (var piece in TypingPieces(text))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    string sofar = $" ({typedChars} character(s) were typed before that.)";
+                    if (DesktopNative.GetForegroundWindow() != front)
+                        throw new InvalidOperationException("Another window came to the front while typing, so the rest was not typed." + sofar);
+                    var now = AutomationElement.FocusedElement;
+                    string key = FocusKeyOf(now);
+                    bool boundary = piece is "\n" or "\t";
+                    if (boundary || key.Length == 0 || key != judgedKey)
+                    {
+                        var v = VerdictOf(now, verdicts);
+                        if (v.Password is { } pw2) throw new InvalidOperationException(pw2 + sofar);
+                        if (v.Guard is { } g3) throw new InvalidOperationException(g3 + sofar);
+                        if (v.Kind != null) throw new InvalidOperationException(DesktopSafety.CommandSurfaceRefusal(DesktopWindows.Describe(front), now) + sofar);
+                        if (v.InPalette && DesktopSafety.TerminalSendRefusal(text, now) is { } sends2) throw new InvalidOperationException(sends2 + sofar);
+                        inExplorerMenu = v.InExplorerMenu;
+                        judgedKey = key;
+                    }
+                    // A context menu in Explorer takes typed letters as access keys ('o' = Open). A Tab only moves there and
+                    // a line break is judged as Enter below, by the focused command.
+                    if (piece is not ("\n" or "\t") && inExplorerMenu
+                        && DesktopSafety.OpensFileRefusal(now, DesktopSafety.OpenKind.MenuKey) is { } menu2) throw new InvalidOperationException(menu2 + sofar);
+                    if (piece == "\n")
+                    {
+                        if (DesktopSafety.OpensFileRefusal(now, DesktopSafety.OpenKind.Enter) is { } run2) throw new InvalidOperationException(run2 + sofar);
+                        if (DesktopSafety.PaletteEnterRefusal(now) is { } pal2) throw new InvalidOperationException(pal2 + sofar);
+                        DesktopInput.SendChord(DesktopInput.Parse("Enter")!);
+                        WaitFocusSettled(ct);
+                    }
+                    else
+                    {
+                        DesktopInput.SendText(piece, ct);
+                        if (piece == "\t") WaitFocusSettled(ct);   // a Tab can move the focus too
+                    }
+                    typedChars += piece.Length;
+                }
                 how = "typed as key input";
             }
         }
@@ -649,7 +751,11 @@ public sealed partial class DesktopToolModule : IAgentToolModule
         if (submit)
         {
             if (!DesktopWindows.Activate(window)) throw new InvalidOperationException(NotInFront(window));
-            if (DesktopSafety.GuardRefusal(AutomationElement.FocusedElement) is { } g2) throw new InvalidOperationException(g2);
+            var focusNow = AutomationElement.FocusedElement;
+            if (DesktopSafety.GuardRefusal(focusNow) is { } g2) throw new InvalidOperationException(g2);
+            if (DesktopSafety.CommandSurfaceRefusal(DesktopWindows.Describe(DesktopNative.GetForegroundWindow()), focusNow) is { } cs3) throw new InvalidOperationException(cs3);
+            if (DesktopSafety.OpensFileRefusal(focusNow, DesktopSafety.OpenKind.Enter) is { } run3) throw new InvalidOperationException(run3);
+            if (DesktopSafety.PaletteEnterRefusal(focusNow) is { } pal3) throw new InvalidOperationException(pal3);
             DesktopInput.SendChord(DesktopInput.Parse("Enter")!);
         }
         string name = SafeName(target);
@@ -674,11 +780,15 @@ public sealed partial class DesktopToolModule : IAgentToolModule
 
     private ToolResult Keys(ToolCall call, ToolModuleContext context, CancellationToken ct)
     {
+        // Parsed in the same keyboard layout the typed-text check used, so ';' is the same key in both.
+        _keysChecked.TryGetValue(call, out var checkedKeys);
+        IntPtr layout = checkedKeys?.Layout ?? IntPtr.Zero;
         var chords = new List<DesktopChord>();
         foreach (var token in call.GetArg("keys").Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
-            var c = DesktopInput.Parse(token) ?? throw new ArgumentException($"Unknown key \"{token}\". Use names like Enter, Tab, Esc, F5, Up, ctrl+s, alt+F4, shift+Tab.");
+            var c = DesktopInput.Parse(token, layout) ?? throw new ArgumentException($"Unknown key \"{token}\". Use names like Enter, Tab, Esc, F5, Up, ctrl+s, alt+F4, shift+Tab.");
             if (c.UsesWin) throw new ArgumentException($"\"{token}\" uses the Windows key, which acts on Windows itself rather than the app — refused.");
+            if (DesktopSafety.OpensStart(c)) throw new ArgumentException($"\"{token}\" opens Start, like the Windows key, and Start runs what is typed into it — refused.");
             chords.Add(c);
         }
         if (chords.Count == 0) throw new ArgumentException("Give keys, e.g. 'ctrl+s' or 'Tab Enter'.");
@@ -697,22 +807,50 @@ public sealed partial class DesktopToolModule : IAgentToolModule
         else window = ResolveWindow(call, foregroundDefault: true).Handle;
         var win = DesktopWindows.Describe(window) ?? throw new InvalidOperationException("The window is gone.");
         CheckWindow(win);
+        // Esc / alt+F4 alone only dismiss a Run box (owner 2026-11-02: it must stay closable). The focus is judged per chord below.
+        if (DesktopSafety.CommandSurfaceRefusal(win, null, dismissing: DesktopSafety.IsDismissKeys(call.GetArg("keys"))) is { } cs) throw new InvalidOperationException(cs);
 
         int sent = 0;
+        var verdicts = new Dictionary<string, FocusVerdict>(StringComparer.Ordinal);
         for (int i = 0; i < repeat; i++)
             foreach (var c in chords)
             {
                 ct.ThrowIfCancellationRequested();
+                string sofar = $" ({sent} chord(s) were sent before that.)";
                 // Checked before EVERY chord: a Tab can move the focus into a password box or onto an Allow button,
-                // and another window can come to the front mid-sequence.
+                // and another window can come to the front mid-sequence. The walk up the focused element's ancestors is
+                // kept per element (Tab Tab … with repeat comes back to the same few elements).
                 if (DesktopNative.GetForegroundWindow() != window && !DesktopWindows.Activate(window))
-                    throw new InvalidOperationException(NotInFront(window) + $" ({sent} chord(s) were sent before that.)");
+                    throw new InvalidOperationException(NotInFront(window) + sofar);
                 var focus = AutomationElement.FocusedElement;
-                if (DesktopSafety.GuardRefusal(focus) is { } g) throw new InvalidOperationException(g + $" ({sent} chord(s) were sent before that.)");
-                if (c.PutsText && focus != null && DesktopSafety.PasswordRefusal(focus) is { } pw) throw new InvalidOperationException(pw);
+                var v = VerdictOf(focus, verdicts);
+                if (v.Guard is { } g) throw new InvalidOperationException(g + sofar);
+                // A terminal panel refuses every chord; the address bar lets Esc / Tab / F6 move out of it.
+                if ((DesktopSafety.IsLeaveChord(c.Text) ? v.KindNoAddressBar : v.Kind) != null)
+                    throw new InvalidOperationException(DesktopSafety.CommandSurfaceRefusal(win, focus) + sofar);
+                if (c.PutsText && v.Password is { } pw) throw new InvalidOperationException(pw + sofar);
+                if (c.PutsText && v.InPalette && DesktopSafety.TerminalSendRefusal(checkedKeys?.Typed, focus) is { } sends)
+                    throw new InvalidOperationException(sends + sofar);
+                if (c.Key == 0x0D || (v.InExplorerMenu && c.Key == 0x20 && c.Modifiers.Length == 0))
+                {
+                    // Enter in Explorer opens the whole selection, and in a context menu (space too) chooses the focused
+                    // command; in a command palette it runs the highlighted command.
+                    if (DesktopSafety.OpensFileRefusal(focus, DesktopSafety.OpenKind.Enter) is { } run) throw new InvalidOperationException(run + sofar);
+                    if (DesktopSafety.PaletteEnterRefusal(focus) is { } pal) throw new InvalidOperationException(pal + sofar);
+                }
+                // An access key ('o' = Open) in Explorer's context menu can choose any command; Esc, arrows, Tab only move or close.
+                else if (v.InExplorerMenu && DesktopSafety.IsMenuAccessKey(c) && DesktopSafety.OpensFileRefusal(focus, DesktopSafety.OpenKind.MenuKey) is { } menu)
+                    throw new InvalidOperationException(menu + sofar);
+                if (DesktopSafety.RunKeyRefusal(focus, c) is { } runKey) throw new InvalidOperationException(runKey + sofar);
+                // The text check read the keys in one keyboard layout: a layout switched since would type something else.
+                if (c.PutsText && checkedKeys != null && DesktopInput.KeyboardLayoutOf(window) != checkedKeys.Layout)
+                    throw new InvalidOperationException("The window's keyboard layout changed since the keys were checked, so they would type something else. Call again." + sofar);
                 DesktopInput.SendChord(c, hold);
                 sent++;
-                Thread.Sleep(40);
+                // A chord like ctrl+` moves the focus asynchronously (Electron's renderer, then UIA): wait for it to land
+                // before judging the next chord, or its first keys could reach the terminal before the check sees it.
+                if (c.PutsText && !c.Modifiers.Contains(DesktopInput.VK_MENU)) Thread.Sleep(40);
+                else WaitFocusSettled(ct);
             }
         Log("desktop_keys", win.ProcessName, "keys", string.Join(" ", chords.Select(c => c.PutsText ? "(text key)" : c.Text)));
         Thread.Sleep(120);
@@ -733,6 +871,7 @@ public sealed partial class DesktopToolModule : IAgentToolModule
         string commandLine = (path + " " + args).Trim();
         if (DangerousCommandCheck.FindSerious(commandLine) is { } blocked)
             return Fail(call, DangerousCommandCheck.BlockedMessage(blocked));
+        if (DesktopSafety.RunBoxLaunchRefusal(commandLine) is { } runBox) return Fail(call, runBox);
         string? cwd = call.GetArg("cwd").Trim().Trim('"');
         if (string.IsNullOrEmpty(cwd)) cwd = context.WorkingDirectory;
         if (cwd != null && !Directory.Exists(cwd)) throw new ArgumentException($"The working directory {cwd} does not exist.");
@@ -818,6 +957,175 @@ public sealed partial class DesktopToolModule : IAgentToolModule
     }
 
     // ─────────────────────────── helpers ───────────────────────────
+
+    /// <summary>desktop_type's text as it goes out: each line break its own "\n" piece (an Enter) and each Tab its own
+    /// "\t" piece (both can move the focus), the rest in chunks of at most <paramref name="chunk"/> characters, so the
+    /// focus can be judged again between them. '\r' is dropped, and a surrogate pair is never split.</summary>
+    internal static List<string> TypingPieces(string? text, int chunk = 32)
+    {
+        var pieces = new List<string>();
+        var sb = new StringBuilder();
+        foreach (char ch in text ?? "")
+        {
+            if (ch == '\r') continue;
+            if (ch is '\n' or '\t')
+            {
+                if (sb.Length > 0) { pieces.Add(sb.ToString()); sb.Clear(); }
+                pieces.Add(ch.ToString());
+                continue;
+            }
+            if (sb.Length >= chunk && !char.IsLowSurrogate(ch)) { pieces.Add(sb.ToString()); sb.Clear(); }
+            sb.Append(ch);
+        }
+        if (sb.Length > 0) pieces.Add(sb.ToString());
+        return pieces;
+    }
+
+    /// <summary>What desktop_keys' typed-text check read for a call, so Keys parses and sends in that same layout.</summary>
+    private sealed record KeysChecked(string Typed, IntPtr Layout);
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ToolCall, KeysChecked> _keysChecked = new();
+
+    /// <summary>The text a desktop_keys call types, for the danger check, in its target window's keyboard layout.
+    /// <paramref name="refusal"/> is set when that text cannot be known (see <see cref="KeysTypedText"/>).</summary>
+    private string KeysCheckOf(ToolCall call, ToolModuleContext context, out string? refusal)
+    {
+        IntPtr layout = KeysLayout(call, context);
+        string typed = KeysTypedText(call.GetArg("keys"), Math.Clamp(IntArg(call, "repeat", 1), 1, 50), layout, DesktopInput.CapsLockOn(), out refusal);
+        _keysChecked.AddOrUpdate(call, new KeysChecked(typed, layout));
+        return typed;
+    }
+
+    /// <summary>The keyboard layout of the window desktop_keys will press keys in (the ref's window, the named window,
+    /// else the foreground one).</summary>
+    private IntPtr KeysLayout(ToolCall call, ToolModuleContext context)
+    {
+        IntPtr window = IntPtr.Zero;
+        try
+        {
+            using var dpi = DesktopNative.PerMonitorDpi();
+            window = _uia.Lookup(context.SessionKey, call.GetArg("ref"))?.Window
+                     ?? DesktopWindows.Resolve(call.GetArg("handle"), call.GetArg("pid"), call.GetArg("title"), true, out _)?.Handle
+                     ?? IntPtr.Zero;
+        }
+        catch { }
+        return DesktopInput.KeyboardLayoutOf(window);
+    }
+
+    /// <summary>The text a desktop_keys sequence types, rebuilt from the chords that will really be sent: each key's
+    /// character in <paramref name="layout"/> with its shift / AltGr (ctrl+alt) state and Caps Lock — shift+; is ':',
+    /// shift+7 '&amp;', a bare C is 'c', "plus" is what VK_OEM_PLUS types ('=' in US English) — Enter and Tab as
+    /// themselves, Backspace removing the last character, repeated <paramref name="repeat"/> times. Chords with ctrl or
+    /// alt alone, and Windows-key chords, type nothing. What the typed-text danger check judges, as for desktop_type.
+    /// <paramref name="refusal"/> is set when that text cannot be known: typed characters mixed with keys that move the
+    /// caret or change the text another way (Left, Home, Delete, Esc, ctrl+…), which can reorder or wipe what the check
+    /// read, or a dead key.</summary>
+    internal static string KeysTypedText(string? keys, int repeat, IntPtr layout, bool capsLock, out string? refusal)
+    {
+        refusal = null;
+        var chords = new List<DesktopChord>();
+        foreach (var token in (keys ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            if (DesktopInput.Parse(token, layout) is { UsesWin: false } c) chords.Add(c);   // unknown keys and Win chords fail the call before anything is sent
+        var sb = new StringBuilder();
+        bool printed = false, caps = capsLock;
+        string? other = null;
+        for (int i = 0; i < Math.Clamp(repeat, 1, 50); i++)
+            foreach (var c in chords)
+            {
+                bool shift = c.Modifiers.Contains(DesktopInput.VK_SHIFT), ctrl = c.Modifiers.Contains(DesktopInput.VK_CONTROL),
+                     alt = c.Modifiers.Contains(DesktopInput.VK_MENU);
+                if (!ctrl && !alt)
+                {
+                    if (c.Key == DesktopInput.VK_CAPITAL) { caps = !caps; continue; }
+                    if (c.Key == 0x0D) { sb.Append('\n'); continue; }
+                    if (c.Key == 0x09) { if (!shift) sb.Append('\t'); continue; }
+                    if (c.Key == 0x08)
+                    {
+                        // Backspace takes back the last character, never a line already entered.
+                        if (sb.Length > 0 && sb[^1] != '\n') sb.Length -= sb.Length > 1 && char.IsLowSurrogate(sb[^1]) ? 2 : 1;
+                        continue;
+                    }
+                }
+                if (ctrl == alt)   // a plain key, or AltGr
+                {
+                    int n = DesktopInput.CharsOf(c.Key, shift, ctrl, caps, layout, out string chars);
+                    if (n < 0)
+                    {
+                        refusal = $"\"{c.Text}\" is a dead key in the window's keyboard layout (it combines with the next key), so what "
+                                  + "desktop_keys would type cannot be checked. Type the text with desktop_type.";
+                        return sb.ToString();
+                    }
+                    if (n > 0)
+                    {
+                        sb.Append(chars);
+                        if (chars.Any(ch => !char.IsWhiteSpace(ch))) printed = true;
+                        continue;
+                    }
+                }
+                other ??= c.Text;
+            }
+        if (printed && other != null)
+            refusal = $"desktop_keys mixes typed characters with \"{other}\", which moves the caret or changes the text in another way, "
+                      + $"so what it would type cannot be checked. Type the text with desktop_type, and press {other} in a separate desktop_keys call.";
+        return sb.ToString();
+    }
+
+    /// <summary>What the guards said about one focused element. Kept for the rest of a call: the focus comes back to the
+    /// same element often (Tab Tab … with repeat, chunks typed into one editor), and each verdict walks up its ancestors.</summary>
+    private sealed record FocusVerdict(string? Guard, string? Password, string? Kind, string? KindNoAddressBar, bool InPalette, bool InExplorerMenu);
+
+    /// <summary>The focused element's UIA runtime id ("" when it has none or is gone: such an element is never cached).</summary>
+    private static string FocusKeyOf(AutomationElement? f)
+    {
+        try { return f == null ? "" : string.Join(".", f.GetRuntimeId()); }
+        catch { return ""; }
+    }
+
+    private static FocusVerdict VerdictOf(AutomationElement? f, Dictionary<string, FocusVerdict> cache)
+    {
+        string key = FocusKeyOf(f);
+        if (key.Length > 0 && cache.TryGetValue(key, out var known)) return known;
+        FocusVerdict v;
+        if (f == null) v = new FocusVerdict(null, null, null, null, false, false);
+        else
+        {
+            string? kind = DesktopSafety.CommandInputKind(f);
+            bool menu = false;
+            try
+            {
+                var ct = f.Current.ControlType;
+                menu = (ct == ControlType.MenuItem || ct == ControlType.Menu)
+                       && string.Equals(DesktopWindows.ProcessNameOf(f.Current.ProcessId), "explorer", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { }
+            v = new FocusVerdict(DesktopSafety.GuardRefusal(f), DesktopSafety.PasswordRefusal(f), kind,
+                kind == null ? null : DesktopSafety.CommandInputKind(f, addressBar: false), DesktopSafety.PaletteOf(f) != null, menu);
+        }
+        if (key.Length > 0) cache[key] = v;
+        return v;
+    }
+
+    /// <summary>Wait until the keyboard focus has stayed on one element for 150 ms (at most 800 ms): Electron apps move
+    /// it asynchronously after a chord, and UI Automation reports it later still.</summary>
+    private static void WaitFocusSettled(CancellationToken ct)
+    {
+        static string FocusKey()
+        {
+            try { return AutomationElement.FocusedElement is { } f ? string.Join(".", f.GetRuntimeId()) : ""; }
+            catch { return ""; }
+        }
+        var sw = Stopwatch.StartNew();
+        string last = FocusKey();
+        long since = 0;
+        while (sw.ElapsedMilliseconds < 800)
+        {
+            ct.ThrowIfCancellationRequested();
+            Thread.Sleep(40);
+            string now = FocusKey();
+            if (now != last) { last = now; since = sw.ElapsedMilliseconds; }
+            else if (sw.ElapsedMilliseconds - since >= 150) return;
+        }
+    }
 
     private static int IntArg(ToolCall call, string key, int def)
     {

@@ -294,10 +294,11 @@ public class GeminiProvider : ApiProviderBase, IModelLister
         string? blockReason = null;
         JsonElement? lastUsage = null;
 
-        while (!reader.EndOfStream)
+        // ReadLineAsync, not the synchronous EndOfStream, so a silent stream never blocks a thread (see LlamaServerProvider).
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
 
             var data = line["data: ".Length..];
@@ -623,10 +624,11 @@ public class GeminiProvider : ApiProviderBase, IModelLister
         JsonElement? usage = null;
         int synthetic = 0;
 
-        while (!reader.EndOfStream)
+        // ReadLineAsync, not the synchronous EndOfStream, so a silent stream never blocks a thread (see LlamaServerProvider).
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line)) continue;
             onTextDelta?.Invoke(string.Empty);   // keep-alive for the loop's idle timeout (see IAiProvider)
             if (!line.StartsWith("data: ")) continue;

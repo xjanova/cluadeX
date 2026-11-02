@@ -596,10 +596,11 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         int promptTokens = 0;   // input + cache reads + cache writes (message_start): prices the output records (Haiku 5.5 tiers)
         bool anyText = false;
 
-        while (!reader.EndOfStream)
+        // ReadLineAsync, not the synchronous EndOfStream, so a silent stream never blocks a thread (see LlamaServerProvider).
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             if (line.StartsWith("event: "))
@@ -949,10 +950,11 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         int finalOutputTokens = 0;
         bool streamEnded = false;
 
-        while (!streamEnded && !reader.EndOfStream)
+        // ReadLineAsync, not the synchronous EndOfStream, so a silent stream never blocks a thread (see LlamaServerProvider).
+        string? line;
+        while (!streamEnded && (line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line)) continue;
             onTextDelta?.Invoke(string.Empty);   // keep-alive: any event proves the stream is alive (see IAiProvider)
             if (line.StartsWith("event: ")) continue;

@@ -44,21 +44,46 @@ public sealed partial class UiStudioViewModel
         _fs.OnWorkingDirectoryChanged += () => Application.Current?.Dispatcher.BeginInvoke(QueueFollow);
         // A folder the chat opened while still empty (the AI makes the site after opening it) stayed "Unsupported" for
         // good, so the Studio never showed the page it then wrote (owner 2026-10-20). Look again when files appear.
-        _studio.FilesChanged += _ => RedetectAfterFilesAppeared();
+        _studio.FilesChanged += paths => _ = RedetectAfterFilesAppearedAsync(paths);
         // the project open at start-up (the last chat's): followed once the window is up, after the start-up work
         Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, QueueFollow);
     }
 
     /// <summary>An "Unsupported" project that files were just written into: detect it again, and start it the way a
-    /// followed project starts (a static site at once). Runs on the dispatcher (FilesChanged is raised by its timer).</summary>
-    internal void RedetectAfterFilesAppeared()
+    /// followed project starts (a static site at once). FilesChanged is raised by the dispatcher's timer, so the look
+    /// itself runs off it — and only for a file that can change the answer (a package.json, a pubspec.yaml, a .csproj,
+    /// an index.html…): a Python or console .NET repo is Unsupported for good, and every burst of the AI's edits there
+    /// re-read its .sln, every .csproj and every folder on the UI thread (2026-11-02).</summary>
+    internal async Task RedetectAfterFilesAppearedAsync(IReadOnlyCollection<string> paths)
     {
-        if (!_studio.HasProject || !IsUnsupported || _session != null || IsChecking) return;
-        if (StudioProject.Detect(_studio.Root).Kind == StudioProjectKind.Unsupported) return;
-        _studio.OpenProject(_studio.Root);   // the same root: detected again
-        StartFollowed();
-        _log?.Info("UiStudio", $"files appeared in {_studio.Root}: now {_studio.Project.Kind}");
+        // The caller discards this task, so StudioService's own catch never sees a failure here: everything that can
+        // throw is caught and logged in this method.
+        string root;
+        int run;
+        try
+        {
+            if (!_studio.HasProject || !IsUnsupported || _session != null || IsChecking) return;
+            root = _studio.Root;
+            if (!paths.Any(p => StudioProject.MayChangeKind(root, p))) return;
+            run = ++_redetectRun;
+        }
+        catch (Exception ex) { _log?.Warn("UiStudio", "checking changed files for a new project kind failed", ex); return; }
+        StudioProjectKind kind;
+        try { kind = await Task.Run(() => StudioProject.Detect(root).Kind); }
+        catch (Exception ex) { _log?.Warn("UiStudio", "detecting the project again failed", ex); return; }
+        try
+        {
+            if (kind == StudioProjectKind.Unsupported || run != _redetectRun) return;   // a newer look is on its way
+            // the Studio may have moved on while it looked: another project, a review round, already detected
+            if (!_studio.HasProject || !SamePath(_studio.Root, root) || !IsUnsupported || _session != null || IsChecking) return;
+            _studio.OpenProject(root);   // the same root: detected again
+            StartFollowed();
+            _log?.Info("UiStudio", $"files appeared in {root}: now {_studio.Project.Kind}");
+        }
+        catch (Exception ex) { _log?.Warn("UiStudio", "opening the newly detected project failed", ex); }
     }
+
+    private int _redetectRun;
 
     /// <summary>Chats switch projects in bursts (the session list, a restore): follow the folder it settles on.</summary>
     private void QueueFollow()

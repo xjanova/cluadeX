@@ -5,11 +5,12 @@ namespace CluadeX.Services.Desktop;
 /// <summary>One key chord: modifiers + a key ("ctrl+shift+s", "Enter", "F5").</summary>
 public sealed record DesktopChord(ushort[] Modifiers, ushort Key, bool Extended, string Text, bool UsesWin)
 {
-    /// <summary>Would this chord put text into the focused field: a printable key with no Ctrl/Alt, or a paste.</summary>
+    /// <summary>Would this chord put text into the focused field: a printable key with no Ctrl/Alt, the same with
+    /// ctrl+alt (AltGr: '\' or '@' on many European layouts), or a paste.</summary>
     public bool PutsText =>
         (Key == 0x56 && Modifiers.Contains(DesktopInput.VK_CONTROL))          // ctrl+v
         || (Key == 0x2D && Modifiers.Contains(DesktopInput.VK_SHIFT))         // shift+insert
-        || (!Modifiers.Contains(DesktopInput.VK_CONTROL) && !Modifiers.Contains(DesktopInput.VK_MENU) && DesktopInput.IsPrintable(Key));
+        || (Modifiers.Contains(DesktopInput.VK_CONTROL) == Modifiers.Contains(DesktopInput.VK_MENU) && !UsesWin && DesktopInput.IsPrintable(Key));
 }
 
 /// <summary>Real keyboard and mouse input through SendInput — reaches the foreground window only.</summary>
@@ -29,8 +30,10 @@ public static class DesktopInput
         ["plus"] = (0xBB, false), ["minus"] = (0xBD, false), ["comma"] = (0xBC, false), ["period"] = (0xBE, false),
     };
 
-    /// <summary>Parse "ctrl+shift+s" / "Enter" / "alt+f4" / "a". Null when a part is unknown.</summary>
-    public static DesktopChord? Parse(string token)
+    /// <summary>Parse "ctrl+shift+s" / "Enter" / "alt+f4" / "a". Null when a part is unknown. A single punctuation
+    /// character is looked up in <paramref name="layout"/> (the target window's; this thread's when zero), so ';' is
+    /// the key that types ';' there, with shift or AltGr added when that layout needs them.</summary>
+    public static DesktopChord? Parse(string token, IntPtr layout = default)
     {
         if (string.IsNullOrWhiteSpace(token)) return null;
         var parts = token.Trim().Split('+', StringSplitOptions.RemoveEmptyEntries);
@@ -56,10 +59,16 @@ public static class DesktopInput
         else if (k.Length == 1 && char.IsAsciiLetterOrDigit(k[0])) vk = char.ToUpperInvariant(k[0]);
         else if (k.Length == 1)
         {
-            short scan = VkKeyScanW(k[0]);
+            short scan = layout != IntPtr.Zero ? VkKeyScanExW(k[0], layout) : VkKeyScanW(k[0]);
             if (scan == -1) return null;
             vk = (ushort)(scan & 0xFF);
             if ((scan & 0x100) != 0 && !mods.Contains(VK_SHIFT)) mods.Add(VK_SHIFT);
+            // 0x600: the layout types it with AltGr (ctrl+alt).
+            if ((scan & 0x600) == 0x600)
+            {
+                if (!mods.Contains(VK_CONTROL)) mods.Add(VK_CONTROL);
+                if (!mods.Contains(VK_MENU)) mods.Add(VK_MENU);
+            }
         }
         else if (k.Equals("win", StringComparison.OrdinalIgnoreCase)) { vk = VK_LWIN; win = true; }
         else return null;
@@ -70,6 +79,62 @@ public static class DesktopInput
         vk == 0x20 || (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A) || (vk >= 0x60 && vk <= 0x6F) || (vk >= 0xBA && vk <= 0xE2);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern short VkKeyScanW(char ch);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern short VkKeyScanExW(char ch, IntPtr layout);
+    [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint threadId);
+    [DllImport("user32.dll")] private static extern int GetKeyboardLayoutList(int count, [Out] IntPtr[]? list);
+    [DllImport("user32.dll")] private static extern uint MapVirtualKeyExW(uint code, uint mapType, IntPtr layout);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int ToUnicodeEx(uint vk, uint scan, byte[] keyState, [Out] char[] buffer, int bufferSize, uint flags, IntPtr layout);
+    [DllImport("user32.dll")] private static extern short GetKeyState(int vk);
+
+    public const ushort VK_CAPITAL = 0x14;
+
+    /// <summary>The keyboard layout of the thread that owns <paramref name="window"/> (the foreground window when it is
+    /// zero): what a virtual key types depends on it (shift+7 is '&amp;' in US English, something else in Thai).</summary>
+    public static IntPtr KeyboardLayoutOf(IntPtr window)
+    {
+        if (window == IntPtr.Zero) window = DesktopNative.GetForegroundWindow();
+        uint tid = window != IntPtr.Zero ? DesktopNative.GetWindowThreadProcessId(window, out _) : 0;
+        return GetKeyboardLayout(tid);
+    }
+
+    /// <summary>The keyboard layouts loaded on this PC (the user's input languages).</summary>
+    public static IReadOnlyList<IntPtr> LoadedLayouts()
+    {
+        int n = GetKeyboardLayoutList(0, null);
+        if (n <= 0) return Array.Empty<IntPtr>();
+        var list = new IntPtr[n];
+        n = GetKeyboardLayoutList(n, list);
+        return list.Take(Math.Max(0, n)).ToArray();
+    }
+
+    /// <summary>Whether Caps Lock is on: a plain letter key then types a capital.</summary>
+    public static bool CapsLockOn()
+    {
+        try { return (GetKeyState(VK_CAPITAL) & 1) != 0; }
+        catch { return false; }
+    }
+
+    /// <summary>What pressing <paramref name="vk"/> types in <paramref name="layout"/>, with shift / AltGr (ctrl+alt) /
+    /// Caps Lock as given: the number of characters (0 = none, or only control characters), or -1 for a dead key (it
+    /// combines with the next key, so what it types cannot be known alone). Leaves the keyboard state untouched.</summary>
+    public static int CharsOf(ushort vk, bool shift, bool altGr, bool capsLock, IntPtr layout, out string chars)
+    {
+        chars = "";
+        var state = new byte[256];
+        if (shift) { state[VK_SHIFT] = 0x80; state[0xA0] = 0x80; }                       // VK_LSHIFT
+        if (altGr) { state[VK_CONTROL] = 0x80; state[0xA2] = 0x80; state[VK_MENU] = 0x80; state[0xA4] = 0x80; }   // LCONTROL, LMENU
+        if (capsLock) state[VK_CAPITAL] = 0x01;
+        uint scan = MapVirtualKeyExW(vk, 0, layout);   // MAPVK_VK_TO_VSC
+        var buf = new char[8];
+        // Flag 4: do not change the keyboard state (Windows 10 1607+), so a dead key is not left pending.
+        int n = ToUnicodeEx(vk, scan, state, buf, buf.Length, 0x4, layout);
+        if (n < 0) return -1;
+        string s = new string(buf, 0, Math.Min(n, buf.Length));
+        if (s.All(char.IsControl)) return 0;
+        chars = s;
+        return s.Length;
+    }
 
     public static void SendChord(DesktopChord c, int holdMs = 0)
     {

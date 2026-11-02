@@ -680,20 +680,68 @@ public sealed class FileGlyphConverter : System.Windows.Data.IValueConverter
 /// A tool-row thumbnail from an image file path: decoded small (≈240 px tall), read fully into memory and the file
 /// closed at once — so a thumbnail never holds a lock on a screenshot the store later prunes — and nothing (no
 /// image) when the file is gone or unreadable.
+/// The decode runs off the UI thread and is kept by file + time written (owner 2026-11-02: a chat of screenshots
+/// stuttered on every thumbnail, because each row re-read and re-decoded its PNG on the UI thread every time it
+/// scrolled back into view). A thumbnail not decoded yet is an empty picture that fills in when it is.
 /// </summary>
 public sealed class ThumbnailSourceConverter : System.Windows.Data.IValueConverter
 {
+    private const int ThumbHeight = 240;
+
+    /// <summary>Thumbnails by path + time written; a long chat of screenshots drops the lot rather than grow.</summary>
+    private static readonly Dictionary<string, Task<System.Windows.Media.Imaging.BitmapSource?>> Thumbs =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
     {
         if (value is not string path || !ChatViewModel.IsOpenableImage(path)) return null;
+        string key;
+        try { key = path + "|" + System.IO.File.GetLastWriteTimeUtc(path).Ticks; }
+        catch { return null; }
+
+        Task<System.Windows.Media.Imaging.BitmapSource?> decode;
+        lock (Thumbs)
+        {
+            if (!Thumbs.TryGetValue(key, out decode!))
+            {
+                if (Thumbs.Count >= 48) Thumbs.Clear();
+                decode = Task.Run(() => Decode(path));
+                Thumbs[key] = decode;
+            }
+        }
+        if (decode.IsCompletedSuccessfully)
+        {
+            if (decode.Result != null) return decode.Result;
+            lock (Thumbs) Thumbs.Remove(key);   // unreadable just now (still being written?): try again next time
+            return null;
+        }
+
+        var pending = new DrawingImage();
+        decode.ContinueWith(t =>
+        {
+            var bmp = t.Result;   // never throws: an unreadable picture is null
+            if (bmp == null) { lock (Thumbs) Thumbs.Remove(key); return; }
+            pending.Dispatcher.BeginInvoke(() =>
+                pending.Drawing = new ImageDrawing(bmp, new Rect(0, 0, bmp.Width, bmp.Height)));
+        }, TaskScheduler.Default);
+        return pending;
+    }
+
+    private static System.Windows.Media.Imaging.BitmapSource? Decode(string path)
+    {
         try
         {
+            using var stream = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+                System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete);
+            int height = System.Windows.Media.Imaging.BitmapFrame.Create(stream,
+                System.Windows.Media.Imaging.BitmapCreateOptions.DelayCreation,
+                System.Windows.Media.Imaging.BitmapCacheOption.None).PixelHeight;
+            stream.Position = 0;
             var bmp = new System.Windows.Media.Imaging.BitmapImage();
             bmp.BeginInit();
-            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-            bmp.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
-            bmp.DecodePixelHeight = 240;
-            bmp.UriSource = new Uri(path, UriKind.Absolute);
+            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;   // read now: the file is not held open
+            bmp.DecodePixelHeight = Math.Clamp(height, 1, ThumbHeight);
+            bmp.StreamSource = stream;
             bmp.EndInit();
             bmp.Freeze();
             return bmp;

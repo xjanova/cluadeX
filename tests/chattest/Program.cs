@@ -320,6 +320,7 @@ internal static partial class Program
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
+        await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
@@ -2959,8 +2960,22 @@ internal static partial class Program
         Check("T1 an image whose file is gone gets no thumbnail (no broken picture)", rows.Count == 2 && rows[1].ThumbnailPath == null);
         Check("T1 with Steps off the image row stays on screen (like a diff: something to verify), the plain row collapses",
             !Vm.ShowAgentInternals && row != null && Container(row)?.Visibility == Visibility.Visible && Container(rows[1])?.Visibility == Visibility.Collapsed);
-        var img = row == null || Container(row) == null ? null : Find<Image>(Container(row)).FirstOrDefault(i => i.IsVisible && i.Source != null);
-        Check("T1 the thumbnail is rendered on the row", img?.Source is System.Windows.Media.Imaging.BitmapSource bs && bs.PixelHeight > 0);
+        // The decode runs off the UI thread (2026-11-02): a first sight is an empty picture that fills in when the
+        // decode is done, so wait for the picture and for the row's Image to take its size.
+        Image img = null;
+        static int ThumbPixels(ImageSource src) => src switch
+        {
+            System.Windows.Media.Imaging.BitmapSource b => b.PixelHeight,
+            DrawingImage { Drawing: ImageDrawing { ImageSource: System.Windows.Media.Imaging.BitmapSource b } } => b.PixelHeight,
+            _ => 0,
+        };
+        await WaitUntil(() =>
+        {
+            img = row == null || Container(row) == null ? null : Find<Image>(Container(row)).FirstOrDefault(i => i.IsVisible && i.Source != null);
+            return img != null && ThumbPixels(img.Source) > 0 && img.ActualHeight > 0;
+        }, 5000);
+        Check("T1 the thumbnail is rendered on the row", img != null && ThumbPixels(img.Source) > 0 && img.ActualHeight > 0,
+            img == null ? "no Image" : $"{img.Source?.GetType().Name} {ThumbPixels(img.Source)}px, shown {img.ActualHeight:0}px");
         var open = row == null || Container(row) == null ? null : Find<Button>(Container(row)).FirstOrDefault(b => Equals(b.Tag, jpg));
         Check("T1 the thumbnail is a button carrying the file to open full size; only an existing local image is ever opened",
             open is { IsVisible: true } && ChatViewModel.IsOpenableImage(jpg) && !ChatViewModel.IsOpenableImage("https://example.com/a.jpg")

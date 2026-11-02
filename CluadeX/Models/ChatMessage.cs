@@ -180,6 +180,15 @@ public class ChatMessage : INotifyPropertyChanged
     public string? ToolName { get; set; }
     public string? ToolSummary { get; set; }
     public string? ToolOutput { get; set; }
+
+    /// <summary>ContextMemoryService's token estimate of this row, with the Content and ToolOutput strings it was
+    /// counted from. Every recount re-read every character of every row (owner 2026-11-02: the chat hitched every 5 s);
+    /// a finished row never changes, so its count is kept until either string is replaced. One object, swapped whole,
+    /// so a reader never pairs a new string with an old count.</summary>
+    internal ContextTokenCount? ContextTokens;
+
+    internal sealed record ContextTokenCount(string Content, string? Output, int Tokens);
+
     public bool ToolSuccess { get; set; }
     public string? ToolArguments { get; set; }
     public string? ToolInputSummary { get; set; }
@@ -556,7 +565,14 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     }
 
     public string Id { get; set; } = Guid.NewGuid().ToString();
-    public string Title { get; set; } = "New Chat";
+    private string _title = "New Chat";
+    /// <summary>Raises its change: opening a chat copies the stored title onto the sidebar's own row (the row is no longer
+    /// swapped for a new object, which is what redrew it before).</summary>
+    public string Title
+    {
+        get => _title;
+        set { if (_title != value) { _title = value; Raise(nameof(Title)); } }
+    }
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     private DateTime _updatedAt = DateTime.Now;
     public DateTime UpdatedAt
@@ -571,7 +587,12 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     public List<ChatMessage> Messages { get; set; } = new();
 
     /// <summary>Absolute path of the project folder this session was created in (empty = no project).</summary>
-    public string ProjectPath { get; set; } = "";
+    public string ProjectPath
+    {
+        get => _projectPath;
+        set { if (_projectPath != value) { _projectPath = value; Raise(nameof(ProjectPath)); Raise(nameof(ProjectName)); Raise(nameof(ShowProjectLine)); } }
+    }
+    private string _projectPath = "";
 
     /// <summary>Related folders open beside <see cref="ProjectPath"/> for this chat (kept while the app runs).</summary>
     public List<string> ExtraFolders { get; } = new();

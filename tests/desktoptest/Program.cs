@@ -20,7 +20,7 @@ namespace DesktopTest;
 /// pid or handle; key input is only sent once the fixture is verified to be in front). Data root isolated next to
 /// this exe (portable.txt). The permission cases go through AgentToolService's real gate.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail, Gaps;
     static readonly List<string> Problems = new();
@@ -197,6 +197,11 @@ internal static class Program
         await Case("C1", ScreenshotCases);
         Console.WriteLine("\n── wait, launch, Stop ──");
         await Case("L1", WaitLaunchCases);
+        Console.WriteLine("\n── mouse, window, read, clipboard, terminals ──");
+        await Case("M1", MouseCases);
+        await Case("N1", WindowToolCases);
+        await Case("R1", ReadClipboardCases);
+        await Case("T1", TerminalCases);
         Console.WriteLine("\n── permission gate (AgentToolService) ──");
         await Case("P1", () => PermissionCases(provider.GetRequiredService<PermissionService>(), settings));
         Console.WriteLine("\n── log ──");

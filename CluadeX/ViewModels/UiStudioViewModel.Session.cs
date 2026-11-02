@@ -299,7 +299,9 @@ public sealed partial class UiStudioViewModel
         foreach (var p in changed) _selfWrites.Remove(p);
         _pendingFocus = null;
         StageBox = null;
-        EndSession();
+        // A failed restore keeps the round open: s.Before is the only copy of the text that could not be put back,
+        // and Undo All can be pressed again (restored files compare equal and are skipped).
+        if (failed.Count == 0) EndSession();
         CheckPassed = null;
         OnPropertyChanged(nameof(CanUndo));
         Status(failed.Count == 0 ? T("studio.session.undone", changed.Count) : T("studio.session.undoFailed", failed.Count), error: failed.Count > 0);

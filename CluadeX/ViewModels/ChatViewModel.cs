@@ -76,6 +76,7 @@ public partial class ChatViewModel : ViewModelBase
             _messages.CollectionChanged -= OnMessagesChanged;
             _messages = value;
             _messages.CollectionChanged += OnMessagesChanged;
+            _ctxDirty = true;
             OnPropertyChanged();
         }
     }
@@ -205,7 +206,7 @@ public partial class ChatViewModel : ViewModelBase
             if (SetProperty(ref _workingDirectory, value))
             {
                 HasProject = !string.IsNullOrEmpty(value);
-                RebuildVisibleSessions();
+                ScheduleSidebarRebuild();
             }
         }
     }
@@ -221,10 +222,26 @@ public partial class ChatViewModel : ViewModelBase
         set { if (SetProperty(ref _showAllProjectSessions, value)) RebuildVisibleSessions(); }
     }
 
+    /// <summary>A sidebar rebuild is queued and has not run yet.</summary>
+    private volatile bool _sidebarRebuildQueued;
+
+    /// <summary>One sidebar rebuild for a burst of changes, at Background priority (below input). Opening one chat rebuilt
+    /// the list 2-4 times in a row, each a full pass over every chat on the UI thread (owner 2026-11-02): the run state,
+    /// the save of the chat left, the project switch each asked for their own. Any thread may call this.</summary>
+    private void ScheduleSidebarRebuild()
+    {
+        var d = App.Current?.Dispatcher;
+        if (d == null) { RebuildVisibleSessions(); return; }
+        if (_sidebarRebuildQueued) return;
+        _sidebarRebuildQueued = true;
+        d.BeginInvoke(DispatcherPriority.Background, () => { if (_sidebarRebuildQueued) RebuildVisibleSessions(); });
+    }
+
     /// <summary>Rebuild VisibleSessions from Sessions, applying the project filter.</summary>
     private void RebuildVisibleSessions()
     {
         if (_bulkSessions) return;   // the start-up load adds every chat, then rebuilds once
+        _sidebarRebuildQueued = false;   // a queued rebuild has nothing left to do
 
         // No project open, or user opted to see everything → passthrough
         bool filter = HasProject && !ShowAllProjectSessions;
@@ -308,8 +325,7 @@ public partial class ChatViewModel : ViewModelBase
     private void TouchSession(ChatSession s)
     {
         s.UpdatedAt = DateTime.Now;
-        if (App.Current?.Dispatcher is { } d && !d.CheckAccess()) d.BeginInvoke(RebuildVisibleSessions);
-        else RebuildVisibleSessions();
+        ScheduleSidebarRebuild();
     }
 
     private DateTime _sidebarDay = DateTime.Today;
@@ -581,7 +597,7 @@ public partial class ChatViewModel : ViewModelBase
     private void RebuildSidebarIfActiveChanged()
     {
         string now = string.Join("|", Sessions.Where(IsActiveChat).Select(s => s.Id));
-        if (now != _activeChatsShown) RebuildVisibleSessions();
+        if (now != _activeChatsShown) ScheduleSidebarRebuild();
     }
 
     private static bool PathEquals(string a, string b)
@@ -1413,8 +1429,8 @@ public partial class ChatViewModel : ViewModelBase
         Messages.CollectionChanged += OnMessagesChanged;
 
         // Keep the sidebar-filtered VisibleSessions list in sync with Sessions automatically.
-        // Any Add/Remove/Replace/Reset on Sessions triggers a rebuild filtered by current project.
-        Sessions.CollectionChanged += (_, _) => RebuildVisibleSessions();
+        // Any Add/Remove/Replace/Reset on Sessions triggers a rebuild filtered by current project (one per burst).
+        Sessions.CollectionChanged += (_, _) => ScheduleSidebarRebuild();
         // The sidebar groups the list by day (today / yesterday / this week / earlier), newest first.
         // The groups in day order, whichever row came first: unsorted, a group stood where its first row was, so a working
         // chat from yesterday (working chats come first) put "Yesterday" above "Today".
@@ -1426,7 +1442,9 @@ public partial class ChatViewModel : ViewModelBase
         _memoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _memoryTimer.Tick += (_, _) =>
         {
-            UpdateContextInfo();
+            // Only when something could have changed it: the rows (also counted 400 ms after they change) or a reply
+            // being written. It recounted the whole chat every 5 s, idle for hours or minimized (owner 2026-11-02).
+            if (_ctxDirty || IsGenerating) UpdateContextInfo();
             CostText = _costTracker.FormatCost();
             RefreshUsageStrip();
             ProbeOllamaForChatBox();   // throttled to 30 s: lists Ollama's models in the model box while it answers
@@ -1523,11 +1541,11 @@ public partial class ChatViewModel : ViewModelBase
 
                 if (lastSession != null && lastSession.Messages.Count > 0)
                 {
+                    // Onto the sidebar's own row (it holds the pin ApplyPins just set), not swapped for the copy.
+                    lastSession = AdoptLoadedSession(lastSession);
                     CurrentSession = lastSession;
-                    for (int i = 0; i < Sessions.Count; i++)
-                    {
-                        if (Sessions[i].Id == lastSession.Id) { Sessions[i] = lastSession; break; }
-                    }
+                    // The rebuild above ran before this chat was open: a put-away split chat needs one more to show.
+                    ScheduleSidebarRebuild();
                     foreach (var msg in lastSession.Messages)
                         Messages.Add(msg);
                     // Its project at once: the files panel used to keep the previous folder until the first message
@@ -1751,8 +1769,20 @@ public partial class ChatViewModel : ViewModelBase
             CurrentSession = running.Session;
             Messages = running.Messages;
             _isDirty = false;
+            // Normally the sidebar's row IS the run's chat; only a stray copy is swapped (keeping its pin).
             for (int i = 0; i < Sessions.Count; i++)
-                if (Sessions[i].Id == sessionId) { Sessions[i] = running.Session; break; }
+                if (Sessions[i].Id == sessionId)
+                {
+                    if (!ReferenceEquals(Sessions[i], running.Session))
+                    {
+                        running.Session.IsPinned = Sessions[i].IsPinned;
+                        Sessions[i] = running.Session;
+                    }
+                    break;
+                }
+            // The row is usually not replaced, so nothing else rebuilds: the chat left may be a put-away split that
+            // must leave the list now. Coalesced with the other rebuilds of this switch.
+            ScheduleSidebarRebuild();
             StatusText = Loc("chat.status.working");
             FollowChatProject(running.Session);
             UpdateContextInfo();
@@ -1798,6 +1828,8 @@ public partial class ChatViewModel : ViewModelBase
             }
             session = inMemory;
         }
+        // The sidebar's own row becomes the chat, with the stored rows and header copied onto it.
+        else session = AdoptLoadedSession(session);
 
         // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
         CurrentSession = session;
@@ -1811,16 +1843,8 @@ public partial class ChatViewModel : ViewModelBase
         CurrentSession.Messages = Messages.ToList();
 
         _isDirty = false;
-
-        // Update the Sessions list entry to reference the full loaded session
-        for (int i = 0; i < Sessions.Count; i++)
-        {
-            if (Sessions[i].Id == sessionId)
-            {
-                Sessions[i] = session;
-                break;
-            }
-        }
+        // A put-away split chat shows in the list while it is open: one rebuild, coalesced with the others of this switch.
+        ScheduleSidebarRebuild();
 
         tList = switchWatch.ElapsedMilliseconds;
         StatusText = session.Messages.Count > 0
@@ -1842,6 +1866,24 @@ public partial class ChatViewModel : ViewModelBase
 
     /// <summary>Switches in flight: a chat whose load finishes after another chat was picked is not shown.</summary>
     private int _switchSeq;
+
+    /// <summary>
+    /// The chat just read from the database, put onto the sidebar's own object for it: its rows and what the database
+    /// holds (title, times, project) are copied across, and that object is the one opened. Swapping the row for the
+    /// database copy lost everything kept only in memory — the pin (the chat fell out of Pinned), the related folders,
+    /// the run badge — and re-templated the row (owner 2026-11-02). No sidebar row: the database copy itself.
+    /// </summary>
+    internal ChatSession AdoptLoadedSession(ChatSession loaded)
+    {
+        var kept = Sessions.FirstOrDefault(s => s.Id == loaded.Id);
+        if (kept == null || ReferenceEquals(kept, loaded)) return loaded;
+        kept.Title = loaded.Title;
+        kept.CreatedAt = loaded.CreatedAt;
+        kept.UpdatedAt = loaded.UpdatedAt;
+        kept.ProjectPath = loaded.ProjectPath;
+        kept.Messages = loaded.Messages;
+        return kept;
+    }
 
     /// <summary>
     /// Opening a chat opens its project. A chat belongs to the folder it was started in (ChatSession.ProjectPath).
@@ -1979,6 +2021,7 @@ public partial class ChatViewModel : ViewModelBase
     private void OnMessagesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
         _isDirty = true;
+        _ctxDirty = true;
         // Debounced: both refreshes walk the whole chat (history rebuild + token estimate over every message and tool
         // output). Run per added row, a long run did that hundreds of times — O(n²) on the UI thread, the chat slowed
         // the longer it got. Now once, 400 ms after the rows stop changing, at Background priority (below input).
@@ -2006,9 +2049,13 @@ public partial class ChatViewModel : ViewModelBase
     private System.Windows.Threading.DispatcherTimer? _messagesChangedTimer;
     private bool _messagesChangedHooked;
 
+    /// <summary>The rows changed since the context bar was last counted (the 5 s tick skips the count otherwise).</summary>
+    private bool _ctxDirty = true;
+
     // ─── Context Tracking ───
     private void UpdateContextInfo()
     {
+        _ctxDirty = false;
         try
         {
             var messages = Messages.ToList();
@@ -3204,9 +3251,7 @@ public partial class ChatViewModel : ViewModelBase
                     break;
                 case MessageRole.Assistant when !m.HasError && !ChatMessage.IsLegacyStatusLine(m.Content):
                     // Replies saved by older builds can still carry <thinking> spans inline.
-                    result.Add(m.Content.Contains("<thinking>", StringComparison.Ordinal)
-                        ? new ChatMessage { Role = MessageRole.Assistant, Content = StripThinkingSpans(m.Content), Timestamp = m.Timestamp }
-                        : m);
+                    result.Add(m.Content.Contains("<thinking>", StringComparison.Ordinal) ? StrippedReplyCopy(m) : m);
                     break;
                 case MessageRole.ToolAction when includeTools:
                     result.Add(m);
@@ -3214,6 +3259,39 @@ public partial class ChatViewModel : ViewModelBase
             }
         }
         return result;
+    }
+
+    /// <summary>A legacy reply's text without its &lt;thinking&gt; spans, kept per source row with the copy last made
+    /// from it. Every context recount rebuilt the history, so each such reply was stripped and re-counted in full each
+    /// time (a chat from an older build carries them on every reply).</summary>
+    private sealed class StrippedReply
+    {
+        public StrippedReply(string source, string text) { Source = source; Text = text; }
+        public readonly string Source;   // the row's Content this was stripped from; a new string means a new strip
+        public readonly string Text;
+        public ChatMessage? LastCopy;    // its token count is handed to the next copy
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ChatMessage, StrippedReply> _strippedReplies = new();
+
+    /// <summary>A fresh copy of the reply without its &lt;thinking&gt; spans (the source row is never changed). The copy
+    /// shares the cached stripped string and the last copy's token count; ContextMemoryService only reuses that count
+    /// while it was taken from the same string, so a stale one can never be used.</summary>
+    private static ChatMessage StrippedReplyCopy(ChatMessage m)
+    {
+        string content = m.Content;
+        if (!_strippedReplies.TryGetValue(m, out var s) || !ReferenceEquals(s.Source, content))
+        {
+            s = new StrippedReply(content, StripThinkingSpans(content));
+            _strippedReplies.AddOrUpdate(m, s);
+        }
+        var copy = new ChatMessage
+        {
+            Role = MessageRole.Assistant, Content = s.Text, Timestamp = m.Timestamp,
+            ContextTokens = s.LastCopy?.ContextTokens,
+        };
+        s.LastCopy = copy;
+        return copy;
     }
 
     /// <summary>
@@ -3971,7 +4049,10 @@ public partial class ChatViewModel : ViewModelBase
         // Clear the generic "thinking" placeholder — the autonomous loop posts its own phase banners.
         RemoveActiveStatus();
 
-        var result = await _autonomousService.RunAsync(history, input, ct);
+        // On the pool, as RunAgentic does: awaited from here, every synchronous stretch of the loop (tools, builds, the
+        // verify step, the provider's reads) ran on the UI thread and the window stuttered for minutes (owner
+        // 2026-11-02). Its phase banners and prompts already marshal through the Dispatcher.
+        var result = await Task.Run(() => _autonomousService.RunAsync(history, input, ct), CancellationToken.None);
 
         var final = new ChatMessage
         {
@@ -5015,65 +5096,72 @@ public partial class ChatViewModel : ViewModelBase
         bool replyComplete = false;   // UI thread only
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
+        // The stream is read on the pool, not here: awaited from the UI thread, the provider's whole read loop ran on the
+        // dispatcher, and its synchronous waits for the next chunk froze the window — through Ollama's prefill before the
+        // first token, and in every pause between Claude's thinking chunks, Stop included (owner 2026-11-02). The body
+        // touches the screen only through Dispatcher.Invoke and the throttles, which queue onto the UI thread.
+        await Task.Run(async () =>
         {
-            // Thinking chunks go to the reply's collapsed Thinking block — never into the reply text.
-            if (TryUnwrapThinking(token, out var thought))
+            await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
             {
-                if (thought.Length == 0 || !ShowThinking) continue;
-                bool firstThought = thinkSb.Length == 0;
-                thinkSb.Append(thought);
-                // A snapshot of the whole block per chunk was O(n²) and one UI update each: paced instead — the
-                // end of the reply sets the full text.
-                if (!firstThought && !thinkThrottle.Due) continue;
-                string thinkSnap = thinkSb.ToString();
-                thinkThrottle.Post(() =>
+                // Thinking chunks go to the reply's collapsed Thinking block — never into the reply text.
+                if (TryUnwrapThinking(token, out var thought))
                 {
-                    assistantMsg.ThinkingContent = thinkSnap;
-                    if (firstThought && firstToken && _activeAgentStatusMsg != null)
-                        _activeAgentStatusMsg.Content = "💭 " + Loc("chat.thinkingInline").Trim();
-                });
-                continue;
-            }
-
-            sb.Append(token);
-            tokenCount++;
-            _streamingTokenCount = tokenCount;
-
-            // First token: sync update to guarantee bubble visible before more tokens arrive
-            if (firstToken)
-            {
-                firstToken = false;
-                App.Current?.Dispatcher.Invoke(() =>
-                {
-                    if (_activeAgentStatusMsg != null)
-                        _activeAgentStatusMsg.Content = "⚡ " + Loc("chat.status.generating");
-                    PostTurnMessage(target, assistantMsg);
-                    assistantMsg.Content = sb.ToString();
-                    ScrollToBottom?.Invoke();
-                });
-                continue;
-            }
-
-            // Subsequent tokens: paced (~12/s, below keyboard input — see UiThrottle)
-            if (tokenThrottle.Due)
-            {
-                int capturedCount = tokenCount;
-                string snapshot = sb.ToString();
-                tokenThrottle.Post(() =>
-                {
-                    if (!replyComplete) assistantMsg.Content = snapshot;
-                    if (_activeAgentStatusMsg != null)
+                    if (thought.Length == 0 || !ShowThinking) continue;
+                    bool firstThought = thinkSb.Length == 0;
+                    thinkSb.Append(thought);
+                    // A snapshot of the whole block per chunk was O(n²) and one UI update each: paced instead — the
+                    // end of the reply sets the full text.
+                    if (!firstThought && !thinkThrottle.Due) continue;
+                    string thinkSnap = thinkSb.ToString();
+                    thinkThrottle.Post(() =>
                     {
-                        int elapsed = (int)sw.Elapsed.TotalSeconds;
-                        double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;
-                        _activeAgentStatusMsg.Content = "⚡ " + (tps > 0
-                            ? LocF("chat.status.generatingRate", capturedCount, tps)
-                            : LocF("chat.status.generatingCount", capturedCount));
-                    }
-                });
+                        assistantMsg.ThinkingContent = thinkSnap;
+                        if (firstThought && firstToken && _activeAgentStatusMsg != null)
+                            _activeAgentStatusMsg.Content = "💭 " + Loc("chat.thinkingInline").Trim();
+                    });
+                    continue;
+                }
+
+                sb.Append(token);
+                tokenCount++;
+                _streamingTokenCount = tokenCount;
+
+                // First token: sync update to guarantee bubble visible before more tokens arrive
+                if (firstToken)
+                {
+                    firstToken = false;
+                    App.Current?.Dispatcher.Invoke(() =>
+                    {
+                        if (_activeAgentStatusMsg != null)
+                            _activeAgentStatusMsg.Content = "⚡ " + Loc("chat.status.generating");
+                        PostTurnMessage(target, assistantMsg);
+                        assistantMsg.Content = sb.ToString();
+                        ScrollToBottom?.Invoke();
+                    });
+                    continue;
+                }
+
+                // Subsequent tokens: paced (~12/s, below keyboard input — see UiThrottle)
+                if (tokenThrottle.Due)
+                {
+                    int capturedCount = tokenCount;
+                    string snapshot = sb.ToString();
+                    tokenThrottle.Post(() =>
+                    {
+                        if (!replyComplete) assistantMsg.Content = snapshot;
+                        if (_activeAgentStatusMsg != null)
+                        {
+                            int elapsed = (int)sw.Elapsed.TotalSeconds;
+                            double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;
+                            _activeAgentStatusMsg.Content = "⚡ " + (tps > 0
+                                ? LocF("chat.status.generatingRate", capturedCount, tps)
+                                : LocF("chat.status.generatingCount", capturedCount));
+                        }
+                    });
+                }
             }
-        }
+        }, CancellationToken.None);
 
         // Final content flush — ensure last tokens are shown. A batched update still queued runs after this (Invoke
         // outranks BeginInvoke) and must not cut the reply back to an older snapshot.
@@ -5154,7 +5242,8 @@ public partial class ChatViewModel : ViewModelBase
         var progress = new Progress<string>(status =>
             App.Current?.Dispatcher.Invoke(() => StatusText = status));
 
-        var result = await _agentService.ExecuteWithAutoFixAsync(history, input, progress, ct);
+        // On the pool, like RunAgentic and RunAutonomous: generating, extracting and running the code blocked the window.
+        var result = await Task.Run(() => _agentService.ExecuteWithAutoFixAsync(history, input, progress, ct), CancellationToken.None);
 
         // Remove thinking indicator after async completes
         RemoveActiveStatus();

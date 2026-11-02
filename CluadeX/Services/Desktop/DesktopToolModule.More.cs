@@ -138,8 +138,9 @@ public sealed partial class DesktopToolModule
         return WindowAt(x, y);
     }
 
-    /// <summary>Throws when the point is off limits: its window, or CluadeX's own approval UI under it.</summary>
-    private void CheckPoint(int x, int y, DesktopWindow? win)
+    /// <summary>Throws when the point is off limits: its window, or CluadeX's own approval UI under it. Returns the
+    /// element under the point (null when it could not be looked at).</summary>
+    private AutomationElement? CheckPoint(int x, int y, DesktopWindow? win)
     {
         if (win == null) throw new InvalidOperationException($"No window is under ({x},{y}).");
         CheckWindow(win);
@@ -150,6 +151,7 @@ public sealed partial class DesktopToolModule
             throw new InvalidOperationException("The element under that point in CluadeX's window could not be checked, so it is not clicked "
                                                 + "(it may be CluadeX's own approval prompt). Use desktop_click on a named element instead.");
         if (DesktopSafety.GuardRefusal(e) is { } g) throw new InvalidOperationException(g);
+        return e;
     }
 
     private ToolResult MouseTool(ToolCall call, ToolModuleContext context, CancellationToken ct)
@@ -167,7 +169,15 @@ public sealed partial class DesktopToolModule
 
         var (x, y, note) = PointOf(call, context, "x", "y");
         var win = WindowAt(x, y);
-        CheckPoint(x, y, win);
+        var hit = CheckPoint(x, y, win);
+        // A click into a terminal pastes (right / middle button) or lands in its input; moving and scrolling only look.
+        // Judged by the element under the point, not only its window: VS Code's terminal panel is an xterm.js div inside
+        // an ordinary window, and a right-click there pastes the clipboard into the shell.
+        string button = action switch { "right_click" => "right", "middle_click" => "middle", _ => "left" };
+        if (action is not ("move" or "scroll" or "drag")
+            && DesktopSafety.PointRefusal(x, y, hit, button, opens: action == "double_click") is { } cs) throw new InvalidOperationException(cs);
+        // A drag starts with the left button down on its source: a terminal or Run box there is refused as for a click.
+        if (action == "drag" && DesktopSafety.PointRefusal(x, y, hit, "left", opens: false) is { } csFrom) throw new InvalidOperationException(csFrom);
         string done;
         switch (action)
         {
@@ -176,14 +186,15 @@ public sealed partial class DesktopToolModule
                 done = $"Moved the mouse to ({x},{y})";
                 break;
             case "click" or "double_click" or "right_click" or "middle_click":
-                string button = action switch { "right_click" => "right", "middle_click" => "middle", _ => "left" };
                 DesktopInput.ClickButton(x, y, button, action == "double_click" ? 2 : 1);
                 done = $"{action.Replace('_', ' ')} at ({x},{y})";
                 break;
             case "drag":
                 var (tx, ty, toNote) = PointOf(call, context, "to_x", "to_y");
                 var toWin = WindowAt(tx, ty);
-                CheckPoint(tx, ty, toWin);
+                var toHit = CheckPoint(tx, ty, toWin);
+                // Dropping text or a file onto a terminal types it there; dropped on a program in Explorer, it starts it.
+                if (DesktopSafety.PointRefusal(tx, ty, toHit, "left", opens: true) is { } csTo) throw new InvalidOperationException(csTo);
                 DesktopInput.Drag(x, y, tx, ty, ct);
                 done = $"Dragged from ({x},{y}) to ({tx},{ty})" + (toWin != null && toWin.Handle != win!.Handle ? $", onto \"{DesktopWindows.Trunc(toWin.Title, 60)}\" ({toWin.ProcessName})" : "");
                 if (toNote != null) note = note == null ? toNote : note + "; " + toNote;
@@ -221,6 +232,10 @@ public sealed partial class DesktopToolModule
         var h = w.Handle;
         if (action == "close" && DesktopSafety.IsCluadeXProcess(w.ProcessId))
             throw new InvalidOperationException("desktop_window never closes CluadeX itself — the user closes it.");
+        // Closing a terminal ends whatever runs in it (a dev server, a build, the user's own session) without a question.
+        // A Run box / Create new task is not refused: closing it is its Cancel, and runs nothing (owner 2026-11-02).
+        if (action == "close" && DesktopSafety.IsTerminalWindow(w.ProcessName, w.ClassName))
+            throw new InvalidOperationException($"\"{DesktopWindows.Trunc(w.Title, 60)}\" ({w.ProcessName}) is a terminal: closing it ends what runs there. Ask the user to close it.");
 
         string done;
         switch (action)
