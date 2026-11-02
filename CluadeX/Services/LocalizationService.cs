@@ -23,7 +23,8 @@ public class LocalizationService
                                       Localization.DispatchKeys.Keys, Localization.DesktopKeys.Keys,
                                       Localization.StudioKeys.Keys, Localization.StudioPageKeys.Keys, Localization.SetupKeys.Keys,
                                       Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys,
-                                      Localization.StarterKeys.Keys })
+                                      Localization.StarterKeys.Keys,
+                                      Localization.AutoCommentKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

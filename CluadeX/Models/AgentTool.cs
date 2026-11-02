@@ -182,6 +182,8 @@ public enum ToolType
     GitBlame,            // Who last changed each line of a file
     GitShow,             // A commit (stat + patch), or a file as it was at a revision
     Debug,               // Drive the debugger: adapters / start / stack / eval / step / continue / stop
+    // Auto-comment (Services/Tools/AutoCommentToolModule) — appended last: a ToolType is stored by number
+    AddCodeComments,     // The model names lines + comment text; AutoCommentService inserts and proves the code unchanged
 }
 
 /// <summary>

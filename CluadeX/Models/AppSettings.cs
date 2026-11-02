@@ -178,6 +178,11 @@ public class AppSettings
     public string CodeCommentLevel { get; set; } = "none";
     public string CodeCommentLanguage { get; set; } = "match";
     public Dictionary<string, CodeCommentSetting> CodeCommentProjects { get; set; } = new();
+    /// <summary>Code Editor ▸ Auto-comment (comment code that already exists): the last scope ("functions" | "changed" |
+    /// "key" | "file" | "selection"), comment language ("th" | "en" | "match") and model ("" = the provider's own).</summary>
+    public string AutoCommentScope { get; set; } = "functions";
+    public string AutoCommentLanguage { get; set; } = "match";
+    public string AutoCommentModel { get; set; } = "";
 
     /// <summary>
     /// Local native tool-calling. When ON, llama-server / Ollama use OpenAI-style function-calling

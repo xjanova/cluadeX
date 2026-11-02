@@ -252,8 +252,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
     public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm,
         SettingsService settings, GitService git, CodeIntelligenceService intel, RepoMapService repoMap,
-        DebugAdapterService debug, LocalizationService loc, DebugLogService? log = null)
+        DebugAdapterService debug, LocalizationService loc, DebugLogService? log = null, AiProviderManager? providers = null)
     {
+        _providers = providers;
         _workspace = workspace;
         _fs = fs;
         _settings = settings;
@@ -274,6 +275,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             OnPropertyChanged(nameof(ProjectFileCount));
             OnPropertyChanged(nameof(GitChangeCount));
             RaiseAiComment();
+            RaiseAutoComment();
         };
 
         RefreshTreeCommand = new AsyncRelayCommand(RefreshTreeAsync);
@@ -624,6 +626,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
             OnUi(() =>
             {
+                if (HasAutoCommentPreview) EndAutoCommentPreview();   // another diff replaces a pending preview
                 DiffRows = diff.Rows;
                 DiffTitle = item.Path;
                 DiffSummary = diff.HasChanges
@@ -650,6 +653,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         var diff = await Task.Run(() => DiffService.BuildSideBySide(disk, mine));
         OnUi(() =>
         {
+            if (HasAutoCommentPreview) EndAutoCommentPreview();
             DiffRows = diff.Rows;
             DiffTitle = tab.FileName;
             DiffSummary = T("ide.diffDiskVsEditor", diff.Added.ToString("N0"), diff.Removed.ToString("N0"));
@@ -677,6 +681,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
     public ICommand CloseDiffCommand => _closeDiffCommand ??= new RelayCommand(() =>
     {
+        if (HasAutoCommentPreview) { DiscardAutoComment(); return; }   // closing an auto-comment preview = Discard
         IsDiffViewActive = false;
         DiffRows = new List<DiffRow>();   // thousands of rows shouldn't sit in memory once dismissed
         DiffTitle = "";

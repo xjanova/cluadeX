@@ -280,6 +280,47 @@ public partial class CodeEditorView
         b.ContextMenu.IsOpen = true;
     }
 
+    /// <summary>Toolbar ▸ Auto-comment: the estimate is computed for the file and selection as they are now, and the model
+    /// items are built here because the list depends on the provider picked at this moment.</summary>
+    private void OnAutoCommentMenu(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.ContextMenu == null || _vm == null) return;
+        var vm = _vm;
+        vm.RefreshAutoCommentEstimate(SelectedLineRange());
+        AcmModelMenu.Items.Clear();
+        string current = vm.AutoCommentModelId;
+        foreach (var (id, label) in vm.AutoCommentModelChoices())
+        {
+            var item = new MenuItem { Header = label, IsChecked = id == current };
+            item.Click += (_, _) => vm.SetAutoCommentModel(id);
+            AcmModelMenu.Items.Add(item);
+        }
+        b.ContextMenu.DataContext = b.DataContext;
+        b.ContextMenu.PlacementTarget = b;
+        b.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        b.ContextMenu.IsOpen = true;
+    }
+
+    private async void OnAutoCommentStart(object sender, RoutedEventArgs e)
+    {
+        if (_vm == null) return;
+        try { await _vm.StartAutoCommentAsync(SelectedLineRange()); }
+        catch (Exception ex) { _vm.StatusMessage = ex.Message; }
+    }
+
+    /// <summary>The selected lines (1-based, inclusive), or null with nothing selected. A selection that ends at the very
+    /// start of a line does not include that line.</summary>
+    private (int First, int Last)? SelectedLineRange()
+    {
+        var sel = Editor.TextArea.Selection;
+        if (sel.IsEmpty) return null;
+        int first = Math.Min(sel.StartPosition.Line, sel.EndPosition.Line);
+        var end = sel.StartPosition.Line > sel.EndPosition.Line ? sel.StartPosition : sel.EndPosition;
+        int last = end.Line;
+        if (end.Column <= 1 && last > first) last--;
+        return (first, last);
+    }
+
     private void OnDuplicateLines(object sender, RoutedEventArgs e) => DuplicateLines();
     private void OnDeleteLines(object sender, RoutedEventArgs e) => DeleteLines();
     private void OnMoveLinesUp(object sender, RoutedEventArgs e) => MoveLines(up: true);

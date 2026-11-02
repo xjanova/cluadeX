@@ -274,6 +274,33 @@ public class SkillService
                     """,
             },
 
+            // /comment — Code Editor ▸ Auto-comment from the chat. Only add_code_comments (plus finding the file) is
+            // allowed: the chat model picks file / scope / language / model and never edits code itself.
+            new()
+            {
+                Name = "comment",
+                Description = "Comment the open (or named) file: what each part does and why — the code is not changed",
+                IsBuiltIn = true,
+                UserInvocable = true,
+                ArgumentHint = "[file] [functions|changed|key|file|<from>-<to>] [th|en|match] [model]",
+                AllowedTools = new() { "add_code_comments", "glob", "list_files" },
+                PromptContent = """
+                    Add explanatory comments to existing code with the add_code_comments tool.
+
+                    1. The file: the one named in the user's arguments. With none named, call the tool WITHOUT a path —
+                       it uses the file open in the Code Editor. Given only a file name, find it with glob first.
+                    2. Read the rest of the arguments:
+                       - scope: functions (default) | changed (only what changed since git HEAD) | key (only key points)
+                         | file (the whole file) | a line range like 40-80 → scope=selection with start_line / end_line
+                       - language: th | en | match (Thai / English / the file's own); leave out to use the saved choice
+                       - model: a model id, if one is given
+                    3. Call add_code_comments once per file. Never edit code and never write comments any other way:
+                       the tool's model only names lines, the app inserts the comments and proves the code unchanged.
+                    4. Reply in the user's language: how many comments went in, what was skipped and why, and that a
+                       Time Machine restore point holds the file as it was. If the tool refused, say why in one line.
+                    """,
+            },
+
             // ════════════════════════════════════════════════════════════════
             // Sprint 1 #2 — Skill .md Library: 15 ECC-parity built-in skills
             // ════════════════════════════════════════════════════════════════
