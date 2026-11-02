@@ -1,0 +1,4 @@
+{
+  // shared options
+  "compilerOptions": { "baseUrl": ".", "strict": true, },
+}
