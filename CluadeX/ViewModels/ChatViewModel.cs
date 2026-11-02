@@ -1480,6 +1480,7 @@ public partial class ChatViewModel : ViewModelBase
         InitControls(activation);
         InitSidePanel();
         InitCharacter();
+        InitStarters();
         HookPendingImages();
 
         // Auto-save every 10 seconds if dirty

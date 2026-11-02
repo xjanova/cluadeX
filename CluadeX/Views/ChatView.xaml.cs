@@ -70,6 +70,7 @@ public partial class ChatView : UserControl
         };
         // The panel's own show/hide (the toggle): the height grip follows it, or a hidden panel leaves a 6 px strip.
         SidePanel.IsVisibleChanged += (_, _) => UpdateSidePanelRoom();
+        NewChatPage.SizeChanged += (_, e) => FitNewChatPage(e.NewSize.Width);
 
         InputBox.PreviewKeyDown += (_, e) =>
         {
@@ -109,6 +110,11 @@ public partial class ChatView : UserControl
                             System.Windows.Threading.DispatcherPriority.Input);
                     e.Handled = true;
                 }
+            }
+            else if (e.Key == Key.Escape && DataContext is ChatViewModel starterVm && starterVm.IsChoosingStarterProject)
+            {
+                starterVm.CancelStarterCommand.Execute(null);
+                e.Handled = true;
             }
             else if (e.Key == Key.Escape && DataContext is ChatViewModel vm2 && vm2.IsChatSearchVisible)
             {
@@ -238,6 +244,8 @@ public partial class ChatView : UserControl
             vm.PropertyChanged += OnVmPropertyChanged;
             vm.DictationApplied -= OnDictationApplied;
             vm.DictationApplied += OnDictationApplied;
+            vm.StarterApplied -= OnStarterApplied;
+            vm.StarterApplied += OnStarterApplied;
         }
     }
 
@@ -281,6 +289,7 @@ public partial class ChatView : UserControl
                 _scrollHandler = null;
             }
             vm.PropertyChanged -= OnVmPropertyChanged;
+            vm.StarterApplied -= OnStarterApplied;
             if (_collectionHandler != null)
             {
                 if (_watched != null) _watched.CollectionChanged -= _collectionHandler;
@@ -634,14 +643,48 @@ public partial class ChatView : UserControl
 
     // ─── Suggested prompts ───
 
-    private void SuggestedPrompt_Click(object sender, RoutedEventArgs e)
+    /// <summary>Below this width the new chat page goes compact: smaller starters three across and a smaller title.
+    /// Docked beside the editor (~390 px) the full-size tiles stood two across and the page scrolled for screens.</summary>
+    public const double CompactStarterWidth = 640;
+    private bool? _compactStarters;
+
+    private void FitNewChatPage(double width)
     {
-        if (sender is Button btn && btn.Tag is string prompt && DataContext is ChatViewModel vm)
+        bool compact = width > 0 && width < CompactStarterWidth;
+        if (compact == _compactStarters) return;
+        _compactStarters = compact;
+        var r = NewChatPage.Resources;
+        if (compact)
         {
-            vm.UserInput = prompt;
-            if (vm.SendMessageCommand.CanExecute(null))
-                vm.SendMessageCommand.Execute(null);
+            r["Starter.Tile.Width"] = 104.0;
+            r["Starter.Tile.Height"] = 90.0;
+            r["Starter.Title.Size"] = 22.0;
         }
+        else
+            foreach (var key in new[] { "Starter.Tile.Width", "Starter.Tile.Height", "Starter.Title.Size" }) r.Remove(key);
+    }
+
+    /// <summary>A starter was filled in (ChatViewModel.Starters): into the box, with its [bracketed] part selected so
+    /// the first thing typed replaces it. Nothing is sent — Enter is still the user's.</summary>
+    private void OnStarterApplied()
+    {
+        if (!IsVisible) return;   // the chat page and the one docked in the editor share the VM: the one on screen acts
+        Dispatcher.InvokeAsync(() =>
+        {
+            InputBox.Focus();
+            var (start, length) = StarterPlaceholder(InputBox.Text);
+            if (length > 0) InputBox.Select(start, length);
+            else InputBox.CaretIndex = InputBox.Text.Length;
+        }, System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    /// <summary>The first [bracketed] part of a starter's prompt, brackets included; (end, 0) when there is none.</summary>
+    public static (int Start, int Length) StarterPlaceholder(string? text)
+    {
+        text ??= "";
+        int open = text.IndexOf('[');
+        int close = open < 0 ? -1 : text.IndexOf(']', open + 1);
+        return close > open ? (open, close - open + 1) : (text.Length, 0);
     }
 }
 
