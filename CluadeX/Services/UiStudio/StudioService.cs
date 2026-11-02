@@ -361,14 +361,16 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
             var w = new FileSystemWatcher(Root)
             {
                 IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                // DirectoryName too: deleting or renaming a folder raises one event for the folder, none for its files
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size,
                 InternalBufferSize = 64 * 1024,   // an AI or a git checkout writing many files at once
             };
             FileSystemEventHandler onChange = (_, e) => Changed(e.FullPath);
             w.Changed += onChange;
-            w.Created += onChange;
-            w.Deleted += onChange;
-            w.Renamed += (_, e) => { Changed(e.OldFullPath); Changed(e.FullPath); };
+            w.Created += (_, e) => Changed(e.FullPath, folder: Directory.Exists(e.FullPath));
+            // a deleted path cannot be asked whether it was a folder: one without an extension is taken as one
+            w.Deleted += (_, e) => Changed(e.FullPath, folder: true);
+            w.Renamed += (_, e) => { Changed(e.OldFullPath, folder: true); Changed(e.FullPath, folder: Directory.Exists(e.FullPath)); };
             w.Error += (_, e) => _log?.Warn("UiStudio", "file watcher overflow", e.GetException());
             w.EnableRaisingEvents = true;
             _watcher = w;
@@ -377,8 +379,9 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     }
 
     /// <summary>Whether a changed file is the project's own source, worth reacting to. Called on the watcher's thread:
-    /// it touches no state.</summary>
-    public static bool IsSourceChange(string root, string path)
+    /// it touches no state. <paramref name="folder"/>: the path may be a folder (created, deleted or renamed), which
+    /// has no extension but takes its files with it.</summary>
+    public static bool IsSourceChange(string root, string path, bool folder = false)
     {
         if (root.Length == 0 || !path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
         string rel = path[root.Length..];
@@ -389,6 +392,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         // after composer.json must still get the folder detected again. It never reloads the page (ReloadsPage).
         if (segs.Length == 1 && segs[0].Equals("artisan", StringComparison.OrdinalIgnoreCase)) return true;
         string ext = Path.GetExtension(path).ToLowerInvariant();
+        if (folder && ext.Length == 0) return true;
         return ext is not ("" or ".tmp" or ".swp" or ".bak" or ".log" or ".lock") && !path.EndsWith('~');
     }
 
@@ -404,10 +408,10 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         else _quietWrites.Remove(path);
     }
 
-    private void Changed(string path)
+    private void Changed(string path, bool folder = false)
     {
         string root = Root;
-        if (!IsSourceChange(root, path)) return;
+        if (!IsSourceChange(root, path, folder)) return;
         string ext = Path.GetExtension(path).ToLowerInvariant();
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {

@@ -19,6 +19,8 @@ public partial class NodeGraphView : UserControl
         Canvas.NodeActivated += n => _vm?.NodeActivated(n);
         Canvas.NodeMoved += n => _vm?.NodeMoved(n);
         Canvas.NodeContextMenu += (n, p) => ShowMenu(n);
+        Canvas.EdgeSelected += e => { if (_vm != null) _vm.SelectedEdge = e; };
+        Canvas.EdgeActivated += e => _vm?.EdgeActivated(e);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -49,6 +51,11 @@ public partial class NodeGraphView : UserControl
         Canvas.Highlights = _vm.Matches;
         Canvas.Changed = _vm.RecentlyChanged;
         Canvas.ChangeGlow = NodeGraphViewModel.ChangeGlow;
+        // the filters and the grouping apply to the project graph only; the live tree shows everything
+        Canvas.HiddenKinds = _vm.IsProject ? _vm.HiddenKinds : new HashSet<GraphEdgeKind>();
+        Canvas.ShowInferred = !_vm.IsProject || _vm.ShowInferred;
+        Canvas.GroupByFolder = _vm.IsProject && _vm.GroupByFolder;
+        Canvas.SelectedEdge = _vm.SelectedEdge;
         Canvas.SetGraph(_vm.Graph, _vm.SelectedNode);
     }
 

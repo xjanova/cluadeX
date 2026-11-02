@@ -14,15 +14,52 @@
                         <Rectangle Width="12" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="{Binding Color}" Margin="0,0,5,0" VerticalAlignment="Center"/>
                         <TextBlock Text="{Binding Kind}" FontSize="10" Foreground="{Binding Color}" VerticalAlignment="Center"/>
                     </StackPanel>
+                    <!-- the line that made this wire: click to open it -->
+                    <Button DockPanel.Dock="Right" Style="{StaticResource StudioLinkBtn}" Content="{Binding LineText}" FontFamily="{DynamicResource Font.Mono}" FontSize="10.5"
+                            Margin="6,0,0,0" VerticalAlignment="Center" ToolTip="{services:Loc graph.lineTip}"
+                            Visibility="{Binding HasLine, Converter={StaticResource BoolVis}}"
+                            Command="{Binding DataContext.OpenLinkEvidenceCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"/>
                     <Button Style="{StaticResource StudioLinkBtn}" Content="{Binding Label}" FontFamily="{DynamicResource Font.Mono}"
                             Command="{Binding DataContext.GoToLinkCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"/>
                 </DockPanel>
             </DataTemplate>
+
+            <!-- a kind of connection in the filter row: its colour, name and count; off = its wires are hidden -->
+            <Style x:Key="GraphKindChip" TargetType="ToggleButton">
+                <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+                <Setter Property="FontSize" Value="11.5"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Margin" Value="0,0,6,4"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ToggleButton">
+                            <Border x:Name="B" CornerRadius="10" Padding="8,2,9,2" BorderThickness="1"
+                                    Background="Transparent" BorderBrush="{DynamicResource Border.Subtle}">
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="B" Property="Background" Value="{DynamicResource Surface.Chip}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="False">
+                                    <Setter TargetName="B" Property="Opacity" Value="0.55"/>
+                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="B" Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </UserControl.Resources>
 
     <Grid Background="{DynamicResource Page.Background}">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
@@ -71,7 +108,43 @@
             </DockPanel>
         </Border>
 
-        <Grid Grid.Row="1">
+        <!-- project mode: which kinds of connection to show, inferred wires, and grouping by folder -->
+        <Border Grid.Row="1" Background="{DynamicResource Page.Toolbar.Background}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,0,0,1" Padding="12,6,12,2"
+                Visibility="{Binding IsProject, Converter={StaticResource BoolVis}}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" Margin="8,1,0,4">
+                    <CheckBox IsChecked="{Binding ShowInferred}" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="12"
+                              Foreground="{DynamicResource Text.Secondary}" ToolTip="{services:Loc graph.inferredTip}"
+                              Visibility="{Binding HasInferred, Converter={StaticResource BoolVis}}">
+                        <TextBlock><Run Text="{services:Loc graph.showInferred}"/><Run Text=" ("/><Run Text="{Binding InferredCount, Mode=OneWay}"/><Run Text=")"/></TextBlock>
+                    </CheckBox>
+                    <CheckBox Content="{services:Loc graph.groupFolders}" IsChecked="{Binding GroupByFolder}" VerticalAlignment="Center" FontSize="12"
+                              Foreground="{DynamicResource Text.Secondary}" ToolTip="{services:Loc graph.groupTip}"/>
+                </StackPanel>
+                <WrapPanel>
+                    <Button Style="{StaticResource StudioLinkBtn}" Content="{services:Loc graph.allKinds}" Command="{Binding AllKindsCommand}"
+                            ToolTip="{services:Loc graph.allKindsTip}" FontSize="11.5" VerticalAlignment="Center" Margin="0,0,10,4"/>
+                    <ItemsControl ItemsSource="{Binding EdgeFilters}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <ToggleButton Style="{StaticResource GraphKindChip}" IsChecked="{Binding IsOn}" ToolTip="{services:Loc graph.filterTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Rectangle Width="12" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="{Binding Color}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Count}" Foreground="{DynamicResource Text.Muted}" Margin="5,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </ToggleButton>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </WrapPanel>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="300"/>
@@ -88,12 +161,11 @@
                         <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#7C5CFF" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.component}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
                         <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#22D3EE" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.script}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
                         <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#F472B6" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.style}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#60A5FA" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.code}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
                         <Border Width="1" Background="{DynamicResource Border.Subtle}" Margin="0,1,12,1"/>
-                        <!-- wire colours: the canvas draws each kind of connection in its colour (NodeGraphCanvas.EdgeColors) -->
-                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#38BDF8" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.imports}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
-                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#A78BFA" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.renders}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
-                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#FBBF24" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.loads}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
-                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#A3E635" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.links}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <!-- wire colours are on the filter chips above; here only what solid and dashed mean -->
+                        <Line X1="0" Y1="1.5" X2="18" Y2="1.5" Stroke="{DynamicResource Text.Secondary}" StrokeThickness="2" VerticalAlignment="Center" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.confirmed}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Line X1="0" Y1="1.5" X2="18" Y2="1.5" Stroke="{DynamicResource Text.Secondary}" StrokeThickness="2" StrokeDashArray="2,1.5" VerticalAlignment="Center" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.inferred}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Visibility="{Binding IsLive, Converter={StaticResource BoolVis}}">
                         <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#2DD4BF" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.contains}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
@@ -115,7 +187,34 @@
                     <StackPanel>
                         <TextBlock Text="{services:Loc graph.details}" Style="{StaticResource StudioPanelHeader}"/>
                         <TextBlock Text="{services:Loc graph.noSelection}" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Text.Muted}" Margin="0,10,0,0"
-                                   Visibility="{Binding HasSelection, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                   Visibility="{Binding HasAnySelection, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                        <!-- a selected wire: what it is, proven or matched by name, and the lines it stands on -->
+                        <StackPanel Visibility="{Binding HasEdgeSelection, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{Binding EdgeTitle}" FontFamily="{DynamicResource Font.Mono}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                       TextWrapping="Wrap" Margin="0,10,0,4"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Rectangle Width="14" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="{Binding EdgeColor}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding EdgeKindText}" FontSize="11.5" Foreground="{Binding EdgeColor}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <TextBlock Text="{Binding EdgeStatus}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,4,0,0"/>
+                            <TextBlock Text="{Binding EdgeWhy}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                       Visibility="{Binding EdgeWhy, Converter={StaticResource BoolVis}}"/>
+                            <TextBlock Text="{services:Loc graph.evidence}" Style="{StaticResource StudioKicker}"/>
+                            <ItemsControl ItemsSource="{Binding EdgeEvidence}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,0,0,8">
+                                            <Button Style="{StaticResource StudioLinkBtn}" Content="{Binding Where}" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                    ToolTip="{services:Loc graph.lineTip}"
+                                                    Command="{Binding DataContext.OpenEvidenceCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"/>
+                                            <Border Background="{DynamicResource Surface.Inset}" CornerRadius="5" Padding="6,3" Margin="0,3,0,0">
+                                                <TextBlock Text="{Binding Code}" FontFamily="{DynamicResource Font.Mono}" FontSize="10.5" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap"/>
+                                            </Border>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                         <StackPanel Visibility="{Binding HasSelection, Converter={StaticResource BoolVis}}">
                             <TextBlock Text="{Binding SelectedTitle}" FontFamily="{DynamicResource Font.Mono}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
                                        TextWrapping="Wrap" Margin="0,10,0,2"/>

@@ -10,8 +10,32 @@ using CluadeX.Services.UiStudio;
 
 namespace CluadeX.ViewModels;
 
-/// <summary>A node listed in the details panel (imports / imported by / children), with its wire's colour.</summary>
-public sealed record GraphLink(string Id, string Label, string Kind, System.Windows.Media.Brush? Color = null);
+/// <summary>A node listed in the details panel (imports / imported by / children), with its wire's colour and the
+/// line that made the wire (click it to open that line).</summary>
+public sealed record GraphLink(string Id, string Label, string Kind, System.Windows.Media.Brush? Color = null, GraphEdge? Edge = null)
+{
+    public string LineText => Edge?.First is { } e ? ":" + e.Line : "";
+    public bool HasLine => Edge?.First != null;
+}
+
+/// <summary>One line of code an edge stands on: "file:line" and the line itself.</summary>
+public sealed record GraphEvidenceItem(string Where, string Code, string File, int Line);
+
+/// <summary>A kind of connection in the filter row: its colour, how many wires of it the graph has, on or off.</summary>
+public sealed class EdgeKindFilter : ViewModelBase
+{
+    private readonly Action<EdgeKindFilter> _changed;
+    public EdgeKindFilter(GraphEdgeKind kind, string label, System.Windows.Media.Brush color, int count, bool isOn, Action<EdgeKindFilter> changed)
+    {
+        Kind = kind; Label = label; Color = color; Count = count; _isOn = isOn; _changed = changed;
+    }
+    public GraphEdgeKind Kind { get; }
+    public string Label { get; }
+    public System.Windows.Media.Brush Color { get; }
+    public int Count { get; }
+    private bool _isOn;
+    public bool IsOn { get => _isOn; set { if (SetProperty(ref _isOn, value)) _changed(this); } }
+}
 
 /// <summary>
 /// The Node Graph page: the project drawn as nodes you can drag — files and components wired by what they really
@@ -75,7 +99,7 @@ public sealed class NodeGraphViewModel : ViewModelBase
         };
         studio.FilesChanged += OnFilesChanged;
         _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _liveTimer.Tick += (_, _) => { _liveTimer.Stop(); _ = RefreshAsync(keepView: true); };
+        _liveTimer.Tick += (_, _) => LiveTick();
         _prebuildTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
         _prebuildTimer.Tick += (_, _) => { _prebuildTimer.Stop(); if (!IsVisible && Graph == null && IsProject) _ = RefreshAsync(); };
 
@@ -89,6 +113,16 @@ public sealed class NodeGraphViewModel : ViewModelBase
         OpenStudioCommand = new RelayCommand(() => OpenPageRequested?.Invoke("UiStudio"));
         StructureCommand = new RelayCommand<string>(cmd => { if (cmd != null) _ui.Structure(cmd); }, _ => CanEditLive);
         ToggleCollapseCommand = new RelayCommand(() => { if (SelectedNode != null) ToggleCollapse(SelectedNode); });
+        OpenEvidenceCommand = new RelayCommand<GraphEvidenceItem>(ev => { if (ev != null) OpenEvidence(ev.File, ev.Line); });
+        OpenLinkEvidenceCommand = new RelayCommand<GraphLink>(l => { if (l?.Edge?.First is { } ev) OpenEvidence(ev.File, ev.Line); });
+        AllKindsCommand = new RelayCommand(() =>
+        {
+            bool allOn = EdgeFilters.All(f => f.IsOn);
+            _bulk = true;
+            foreach (var f in EdgeFilters) f.IsOn = !allOn;
+            _bulk = false;
+            FiltersChanged();
+        });
     }
 
     private string T(string key) => _loc.T(key);
@@ -111,7 +145,7 @@ public sealed class NodeGraphViewModel : ViewModelBase
             _isVisible = value;
             _studio.KeepPageAwake = value && IsLive;
             _ui.SetGraphOnScreen(value);
-            if (value && _dirty && IsProject && Graph != null) { _liveTimer.Stop(); _ = RefreshAsync(keepView: true); }
+            if (value && _dirty && IsProject && Graph != null) LiveTick();
         }
     }
     private bool _isVisible;
@@ -139,9 +173,40 @@ public sealed class NodeGraphViewModel : ViewModelBase
         if (Graph == null && !IsVisible) return;   // nothing built yet: the first build reads it all anyway
         _dirty = true;
         if (!IsVisible || IsLive) return;   // (the live tree follows the page, which reloads by itself)
+        // Debounced (half a second of quiet), but never put off for more than MaxLiveWait: an AI writing a file every
+        // 400 ms still sees the graph follow. A build already running is not restarted — it is followed by one more.
+        _pendingSince ??= now;
         _liveTimer.Stop();
-        _liveTimer.Start();
+        if (now - _pendingSince.Value >= MaxLiveWait) LiveTick();
+        else _liveTimer.Start();
     }
+
+    public static readonly TimeSpan MaxLiveWait = TimeSpan.FromSeconds(3);
+    private DateTime? _pendingSince;
+    private Task? _liveBuild;
+    private bool _liveAgain;
+
+    /// <summary>The live update fires: one build at a time; changes during it make exactly one more build after it.</summary>
+    private void LiveTick()
+    {
+        _liveTimer.Stop();
+        _pendingSince = null;
+        if (_liveBuild is { IsCompleted: false }) { _liveAgain = true; return; }
+        _liveBuild = RunLive();
+    }
+
+    private async Task RunLive()
+    {
+        do
+        {
+            _liveAgain = false;
+            await RefreshAsync(keepView: true);
+        }
+        while (_liveAgain && IsVisible && IsProject);
+    }
+
+    /// <summary>How many project builds have run (the harness counts them to prove a burst of changes is one build).</summary>
+    public int BuildCount { get; private set; }
 
     /// <summary>Build the graph once in the background after a project is opened, so the first visit shows it at once.
     /// One read of the project's files; nothing more happens while the page stays hidden.</summary>
@@ -225,7 +290,11 @@ public sealed class NodeGraphViewModel : ViewModelBase
             if (Graph == null) return "";
             int nodes = Graph.Nodes.Count(n => !n.Hidden);
             string s = T("graph.summary", nodes, Graph.Edges.Count);
-            return Graph.Truncated ? s + " · " + T("graph.truncated") : s;
+            int inferred = Graph.Edges.Count(e => e.Inferred);
+            if (inferred > 0) s += " · " + T("graph.summaryInferred", inferred);
+            if (Graph.Truncated) s += " · " + T(Graph.TruncatedWhy == "size" ? "graph.truncatedSize" : "graph.truncated", ProjectGraphBuilder.DefaultMaxFiles);
+            if (Graph.Skipped > 0) s += " · " + T("graph.skipped", Graph.Skipped);
+            return s;
         }
     }
 
@@ -255,8 +324,11 @@ public sealed class NodeGraphViewModel : ViewModelBase
         try
         {
             bool packages = ShowPackages;
+            BuildCount++;
             var graph = await Task.Run(() => ProjectGraphBuilder.Build(root, packages, cts.Token), cts.Token);
+            // the chat (so the project) changed while this was reading, or a newer build took over: drop it
             if (cts.IsCancellationRequested || IsLive || !string.Equals(root, RootPath, StringComparison.OrdinalIgnoreCase)) return;
+            _log?.Debug("NodeGraph", $"{graph.Nodes.Count} nodes, {graph.Edges.Count} edges ({graph.Edges.Count(e => e.Inferred)} inferred) — {graph.Timings}");
             LoadLayout(root);
             Layout(graph, useSaved: true);
             if (keepView)
@@ -268,10 +340,15 @@ public sealed class NodeGraphViewModel : ViewModelBase
                     { n.X = parent.X + parent.Width + ColGap; n.Y = parent.Y + parent.Height + RowGap; }
             }
             string? keep = SelectedNode?.Id;
+            var keepEdge = SelectedEdge;
             _builtFor = root;
+            RebuildFilters(graph);
             Graph = graph;
             EmptyText = graph.Nodes.Count == 0 ? T("graph.empty") : "";
             if (keep != null) SelectedNode = graph.ById.TryGetValue(keep, out var again) ? again : null;
+            if (keepEdge != null)
+                SelectedEdge = graph.Edges.FirstOrDefault(e => e.Kind == keepEdge.Kind && string.Equals(e.From, keepEdge.From, StringComparison.OrdinalIgnoreCase)
+                                                             && string.Equals(e.To, keepEdge.To, StringComparison.OrdinalIgnoreCase));
             if (!keepView) FitRequested?.Invoke();
         }
         catch (OperationCanceledException) { }
@@ -353,10 +430,13 @@ public sealed class NodeGraphViewModel : ViewModelBase
     // ───────────────────────────── layout ─────────────────────────────
 
     private const double ColGap = 96, RowGap = 16;
+    private const int MaxColumn = 40;
 
-    /// <summary>Layered layout (left → right along imports): a file sits one column right of whatever imports it;
-    /// within a column, nodes follow the order of their parents to keep wires short. Files with no wires go to a
-    /// grid underneath. Positions the user dragged before are kept.</summary>
+    /// <summary>Layered layout (left → right along the wires): a file sits one column right of whatever uses it;
+    /// within a column, a few barycenter sweeps (down and back up) order nodes by the rows of their neighbours so
+    /// wires cross less, and a column taller than <see cref="MaxColumn"/> wraps into several. Files with no wires go
+    /// to a grid underneath. Grouped by folder, each folder is its own block of that same order. Positions the user
+    /// dragged before are kept (separately for the grouped view).</summary>
     private void Layout(ProjectGraph g, bool useSaved)
     {
         var nodes = g.Nodes.Where(n => !n.Hidden).ToList();
@@ -388,53 +468,119 @@ public sealed class NodeGraphViewModel : ViewModelBase
         }
 
         var columns = layer.GroupBy(x => x.Value).OrderBy(x => x.Key).Select(x => x.Select(y => g.ById[y.Key]).ToList()).ToList();
-        // order: first column by kind/name, later columns by the mean row of their parents (barycenter)
+        // order: the first column by kind/name, then sweeps that sort each column by the mean row of its neighbours
+        // in the column before (going right) or after (going back left)
         var row = new Dictionary<string, double>();
+        void Number(List<GraphNode> col) { for (int i = 0; i < col.Count; i++) row[col[i].Id] = i; }
+        double Bary(GraphNode n, Dictionary<string, List<string>> side)
+            => side.TryGetValue(n.Id, out var p) && p.Any(row.ContainsKey) ? p.Where(row.ContainsKey).Average(x => row[x]) : row.GetValueOrDefault(n.Id, double.MaxValue);
         for (int c = 0; c < columns.Count; c++)
         {
-            var col = c == 0
-                ? columns[c].OrderBy(n => Rank(n.Id)).ToList()
-                : columns[c].OrderBy(n => ins.TryGetValue(n.Id, out var p) && p.Any(row.ContainsKey) ? p.Where(row.ContainsKey).Average(x => row[x]) : double.MaxValue)
-                            .ThenBy(n => n.Label).ToList();
-            columns[c] = col;
-            for (int i = 0; i < col.Count; i++) row[col[i].Id] = i;
+            columns[c] = c == 0 ? columns[c].OrderBy(n => Rank(n.Id)).ThenBy(n => n.Id).ToList()
+                                : columns[c].OrderBy(n => Bary(n, ins)).ThenBy(n => n.Label).ToList();
+            Number(columns[c]);
         }
-
-        double maxHeight = columns.Count == 0 ? 0 : columns.Max(c => c.Count * (c[0].Height + RowGap));
-        for (int c = 0; c < columns.Count; c++)
+        for (int sweep = 0; sweep < 2; sweep++)
         {
-            var col = columns[c];
-            double h = col.Count * (col[0].Height + RowGap);
-            double y0 = (maxHeight - h) / 2;
-            for (int i = 0; i < col.Count; i++)
-            {
-                col[i].Layer = c;
-                col[i].X = c * (col[i].Width + ColGap);
-                col[i].Y = y0 + i * (col[i].Height + RowGap);
-            }
+            for (int c = columns.Count - 2; c >= 0; c--) { columns[c] = columns[c].OrderBy(n => Bary(n, outs)).ThenBy(n => n.Label).ToList(); Number(columns[c]); }
+            for (int c = 1; c < columns.Count; c++) { columns[c] = columns[c].OrderBy(n => Bary(n, ins)).ThenBy(n => n.Label).ToList(); Number(columns[c]); }
         }
 
-        // unconnected files: a grid under the wired part
         var loose = nodes.Where(n => !connected.Contains(n.Id)).OrderBy(n => n.Kind).ThenBy(n => n.Id).ToList();
-        if (loose.Count > 0)
+        if (GroupByFolder) LayoutGroups(columns, loose);
+        else
         {
-            int perRow = Math.Max(4, (int)Math.Ceiling(Math.Sqrt(loose.Count) * 1.6));
-            double top = maxHeight + 80;
-            for (int i = 0; i < loose.Count; i++)
+            // a very tall column wraps into side-by-side sub-columns, so a folder of 300 widgets is not a 15 000 px strip
+            var placed = new List<List<GraphNode>>();
+            var layerOf = new List<int>();
+            for (int c = 0; c < columns.Count; c++)
+                for (int i = 0; i < columns[c].Count; i += MaxColumn) { placed.Add(columns[c].Skip(i).Take(MaxColumn).ToList()); layerOf.Add(c); }
+            double maxHeight = placed.Count == 0 ? 0 : placed.Max(c => c.Count * (c[0].Height + RowGap));
+            for (int c = 0; c < placed.Count; c++)
             {
-                loose[i].X = (i % perRow) * (loose[i].Width + 24);
-                loose[i].Y = top + (i / perRow) * (loose[i].Height + RowGap);
+                var col = placed[c];
+                double h = col.Count * (col[0].Height + RowGap);
+                double y0 = (maxHeight - h) / 2;
+                for (int i = 0; i < col.Count; i++)
+                {
+                    col[i].Layer = layerOf[c];
+                    col[i].X = c * (col[i].Width + ColGap);
+                    col[i].Y = y0 + i * (col[i].Height + RowGap);
+                }
+            }
+
+            // unconnected files: a grid under the wired part
+            if (loose.Count > 0)
+            {
+                int perRow = Math.Max(4, (int)Math.Ceiling(Math.Sqrt(loose.Count) * 1.6));
+                double top = maxHeight + 80;
+                for (int i = 0; i < loose.Count; i++)
+                {
+                    loose[i].X = (i % perRow) * (loose[i].Width + 24);
+                    loose[i].Y = top + (i / perRow) * (loose[i].Height + RowGap);
+                }
             }
         }
 
         if (useSaved)
             foreach (var n in g.Nodes)
-                if (_saved.TryGetValue(n.Id, out var xy) && xy.Length == 2) { n.X = xy[0]; n.Y = xy[1]; }
+                if (_saved.TryGetValue(SaveKey(n.Id), out var xy) && xy.Length == 2) { n.X = xy[0]; n.Y = xy[1]; }
 
         int Rank(string id)
         {
             var n = g.ById[id];
             return n.Kind switch { GraphNodeKind.Page => 0, GraphNodeKind.Script => 1, GraphNodeKind.Component => 2, GraphNodeKind.Style => 3, _ => 4 };
+        }
+    }
+
+    /// <summary>Group by folder: each folder is a block of its own files in the layered order (one column per layer
+    /// they use, wrapped when tall, unwired files last); the blocks are packed in rows, folders in path order, so a
+    /// folder's frame (drawn by the canvas) never overlaps another's.</summary>
+    private static void LayoutGroups(List<List<GraphNode>> columns, List<GraphNode> loose)
+    {
+        const double Pad = 14, Head = 30, BlockGap = 40;
+        var order = new Dictionary<GraphNode, (int col, int row)>();
+        for (int c = 0; c < columns.Count; c++)
+            for (int i = 0; i < columns[c].Count; i++) order[columns[c][i]] = (c, i);
+        int looseCol = columns.Count;
+        for (int i = 0; i < loose.Count; i++) order[loose[i]] = (looseCol, i);
+
+        var blocks = new List<(List<List<GraphNode>> cols, double w, double h)>();
+        foreach (var folder in order.Keys.GroupBy(n => n.Kind == GraphNodeKind.Package ? "\u0001" : n.Folder, StringComparer.OrdinalIgnoreCase)
+                                         .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var cols = new List<List<GraphNode>>();
+            foreach (var layer in folder.GroupBy(n => order[n].col).OrderBy(x => x.Key))
+            {
+                var list = layer.OrderBy(n => order[n].row).ToList();
+                int per = layer.Key == looseCol ? Math.Max(4, (int)Math.Ceiling(Math.Sqrt(list.Count))) : MaxColumn;
+                for (int i = 0; i < list.Count; i += per) cols.Add(list.Skip(i).Take(per).ToList());
+            }
+            double w = cols.Sum(c => c[0].Width) + Math.Max(0, cols.Count - 1) * (ColGap / 2) + 2 * Pad;
+            double h = cols.Max(c => c.Count * (c[0].Height + RowGap)) - RowGap + Head + Pad;
+            blocks.Add((cols, w, h));
+        }
+        if (blocks.Count == 0) return;
+
+        // shelf packing: rows about as wide as the square of the total area (a little wider — screens are wide)
+        double shelf = Math.Max(blocks.Max(b => b.w), Math.Sqrt(blocks.Sum(b => (b.w + BlockGap) * (b.h + BlockGap))) * 1.6);
+        double x = 0, y = 0, rowH = 0;
+        foreach (var (cols, w, h) in blocks)
+        {
+            if (x > 0 && x + w > shelf) { x = 0; y += rowH + BlockGap; rowH = 0; }
+            double cx = x + Pad;
+            foreach (var col in cols)
+            {
+                for (int i = 0; i < col.Count; i++)
+                {
+                    col[i].Layer = 0;
+                    col[i].X = cx;
+                    col[i].Y = y + Head + i * (col[i].Height + RowGap);
+                }
+                cx += col[0].Width + ColGap / 2;
+            }
+            x += w + BlockGap;
+            rowH = Math.Max(rowH, h);
         }
     }
 
@@ -504,9 +650,12 @@ public sealed class NodeGraphViewModel : ViewModelBase
         catch (Exception ex) { _log?.Warn("NodeGraph", "could not save layout", ex); }
     }
 
+    /// <summary>Where a dragged node is remembered: the grouped view keeps its own positions ("g:" + id).</summary>
+    private string SaveKey(string id) => GroupByFolder ? "g:" + id : id;
+
     private void ForgetLayout()
     {
-        _saved.Clear();
+        foreach (var k in _saved.Keys.Where(k => k.StartsWith("g:", StringComparison.Ordinal) == GroupByFolder).ToList()) _saved.Remove(k);
         _saveTimer.Stop();
         SaveLayout();
     }
@@ -515,7 +664,7 @@ public sealed class NodeGraphViewModel : ViewModelBase
     public void NodeMoved(GraphNode node)
     {
         if (IsLive) return;   // the live tree is re-laid out from the page each time
-        _saved[node.Id] = new[] { Math.Round(node.X, 1), Math.Round(node.Y, 1) };
+        _saved[SaveKey(node.Id)] = new[] { Math.Round(node.X, 1), Math.Round(node.Y, 1) };
         _saveTimer.Stop();
         _saveTimer.Start();
     }
@@ -530,7 +679,9 @@ public sealed class NodeGraphViewModel : ViewModelBase
         {
             if (ReferenceEquals(_selected, value)) return;
             _selected = value;
+            if (value != null && _selectedEdge != null) SelectedEdge = null;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(HasAnySelection));
             OnPropertyChanged(nameof(HasSelection));
             OnPropertyChanged(nameof(SelectedTitle));
             OnPropertyChanged(nameof(SelectedPath));
@@ -540,9 +691,9 @@ public sealed class NodeGraphViewModel : ViewModelBase
             if (value != null && Graph != null)
             {
                 foreach (var e in Graph.Edges.Where(e => e.From == value.Id))
-                    if (Graph.ById.TryGetValue(e.To, out var to)) Outgoing.Add(new GraphLink(to.Id, to.Label, KindText(e.Kind), EdgeBrush(e.Kind)));
+                    if (Graph.ById.TryGetValue(e.To, out var to)) Outgoing.Add(new GraphLink(to.Id, to.Label, LinkKind(e), EdgeBrush(e.Kind), e));
                 foreach (var e in Graph.Edges.Where(e => e.To == value.Id))
-                    if (Graph.ById.TryGetValue(e.From, out var from)) Incoming.Add(new GraphLink(from.Id, from.Label, KindText(e.Kind), EdgeBrush(e.Kind)));
+                    if (Graph.ById.TryGetValue(e.From, out var from)) Incoming.Add(new GraphLink(from.Id, from.Label, LinkKind(e), EdgeBrush(e.Kind), e));
                 if (IsLive && value.DomId is int dom) _studio.SelectNode(dom);
             }
             GraphChanged?.Invoke();
@@ -561,6 +712,118 @@ public sealed class NodeGraphViewModel : ViewModelBase
     public bool CanEditLive => IsLive && _ui.CanEditSource;
 
     private string KindText(GraphEdgeKind k) => T("graph.edge." + k.ToString().ToLowerInvariant());
+    private string LinkKind(GraphEdge e) => KindText(e.Kind) + (e.Inferred ? " · " + T("graph.inferredShort") : "");
+
+    // ───────────────────────────── a selected wire ─────────────────────────────
+
+    private GraphEdge? _selectedEdge;
+    /// <summary>The wire clicked on the canvas: what it is, whether the code proves it or a name matched, and the
+    /// lines it stands on (each opens in the editor).</summary>
+    public GraphEdge? SelectedEdge
+    {
+        get => _selectedEdge;
+        set
+        {
+            if (ReferenceEquals(_selectedEdge, value)) return;
+            _selectedEdge = value;
+            if (value != null && _selected != null)
+            {
+                _selected = null;
+                Outgoing.Clear();
+                Incoming.Clear();
+                OnPropertyChanged(nameof(SelectedNode));
+                OnPropertyChanged(nameof(HasSelection));
+            }
+            EdgeEvidence.Clear();
+            if (value != null)
+                foreach (var ev in value.Evidence)
+                    EdgeEvidence.Add(new GraphEvidenceItem($"{ev.File}:{ev.Line}", ev.Text, ev.File, ev.Line));
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasEdgeSelection));
+            OnPropertyChanged(nameof(HasAnySelection));
+            OnPropertyChanged(nameof(EdgeTitle));
+            OnPropertyChanged(nameof(EdgeKindText));
+            OnPropertyChanged(nameof(EdgeStatus));
+            OnPropertyChanged(nameof(EdgeWhy));
+            OnPropertyChanged(nameof(EdgeColor));
+            GraphChanged?.Invoke();
+        }
+    }
+    public bool HasEdgeSelection => SelectedEdge != null;
+    public bool HasAnySelection => SelectedEdge != null || SelectedNode != null;
+    public string EdgeTitle => SelectedEdge is { } e && Graph != null
+        ? (Graph.ById.TryGetValue(e.From, out var a) ? a.Label : e.From) + "  →  " + (Graph.ById.TryGetValue(e.To, out var b) ? b.Label : e.To) : "";
+    public string EdgeKindText => SelectedEdge is { } e ? KindText(e.Kind) + (e.Label is { Length: > 0 } l ? "  ·  " + l : "") : "";
+    public string EdgeStatus => SelectedEdge is { } e ? T(e.Inferred ? "graph.inferred" : "graph.confirmed") + (e.Count > 1 ? " · " + T("graph.places", e.Count) : "") : "";
+    public string EdgeWhy => SelectedEdge?.Why ?? "";
+    public System.Windows.Media.Brush? EdgeColor => SelectedEdge is { } e ? EdgeBrush(e.Kind) : null;
+    public ObservableCollection<GraphEvidenceItem> EdgeEvidence { get; } = new();
+
+    /// <summary>A wire was double-clicked: open its first line.</summary>
+    public void EdgeActivated(GraphEdge e)
+    {
+        SelectedEdge = e;
+        if (e.First is { } ev) OpenEvidence(ev.File, ev.Line);
+    }
+
+    private void OpenEvidence(string fileId, int line)
+    {
+        if (Graph?.ById.TryGetValue(fileId, out var n) != true || n!.FullPath == null) return;
+        _ = _editor.OpenAtLineAsync(n.FullPath, line);
+        OpenPageRequested?.Invoke("Code");
+    }
+
+    // ───────────────────────────── filters ─────────────────────────────
+
+    /// <summary>One chip per kind of connection the graph has (with its count); a kind switched off stays off across
+    /// rebuilds and projects.</summary>
+    public ObservableCollection<EdgeKindFilter> EdgeFilters { get; } = new();
+    public HashSet<GraphEdgeKind> HiddenKinds { get; } = new();
+    private bool _bulk;
+
+    private void RebuildFilters(ProjectGraph g)
+    {
+        EdgeFilters.Clear();
+        foreach (var k in g.Edges.GroupBy(e => e.Kind).OrderBy(x => (int)x.Key))
+            EdgeFilters.Add(new EdgeKindFilter(k.Key, KindText(k.Key), EdgeBrush(k.Key), k.Count(), !HiddenKinds.Contains(k.Key), OnFilter));
+        _inferredCount = g.Edges.Count(e => e.Inferred);
+        OnPropertyChanged(nameof(InferredCount));
+        OnPropertyChanged(nameof(HasInferred));
+    }
+
+    private void OnFilter(EdgeKindFilter f)
+    {
+        if (f.IsOn) HiddenKinds.Remove(f.Kind); else HiddenKinds.Add(f.Kind);
+        if (!_bulk) FiltersChanged();
+    }
+
+    private void FiltersChanged()
+    {
+        if (SelectedEdge != null && (HiddenKinds.Contains(SelectedEdge.Kind) || SelectedEdge.Inferred && !ShowInferred)) SelectedEdge = null;
+        GraphChanged?.Invoke();
+    }
+
+    private bool _showInferred = true;
+    /// <summary>Show the inferred (dashed) wires — off leaves only what the code proves.</summary>
+    public bool ShowInferred { get => _showInferred; set { if (SetProperty(ref _showInferred, value)) FiltersChanged(); } }
+    private int _inferredCount;
+    public int InferredCount => _inferredCount;
+    public bool HasInferred => _inferredCount > 0;
+
+    private bool _groupByFolder;
+    /// <summary>Lay the files out in one block per folder, a frame around each. Positions dragged in this view are
+    /// kept apart from the ungrouped ones.</summary>
+    public bool GroupByFolder
+    {
+        get => _groupByFolder;
+        set
+        {
+            if (!SetProperty(ref _groupByFolder, value) || Graph == null || IsLive) return;
+            Layout(Graph, useSaved: true);
+            GraphChanged?.Invoke();
+            FitRequested?.Invoke();
+        }
+    }
 
     private static readonly Dictionary<GraphEdgeKind, System.Windows.Media.SolidColorBrush> EdgeBrushes = new();
     private static System.Windows.Media.Brush EdgeBrush(GraphEdgeKind k)
@@ -596,4 +859,7 @@ public sealed class NodeGraphViewModel : ViewModelBase
     public ICommand OpenStudioCommand { get; }
     public ICommand StructureCommand { get; }
     public ICommand ToggleCollapseCommand { get; }
+    public ICommand OpenEvidenceCommand { get; }
+    public ICommand OpenLinkEvidenceCommand { get; }
+    public ICommand AllKindsCommand { get; }
 }

@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.212</Version>
+    <Version>3.0.213</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -116,6 +116,10 @@
     <!-- Dev Preview built-in browser (Services/Browser). WebView2 runtime ships with Windows 10/11; the loader
          lands in runtimes\win-x64|x86|arm64\native\WebView2Loader.dll for this AnyCPU build (root on publish -r). -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+    <!-- The Node Graph's C# reader (Services/UiStudio/Graph/CSharpGraphReader.cs): real syntax trees and symbol binding,
+         so a class, a base type or a call is linked where the code names it, never by a matching word. MIT, ~10 MB
+         (the app ships ~2 GB of llama backends); the net8.0 build of 4.x needs nothing outside the shared framework. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
   </ItemGroup>
 
   <!--
