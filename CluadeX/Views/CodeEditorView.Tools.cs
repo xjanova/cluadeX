@@ -59,6 +59,7 @@ public partial class CodeEditorView
         Editor.Options.IndentationSize = TabSize;
         _folding = FoldingManager.Install(Editor.TextArea);
         ApplyToolTheme();
+        InitializeLsp();
     }
 
     /// <summary>The view toggles the user left on (word wrap, whitespace, zoom) — from the VM's settings.</summary>
@@ -82,6 +83,7 @@ public partial class CodeEditorView
         _marks.Smart = null;
         if (FindBar.Visibility == Visibility.Visible) RefreshFind(jump: false);
         UpdateStatusBar();
+        OnLspTabBound();
     }
 
     private void OnToolsTextChanged()
@@ -97,6 +99,7 @@ public partial class CodeEditorView
     {
         _foldTimer?.Stop();
         _countTimer?.Stop();
+        DetachLsp();
     }
 
     /// <summary>Theme switch: the colours AvalonEdit holds as plain properties.</summary>
