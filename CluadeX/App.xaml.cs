@@ -1160,6 +1160,7 @@ public partial class App : Application
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.AutoComment.AutoCommentToolModule(
             sp.GetService<SettingsService>(), sp.GetService<AiProviderManager>(), sp.GetService<GitService>(),
             () => sp.GetService<CodeEditorViewModel>()?.OpenFilesForTools()));
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.OrchestrationToolModule());
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 

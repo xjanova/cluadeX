@@ -1281,6 +1281,10 @@ public partial class ChatViewModel : ViewModelBase
             });
         };
 
+        // Claude-Code-style orchestration views: the plan's "N running" line, workflow cards, split chips, notices,
+        // the next-step box (ChatViewModel.Orchestration.cs).
+        InitOrchestration();
+
         // Agent map: every sub-agent this command started, live, as one tree card per command.
         _agentService.OnSubAgentEvent += e =>
         {
@@ -1323,6 +1327,8 @@ public partial class ChatViewModel : ViewModelBase
                     "in_progress" or "active" => "active",
                     _ => "pending",
                 })).ToList();
+                if (planItems.FirstOrDefault(p => p.IsActive) is { } activeStep)
+                    activeStep.Running = RunningLineFor(todoRun?.Session.Id ?? CurrentSession?.Id);
                 int planDone = planItems.Count(p => p.IsDone);
                 string planHeader = planDone == planItems.Count
                     ? LocF("chat.plan.done", planDone, planItems.Count)
@@ -2599,7 +2605,10 @@ public partial class ChatViewModel : ViewModelBase
             foreach (var m in inherited) Messages.Add(m);
         // The split, for the sidebar's tree and for close_chat: what this chat was opened to do.
         if (parentId != null)
+        {
             ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "");
+            NoteSplitChip(parentId, chat);
+        }
         string folder = string.IsNullOrWhiteSpace(chat.ProjectPath) ? "(no project)" : chat.ProjectPath;
         Messages.Add(new ChatMessage
         {
@@ -3297,6 +3306,10 @@ public partial class ChatViewModel : ViewModelBase
                 case MessageRole.ToolAction when includeTools:
                     result.Add(m);
                     break;
+                case MessageRole.System when m.IsNotice && !string.IsNullOrWhiteSpace(m.Content):
+                    // A background command or a split chat finished: the model hears it (it may have been told mid-run too).
+                    result.Add(new ChatMessage { Role = MessageRole.User, Content = NoticePrefix + m.Content, Timestamp = m.Timestamp });
+                    break;
             }
         }
         return result;
@@ -3424,7 +3437,13 @@ public partial class ChatViewModel : ViewModelBase
     }
 
     // ─── Send Message ───
-    private Task SendMessage() => SendMessageCore(UserInput?.Trim() ?? "", pipe: null);
+    private Task SendMessage()
+    {
+        string input = UserInput?.Trim() ?? "";
+        // The owner's own words, for the workflow opt-in (a pipe caller's or an agent's text never counts).
+        if (CurrentSession is { } s && input.Length > 0) Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+        return SendMessageCore(input, pipe: null);
+    }
 
     /// <summary>Pressing Send: <paramref name="input"/> is what the box holds. <paramref name="pipe"/> set = the same
     /// path for a message a pipe caller sent (cluadex.continue_chat): the box and its attached images are the user's

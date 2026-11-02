@@ -114,11 +114,29 @@ public sealed record ToolStepView(string? Kind, string Verb, string? Target, str
 }
 
 /// <summary>One step of the agent's plan, as the plan card shows it.</summary>
-public sealed record PlanItemView(int Number, string Text, string State)
+public sealed record PlanItemView(int Number, string Text, string State) : System.ComponentModel.INotifyPropertyChanged
 {
     public bool IsDone => State == "done";
     public bool IsActive => State == "active";
     public bool IsPending => State == "pending";
+
+    private string _running = "";
+    /// <summary>On the active step only: what runs under it now ("กำลังรัน: เอเจนต์ย่อย 2 · คำสั่งเบื้องหลัง 1"), set in
+    /// place on the same row so the card does not redraw its list (Services/Agents/RunActivity).</summary>
+    public string Running
+    {
+        get => _running;
+        set
+        {
+            if (_running == value) return;
+            _running = value;
+            PropertyChanged?.Invoke(this, new(nameof(Running)));
+            PropertyChanged?.Invoke(this, new(nameof(HasRunning)));
+        }
+    }
+    public bool HasRunning => _running.Length > 0;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 }
 
 /// <summary>One sub-agent on the agent map card: what it was given, what it is doing, how it ended. Updated in place

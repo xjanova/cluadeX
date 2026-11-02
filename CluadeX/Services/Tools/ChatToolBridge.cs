@@ -41,7 +41,9 @@ public static class ChatToolBridge
     public static readonly string[] QualifiedToolNames = new[]
         {
             ProjectToolModule.NewChatToolName, ProjectToolModule.ToolName, ProjectToolModule.CloseChatToolName, AskToolName,
+            PlanToolName,
         }
+        .Concat(OrchestrationToolModule.ToolNames)
         .Concat(BrowserToolModule.ToolNames)
         .Concat(Desktop.DesktopToolModule.ToolNames)
         .Concat(EngineeringToolModule.ToolNames)
@@ -58,6 +60,11 @@ public static class ChatToolBridge
 
     /// <summary>Claude Code's built-in question tool, which it puts to the permission prompt.</summary>
     public const string CliAskToolName = "AskUserQuestion";
+
+    /// <summary>The plan for every CLI agent (docs/agent-orchestration.md §1): the chat's own plan card and bar, with
+    /// Claude Code's step operations — a CLI without a plan tool of its own (Antigravity) gets one, and one with its own
+    /// TodoWrite can step along with advance.</summary>
+    public const string PlanToolName = "update_plan";
 
     /// <summary>The line for each CLI's wrapper: it says which tool reaches the user's card.</summary>
     public const string AskHint = "When you need the user's answer or choice, call CluadeX's ask_user tool (MCP server cluadex) "
@@ -355,11 +362,15 @@ public static class ChatToolBridge
         var type = browser ? BrowserToolModule.TypeOf(tool)
             : desktop ? Desktop.DesktopToolModule.TypeOf(tool)
             : engineering ? EngineeringToolModule.TypeOf(tool)
-            : new ProjectToolModule().ResolveToolType(tool);
-        if (type == null || (!browser && !desktop && !engineering && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat)))
+            : tool == PlanToolName ? ToolType.TodoWrite
+            : OrchestrationToolModule.TypeOf(tool) ?? new ProjectToolModule().ResolveToolType(tool);
+        if (type == null || (!browser && !desktop && !engineering && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat
+                                                                 or ToolType.TodoWrite or ToolType.Workflow or ToolType.WrapUp)))
             return (false, $"CluadeX: '{tool}' is not one of its tools for CLI agents (open_project, new_chat, close_chat, "
-                           + "ask_user, browser_open … browser_close, desktop_windows … desktop_wait, verify_change, find_references, "
-                           + "rename_symbol, impact_of, checkpoint_list/diff/restore, gh_pr_view, gh_pr_checks, gh_run_log, git_blame, git_show, debug).");
+                           + "ask_user, update_plan, workflow, wrap_up, browser_open … browser_close, desktop_windows … desktop_wait, "
+                           + "verify_change, find_references, rename_symbol, impact_of, checkpoint_list/diff/restore, gh_pr_view, "
+                           + "gh_pr_checks, gh_run_log, git_blame, git_show, debug).");
+        if (type == ToolType.TodoWrite) tool = "todo_write";
         var lane = browser ? reg.BrowserLane : desktop ? reg.DesktopLane
             : engineering && !new ToolCall { Type = type.Value }.IsReadOnly ? reg.WorkLane : null;
 
@@ -834,7 +845,38 @@ public static class ChatToolBridge
             },
             required = new[] { "question" },
         },
-    }).Concat(BrowserToolModule.Schemas().Select(s => (object)new
+    }).Append(new
+    {
+        name = PlanToolName,
+        description = "Your plan, shown to the user as a live checklist pinned under the latest message in CluadeX. Send the WHOLE "
+            + "list once with todos; then step along with advance=true (finish the current item, start the next) or done + start "
+            + "(1-based step numbers). One item in_progress at a time.",
+        inputSchema = (object)new
+        {
+            type = "object",
+            properties = new
+            {
+                todos = new
+                {
+                    type = "array", description = "The whole plan",
+                    items = new
+                    {
+                        type = "object",
+                        properties = new { content = new { type = "string" }, status = new { type = "string", @enum = new[] { "pending", "in_progress", "completed" } } },
+                        required = new[] { "content", "status" },
+                    },
+                },
+                advance = new { type = "boolean", description = "Finish the item in progress and start the next pending one" },
+                done = new { type = "array", items = new { type = "integer" }, description = "Step numbers to mark finished" },
+                start = new { type = "integer", description = "Step number to start" },
+            },
+        },
+    }).Concat(OrchestrationToolModule.Schemas().Select(s => (object)new
+    {
+        name = s.Name,
+        description = s.Description,
+        inputSchema = CliSchema(s.InputSchema),
+    })).Concat(BrowserToolModule.Schemas().Select(s => (object)new
     {
         name = s.Name,
         description = s.Description,

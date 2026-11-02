@@ -1286,6 +1286,7 @@
                                         <ItemsControl ItemsSource="{Binding PlanItems}" Margin="2,0,0,0">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
+                                                    <StackPanel>
                                                     <StackPanel Orientation="Horizontal" Margin="0,2">
                                                         <Grid Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,10,0">
                                                             <Ellipse StrokeThickness="1.4">
@@ -1324,9 +1325,124 @@
                                                             </TextBlock.Style>
                                                         </TextBlock>
                                                     </StackPanel>
+                                                    <!-- under the active step: what runs now (sub-agents, workflows, background commands) -->
+                                                    <TextBlock Text="{Binding Running}" Margin="26,0,0,2" FontSize="11"
+                                                               Foreground="{DynamicResource Accent.1}"
+                                                               Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
+                                                    </StackPanel>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ Workflow card (docs/agent-orchestration.md §3) ═══ -->
+                                <ContentControl Grid.Row="1" Content="{Binding Workflow}" Focusable="False"
+                                                Visibility="{Binding ShowsWorkflowCard, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate><views:WorkflowCardView/></DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
+
+                                <!-- ═══ Split-chat chips: the chats this command split off, each with the sidebar's own state ═══ -->
+                                <Border Grid.Row="1" Margin="20,6,0,4" Padding="12,8" CornerRadius="8" BorderThickness="1"
+                                        Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}"
+                                        Visibility="{Binding IsSplitChips, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc orch.splits.header}" FontSize="11.5" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,6"/>
+                                        <ItemsControl ItemsSource="{Binding SplitChips}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Margin="0,0,6,4" Padding="9,3" Cursor="Hand" ToolTip="{services:Loc orch.splits.openTip}"
+                                                            Command="{Binding DataContext.GoToChatCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                            CommandParameter="{Binding Id}">
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <Border x:Name="Chip" CornerRadius="10" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                        BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource State.Fill.Faint}">
+                                                                    <ContentPresenter/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Chip" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <Ellipse x:Name="StateDot" Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                                     Fill="{DynamicResource Text.Faint}"/>
+                                                            <TextBlock Text="{Binding Title}" FontSize="11.5" MaxWidth="260" TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{DynamicResource Text.Primary}"/>
+                                                            <TextBlock x:Name="StateText" Text="{services:Loc orch.splits.idle}" Margin="6,0,0,0" FontSize="11"
+                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                        </StackPanel>
+                                                    </Button>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="working">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Accent.1}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.working}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="waiting">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Warning}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.waiting}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="done">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Success}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.done}"/>
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ Next-step box (wrap_up): recap, one question, one or two answers ═══ -->
+                                <Border Grid.Row="1" Margin="20,8,0,4" Padding="14,10" CornerRadius="10" BorderThickness="1"
+                                        Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1.Border.Soft}"
+                                        Visibility="{Binding ShowsNextStep, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <StackPanel DataContext="{Binding NextStep}">
+                                        <TextBlock Text="{services:Loc orch.next.title}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Accent.1}"/>
+                                        <TextBlock Text="{Binding Recap}" Margin="0,4,0,0" FontSize="12.5" TextWrapping="Wrap" Foreground="{DynamicResource Text.Primary}"/>
+                                        <TextBlock Text="{Binding Ask}" Margin="0,8,0,0" FontSize="12.5" FontWeight="SemiBold" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource Text.Primary}" Visibility="{Binding HasAsk, Converter={StaticResource BoolVis}}"/>
+                                        <ItemsControl ItemsSource="{Binding Actions}" Margin="0,8,0,0"
+                                                      Visibility="{Binding HasActions, Converter={StaticResource BoolVis}}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button x:Name="Act" Command="{Binding Command}" Margin="0,0,8,0" Padding="14,5" Cursor="Hand">
+                                                        <!-- a style setter, not a local value: the primary trigger below must win over it -->
+                                                        <Button.Style><Style TargetType="Button"><Setter Property="Background" Value="Transparent"/></Style></Button.Style>
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <Border x:Name="Bd" CornerRadius="7" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                        Background="{TemplateBinding Background}" BorderBrush="{DynamicResource Accent.1.Border.Soft}">
+                                                                    <ContentPresenter/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Bd" Property="Opacity" Value="0.85"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                        <TextBlock x:Name="ActText" Text="{Binding Label}" FontSize="12" Foreground="{DynamicResource Text.Primary}"/>
+                                                    </Button>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding IsPrimary}" Value="True">
+                                                            <Setter TargetName="Act" Property="Background" Value="{DynamicResource Accent.1}"/>
+                                                            <Setter TargetName="ActText" Property="Foreground" Value="{DynamicResource Text.OnAccent}"/>
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Text="{Binding PickedText}" Margin="0,8,0,0" FontSize="11.5" Foreground="{DynamicResource Text.Muted}"
+                                                   Visibility="{Binding IsAnswered, Converter={StaticResource BoolVis}}"/>
                                     </StackPanel>
                                 </Border>
 
@@ -1484,6 +1600,9 @@
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsAgentMap}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsOrchestrationCard}" Value="True">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
@@ -2353,11 +2472,15 @@
                                       Visibility="{Binding IsStickyPlanExpanded, Converter={StaticResource BoolVis}}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
+                                    <StackPanel>
                                     <StackPanel Orientation="Horizontal" Margin="0,2">
                                         <TextBlock x:Name="M" Text="&#xE739;" FontFamily="Segoe MDL2 Assets" FontSize="11" Width="20"
                                                    Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                                         <TextBlock x:Name="T" Text="{Binding Text}" FontSize="12" TextTrimming="CharacterEllipsis"
                                                    Foreground="{DynamicResource Text.Secondary}"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Running}" Margin="20,0,0,2" FontSize="11" Foreground="{DynamicResource Accent.1}"
+                                               Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
                                     </StackPanel>
                                     <DataTemplate.Triggers>
                                         <DataTrigger Binding="{Binding IsDone}" Value="True">
@@ -3093,6 +3216,15 @@
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <TextBlock Text="{services:Loc chat.think}" FontSize="12" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
+
+                                <!-- Ultra: this chat may run multi-agent workflows (off by default, per chat) -->
+                                <CheckBox x:Name="UltraToggle" IsChecked="{Binding IsUltra}" Foreground="{DynamicResource Accent.2}"
+                                          VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc orch.ultraTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8B9;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{services:Loc orch.ultra}" FontSize="12" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </CheckBox>
 

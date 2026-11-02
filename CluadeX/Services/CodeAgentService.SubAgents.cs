@@ -87,12 +87,12 @@ public partial class CodeAgentService
     /// <summary>What a sub-agent is doing, for the agent map: Phase "start" | "tool" | "done" | "failed" | "stopped".
     /// Raised in the run's own flow (AgentRunScope.Current is the run that spawned it).</summary>
     public sealed record SubAgentEvent(int Id, string Label, string Kind, string Task, string Phase, string Detail, int Steps,
-        string? Model = null, decimal CostUsd = 0);
+        string? Model = null, decimal CostUsd = 0, string? WorkflowId = null);
 
     /// <summary>How one sub-agent runs when the dispatcher starts it: its map id and label, kind, routed model, own scope
     /// (its cost), its warm-start context; ReportOnDone = false for a fixer, whose "done" comes after the re-run.</summary>
     private sealed record SubAgentRunOptions(int Id, string Label, string Kind, string? Model, AgentRunScope? Scope,
-        string? Warm = null, bool ReportOnDone = true, SubAgentThread? Thread = null);
+        string? Warm = null, bool ReportOnDone = true, SubAgentThread? Thread = null, string? WorkflowId = null);
 
     /// <summary>A sub-agent's conversation, so agent_spawn's continue_agent carries on with it. Finished: it ended with a
     /// report, so the conversation can take another message; one that failed mid-tool cannot.</summary>
@@ -112,6 +112,13 @@ public partial class CodeAgentService
 
     private void RaiseSubAgent(SubAgentEvent e)
     {
+        // The plan's "N running" line counts from these same events (raised in the spawning run's flow).
+        if (e.WorkflowId == null)
+        {
+            string? chat = RootOf(AgentRunScope.Current)?.SessionKey;
+            if (e.Phase == "start") Agents.RunActivity.SubAgentStarted(chat, "sa-" + e.Id);
+            else if (e.Phase is "done" or "failed" or "stopped") Agents.RunActivity.SubAgentEnded(chat, "sa-" + e.Id);
+        }
         try { OnSubAgentEvent?.Invoke(e); } catch (Exception ex) { _debugLog?.Warn("SubAgent", "agent map update failed", ex); }
     }
 
@@ -244,7 +251,7 @@ public partial class CodeAgentService
         messages.Add(new NativeMessage { Role = "user", Content = { new ContentBlock { Type = "text", Text = first.ToString() } } });
 
         OnAgentStatus?.Invoke($"{label}: {(thai ? "เริ่มงาน" : "starting")} · {Shorten(task, 60)}");
-        var ev = new SubAgentEvent(n, label, opts?.Kind ?? type, Shorten(task, 160), "start", "", 0, opts?.Model);
+        var ev = new SubAgentEvent(n, label, opts?.Kind ?? type, Shorten(task, 160), "start", "", 0, opts?.Model, WorkflowId: opts?.WorkflowId);
         decimal Cost() => opts?.Scope?.CostUsd ?? 0;
         _subAgentLast.Value = ev;
         RaiseSubAgent(ev);

@@ -279,6 +279,17 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=ORCH: just the orchestration views (docs/agent-orchestration.md), and the narrow composer the
+        // Ultra switch joined.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "ORCH")
+        {
+            await TestOrchestrationViews();
+            await TestNarrowComposer();
+            Log($"\n## Result (CHATTEST_ONLY=ORCH): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PP: just the plain-language permission prompt and the live model chip (quick renders to look at).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") is "PP" or "PB")
         {
@@ -332,6 +343,7 @@ internal static partial class Program
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
+        await TestOrchestrationViews();       // OR: workflow card, split chips, notices, next-step box, Ultra
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
@@ -2742,10 +2754,12 @@ internal static partial class Program
             Check("U10 narrow: the mic / send / stop buttons move to a row of their own and the options span the width",
                 Grid.GetRow(buttons) == 1 && Grid.GetColumnSpan(options) == 2 && effortLabel.Visibility == Visibility.Collapsed,
                 $"row={Grid.GetRow(buttons)} span={Grid.GetColumnSpan(options)} composer={((FrameworkElement)View.FindName("ComposerStrip")).ActualWidth:F0}");
-            // Every option row is one height, so a wrapped strip reads as rows, not a staircase.
+            // Every option row is one height, so a wrapped strip reads as rows, not a staircase. Items of different
+            // heights sit centred in their ItemHeight slot, so a row is the slot an item's middle falls in, not its top.
             var tops = new List<double>();
+            double slot = ((WrapPanel)options).ItemHeight;
             foreach (FrameworkElement c in ((Panel)options).Children)
-                if (c.IsVisible) tops.Add(Math.Round(c.TranslatePoint(new Point(0, 0), options).Y));
+                if (c.IsVisible) tops.Add(Math.Floor((c.TranslatePoint(new Point(0, 0), options).Y + c.ActualHeight / 2) / slot));
             int rows = tops.Distinct().Count();
             Check("U10 narrow: the options take at most four rows at 440 px (it was one per option)", rows is > 0 and <= 4, $"rows={rows} of {tops.Count} options");
             // The compaction toast in the same narrow chat (owner's screenshot): its actions sit under the text now.

@@ -21,7 +21,19 @@ public partial class ChatViewModel
         public required ObservableCollection<ChatMessage> Messages { get; init; }
         public AgentRunScope Scope { get; set; } = null!;
         public TaskCompletionSource Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public CancellationTokenSource? Cts;
+        /// <summary>The turn's Stop. Its cancel is remembered in <see cref="Stopped"/>: the source is disposed before the turn
+        /// ends, and the end needs to know (no next-step box after a Stop).</summary>
+        public CancellationTokenSource? Cts
+        {
+            get => _cts;
+            set
+            {
+                _cts = value;
+                try { value?.Token.Register(() => Stopped = true); } catch (ObjectDisposedException) { }
+            }
+        }
+        private CancellationTokenSource? _cts;
+        public volatile bool Stopped;
         public ChatMessage? ActiveStatus;
         /// <summary>The running balloon: the background-work row the current calls fold into (IsLive while they run).</summary>
         public ChatMessage? LiveRow;
@@ -30,6 +42,8 @@ public partial class ChatViewModel
         public ChatMessage? TodoMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
+        /// <summary>This command's split-chat chips (made with its first new_chat).</summary>
+        public ChatMessage? SplitsMsg;
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
@@ -418,8 +432,10 @@ public partial class ChatViewModel
         List<(string Text, object? Tag)>? leftover = null;
         if (run != null)
         {
+            Services.Agents.RunActivity.ClearRun(run.Session.Id);
             PostRunCostSummary(run);
             RememberRunStats(run);
+            AddNextStepBox(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
                 open.CloseQuestion(Loc("chat.ask.cancelled"));
@@ -436,7 +452,7 @@ public partial class ChatViewModel
         }
         done.TrySetResult();
         RaiseRunStateChanged();
-        if (run != null) TellParentSplitFinished(run.Session);
+        if (run != null) TellParentSplitFinished(run.Session, run.Messages);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
     }
@@ -444,27 +460,25 @@ public partial class ChatViewModel
     /// <summary>
     /// A split chat finished its turn: the chat that opened it hears so (a side note in its live list, when it is
     /// running or on screen) and the sidebar's tree updates its count — so the asking chat, or the owner, can put the
-    /// finished one away (close_chat / the sidebar's box button).
+    /// finished one away (close_chat / the sidebar's box button). It is a notice with the gist of what the split
+    /// answered, so the parent's agent reads it too — at its next step while it runs, else on its next turn.
     /// </summary>
-    private void TellParentSplitFinished(ChatSession child)
+    private void TellParentSplitFinished(ChatSession child, IEnumerable<ChatMessage>? childMessages = null)
     {
         if (child.ParentId is not { } pid) return;
-        var parent = Sessions.FirstOrDefault(s => s.Id == pid);
-        if (parent != null)
+        if (Sessions.Any(s => s.Id == pid))
         {
-            var list = RunOf(parent)?.Messages ?? (ReferenceEquals(parent, CurrentSession) ? Messages : null);
-            list?.Add(new ChatMessage
-            {
-                Role = MessageRole.System,
-                IsSideNote = true,
-                Content = "✅ " + LocF("chat.split.finishedNote", child.Title),
-            });
+            string gist = GistOf(childMessages);
+            AddNotice(pid,
+                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)),
+                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : ""));
         }
         RebuildVisibleSessions();
     }
 
     private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)
     {
+        if (e.WorkflowId != null) return;   // a workflow's agents are on its card
         var list = run?.Messages ?? Messages;
         var map = run?.AgentMapMsg;
         if (map == null || !list.Contains(map))

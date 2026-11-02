@@ -184,6 +184,9 @@ public enum ToolType
     Debug,               // Drive the debugger: adapters / start / stack / eval / step / continue / stop
     // Auto-comment (Services/Tools/AutoCommentToolModule) — appended last: a ToolType is stored by number
     AddCodeComments,     // The model names lines + comment text; AutoCommentService inserts and proves the code unchanged
+    // Orchestration (Services/Tools/OrchestrationToolModule) — appended last: a ToolType is stored by number
+    Workflow,            // A declarative multi-agent workflow (opt-in: the chat's Ultra switch or the owner's words)
+    WrapUp,              // The next-step box at the end of a turn: recap, one question, one or two answer buttons
 }
 
 /// <summary>
