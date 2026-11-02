@@ -10,8 +10,9 @@ namespace CluadeX.Services.Problems;
 /// fixed; its line may have moved), so it is listed dimmed and not drawn in the editor.</summary>
 public sealed record BuildProblemEntry(BuildProblem Problem, bool Stale);
 
-/// <summary>A checker the editor can run for a project. Safe = runs none of the project's own code (no MSBuild targets,
-/// build.rs or package scripts), so it may run by itself after an AI run; the others run only when the user clicks.</summary>
+/// <summary>A checker the editor can run for a project. Safe = runs no program or script the project ships (no MSBuild
+/// targets, build.rs, package scripts or node_modules binaries — only an SDK's own analyzer or the editor's Python AST
+/// pass), so it may run by itself after an AI run; the others run only when the user clicks Check.</summary>
 public sealed record ProblemCheck(string Key, string Label, string Command, bool Safe, string[] Extensions);
 
 /// <summary>How the last check went, for the line under the Problems header.</summary>
@@ -276,9 +277,10 @@ public sealed class BuildProblemsService : IAppShutdownHook, IDisposable
                 checks.Add(new ProblemCheck("dart", "dart analyze", "dart analyze", true, new[] { ".dart" }));
         }
 
+        // node_modules\.bin	sc.cmd is a file of the project (a cloned repo can put anything there): only on a click.
         string tsc = Path.Combine(root, "node_modules", ".bin", "tsc.cmd");
         if (Has("tsconfig.json") && SafeExists(tsc))
-            checks.Add(new ProblemCheck("tsc", "tsc --noEmit", $"\"{tsc}\" --noEmit --pretty false -p .", true,
+            checks.Add(new ProblemCheck("tsc", "tsc --noEmit", $"\"{tsc}\" --noEmit --pretty false -p .", false,
                 new[] { ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".vue" }));
 
         if ((Has("pyproject.toml") || Has("requirements.txt") || Has("setup.py") || HasGlob("*.py")) && FindPython() is { } python)

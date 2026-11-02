@@ -99,5 +99,35 @@ internal static class LspKeys
         ["search.toChatHeader"] = new() { ["en"] = "{0} — {1} results:", ["th"] = "{0} — {1} รายการ:" },
         ["search.toChatQuery"] = new() { ["en"] = "Search results for \"{0}\"", ["th"] = "ผลการค้นหา \"{0}\"" },
         ["search.toChatMore"] = new() { ["en"] = "… and {0} more", ["th"] = "… และอีก {0} รายการ" },
+        // What the AI changed (CodeEditorView.AiChanges.cs)
+        ["ai.changes"] = new() { ["en"] = "AI changed {0}", ["th"] = "AI แก้ {0} จุด" },
+        ["ai.changesTip"] = new() { ["en"] = "Places the AI's last turn changed in this file. Click (or Alt+F5) for the next one, Shift+Alt+F5 for the previous.", ["th"] = "จุดที่ AI แก้ในไฟล์นี้ในเทิร์นล่าสุด คลิก (หรือ Alt+F5) ไปจุดถัดไป Shift+Alt+F5 ไปจุดก่อนหน้า" },
+        // {0} which change, {1} of how many, {2}/{3} its lines
+        ["ai.peekTitle"] = new() { ["en"] = "AI change {0} of {1} · lines {2}–{3}", ["th"] = "AI แก้จุดที่ {0} จาก {1} · บรรทัด {2}–{3}" },
+        ["ai.peekTitleRemoved"] = new() { ["en"] = "AI change {0} of {1} · lines deleted before line {2}", ["th"] = "AI แก้จุดที่ {0} จาก {1} · ลบบรรทัดก่อนบรรทัด {2}" },
+        ["ai.before"] = new() { ["en"] = "Before", ["th"] = "ก่อน" },
+        ["ai.after"] = new() { ["en"] = "After", ["th"] = "หลัง" },
+        ["ai.prev"] = new() { ["en"] = "Previous change (Shift+Alt+F5)", ["th"] = "จุดก่อนหน้า (Shift+Alt+F5)" },
+        ["ai.next"] = new() { ["en"] = "Next change (Alt+F5)", ["th"] = "จุดถัดไป (Alt+F5)" },
+        ["ai.close"] = new() { ["en"] = "Close", ["th"] = "ปิด" },
+        ["ai.revert"] = new() { ["en"] = "Revert…", ["th"] = "ย้อนกลับ…" },
+        ["ai.revertTip"] = new() { ["en"] = "Put these lines back as they were before the AI's last turn", ["th"] = "คืนบรรทัดเหล่านี้เป็นแบบก่อน AI แก้ในเทิร์นล่าสุด" },
+        ["ai.revertTitle"] = new() { ["en"] = "Revert the AI's change", ["th"] = "ย้อนการแก้ของ AI" },
+        ["ai.revertConfirm"] = new()
+        {
+            ["en"] = "Put lines {0}–{1} back as they were before the AI's last turn?\n\nThis changes the text in the editor: Ctrl+Z undoes it, and the file is saved only when you save it.",
+            ["th"] = "คืนบรรทัด {0}–{1} เป็นแบบก่อน AI แก้ในเทิร์นล่าสุดหรือไม่?\n\nจะเปลี่ยนข้อความใน editor (กด Ctrl+Z เพื่อยกเลิกได้) และไฟล์จะถูกบันทึกเมื่อคุณกดบันทึกเท่านั้น",
+        },
+        ["ai.revertConfirmRemoved"] = new()
+        {
+            ["en"] = "Put back the {0} line(s) the AI deleted before line {1}?\n\nThis changes the text in the editor: Ctrl+Z undoes it, and the file is saved only when you save it.",
+            ["th"] = "ใส่ {0} บรรทัดที่ AI ลบไปก่อนบรรทัด {1} กลับคืนหรือไม่?\n\nจะเปลี่ยนข้อความใน editor (กด Ctrl+Z เพื่อยกเลิกได้) และไฟล์จะถูกบันทึกเมื่อคุณกดบันทึกเท่านั้น",
+        },
+        ["ai.reverted"] = new() { ["en"] = "Put back. Save the file to keep it (Ctrl+Z undoes)", ["th"] = "คืนให้แล้ว กดบันทึกไฟล์เพื่อเก็บไว้ (Ctrl+Z เพื่อยกเลิก)" },
+        ["ai.revertGone"] = new() { ["en"] = "Those lines have changed since: the marks were refreshed", ["th"] = "บรรทัดเหล่านั้นถูกแก้ไปแล้ว จึงอัปเดตเครื่องหมายใหม่" },
+        ["ai.revertLocked"] = new() { ["en"] = "The AI is still working in this project: put changes back after it finishes", ["th"] = "AI ยังทำงานอยู่ในโปรเจกต์นี้ รอให้เสร็จก่อนแล้วค่อยย้อนกลับ" },
+        ["ai.hide"] = new() { ["en"] = "Hide marks", ["th"] = "ซ่อนเครื่องหมาย" },
+        ["ai.hideTip"] = new() { ["en"] = "Hide these marks until the AI changes this file again", ["th"] = "ซ่อนเครื่องหมายจนกว่า AI จะแก้ไฟล์นี้อีกครั้ง" },
+        ["ai.tooLarge"] = new() { ["en"] = "The file changed too much to line up before and after: open the diff from Source Control to compare.", ["th"] = "ไฟล์เปลี่ยนมากเกินกว่าจะเทียบก่อน-หลังทีละบรรทัด เปิด diff จาก Source Control เพื่อเทียบ" },
     };
 }

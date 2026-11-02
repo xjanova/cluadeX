@@ -107,6 +107,7 @@ public partial class CodeEditorView
             _lsp.OpenDocument(ProjectRootFor(path), path, () => snapshot.Text, Editor.Document.TextLength);
         }
         RefreshLsp();
+        ScheduleAiChanges();
     }
 
     /// <summary>The project folder when the file is in it (the server sees the whole project), else the file's folder.</summary>

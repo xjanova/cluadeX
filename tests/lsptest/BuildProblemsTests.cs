@@ -240,8 +240,8 @@ internal static partial class Program
         make("node_modules/.bin/tsc.cmd", "@echo off\n");
         var checks = svc.ChecksFor(proj);
         var tsc = checks.FirstOrDefault(c => c.Key == "tsc");
-        Check("R11", "a project with tsconfig.json + node_modules\\.bin\\tsc.cmd offers 'tsc --noEmit' (safe: runs no project code)",
-            tsc != null && tsc.Safe && !checks.Any(c => c.Key == "dotnet" && c.Safe), string.Join(", ", checks.Select(c => c.Label)));
+        Check("R11", "a project with tsconfig.json + node_modules\\.bin\\tsc.cmd offers 'tsc --noEmit', on a click only (that .cmd is the project's own file)",
+            tsc != null && !tsc.Safe && !checks.Any(c => c.Key is "dotnet" or "cargo" or "go" && c.Safe), string.Join(", ", checks.Select(c => c.Label)));
         if (tsc != null)
         {
             var gate = new TaskCompletionSource();
@@ -275,20 +275,25 @@ internal static partial class Program
             Check("R13", "Stop check ends it (and leaves what was found alone)",
                 ended && stopped.Result?.Cancelled == true && !svc.IsChecking && svc.ProblemsFor(appTs).Count == 1);
 
-            // Auto-check after a run: due when a .ts file was written after tsc's last verdict, not after.
+            // An AI edit never makes the project's own tsc.cmd run by itself.
             svc.NoteEdited(appTs);
-            bool due = svc.PendingAutoChecks(proj).Any(c => c.Key == "tsc");
-            svc.Ingest("", proj, "npx tsc --noEmit", succeeded: true);   // empty output: nothing to read
-            svc.Ingest("Found 0 errors.\n", proj, "npx tsc --noEmit", succeeded: true);
-            bool doneAfter = !svc.PendingAutoChecks(proj).Any(c => c.Key == "tsc");
-            svc.NoteEdited(program);
-            Check("R14", "an AI edit to a .ts file makes tsc due; its own tsc run after the edit settles it; a .cs edit never makes a safe check due",
-                due && doneAfter && !svc.PendingAutoChecks(proj).Any(), $"due={due} doneAfter={doneAfter}");
+            Check("R14", "an AI edit to a .ts file does not start the project's tsc.cmd by itself", !svc.PendingAutoChecks(proj).Any(c => c.Key == "tsc"));
         }
 
         // The editor's Python check script is real Python: run it when this machine has one (GAP otherwise).
         make("bad.py", "def f(:\n    pass\n");
         make("ok.py", "print('สวัสดี')\n");
+        // Auto-check after a run: the Python AST check is due when a .py file was written after its last verdict, not after.
+        if (svc.ChecksFor(proj).FirstOrDefault(c => c.Key == "pysyntax") is { } py)
+        {
+            svc.NoteEdited(Path.Combine(proj, "ok.py"));
+            bool due = svc.PendingAutoChecks(proj).Any(c => c.Key == "pysyntax");
+            svc.Ingest("OK (2 files checked)\n", proj, py.Command, succeeded: true);
+            bool doneAfter = !svc.PendingAutoChecks(proj).Any(c => c.Key == "pysyntax");
+            svc.NoteEdited(program);
+            Check("R16", "an AI edit to a .py file makes the Python check due; its run after the edit settles it; a .cs edit never makes a safe check due",
+                due && doneAfter && !svc.PendingAutoChecks(proj).Any(), $"due={due} doneAfter={doneAfter}");
+        }
         var real = new BuildProblemsService(null, null);
         var check = real.ChecksFor(proj).FirstOrDefault(c => c.Key == "pysyntax");
         if (check == null) Console.WriteLine("  GAP  R15   no Python on this machine: the Python syntax check did not run");

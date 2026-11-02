@@ -50,6 +50,9 @@ The workbench left panel is a three-mode activity bar: **EXPLORER | SEARCH | DEB
 | Side-by-side diff | diff button in Source Control | HEAD vs working tree |
 | Breakpoints | click the editor gutter | |
 | Live errors + hover | status-bar ⊗/⚠ count → Problems | real language server per project (`Services/Lsp/`) |
+| Errors with no install | Problems ▸ Check | parsed from builds/tests/terminal runs (`Services/Problems/`) |
+| What the AI changed | `Alt+F5` / `Shift+Alt+F5`, gutter click | vs the file before the AI's last turn (checkpoints); revert one hunk with confirm |
+| Editor → chat | right-click selection, ✦ on a Problem, "to chat" on search | into the running AI's queue when one works here |
 
 **Design rule these all follow — no dead buttons.** Nothing here requires an install to be useful:
 navigation/search/rename/completion work off a bounded workspace scan plus `RepoMapService`
@@ -61,6 +64,10 @@ Live errors follow the same rule: `EditorLanguageService` probes for csharp-ls/O
 typescript-language-server, pyright/pylsp and `dart language-server`; absent → the Problems panel shows the install
 command (Copy / Run in terminal / Check again). Edits go incrementally after a pause; servers stop with the project
 and on exit. Proven by `tests/lsptest` (fake stdio server + the real Dart SDK when present; `--offline` skips it).
+The language server is optional: `BuildProblemsService` reads the output of every build/test/check the agent or the
+editor terminal runs (dotnet, tsc, eslint, dart/flutter, cargo, go, python, pytest…) into the same squiggles. After an
+AI run only checks that run none of the project's own code start by themselves (dart analyze, the Python AST pass);
+MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a Check click.
 
 ## What Was Already Done (10 Phases)
 1. ✅ System prompt (10 sections, env info, git status, Claude Code standard)

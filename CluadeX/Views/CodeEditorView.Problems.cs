@@ -32,6 +32,7 @@ public partial class CodeEditorView
     {
         _build = BuildProblemsService.Current;
         Editor.TextArea.ContextMenu = BuildEditorMenu();
+        InitializeAiChanges();
     }
 
     private void HookBuildProblems()
@@ -47,6 +48,7 @@ public partial class CodeEditorView
             // The view did not exist when a run ended (the user was on the chat page): check now that they look.
             if (!_wasLocked) _ = AutoCheckAsync();
         }
+        ScheduleAiChanges();
     }
 
     private void DetachBuildProblems()
@@ -58,6 +60,7 @@ public partial class CodeEditorView
             _buildVm.SearchResults.CollectionChanged -= OnSearchResultsChanged;
             _buildVm = null;
         }
+        DetachAiChanges();
     }
 
     private void OnBuildChanged() => OnLspEvent("");
@@ -66,7 +69,11 @@ public partial class CodeEditorView
     {
         if (e.PropertyName != nameof(CodeEditorViewModel.IsLockedByAgent) || _vm == null) return;
         bool locked = _vm.IsLockedByAgent;
-        if (_wasLocked && !locked) _ = AutoCheckAsync();   // the AI run in this project ended
+        if (_wasLocked && !locked)
+        {
+            _ = AutoCheckAsync();   // the AI run in this project ended
+            ScheduleAiChanges();
+        }
         _wasLocked = locked;
     }
 

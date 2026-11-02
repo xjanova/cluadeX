@@ -2475,6 +2475,9 @@
                     <!-- Errors / warnings from the language server, or its state ("no C# server: install") — opens Problems -->
                     <Button x:Name="StProblems" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="8,0,0,0"
                             Click="OnProblemsToggle" ToolTip="{services:Loc lsp.problemsTip}" Visibility="Collapsed"/>
+                    <!-- How many places the AI's last turn changed in this file — click = the next one (CodeEditorView.AiChanges.cs) -->
+                    <Button x:Name="StAiChanges" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="8,0,0,0"
+                            Click="OnAiChangesNext" ToolTip="{services:Loc ai.changesTip}" Visibility="Collapsed"/>
                     <Button x:Name="StZoom" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnZoomReset"
                             ToolTip="{services:Loc edt.zoomReset}" Margin="0,0,6,0"/>
                     <TextBlock x:Name="StOverwrite" DockPanel.Dock="Right" Style="{StaticResource EdStatusText}" Margin="8,0"
