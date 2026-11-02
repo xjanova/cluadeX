@@ -353,7 +353,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             int input = Get("promptTokenCount") - cached;
             int output = Get("candidatesTokenCount") + Get("thoughtsTokenCount");
             if (input > 0 || output > 0)
-                _costTracker.RecordUsage(model, Math.Max(0, input), output, cached, 0);
+                _costTracker.RecordUsage(model, Math.Max(0, input), output, cached, 0, thinkingTokens: Get("thoughtsTokenCount"));
         }
     }
 
@@ -604,8 +604,9 @@ public class GeminiProvider : ApiProviderBase, IModelLister
         }
 
         var result = await ParseToolStreamAsync(response.Content, onTextDelta, ct);
-        if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0))
-            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, 0, 0);
+        // Cached prompt tokens are billed at the cached rate — they were left out here, so a cached step read as free input.
+        if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0 || result.CacheReadTokens > 0))
+            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, 0, thinkingTokens: result.ThinkingTokens);
         ConfirmNativeTools();
         return result;
     }
@@ -687,7 +688,9 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             int Get(string name) => u.TryGetProperty(name, out var v) && v.TryGetInt32(out var x) ? x : 0;
             int cached = Get("cachedContentTokenCount");
             result.InputTokens = Math.Max(0, Get("promptTokenCount") - cached);
+            result.CacheReadTokens = cached;
             result.OutputTokens = Get("candidatesTokenCount") + Get("thoughtsTokenCount");
+            result.ThinkingTokens = Get("thoughtsTokenCount");
         }
         result.TextContent = text.Length > 0 ? text.ToString() : null;
         result.ThinkingContent = thinking.Length > 0 ? thinking.ToString() : null;

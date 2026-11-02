@@ -36,11 +36,15 @@ public class CostTrackingService
     // Monthly comparisons and long-lived credit anchors must survive beyond the old three-month window.
     private const int LedgerKeepDays = 3660;
 
-    public CostTrackingService() { }
+    /// <summary>Per-request usage (provider · model · chat · time) behind the Billing page; memory-only without settings.</summary>
+    public Billing.UsageLog Log { get; }
+
+    public CostTrackingService() { Log = new Billing.UsageLog(null); }
 
     /// <summary>With the app's settings: the per-day ledger lives in its data folder (portable runs keep their own).</summary>
     public CostTrackingService(SettingsService settings)
     {
+        Log = new Billing.UsageLog(Path.Combine(settings.DataRoot, "usage-log.jsonl"));
         try
         {
             _ledgerPath = Path.Combine(settings.DataRoot, "usage-daily.json");
@@ -194,9 +198,11 @@ public class CostTrackingService
     }
 
     /// <summary>CLI usage is an estimated API-equivalent value, never an extra API charge or a budget deduction.</summary>
-    public void RecordPackageUsage(string provider, decimal equivalentUsd, int inputTokens, int outputTokens, string method, int cacheReadTokens = 0)
+    public void RecordPackageUsage(string provider, decimal equivalentUsd, int inputTokens, int outputTokens, string method, int cacheReadTokens = 0,
+        string? model = null)
     {
         if (!ProviderCostProjection.IsPackage(provider)) return;
+        LogRow(provider, model ?? "", Billing.UsageCostKind.Estimated, Math.Max(0, equivalentUsd), inputTokens, outputTokens, cacheReadTokens, 0, 0, 1, 0);
         lock (_lock)
         {
             string day = DayKey(DateTime.Now);
@@ -219,6 +225,7 @@ public class CostTrackingService
     /// <summary>Write the ledger now (app exit; otherwise it is written at most every few seconds).</summary>
     public void FlushLedger()
     {
+        Log.Flush();
         string? json = null;
         lock (_lock)
         {
@@ -299,9 +306,12 @@ public class CostTrackingService
     /// billed at 2x input instead of the 5-minute write price.</param>
     /// <param name="promptTokens">The request's whole prompt, for a record that carries none of it (the output record of
     /// a streamed reply): Claude Haiku 5.5 bills every token of a request whose prompt is over 100,000 at its higher price.</param>
+    /// <param name="thinkingTokens">Of <paramref name="outputTokens"/>, the reasoning tokens the provider reports apart
+    /// (OpenAI reasoning_tokens, Gemini thoughtsTokenCount) — shown on the Billing page, priced as output already.</param>
+    /// <param name="provider">The Billing page tab (an <see cref="Models.AiProviderType"/> name); null = from the model id.</param>
     public void RecordUsage(string model, int inputTokens, int outputTokens,
         int cacheReadTokens = 0, int cacheCreationTokens = 0, bool isNewRequest = true, decimal priceFactor = 1m,
-        int cacheWrite1hTokens = 0, int promptTokens = 0)
+        int cacheWrite1hTokens = 0, int promptTokens = 0, int thinkingTokens = 0, string? provider = null)
     {
         decimal cost;
         bool saveLedger;
@@ -364,8 +374,73 @@ public class CostTrackingService
 
         // The run this request was made for (null outside any run: a title, a plain chat answer).
         AgentRunScope.Current?.AddUsage(cost, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, isNewRequest, price.Baseline);
+        LogRow(provider ?? ApiProviderKey(model), model, Billing.UsageCostKind.Billed, cost, inputTokens, outputTokens, cacheReadTokens,
+            cacheCreationTokens, thinkingTokens, isNewRequest ? 1 : 0, 0);
         if (saveLedger) FlushLedger();
         OnCostUpdated?.Invoke(GetSummary());
+    }
+
+    /// <summary>A model on this machine answered (Ollama, llama-server, local GGUF): $0 — its tokens and the time it took
+    /// go to the Billing page only (the spend ledger and the budgets count money).</summary>
+    public void RecordLocalUsage(string provider, string? model, int inputTokens, int outputTokens, double seconds)
+        => LogRow(provider, model ?? "", Billing.UsageCostKind.Free, 0m, inputTokens, outputTokens, 0, 0, 0, 1, seconds);
+
+    /// <summary>The Billing page's tab for a model an API provider recorded: from the model id, else the run's provider.</summary>
+    public static string ApiProviderKey(string? model)
+    {
+        string p = ProviderOf(model);
+        if (p == "Google") return "Gemini";
+        if (p != "Other") return p;
+        return AgentRunScope.Current?.ProviderType is { } t and (Models.AiProviderType.Anthropic or Models.AiProviderType.OpenAI or Models.AiProviderType.Gemini)
+            ? t.ToString() : "Other";
+    }
+
+    private void LogRow(string provider, string model, Billing.UsageCostKind kind, decimal usd, long input, long output, long cacheRead,
+        long cacheWrite, long thinking, int requests, double seconds)
+    {
+        try
+        {
+            var scope = AgentRunScope.Current;
+            Log.Add(new Billing.UsageEntry
+            {
+                At = DateTimeOffset.UtcNow, Provider = provider, Model = model, Kind = kind, Usd = usd,
+                Chat = string.IsNullOrEmpty(scope?.SessionKey) ? null : scope.SessionKey, SubAgent = scope?.Parent != null,
+                Input = Math.Max(0, input), Output = Math.Max(0, output), CacheRead = Math.Max(0, cacheRead), CacheWrite = Math.Max(0, cacheWrite),
+                Thinking = Math.Max(0, thinking), Requests = requests, Seconds = Math.Max(0, seconds),
+            });
+        }
+        catch { /* the Billing page's log must never break a request */ }
+    }
+
+    /// <summary>The day ledger's days from before <see cref="Log"/> has rows (installs that predate the Billing page), as
+    /// rows: one per day and provider, at local noon of that day, no model, no chat.</summary>
+    public List<Billing.UsageEntry> LegacyRows(DateTime? firstLogDay)
+    {
+        var rows = new List<Billing.UsageEntry>();
+        lock (_lock)
+            foreach (var (key, all) in _days)
+            {
+                if (!DateTime.TryParseExact(key, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out var day)) continue;
+                if (firstLogDay != null && day >= firstLogDay.Value.Date) continue;
+                var parts = new List<(string Key, DailyUsage U)>();
+                if (all.ByProvider != null) parts.AddRange(all.ByProvider.Select(kv => (kv.Key, kv.Value)));
+                var rest = Unattributed(all);
+                if (rest.Usd != 0 || rest.Requests != 0 || rest.InputTokens != 0 || rest.OutputTokens != 0) parts.Add(("Other", rest));
+                foreach (var (k, u) in parts)
+                {
+                    string provider = Billing.ProviderBrand.FromLedgerKey(k);
+                    var kind = Billing.ProviderBrand.CostKindOf(provider);
+                    rows.Add(new Billing.UsageEntry
+                    {
+                        At = new DateTimeOffset(DateTime.SpecifyKind(day.AddHours(12), DateTimeKind.Local)).ToUniversalTime(),
+                        Provider = provider, Kind = kind, Legacy = true,
+                        Usd = kind == Billing.UsageCostKind.Estimated ? Math.Max(u.BaselineUsd, u.Usd) : kind == Billing.UsageCostKind.Free ? 0 : u.Usd,
+                        Input = u.InputTokens, Output = u.OutputTokens, CacheRead = u.CacheReadTokens, Requests = u.Requests,
+                    });
+                }
+            }
+        return rows;
     }
 
     // ── Dispatch strategy ledger: what each kind of run cost, took and achieved (tuning DispatchPolicy from real numbers) ──

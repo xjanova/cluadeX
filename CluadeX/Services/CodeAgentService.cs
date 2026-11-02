@@ -1319,6 +1319,14 @@ public partial class CodeAgentService
         return names;
     }
 
+    /// <summary>The model a local provider answers with, for the Billing page's model rows.</summary>
+    private string? LocalModelName(Services.Providers.IAiProvider provider) => provider switch
+    {
+        Services.Providers.OllamaProvider => _settingsService.Settings.ProviderConfigs.GetValueOrDefault("Ollama")?.EffectiveModelId,
+        Services.Providers.LlamaServerProvider ls => ls.LoadedModelName ?? _settingsService.Settings.SelectedModelName,
+        _ => _settingsService.Settings.SelectedModelName,
+    };
+
     /// <summary>
     /// The prompt sections of the tool groups the model is actually offered this turn — a tool module's section
     /// when one of its tools is in the catalogue, an IPromptSectionProvider's when it owns an offered tool. A model
@@ -2241,7 +2249,8 @@ public partial class CodeAgentService
             packageUsageRecorded = true;
             string context = string.Join("\n", sendHistory.Select(m => m.Content)) + "\n" + sendMessage;
             var usage = usageEstimate.Estimate(delegated.ToString(), context, text);
-            _costTrackingService?.RecordPackageUsage(delegated.ToString(), usage.EquivalentUsd, usage.Input, usage.Output, usage.Method, usageEstimate.CacheReadTokens);
+            _costTrackingService?.RecordPackageUsage(delegated.ToString(), usage.EquivalentUsd, usage.Input, usage.Output, usage.Method, usageEstimate.CacheReadTokens,
+                usageEstimate.Model);
         }
         // A worker turn (edit/run) drives the same events as the native loop: rows, plan, steps, sub-agent map.
         var turn = grant is { Edit: true } or { Run: true } ? StartClaudeDevTurn(folder, progress) : null;
@@ -3652,6 +3661,7 @@ public partial class CodeAgentService
                         ? Math.Max(0, EstimateNativeTokens(nativeMessages) - EstimateNativeTokens(outboundMessages)) : 0,
                 };
                 var callScope = AgentRunScope.Current;
+                var callWatch = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     callScope?.BeginCall(callCts);
@@ -3746,6 +3756,10 @@ public partial class CodeAgentService
                 {
                     callScope?.EndCall(callCts);
                 }
+                // A model on this machine reports its tokens to no one: the Billing page shows them, and the time it took.
+                if (loopProvider.ProviderId is "Ollama" or "LlamaServer" or "Local" && response != null)
+                    _costTrackingService?.RecordLocalUsage(loopProvider.ProviderId, LocalModelName(loopProvider),
+                        response.InputTokens, response.OutputTokens, callWatch.Elapsed.TotalSeconds);
             }
 
             // ─── The API refused the tool images and the provider answered from a text-only retry ───

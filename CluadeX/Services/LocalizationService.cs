@@ -25,7 +25,8 @@ public class LocalizationService
                                       Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys,
                                       Localization.StarterKeys.Keys,
                                       Localization.AutoCommentKeys.Keys,
-                                      Localization.OrchestrationKeys.Keys })
+                                      Localization.OrchestrationKeys.Keys,
+                                      Localization.BillingKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }
