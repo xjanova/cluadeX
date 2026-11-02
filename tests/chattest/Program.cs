@@ -289,6 +289,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=PROJ: just renaming chats and the projects that group them.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PROJ")
+        {
+            await TestRenameAndProjects();
+            Log($"\n## Result (CHATTEST_ONLY=PROJ): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         await TestPermissionPrompt();         // C1
         await TestStatusRows();               // L4 (screen)
         await TestThinkingBlock();            // L8 (screen)
@@ -333,6 +342,7 @@ internal static partial class Program
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
+        await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
@@ -3049,7 +3059,10 @@ internal class FakeProvider : IAiProvider
             var key = ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k))
                 ?? history.AsEnumerable().Reverse().SelectMany(h => ScriptFor.Keys.Where(k => h.Content?.Contains(k) == true))
                           .FirstOrDefault(k => ScriptFor[k].Count > 0);
-            step = key != null && ScriptFor[key].Count > 0 ? ScriptFor[key].Dequeue()
+            // The memory/instinct extraction a finished chat starts in the background never takes a scripted step: it
+            // races the next test's first send, and when it won it ate that test's step (L10's error came back as "ok").
+            step = userMessage.Contains("TRANSCRIPT:\n---") ? FakeStep.Reply("[]")
+                 : key != null && ScriptFor[key].Count > 0 ? ScriptFor[key].Dequeue()
                  : Script.Count > 0 ? Script.Dequeue() : FakeStep.Reply("ok");
         }
         await Task.Delay(30, ct);

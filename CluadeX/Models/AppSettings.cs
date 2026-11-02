@@ -383,6 +383,9 @@ public class AppSettings
     // Sidebar system menu — collapsed by default to give chat history maximum real estate.
     public bool SidebarNavExpanded { get; set; } = false;
 
+    /// <summary>The sidebar's project list is open (owner 2026-11-01: projects that group chats).</summary>
+    public bool SidebarProjectsExpanded { get; set; } = true;
+
     /// <summary>Chats pinned to the top of the sidebar, in the order they were pinned (owner 2026-11-02).</summary>
     public List<string> PinnedChatIds { get; set; } = new();
 

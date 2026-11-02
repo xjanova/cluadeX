@@ -573,6 +573,19 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
         get => _title;
         set { if (_title != value) { _title = value; Raise(nameof(Title)); } }
     }
+
+    /// <summary>The owner named this chat (Rename): an automatic title never replaces it, and a save never writes
+    /// over the stored name (DatabaseService.WriteSession).</summary>
+    public bool TitleIsCustom { get; set; }
+
+    private string _projectId = "";
+    /// <summary>The project (a named group of chats, <see cref="ChatProject"/>) this chat is in; "" = none. Only the
+    /// group: the chat's folder (<see cref="ProjectPath"/>) never changes with it — rewind points and memory key off that.</summary>
+    public string ProjectId
+    {
+        get => _projectId;
+        set { if (_projectId != value) { _projectId = value ?? ""; Raise(nameof(ProjectId)); } }
+    }
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     private DateTime _updatedAt = DateTime.Now;
     public DateTime UpdatedAt

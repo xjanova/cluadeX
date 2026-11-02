@@ -173,6 +173,42 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    // ─── the sidebar's chat and project rows: right-click menus, drag a chat onto a project (Views/SidebarMenus) ───
+
+    private void ChatRow_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement row && row.DataContext is Models.ChatSession chat)
+        {
+            Views.SidebarMenus.Open(Views.SidebarMenus.ForChat(_viewModel.ChatVM, chat), row);
+            e.Handled = true;
+        }
+    }
+
+    private void ChatRow_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement row) Views.SidebarMenus.ChatRowPressed(row, e);
+    }
+
+    private void ChatRow_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (sender is FrameworkElement row) Views.SidebarMenus.ChatRowMoved(row, e);
+    }
+
+    private void ProjectRow_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement row && row.DataContext is Models.ChatProject project)
+        {
+            Views.SidebarMenus.Open(Views.SidebarMenus.ForProject(_viewModel.ChatVM, project), row);
+            e.Handled = true;
+        }
+    }
+
+    private void ProjectRow_DragOver(object sender, DragEventArgs e) => Views.SidebarMenus.ProjectRowDragOver(e);
+
+    /// <summary>A chat dropped on a project row — or on the "No project" row (no project behind it: out of any).</summary>
+    private void ProjectRow_Drop(object sender, DragEventArgs e) =>
+        Views.SidebarMenus.ProjectRowDrop(_viewModel.ChatVM, ((sender as FrameworkElement)?.DataContext as Models.ChatProject)?.Id ?? "", e);
+
     /// <summary>The "today" chip: pick the daily budget (a paid run asks before going on past it), or open the billing
     /// page — the only place the account's remaining credit is shown.</summary>
     private void TodayChip_Click(object sender, RoutedEventArgs e)

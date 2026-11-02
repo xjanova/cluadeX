@@ -251,8 +251,10 @@ public partial class ChatViewModel : ViewModelBase
         if (_bulkSessions) return;   // the start-up load adds every chat, then rebuilds once
         _sidebarRebuildQueued = false;   // a queued rebuild has nothing left to do
 
-        // No project open, or user opted to see everything → passthrough
-        bool filter = HasProject && !ShowAllProjectSessions;
+        // A project picked in the sidebar's list: its chats only (it replaces the open folder's filter). Otherwise no
+        // folder open, or user opted to see everything → passthrough.
+        string? projectFilter = ProjectFilterId;
+        bool filter = projectFilter == null && HasProject && !ShowAllProjectSessions;
         string currentProject = WorkingDirectory ?? "";
 
         // Split chats that were put away leave the list (kept, not deleted) unless the owner shows them.
@@ -294,6 +296,20 @@ public partial class ChatViewModel : ViewModelBase
                 if (s.UpdatedAt >= today && shown.Add(s.Id)) todayOthers++;
             rest = rest.Where(s => shown.Contains(s.Id)).ToList();
         }
+        else if (projectFilter != null)
+        {
+            // The project's chats; a split chat follows its parent in, as above.
+            var shown = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var s in rest)
+                if (ProjectOf(s) == projectFilter) shown.Add(s.Id);
+            for (bool grew = true; grew;)
+            {
+                grew = false;
+                foreach (var s in rest)
+                    if (s.ParentId is { } pid && shown.Contains(pid) && shown.Add(s.Id)) grew = true;
+            }
+            rest = rest.Where(s => shown.Contains(s.Id)).ToList();
+        }
         flat.AddRange(rest);
 
         // Unchanged (a chat switch, a run's state, a title typed elsewhere): the sidebar keeps its rows. Changed: only what
@@ -317,7 +333,9 @@ public partial class ChatViewModel : ViewModelBase
         OnPropertyChanged(nameof(VisibleSessionsCount));
 
         int total = Sessions.Count(s => !Hidden(s));
+        UpdateProjectCounts(Hidden);
         SidebarFilterText = total == 0 ? ""
+            : projectFilter != null ? LocF("sidebar.filter.inProject", ProjectFilterName, VisibleSessions.Count, total)
             : filter ? LocF("sidebar.filter.project", ProjectName, VisibleSessions.Count, total)
                        + (todayOthers > 0 ? LocF("sidebar.filter.todayOthers", todayOthers) : "")
             : LocF("sidebar.filter.all", total);
@@ -1509,6 +1527,7 @@ public partial class ChatViewModel : ViewModelBase
             List<ChatSession> savedSessions;
             try { savedSessions = _persistenceService.LoadSessionList(); }
             catch { savedSessions = new(); }
+            var savedProjects = _persistenceService.LoadProjects();
 
             ChatSession? lastSession = null;
             if (savedSessions.Count > 0)
@@ -1538,6 +1557,8 @@ public partial class ChatViewModel : ViewModelBase
                     foreach (var session in savedSessions)
                         Sessions.Add(session);
                     ApplyPins();
+                    ChatProjects.Clear();
+                    foreach (var p in savedProjects) ChatProjects.Add(p);
                 }
                 finally { _bulkSessions = false; }
                 RebuildVisibleSessions();
@@ -1694,8 +1715,8 @@ public partial class ChatViewModel : ViewModelBase
             // to ensure they are never out of sync when saving to DB
             CurrentSession.Messages = Messages.ToList();
 
-            // Auto-generate title from first user message
-            if (CurrentSession.Title == "New Chat" && CurrentSession.Messages.Count > 0)
+            // Auto-generate title from first user message — never over a name the owner gave the chat
+            if (CurrentSession.Title == "New Chat" && !CurrentSession.TitleIsCustom && CurrentSession.Messages.Count > 0)
             {
                 CurrentSession.Title = ChatPersistenceService.GenerateTitle(CurrentSession.Messages);
                 // Update in the Sessions list
@@ -1784,6 +1805,7 @@ public partial class ChatViewModel : ViewModelBase
                     if (!ReferenceEquals(Sessions[i], running.Session))
                     {
                         running.Session.IsPinned = Sessions[i].IsPinned;
+                        CarryMetadata(Sessions[i], running.Session);
                         Sessions[i] = running.Session;
                     }
                     break;
@@ -1885,7 +1907,8 @@ public partial class ChatViewModel : ViewModelBase
     {
         var kept = Sessions.FirstOrDefault(s => s.Id == loaded.Id);
         if (kept == null || ReferenceEquals(kept, loaded)) return loaded;
-        kept.Title = loaded.Title;
+        // A rename or a move made while it loaded is on the sidebar's row, not in the copy just read.
+        if (!kept.TitleIsCustom) { kept.Title = loaded.Title; kept.TitleIsCustom = loaded.TitleIsCustom; }
         kept.CreatedAt = loaded.CreatedAt;
         kept.UpdatedAt = loaded.UpdatedAt;
         kept.ProjectPath = loaded.ProjectPath;
@@ -2488,6 +2511,7 @@ public partial class ChatViewModel : ViewModelBase
             && !_persistenceService.SessionHasMessages(CurrentSession.Id))
         {
             CurrentSession.ProjectPath = projectPath;
+            CurrentSession.ProjectId = DefaultProjectId(projectPath);
             int at = -1;
             for (int i = 0; i < Sessions.Count; i++)
                 if (Sessions[i].Id == CurrentSession.Id) { at = i; break; }
@@ -2513,7 +2537,7 @@ public partial class ChatViewModel : ViewModelBase
 
         // Create new session — tag with the current project path so the sidebar can
         // filter to "just this project" instead of mixing every project's sessions together.
-        var session = new ChatSession { ProjectPath = projectPath };
+        var session = new ChatSession { ProjectPath = projectPath, ProjectId = DefaultProjectId(projectPath) };
         if (!leavingRun) ResolvePendingPermissionPrompts();
         CurrentSession = session;
         Messages = new ObservableCollection<ChatMessage>();
@@ -2567,6 +2591,9 @@ public partial class ChatViewModel : ViewModelBase
         NewSession();
         var chat = CurrentSession ?? throw new InvalidOperationException("no chat was created");
         if (title != null) chat.Title = title;
+        // A split chat stays in its parent's project.
+        if (parentId != null && Sessions.FirstOrDefault(s => s.Id == parentId) is { } parentChat && ProjectOf(parentChat).Length > 0)
+            chat.ProjectId = parentChat.ProjectId;
         if (inherited != null)
             foreach (var m in inherited) Messages.Add(m);
         // The split, for the sidebar's tree and for close_chat: what this chat was opened to do.
@@ -2801,6 +2828,7 @@ public partial class ChatViewModel : ViewModelBase
                     // Tagged with the run's real project: an "obsidianx-task::" tag hid it from the sidebar's
                     // project filter, so the run the user was meant to watch was nowhere in the list.
                     CurrentSession.ProjectPath = project;
+                    CurrentSession.ProjectId = DefaultProjectId(project);
                     RebuildVisibleSessions();
                 }
                 // "Accept edits" for this run: the caller's request as approved above (for exactly that folder), else
@@ -5574,7 +5602,7 @@ public partial class ChatViewModel : ViewModelBase
             var results = await Task.Run(() => _persistenceService.SearchSessions(query));
             if (!string.Equals(query, _pendingSearchQuery, StringComparison.Ordinal) || string.IsNullOrWhiteSpace(HistorySearchQuery)) return;
             SearchResults.Clear();
-            foreach (var r in results)
+            foreach (var r in WithTitleHits(query, results))
                 SearchResults.Add(r);
             IsSearchingHistory = true;
         }

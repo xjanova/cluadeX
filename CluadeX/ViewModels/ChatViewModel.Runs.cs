@@ -536,7 +536,7 @@ public partial class ChatViewModel
             bool changed = run.Session.Messages.Count != run.Messages.Count
                            || !ReferenceEquals(run.Session.Messages.LastOrDefault(), run.Messages.LastOrDefault());
             run.Session.Messages = run.Messages.ToList();
-            if (run.Session.Title == "New Chat" && run.Session.Messages.Count > 0)
+            if (run.Session.Title == "New Chat" && !run.Session.TitleIsCustom && run.Session.Messages.Count > 0)
                 run.Session.Title = ChatPersistenceService.GenerateTitle(run.Session.Messages);
             if (changed) TouchSession(run.Session);
             if (background) _persistenceService.SaveSessionInBackground(run.Session);
