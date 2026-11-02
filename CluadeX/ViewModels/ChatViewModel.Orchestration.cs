@@ -44,6 +44,9 @@ public partial class ChatViewModel
         });
 
         ChatMessage.WorkflowCardFor = m => m.ToolOutput is { Length: > 0 } id ? CardFor(id) : null;
+        ChatMessage.SplitChipsFor = m => new ObservableCollection<ChatSession>(
+            (m.ToolOutput ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(id => Sessions.FirstOrDefault(s => s.Id == id)).OfType<ChatSession>());
     }
 
     // ─── the "N running" line ───
@@ -146,5 +149,27 @@ public partial class ChatViewModel
 
     /// <summary>How a notice reads to the model (in its history and as a mid-run note).</summary>
     public const string NoticePrefix = "[CluadeX notice] ";
+
+    // ─── split chips ───
+
+    /// <summary>new_chat opened <paramref name="child"/> from <paramref name="parentId"/>: a chip on the asking command's
+    /// row (one row per command, made with its first split).</summary>
+    private void NoteSplitChip(string parentId, ChatSession child)
+    {
+        var run = _runs.FirstOrDefault(r => r.Session.Id == parentId);
+        if (run == null) return;
+        var row = run.SplitsMsg;
+        if (row == null || !run.Messages.Contains(row))
+        {
+            row = new ChatMessage { Role = MessageRole.System, ToolName = ChatMessage.SplitsTag, ToolOutput = "" };
+            run.SplitsMsg = row;
+            run.Messages.Add(row);
+        }
+        if ((row.ToolOutput ?? "").Split('\n').Contains(child.Id)) return;
+        row.ToolOutput = string.IsNullOrEmpty(row.ToolOutput) ? child.Id : row.ToolOutput + "\n" + child.Id;
+        var chips = row.SplitChips;   // built from ToolOutput on first use — the new id is already in it
+        if (chips != null && !chips.Contains(child)) chips.Add(child);
+        row.Content = "💬 " + string.Join(", ", (chips ?? new()).Select(c => c.Title));
+    }
 
 }

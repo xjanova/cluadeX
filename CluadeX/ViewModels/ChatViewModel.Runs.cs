@@ -30,6 +30,8 @@ public partial class ChatViewModel
         public ChatMessage? TodoMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
+        /// <summary>This command's split-chat chips (made with its first new_chat).</summary>
+        public ChatMessage? SplitsMsg;
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;

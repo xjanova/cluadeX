@@ -1259,6 +1259,62 @@
                                     </ContentControl.ContentTemplate>
                                 </ContentControl>
 
+                                <!-- ═══ Split-chat chips: the chats this command split off, each with the sidebar's own state ═══ -->
+                                <Border Grid.Row="1" Margin="20,6,0,4" Padding="12,8" CornerRadius="8" BorderThickness="1"
+                                        Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}"
+                                        Visibility="{Binding IsSplitChips, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc orch.splits.header}" FontSize="11.5" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,6"/>
+                                        <ItemsControl ItemsSource="{Binding SplitChips}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Margin="0,0,6,4" Padding="9,3" Cursor="Hand" ToolTip="{services:Loc orch.splits.openTip}"
+                                                            Command="{Binding DataContext.GoToChatCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                            CommandParameter="{Binding Id}">
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <Border x:Name="Chip" CornerRadius="10" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                        BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource State.Fill.Faint}">
+                                                                    <ContentPresenter/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Chip" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <Ellipse x:Name="StateDot" Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                                     Fill="{DynamicResource Text.Faint}"/>
+                                                            <TextBlock Text="{Binding Title}" FontSize="11.5" MaxWidth="260" TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{DynamicResource Text.Primary}"/>
+                                                            <TextBlock x:Name="StateText" Text="{services:Loc orch.splits.idle}" Margin="6,0,0,0" FontSize="11"
+                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                        </StackPanel>
+                                                    </Button>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="working">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Accent.1}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.working}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="waiting">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Warning}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.waiting}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="done">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Success}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.done}"/>
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- ═══ Agent map: the sub-agents this command started, as a live tree (open by default, folds) ═══ -->
                                 <Border Grid.Row="1" Margin="20,6,0,4" Padding="14,10" CornerRadius="10" BorderThickness="1"
                                         Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Accent.1.Border.Soft}"

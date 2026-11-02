@@ -2522,7 +2522,10 @@ public partial class ChatViewModel : ViewModelBase
             foreach (var m in inherited) Messages.Add(m);
         // The split, for the sidebar's tree and for close_chat: what this chat was opened to do.
         if (parentId != null)
+        {
             ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "");
+            NoteSplitChip(parentId, chat);
+        }
         string folder = string.IsNullOrWhiteSpace(chat.ProjectPath) ? "(no project)" : chat.ProjectPath;
         Messages.Add(new ChatMessage
         {
