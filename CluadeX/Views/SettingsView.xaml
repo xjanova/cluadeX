@@ -278,8 +278,58 @@
 
                                 <TextBlock Text="{services:Loc settings.activeProvider}" Style="{StaticResource SettingLabel}"/>
                                 <TextBlock Text="{services:Loc settings.providerChoose}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
-                                <ComboBox ItemsSource="{Binding ProviderOptions}" SelectedItem="{Binding SelectedProvider}"
-                                          Width="260" HorizontalAlignment="Left" Margin="0,0,0,16"/>
+                                <ComboBox ItemsSource="{Binding ProviderChoices}" SelectedValuePath="Type" SelectedValue="{Binding SelectedProvider}"
+                                          Width="300" HorizontalAlignment="Left" Margin="0,0,0,16">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <!-- Each mark on a white tile, so its own colours read in light and dark themes. -->
+                                                <Border Width="20" Height="20" CornerRadius="4" Background="White" Margin="0,0,8,0">
+                                                    <Grid>
+                                                        <Image Source="{Binding Logo}" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"
+                                                               Visibility="{Binding HasLogo, Converter={StaticResource BoolVis}}"/>
+                                                        <TextBlock Text="{Binding Badge}" FontSize="8" FontWeight="Bold" Foreground="#333"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                   Visibility="{Binding HasLogo, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                                    </Grid>
+                                                </Border>
+                                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+
+                                <!-- OpenAI-compatible services: how to get a key, free use, and the key page -->
+                                <Border Visibility="{Binding ShowProviderGuide, Converter={StaticResource BoolVis}}" Margin="0,0,0,16"
+                                        Padding="12" CornerRadius="8" Background="{DynamicResource Accent.1.Tint.Faint}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <Border Width="28" Height="28" CornerRadius="6" Background="White" Margin="0,0,10,0">
+                                                <Grid>
+                                                    <Image Source="{Binding ProviderLogo}" Width="22" Height="22" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                    <TextBlock Text="{Binding ProviderBadge}" FontSize="10" FontWeight="Bold" Foreground="#333"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Visibility="{Binding HasProviderLogo, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                                </Grid>
+                                            </Border>
+                                            <TextBlock Text="{services:Loc settings.agg.guide}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center" Margin="0"/>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding ProviderGuideSteps}" TextWrapping="Wrap" FontSize="12"
+                                                   Foreground="{DynamicResource Text.Body}" Margin="0,0,0,8"/>
+                                        <TextBlock Text="{services:Loc settings.agg.free}" FontSize="11" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Accent.1}"/>
+                                        <TextBlock Text="{Binding ProviderGuideFree}" TextWrapping="Wrap" FontSize="12"
+                                                   Foreground="{DynamicResource Text.Body}" Margin="0,2,0,8"/>
+                                        <TextBlock FontSize="12" Visibility="{Binding HasProviderKeyPage, Converter={StaticResource BoolVis}}">
+                                            <Hyperlink NavigateUri="{Binding ProviderKeyPage}" RequestNavigate="Hyperlink_RequestNavigate"
+                                                       Foreground="{DynamicResource Accent.1}">
+                                                <Run Text="{services:Loc settings.agg.open}"/><Run Text=" → "/><Run Text="{Binding ProviderKeyPage, Mode=OneWay}"/>
+                                            </Hyperlink>
+                                        </TextBlock>
+                                        <TextBlock Text="{services:Loc settings.agg.noKeyNeeded}" FontSize="11" Foreground="{DynamicResource Status.Success}"
+                                                   Margin="0,6,0,0" Visibility="{Binding IsLocalServerSelected, Converter={StaticResource BoolVis}}"/>
+                                    </StackPanel>
+                                </Border>
 
                                 <TextBlock Text="{services:Loc settings.localGgufNotice}" Foreground="{DynamicResource Accent.1}"
                                            FontSize="12" TextWrapping="Wrap" Margin="0,0,0,16"
@@ -345,6 +395,8 @@
                                     <TextBlock Text="{services:Loc settings.baseUrl}" Style="{StaticResource SettingLabel}"/>
                                     <TextBlock Text="{services:Loc settings.baseUrlDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
                                     <TextBox Text="{Binding ProviderBaseUrl, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"/>
+                                    <TextBlock Text="{Binding BaseUrlHint}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,4,0,0"
+                                               TextWrapping="Wrap" Visibility="{Binding ShowProviderGuide, Converter={StaticResource BoolVis}}"/>
                                 </StackPanel>
 
                                 <!-- Model -->

@@ -71,11 +71,11 @@ public static class UsageMeter
     }
 
     /// <summary>x-ratelimit-{limit,remaining}-{tokens,requests}, x-ratelimit-reset-tokens ("6m0s").</summary>
-    public static RateLimitSnapshot? FromOpenAi(HttpResponseMessage response, string model)
+    public static RateLimitSnapshot? FromOpenAi(HttpResponseMessage response, string model, string provider = "OpenAI")
     {
         long? N(string name) => Long(response, "x-ratelimit-" + name);
         TimeSpan? resetIn = Duration(Header(response, "x-ratelimit-reset-tokens") ?? Header(response, "x-ratelimit-reset-requests"));
-        var snap = new RateLimitSnapshot("OpenAI", model,
+        var snap = new RateLimitSnapshot(provider, model,
             N("limit-tokens"), N("remaining-tokens"),
             null, null, null, null,
             N("limit-requests"), N("remaining-requests"),

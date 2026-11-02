@@ -100,7 +100,7 @@ public partial class CodeAgentService
             AiProviderType.Anthropic => Providers.AnthropicProvider.DefaultModel,
             AiProviderType.OpenAI => Providers.OpenAiProvider.DefaultModel,
             AiProviderType.Gemini => Providers.GeminiProvider.DefaultModel,
-            _ => "",
+            var t => Providers.CompatiblePresets.For(t)?.DefaultModel ?? "",
         };
     }
 
@@ -201,7 +201,8 @@ public partial class CodeAgentService
     private void RecordRunStrategy(AgentLoopResult result)
     {
         if (_costTrackingService == null || AgentRunScope.Current is not { } scope || scope.Parent != null) return;
-        bool paid = _providerManager.ActiveProviderType is AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini;
+        bool paid = _providerManager.ActiveProviderType is AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini
+            || Providers.CompatiblePresets.For(_providerManager.ActiveProviderType) is { Local: false };
         if (!paid && scope.CostUsd == 0) return;
         var strategy = (DispatchStrategy)scope.Strategy;
         double seconds = (DateTime.Now - scope.StartedAt).TotalSeconds;

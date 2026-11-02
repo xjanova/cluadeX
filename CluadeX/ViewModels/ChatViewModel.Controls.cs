@@ -60,7 +60,7 @@ public partial class ChatViewModel
         AiProviderType.Anthropic => AnthropicProvider.KnownModels,
         AiProviderType.OpenAI => OpenAiProvider.KnownModels,
         AiProviderType.Gemini => GeminiProvider.KnownModels,
-        _ => [],
+        _ => CompatiblePresets.For(type)?.Models ?? [],
     };
 
     private static string DefaultModelOf(AiProviderType type) => type switch
@@ -70,8 +70,13 @@ public partial class ChatViewModel
         AiProviderType.Gemini => GeminiProvider.DefaultModel,
         AiProviderType.BrainX => BrainXRoomModel,
         AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev => "default",
-        _ => "",
+        _ => CompatiblePresets.For(type)?.DefaultModel ?? "",
     };
+
+    /// <summary>The price label of a model on an OpenAI-compatible service: the price the service reported (or the
+    /// built-in table's, for a model it knows), else none — never the table's Sonnet fallback.</summary>
+    private static string CompatiblePriceLabel(CompatiblePreset preset, string model) =>
+        preset.Local ? "" : CostTrackingService.HasRegisteredPricing(model) || CompatibleProvider.BuiltInPriced(model) ? PriceLabelOf(model) : "";
 
     /// <summary>Is the Gemini CLI installed (looked up once, off the UI thread; the box lists Gemini Dev then).</summary>
     private bool _geminiCliInstalled;
@@ -188,6 +193,23 @@ public partial class ChatViewModel
             if (!odModels.Contains(od)) odModels.Insert(0, od);
             list.AddRange(odModels.Select(m => new ChatModelChoice(AiProviderType.OpenAIDev, m, odLabel, Loc("chat.model.codexPlan"))));
         }
+        // OpenAI-compatible services (OpenRouter, Groq, DeepSeek, …): only the ones set up — a key saved, or for a server
+        // on this PC / a custom endpoint a configuration saved by Test Connection. Twenty services × their models would
+        // bury the vendors above; the saved model plus the preset's short list is what the box needs.
+        foreach (var preset in CompatiblePresets.All)
+        {
+            if (!s.ProviderConfigs.TryGetValue(preset.Type.ToString(), out var pcfg)) continue;
+            bool ready = !string.IsNullOrWhiteSpace(pcfg.ApiKey)
+                || (!preset.KeyRequired && (preset.BaseUrl.Length > 0 || !string.IsNullOrWhiteSpace(pcfg.BaseUrl)) && !string.IsNullOrWhiteSpace(pcfg.EffectiveModelId));
+            if (!ready) continue;
+            var models = preset.Models.ToList();
+            string? saved = pcfg.EffectiveModelId?.Trim();
+            if (!string.IsNullOrEmpty(saved) && !models.Contains(saved)) models.Insert(0, saved);
+            if (models.Count == 0) continue;
+            string label = preset.Name;
+            list.AddRange(models.Select(m => new ChatModelChoice(preset.Type, m, label,
+                preset.Local ? Loc("chat.model.thisPc") : CompatiblePriceLabel(preset, m))));
+        }
         // Ollama: every model it has, whenever it answers (the quiet probe below) — Ollama loads the picked one itself.
         // (owner 2026-10-19: "ต้องมีให้เลือกทุกอย่างที่ใช้งานได้แล้ว ... ติดต่อ local ai ได้ ต้องโชว์ให้หมด")
         if (_ollamaModels is { Count: > 0 } ollamaModels)
@@ -263,7 +285,8 @@ public partial class ChatViewModel
             {
                 if (carryOnNow ? pipeRun : _runs.Count > 0) { StatusText = Loc("chat.model.providerBusy"); return; }
                 // Cloud providers are the paid tier — the same gate as Settings ▸ AI Provider. (The BrainX room is not.)
-                if (c.Provider is not (AiProviderType.BrainX or AiProviderType.Ollama) && _activation?.IsActivated != true) { StatusText = Loc("settings.activationRequired"); return; }
+                if (c.Provider is not (AiProviderType.BrainX or AiProviderType.Ollama) && CompatiblePresets.For(c.Provider)?.Local != true
+                    && _activation?.IsActivated != true) { StatusText = Loc("settings.activationRequired"); return; }
             }
             var carryOn = carryOnNow && !pipeRun ? onScreen : null;
             if (carryOn != null)
@@ -335,7 +358,8 @@ public partial class ChatViewModel
             // then hands CluadeX would be relayed straight back into the room.
             var choice = ChatModelChoices.FirstOrDefault(c => c.Model == model.Trim() && !c.NeedsKey
                 && (string.IsNullOrWhiteSpace(provider) || c.Provider.ToString().Equals(provider.Trim(), StringComparison.OrdinalIgnoreCase))
-                && c.Provider is not (AiProviderType.BrainX or AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama));
+                && c.Provider is not (AiProviderType.BrainX or AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
+                && CompatiblePresets.For(c.Provider)?.Local != true);   // LM Studio loads a model it is asked for
             if (choice == null) return LocF("chat.model.notOffered", model.Trim());
             if (!Equals(choice, _selectedChatModel))
             {
