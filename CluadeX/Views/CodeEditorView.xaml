@@ -1906,6 +1906,72 @@
                             </ContextMenu>
                         </Button.ContextMenu>
                     </Button>
+                    <!-- Auto-comment (phase 5, owner 2026-11-01: "วิเคราะห์โค๊ดและคอมเม้นต์ อัตโนมัติ"): the AI comments code that
+                         already exists. It only names lines and writes text; AutoCommentService inserts, proves the code
+                         unchanged and the diff panel previews it before anything is written. -->
+                    <Button x:Name="TbAutoComment" Style="{StaticResource EdToolBtn}" Click="OnAutoCommentMenu"
+                            ToolTip="{services:Loc edt.acm.tip}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE90A;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsAutoCommenting}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{services:Loc edt.acm.button}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Margin="5,0,4,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="AutoCommentMenu">
+                                <MenuItem Header="{services:Loc edt.acm.scopeHead}" IsEnabled="False" FontWeight="SemiBold"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.functions}" IsChecked="{Binding AcmScopeIsFunctions, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="functions"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.changed}" IsChecked="{Binding AcmScopeIsChanged, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="changed"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.key}" IsChecked="{Binding AcmScopeIsKey, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="key"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.file}" IsChecked="{Binding AcmScopeIsFile, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="file"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.selection}" IsChecked="{Binding AcmScopeIsSelection, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="selection"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.acm.langHead}" IsEnabled="False" FontWeight="SemiBold"/>
+                                <MenuItem Header="{services:Loc edt.acm.lang.th}" IsChecked="{Binding AcmLangIsThai, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentLanguageCommand}" CommandParameter="th"/>
+                                <MenuItem Header="{services:Loc edt.acm.lang.en}" IsChecked="{Binding AcmLangIsEnglish, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentLanguageCommand}" CommandParameter="en"/>
+                                <MenuItem Header="{services:Loc edt.acm.lang.match}" IsChecked="{Binding AcmLangIsMatch, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentLanguageCommand}" CommandParameter="match"/>
+                                <Separator/>
+                                <!-- Filled as the menu opens (OnAutoCommentMenu): the provider's models. -->
+                                <MenuItem x:Name="AcmModelMenu" Header="{services:Loc edt.acm.modelHead}"/>
+                                <Separator/>
+                                <MenuItem IsEnabled="False">
+                                    <MenuItem.Header>
+                                        <TextBlock Text="{Binding AutoCommentEstimate}" TextWrapping="Wrap" MaxWidth="420"/>
+                                    </MenuItem.Header>
+                                </MenuItem>
+                                <MenuItem Header="{services:Loc edt.acm.start}" FontWeight="SemiBold" Click="OnAutoCommentStart"
+                                          IsEnabled="{Binding CanStartAutoComment}"/>
+                                <MenuItem Header="{services:Loc edt.acm.cancel}" Command="{Binding CancelAutoCommentCommand}"
+                                          IsEnabled="{Binding IsAutoCommenting}"/>
+                                <MenuItem Header="{Binding AutoCommentUndoLabel}" Command="{Binding UndoAutoCommentCommand}"
+                                          IsEnabled="{Binding CanUndoAutoComment}"/>
+                                <Separator/>
+                                <MenuItem IsEnabled="False">
+                                    <MenuItem.Header>
+                                        <TextBlock Text="{services:Loc edt.acm.note}" TextWrapping="Wrap" MaxWidth="420"/>
+                                    </MenuItem.Header>
+                                </MenuItem>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
                 </WrapPanel>
             </Border>
 
@@ -2227,6 +2293,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
@@ -2272,24 +2339,75 @@
                         </Grid>
                     </Border>
 
+                    <!-- Auto-comment preview: Apply writes (restore point kept), Discard drops it. -->
+                    <Border Grid.Row="1" Padding="12,8" Background="{DynamicResource Bg.Panel}"
+                            BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Accent.1}"
+                            Visibility="{Binding HasAutoCommentPreview, Converter={StaticResource BoolVis}}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="{Binding AutoCommentBanner}" TextWrapping="Wrap" FontSize="11"
+                                           Foreground="{DynamicResource Text.Primary}"/>
+                                <TextBlock Text="{Binding AutoCommentSkipped}" TextWrapping="Wrap" FontSize="10" Margin="0,2,0,0"
+                                           Foreground="{DynamicResource Text.Faint}"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Command="{Binding ApplyAutoCommentCommand}" Cursor="Hand"
+                                    Padding="10,4" Margin="10,0,6,0" FontSize="11" VerticalAlignment="Center"
+                                    Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                    Foreground="{DynamicResource Button.Flat.Foreground}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="{services:Loc edt.acm.apply}"/>
+                            </Button>
+                            <Button Grid.Column="2" Command="{Binding DiscardAutoCommentCommand}" Cursor="Hand"
+                                    Padding="10,4" Margin="0" FontSize="11" VerticalAlignment="Center"
+                                    Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                    Foreground="{DynamicResource Button.Flat.Foreground}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="{services:Loc edt.acm.discard}"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+
                     <!-- Column captions -->
-                    <Grid Grid.Row="1" Background="{DynamicResource Surface.Sunken}">
+                    <Grid Grid.Row="2" Background="{DynamicResource Surface.Sunken}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="46"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="46"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="1" Text="{services:Loc editor.diffHead}" FontSize="9" Padding="6,3"
+                        <TextBlock Grid.Column="1" Text="{Binding DiffLeftCaption}" FontSize="9" Padding="6,3"
                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                    Foreground="{DynamicResource Text.Faint}"/>
-                        <TextBlock Grid.Column="3" Text="{services:Loc editor.diffWorking}" FontSize="9" Padding="6,3"
+                        <TextBlock Grid.Column="3" Text="{Binding DiffRightCaption}" FontSize="9" Padding="6,3"
                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                    Foreground="{DynamicResource Text.Faint}"/>
                     </Grid>
 
                     <!-- Rows -->
-                    <ListBox Grid.Row="2" ItemsSource="{Binding DiffRows}"
+                    <ListBox Grid.Row="3" ItemsSource="{Binding DiffRows}"
                              Background="Transparent" BorderThickness="0"
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"

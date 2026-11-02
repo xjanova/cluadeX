@@ -130,6 +130,15 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 - XDREAMER = ai.xman4289.com (`ConnectorCatalog.XDreamerUrl`), keys `axm-…` from /developer, `ConnectorNeed.None`.
 - Proven offline by `tests/mcptest` N1–N8 (in-process fake server) and `tests/setuptest` C1, C9b, C9c.
 
+## Auto-comment existing code (phase 5, 2026-11-02)
+- Code Editor toolbar ▸ **Auto-comment** (beside ▸ AI comments, which only shapes code the AI *writes*). Scope: every
+  function / only changed lines (`git diff -U0 HEAD`) / key points / whole file / selection; comment language; model.
+- `Services/AutoComment/`: the model returns only `{line, text}` (forced `submit_comments` tool, or JSON as text);
+  `CommentLexer` decides which line starts are plain code (C#, Python, JS/TS/JSX, Dart, PHP, Java, Go, C/C++, XML/XAML);
+  `CommentPlanner` inserts whole comment lines and `Verify` proves strip = original + unchanged lexer state;
+  `AutoCommentService.Apply` keeps a Time Machine point, writes atomically, re-proves the bytes from disk, else restores.
+- Proven by `tests/commenttest` (89 checks, mocked model, no network). Not yet driven by hand in the running app.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.
