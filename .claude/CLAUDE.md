@@ -137,7 +137,13 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
   `CommentLexer` decides which line starts are plain code (C#, Python, JS/TS/JSX, Dart, PHP, Java, Go, C/C++, XML/XAML);
   `CommentPlanner` inserts whole comment lines and `Verify` proves strip = original + unchanged lexer state;
   `AutoCommentService.Apply` keeps a Time Machine point, writes atomically, re-proves the bytes from disk, else restores.
-- Proven by `tests/commenttest` (89 checks, mocked model, no network). Not yet driven by hand in the running app.
+- From the chat: the `add_code_comments` tool (`AutoCommentToolModule`, a tool module — no edit to `AgentToolService`)
+  and the `/comment` skill, which allows only that tool (+ glob / list_files), so the chat model cannot edit code. No
+  path = the file open in the Code Editor; a tab with unsaved typing is refused. The permission prompt carries the cost
+  estimate and is shown even with permissions off when the run is paid; inside a chat run the restore point is that
+  run's step (`Apply` uses the current `AgentRunScope`).
+- Proven by `tests/commenttest` (109 checks, mocked model, no network; T* = the chat tool through the real
+  `AgentToolService`). Not yet driven by hand in the running app.
 
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).

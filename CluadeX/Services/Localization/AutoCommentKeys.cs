@@ -88,5 +88,15 @@ internal static class AutoCommentKeys
         ["edt.acm.skip.empty"] = new() { ["en"] = "empty", ["th"] = "ว่างเปล่า" },
         ["edt.acm.skip.duplicate"] = new() { ["en"] = "a duplicate", ["th"] = "ซ้ำ" },
         ["edt.acm.skip.limit"] = new() { ["en"] = "over the limit", ["th"] = "เกินจำนวนที่กำหนด" },
+
+        // ═══════ Chat ▸ add_code_comments / /comment (AutoCommentToolModule) ═══════
+        ["edt.acm.tool.permDetail"] = new() { ["en"] = "Add comments to {0} — the code itself is not changed\nWhat: {1} · Language: {2} · {3:N0} line(s) in scope\n{4}", ["th"] = "ใส่คอมเมนต์ใน {0} — ตัวโค้ดไม่ถูกแก้\nใส่ตรงไหน: {1} · ภาษา: {2} · {3:N0} บรรทัดในขอบเขต\n{4}" },
+        ["edt.acm.tool.summary"] = new() { ["en"] = "💬 {0} comment(s) → {1}", ["th"] = "💬 ใส่คอมเมนต์ {0} จุด → {1}" },
+        ["edt.acm.tool.noFile"] = new() { ["en"] = "No file named, and none is open in the Code Editor. Name the file (path) to comment.", ["th"] = "ไม่ได้ระบุไฟล์ และไม่มีไฟล์เปิดอยู่ใน Code Editor ระบุไฟล์ที่จะใส่คอมเมนต์ (path)" },
+        ["edt.acm.tool.outside"] = new() { ["en"] = "{0} is not inside the open project — only project files are commented.", ["th"] = "{0} ไม่ได้อยู่ในโปรเจกต์ที่เปิดอยู่ — ใส่คอมเมนต์ได้เฉพาะไฟล์ในโปรเจกต์" },
+        ["edt.acm.tool.noSuchFile"] = new() { ["en"] = "No file at {0}.", ["th"] = "ไม่พบไฟล์ {0}" },
+        ["edt.acm.tool.badScope"] = new() { ["en"] = "Unknown scope '{0}'. Use one of: {1}.", ["th"] = "ไม่รู้จักขอบเขต '{0}' ใช้ได้: {1}" },
+        ["edt.acm.tool.badLines"] = new() { ["en"] = "scope=selection needs start_line and end_line (1-based, start ≤ end).", ["th"] = "scope=selection ต้องมี start_line และ end_line (นับจาก 1 และ start ≤ end)" },
+        ["edt.acm.tool.unsaved"] = new() { ["en"] = "{0} has unsaved changes in the Code Editor — save it first; nothing was written.", ["th"] = "{0} มีการแก้ไขที่ยังไม่บันทึกใน Code Editor — บันทึกก่อน ยังไม่มีการเขียนไฟล์" },
     };
 }

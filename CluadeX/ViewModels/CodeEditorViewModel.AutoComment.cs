@@ -237,20 +237,18 @@ public partial class CodeEditorViewModel
         }
     }
 
-    /// <summary>New-file lines changed since HEAD (git diff -U0); null for a file git does not track yet (every line is new).</summary>
-    private async Task<IReadOnlyCollection<int>?> ChangedLinesAsync(string path)
+    /// <summary>The open tabs for the chat's add_code_comments tool: which file "the open file" is, and which ones hold
+    /// unsaved typing (never written over). Any thread — read on the UI thread.</summary>
+    public IReadOnlyList<EditorFileState> OpenFilesForTools()
     {
-        var tracked = await _git.RunGitAsync($"ls-files --error-unmatch -- \"{path}\"");
-        if (!tracked.Success)
-        {
-            var inRepo = await _git.RunGitAsync("rev-parse --is-inside-work-tree");
-            if (!inRepo.Success) throw new AutoCommentException("edt.acm.noGit");
-            return null;
-        }
-        var diff = await _git.RunGitAsync($"diff -U0 --no-color --no-ext-diff HEAD -- \"{path}\"");
-        if (!diff.Success) throw new AutoCommentException("edt.acm.noGit");
-        return CommentScopes.ParseChangedLines(diff.Output);
+        var d = System.Windows.Application.Current?.Dispatcher;
+        if (d != null && !d.CheckAccess())
+            return d.Invoke(OpenFilesForTools, System.Windows.Threading.DispatcherPriority.Normal, CancellationToken.None, TimeSpan.FromSeconds(5));
+        var active = ActiveTab;
+        return Tabs.Select(t => new EditorFileState(t.FullPath, t.IsDirty, ReferenceEquals(t, active))).ToList();
     }
+
+    private Task<IReadOnlyCollection<int>?> ChangedLinesAsync(string path) => AutoCommentService.ChangedLinesAsync(_git, path);
 
     private void ShowAutoCommentPreview(AutoCommentPreview p)
     {

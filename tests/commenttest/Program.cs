@@ -33,6 +33,9 @@ namespace CommentTest;
 ///   P*  prompt, cost estimate, and the provider adapter's structured-output call
 ///   W*  the Code Editor flow through the real view model (estimate → confirm → preview diff → apply → undo, cancel,
 ///       unsaved tab) and the static XAML checks: every Loc key has Thai, every binding / resource exists
+///   T*  the chat tool add_code_comments through the real AgentToolService: the same bytes as the editor, the permission
+///       prompt with the cost before the model is asked, refusals (code-changing answer, file changed mid-run, unsaved
+///       tab, bad arguments), the restore point (its own, or the chat run's step), and the /comment skill
 /// Run: build CluadeX first (this links the DLL and does not rebuild it), then `dotnet run`.
 /// </summary>
 internal static class Program
@@ -775,6 +778,8 @@ internal static class Program
             CodeEditorViewModel.ModelOverride = null;
         }
 
+        await ChatTool(provider, vm, cp, loc, proj);
+
         // Static checks: what compiles but renders blank.
         string repo = RepoRoot();
         string xaml = File.ReadAllText(Path.Combine(repo, "CluadeX", "Views", "CodeEditorView.xaml"));
@@ -816,6 +821,238 @@ internal static class Program
             .Where(h => typeof(CluadeX.Views.CodeEditorView).GetMethod(h, BindingFlags.NonPublic | BindingFlags.Instance) == null).ToList();
         Check("W17", "every Click handler exists on CodeEditorView", handlers.Count == 0, string.Join(", ", handlers));
         return 0;
+    }
+
+    // ───────────────────────── T: the chat tool (add_code_comments, /comment) ─────────────────────────
+
+    sealed class Counted(string answer, Action? during = null) : IAutoCommentModel
+    {
+        public int Calls;
+        public Task<string> AnswerAsync(string s, string u, CancellationToken ct) { Calls++; during?.Invoke(); return Task.FromResult(answer); }
+    }
+
+    static Task<ToolResult> Tool(AgentToolService svc, params (string K, string V)[] args) =>
+        svc.ExecuteToolAsync(new ToolCall
+        {
+            Type = svc.ResolveToolTypePublic("add_code_comments") ?? throw new Exception("add_code_comments did not resolve"),
+            ToolName = "add_code_comments",
+            Arguments = args.ToDictionary(a => a.K, a => a.V),
+        }, CancellationToken.None);
+
+    static string Seen(ToolResult r) => r.Success ? r.Output : r.Error + " " + r.Output;
+
+    /// <summary>The chat entry point, through the real AgentToolService the agent loop calls (same permission gate, same
+    /// module dispatch), with a mocked model. Runs inside <see cref="Workbench"/>: it needs the editor view model.</summary>
+    static async Task ChatTool(ServiceProvider provider, CodeEditorViewModel vm, CheckpointService cp, LocalizationService loc, string proj)
+    {
+        Console.WriteLine("\n[T] chat — add_code_comments through AgentToolService, and the /comment skill");
+        var svc = provider.GetRequiredService<AgentToolService>();
+        var settings = provider.GetRequiredService<SettingsService>();
+        loc.SetLanguage("th");
+
+        var schema = svc.BuildNativeToolSchemas().FirstOrDefault(t => t.Name == "add_code_comments");
+        string props = schema == null ? "" : schema.InputSchema.GetProperty("properties").GetRawText();
+        Check("T1", "offered to the model: a native schema with path / scope / lines / language / model",
+            schema != null && svc.ResolveToolTypePublic("add_code_comments") == ToolType.AddCodeComments
+            && new[] { "\"path\"", "\"scope\"", "\"start_line\"", "\"end_line\"", "\"language\"", "\"model\"", "\"selection\"", "\"match\"" }.All(props.Contains),
+            props);
+        var module = svc.ToolModules.OfType<AutoCommentToolModule>().SingleOrDefault();
+        string section = module?.GetPromptSection(new CluadeX.Services.Tools.PromptSectionContext { OfferedToolNames = new[] { "add_code_comments" } }) ?? "";
+        Check("T2", "a system-prompt line tells the model to comment through the tool, never edit_file",
+            section.Contains("add_code_comments") && section.Contains("edit_file"), section);
+
+        // The permission prompt: recorded, with what the model had been asked at that moment.
+        var prompts = new List<(PermissionRequestInfo Info, int CallsBefore)>();
+        bool allow = true;
+        Counted? current = null;
+        Func<PermissionRequestInfo, Task<bool>> gate = info => { prompts.Add((info, current?.Calls ?? 0)); return Task.FromResult(allow); };
+        svc.OnPermissionRequired += gate;
+        string answer = Answer((3, "บวกเลขสองตัว"), (5, "คืนผลรวม"));
+        AutoCommentToolModule.ModelOverride = () => current!;
+        ChoiceDialog.Override = (t, m, b) => 0;
+        CodeEditorViewModel.ModelOverride = () => new Canned(answer);
+        try
+        {
+            // ── the same bytes as the editor path ──
+            string code = "class Calc\r\n{\r\n    int Add(int a, int b)\r\n    {\r\n        return a + b;\r\n    }\r\n}\r\n";
+            byte[] orig = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(code)).ToArray();
+            string viaEditor = Path.Combine(proj, "Same1.cs"), viaChat = Path.Combine(proj, "Same2.cs");
+            File.WriteAllBytes(viaEditor, orig);
+            File.WriteAllBytes(viaChat, orig);
+            await vm.OpenPathAsync(viaEditor);
+            await Until(() => vm.ActiveTab?.FullPath == viaEditor);
+            vm.SetAutoCommentScopeCommand.Execute("functions");
+            vm.SetAutoCommentLanguageCommand.Execute("th");
+            await vm.StartAutoCommentAsync(null);
+            await Until(() => vm.HasAutoCommentPreview);
+            // W7's Apply may still be in its after-write steps (git refresh, build check): the button is disabled till then.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await Until(() => vm.ApplyAutoCommentCommand.CanExecute(null), 120_000);
+            Console.WriteLine($"    (the earlier Apply finished its after-write steps {sw.ElapsedMilliseconds} ms later)");
+            vm.ApplyAutoCommentCommand.Execute(null);
+            await Until(() => vm.CanUndoAutoComment && !vm.IsAutoCommenting && !vm.HasAutoCommentPreview);
+
+            int pointsBefore = cp.Points(proj).Count;
+            current = new Counted(answer);
+            var r = await Tool(svc, ("path", "Same2.cs"), ("scope", "functions"), ("language", "th"));
+            byte[] a = File.ReadAllBytes(viaEditor), b = File.ReadAllBytes(viaChat);
+            Check("T3", "the tool writes byte for byte what the Code Editor writes (BOM, CRLF, Thai)",
+                r.Success && !a.AsSpan().SequenceEqual(orig) && a.AsSpan().SequenceEqual(b),
+                $"editor: {(a.AsSpan().SequenceEqual(orig) ? "NOT written" : "written")} · status: {vm.StatusMessage}\n" + Seen(r));
+            Check("T4", "the permission prompt came first: the tool's name, the file, the cost with the model — before the model was asked",
+                prompts.Count == 1 && prompts[0].CallsBefore == 0 && prompts[0].Info.ToolName == "add_code_comments"
+                && prompts[0].Info.Detail.Contains("Same2.cs") && prompts[0].Info.Detail.Contains("$") && prompts[0].Info.Detail.Contains("claude-haiku-5-5")
+                && prompts[0].Info.Detail.Contains("ทุกฟังก์ชัน") && current.Calls == 1,
+                string.Join("\n---\n", prompts.Select(p => p.Info.Detail)));
+            Check("T5", "the result tells the model what went in, and the chat row gets a diff of added lines only",
+                r.Output.Contains("Added 2 comment(s)") && r.Output.Contains("// คืนผลรวม") && r.Diff is { Added: 2, Removed: 0 }
+                && r.FilePath == "Same2.cs" && r.Summary.Contains("2"), Seen(r));
+            Check("T6", "outside a chat run: a Time Machine restore point of its own holds the original",
+                cp.Points(proj).Count == pointsBefore + 1 && cp.Points(proj)[0].Files.Any(f => f.File == viaChat && f.Note == "before auto-comment"),
+                $"{pointsBefore} → {cp.Points(proj).Count}");
+
+            // ── denied: nothing spent, nothing written ──
+            File.WriteAllBytes(viaChat, orig);
+            prompts.Clear();
+            allow = false;
+            current = new Counted(answer);
+            r = await Tool(svc, ("path", "Same2.cs"), ("scope", "file"), ("language", "en"));
+            Check("T7", "the user says No: the model is never asked and the file is untouched",
+                !r.Success && prompts.Count == 1 && current.Calls == 0 && File.ReadAllBytes(viaChat).AsSpan().SequenceEqual(orig), Seen(r));
+            allow = true;
+
+            // ── a code-changing answer is refused whole ──
+            int pts = cp.Points(proj).Count;
+            current = new Counted("{\"comments\":[{\"line\":3,\"text\":\"adds\",\"new_code\":\"int Add(int a, int b) => a - b;\"}]}");
+            r = await Tool(svc, ("path", "Same2.cs"), ("scope", "file"));
+            Check("T8", "an answer that tries to change code is refused: nothing written, no restore point",
+                !r.Success && current.Calls == 1 && File.ReadAllBytes(viaChat).AsSpan().SequenceEqual(orig) && cp.Points(proj).Count == pts
+                && r.Error.Contains(loc.T("edt.acm.failed").Split('{')[0].Trim()), Seen(r));
+            current = new Counted(Answer((3, "fine" + (char)0x2028 + "int y = 0;")));
+            r = await Tool(svc, ("path", "Same2.cs"), ("scope", "file"));
+            Check("T9", "an answer that breaks out of the comment line (U+2028) to slip code in is refused too",
+                !r.Success && File.ReadAllBytes(viaChat).AsSpan().SequenceEqual(orig) && cp.Points(proj).Count == pts, Seen(r));
+
+            // ── the file changes while the model is thinking ──
+            current = new Counted(answer, () => File.AppendAllText(viaChat, "// the user's own edit\r\n"));
+            r = await Tool(svc, ("path", "Same2.cs"), ("scope", "functions"));
+            string now = File.ReadAllText(viaChat);
+            Check("T10", "the file changed during the run: refused, the user's edit kept, no comment written",
+                !r.Success && now.EndsWith("// the user's own edit\r\n") && !now.Contains("คืนผลรวม") && cp.Points(proj).Count == pts, Seen(r));
+            File.WriteAllBytes(viaChat, orig);
+
+            // ── inside a chat run: the restore point is the run's step ──
+            var run = new AgentRunScope("chat-autocomment", proj) { Step = 4 };
+            AgentRunScope.Enter(run);
+            try
+            {
+                current = new Counted(answer);
+                r = await Tool(svc, ("path", Path.Combine(proj, "Same2.cs")), ("scope", "functions"), ("language", "th"));
+            }
+            finally { AgentRunScope.Enter(null); }
+            var step = cp.Points(proj).FirstOrDefault(p => p.Id == $"{run.TurnId}-004");
+            Check("T11", "in a chat run the restore point lands in that run's step (the chat's rewind finds it)",
+                r.Success && step != null && step.Files.Any(f => f.File == viaChat && f.Note == "before auto-comment")
+                && File.ReadAllBytes(viaChat).AsSpan().SequenceEqual(b), Seen(r) + " | points: " + string.Join(", ", cp.Points(proj).Select(p => p.Id)));
+            var restored = step == null ? (false, 0, "no point") : cp.RestoreTo(proj, step.Id);
+            Check("T12", "restoring that step gives the original bytes", restored.Item1 && File.ReadAllBytes(viaChat).AsSpan().SequenceEqual(orig), restored.Item3);
+
+            // ── selection by line range ──
+            current = new Counted(Answer((1, "outside"), (5, "inside")));
+            r = await Tool(svc, ("path", "Same2.cs"), ("start_line", "4"), ("end_line", "6"), ("language", "en"));
+            now = File.ReadAllText(viaChat);
+            Check("T13", "start_line / end_line alone = the selection scope: only lines inside it get a comment",
+                r.Success && now.Contains("        // inside\r\n") && !now.Contains("outside") && r.Output.Contains("scope selection"), Seen(r) + "\n" + now);
+            File.WriteAllBytes(viaChat, orig);
+
+            // ── the open file, and an unsaved tab ──
+            await vm.OpenPathAsync(viaChat);
+            await Until(() => vm.ActiveTab?.FullPath == viaChat && vm.ActiveTab.Content.Length > 0);
+            current = new Counted(answer);
+            r = await Tool(svc, ("scope", "functions"), ("language", "th"));
+            Check("T14", "no path: the file open in the Code Editor is the one commented", r.Success && File.ReadAllText(viaChat).Contains("// คืนผลรวม"), Seen(r));
+            await Until(() => vm.ActiveTab?.Content.Contains("คืนผลรวม") == true);
+            byte[] beforeTyping = File.ReadAllBytes(viaChat);
+            vm.ActiveTab!.Content += "// typing\n";
+            current = new Counted(answer);
+            r = await Tool(svc, ("path", "Same2.cs"), ("scope", "file"));
+            Check("T15", "unsaved typing in the editor: refused before the model is asked, the file not written",
+                !r.Success && current.Calls == 0 && File.ReadAllBytes(viaChat).AsSpan().SequenceEqual(beforeTyping)
+                && r.Error.Contains("บันทึก"), Seen(r));
+
+            // ── bad arguments fail without a prompt or a model call ──
+            prompts.Clear();
+            current = new Counted(answer);
+            var bad1 = await Tool(svc, ("path", "Same1.cs"), ("scope", "everything-ish"));
+            var bad2 = await Tool(svc, ("path", Path.Combine(Scratch, "p.cs")));
+            var bad3 = await Tool(svc, ("path", "Same1.cs"), ("scope", "selection"));
+            Check("T16", "a wrong scope, a file outside the project, a selection without lines: refused, nobody asked, nothing spent",
+                !bad1.Success && !bad2.Success && !bad3.Success && prompts.Count == 0 && current.Calls == 0,
+                Seen(bad1) + " | " + Seen(bad2) + " | " + Seen(bad3));
+
+            // ── a paid run is asked about even with the permission system switched off ──
+            bool permOn = settings.Settings.Features.PermissionSystem;
+            settings.Settings.Features.PermissionSystem = false;
+            try
+            {
+                File.WriteAllBytes(viaEditor, orig);
+                prompts.Clear();
+                current = new Counted(answer);
+                r = await Tool(svc, ("path", "Same1.cs"), ("scope", "functions"));
+                Check("T17", "permission system off: a paid run still shows its cost first", r.Success && prompts.Count == 1, Seen(r));
+            }
+            finally { settings.Settings.Features.PermissionSystem = permOn; }
+
+            // ── /comment ──
+            var skills = provider.GetRequiredService<SkillService>();
+            var skill = skills.GetSkillByName("comment");
+            Check("T18", "/comment is a built-in skill a user can type, limited to add_code_comments (+ finding the file)",
+                skill is { UserInvocable: true, IsBuiltIn: true } && skill.AllowedTools.Contains("add_code_comments")
+                && !skill.AllowedTools.Any(t => t is "edit_file" or "write_file" or "multi_edit" or "run_command")
+                && skill.PromptContent.Contains("WITHOUT a path"),
+                skill == null ? "missing" : string.Join(",", skill.AllowedTools));
+            svc.ActiveSkillAllowedTools = skill?.AllowedTools;
+            try
+            {
+                var edit = await svc.ExecuteToolAsync(new ToolCall
+                {
+                    Type = ToolType.EditFile, ToolName = "edit_file",
+                    Arguments = new() { ["path"] = "Same1.cs", ["old_str"] = "a + b", ["new_str"] = "a - b" },
+                }, CancellationToken.None);
+                File.WriteAllBytes(viaEditor, orig);
+                current = new Counted(answer);
+                r = await Tool(svc, ("path", "Same1.cs"), ("scope", "functions"));
+                Check("T19", "under /comment the chat model cannot edit code itself, but add_code_comments runs",
+                    !edit.Success && edit.Error.Contains("not allowed by the current skill") && File.ReadAllText(viaEditor).Contains("a + b")
+                    && r.Success && File.ReadAllText(viaEditor).Contains("// คืนผลรวม"), Seen(edit) + " | " + Seen(r));
+            }
+            finally { svc.ActiveSkillAllowedTools = null; }
+
+            // ── only what changed: the tool reads git diff -U0 HEAD itself ──
+            static void GitIn(string dir, string args)
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+                { WorkingDirectory = dir, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                using var p = System.Diagnostics.Process.Start(psi)!;
+                p.WaitForExit(20000);
+            }
+            File.WriteAllBytes(viaEditor, orig);
+            foreach (var g in new[] { "init -q", "config user.email t@t", "config user.name t", "add Same1.cs", "commit -q -m init" }) GitIn(proj, g);
+            File.WriteAllBytes(viaEditor, new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(code.Replace("a + b", "b + a"))).ToArray());
+            current = new Counted(Answer((3, "the declaration"), (5, "operands swapped on purpose")));
+            r = await Tool(svc, ("path", "Same1.cs"), ("scope", "changed"), ("language", "en"));
+            now = File.ReadAllText(viaEditor);
+            Check("T20", "scope=changed: only the line that differs from git HEAD gets a comment",
+                r.Success && now.Contains("        // operands swapped on purpose\r\n        return b + a;") && !now.Contains("the declaration")
+                && r.Output.Contains("scope changed") && r.Output.Contains("Skipped 1"), Seen(r) + "\n" + now);
+        }
+        finally
+        {
+            svc.OnPermissionRequired -= gate;
+            AutoCommentToolModule.ModelOverride = null;
+            CodeEditorViewModel.ModelOverride = null;
+            ChoiceDialog.Override = null;
+        }
     }
 
     // ───────────────────────── P: prompt / provider ─────────────────────────

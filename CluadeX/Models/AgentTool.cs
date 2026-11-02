@@ -167,6 +167,9 @@ public enum ToolType
     DesktopWindowAction, // focus / maximize / minimize / restore / move / resize / close a window
     DesktopRead,         // An element's whole text (Text / Value pattern), a page at a time
     DesktopClipboard,    // Read or set the clipboard's text
+
+    // Auto-comment (Services/Tools/AutoCommentToolModule) — appended last: a ToolType is stored by number
+    AddCodeComments,     // The model names lines + comment text; AutoCommentService inserts and proves the code unchanged
 }
 
 /// <summary>

@@ -245,7 +245,14 @@ public static class AutoCommentService
 
         string project = !string.IsNullOrWhiteSpace(projectDir) ? projectDir! : Path.GetDirectoryName(path)!;
         string? pointProject = null;
-        if (checkpoints != null)
+        if (checkpoints != null && AgentRunScope.Current is { WorkingDirectory: { Length: > 0 } runProject })
+        {
+            // Called from a chat run (add_code_comments): the point belongs to the run's step, where the chat's
+            // rewind and the Time Machine look for what the agent changed.
+            checkpoints.CaptureBeforeChange(path, "before auto-comment");
+            pointProject = runProject;
+        }
+        else if (checkpoints != null)
         {
             // CheckpointService keeps files only inside a run scope: make a one-step one for this write.
             var prev = AgentRunScope.Current;
@@ -284,6 +291,22 @@ public static class AutoCommentService
         byte[] now = File.ReadAllBytes(a.FullPath);
         if (!now.AsSpan().SequenceEqual(a.WrittenBytes)) throw new AutoCommentException("edt.acm.err.changedSinceApply");
         File.WriteAllBytes(a.FullPath, a.OriginalBytes);
+    }
+
+    /// <summary>New-file lines changed since HEAD (git diff -U0); null for a file git does not track yet (every line is new).
+    /// <paramref name="git"/> runs in the open project.</summary>
+    public static async Task<IReadOnlyCollection<int>?> ChangedLinesAsync(GitService git, string path)
+    {
+        var tracked = await git.RunGitAsync($"ls-files --error-unmatch -- \"{path}\"").ConfigureAwait(false);
+        if (!tracked.Success)
+        {
+            var inRepo = await git.RunGitAsync("rev-parse --is-inside-work-tree").ConfigureAwait(false);
+            if (!inRepo.Success) throw new AutoCommentException("edt.acm.noGit");
+            return null;
+        }
+        var diff = await git.RunGitAsync($"diff -U0 --no-color --no-ext-diff HEAD -- \"{path}\"").ConfigureAwait(false);
+        if (!diff.Success) throw new AutoCommentException("edt.acm.noGit");
+        return CommentScopes.ParseChangedLines(diff.Output);
     }
 
     /// <summary>The tool definition handed to providers with native tool use (structured output).</summary>

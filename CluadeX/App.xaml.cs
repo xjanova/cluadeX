@@ -1076,6 +1076,10 @@ public partial class App : Application
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.ProjectToolModule(sp.GetService<SettingsService>(), sp.GetService<ProjectRegistryService>()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AppRestartToolModule());
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AttachmentToolModule(sp.GetService<SettingsService>()));
+        // add_code_comments: the open editor tabs are read at call time (the editor view model is built after the tools).
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.AutoComment.AutoCommentToolModule(
+            sp.GetService<SettingsService>(), sp.GetService<AiProviderManager>(), sp.GetService<GitService>(),
+            () => sp.GetService<CodeEditorViewModel>()?.OpenFilesForTools()));
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 
