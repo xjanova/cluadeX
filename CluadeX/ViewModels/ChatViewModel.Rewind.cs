@@ -122,7 +122,7 @@ public partial class ChatViewModel
         }
         foreach (var m in copy) m.Id = Guid.NewGuid().ToString();
 
-        var child = new ChatSession { Title = LocF("chat.fork.title", parent.Title), ProjectPath = parent.ProjectPath, Messages = copy };
+        var child = new ChatSession { Title = LocF("chat.fork.title", parent.Title), ProjectPath = parent.ProjectPath, ProjectId = parent.ProjectId, Messages = copy };
         child.ExtraFolders.AddRange(parent.ExtraFolders);
         if (copy.Count > 0) _persistenceService.SaveSession(child);
         Sessions.Insert(0, child);

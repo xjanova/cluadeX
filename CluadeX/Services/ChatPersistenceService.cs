@@ -219,6 +219,61 @@ public class ChatPersistenceService
         catch { return null; }
     }
 
+    // ── Metadata only: a rename or a move never rewrites the messages (DatabaseService.RenameSession) ──
+
+    /// <summary>The owner's name for a chat. False = the store failed (or the chat is not stored yet).</summary>
+    public bool RenameSession(string sessionId, string title)
+    {
+        try { lock (_writeGate) return _db.RenameSession(sessionId, title); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to rename session: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Puts a chat in a project ("" = none). False = the store failed (or the chat is not stored yet).</summary>
+    public bool SetSessionProject(string sessionId, string projectId)
+    {
+        try { lock (_writeGate) return _db.SetSessionProject(sessionId, projectId); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to move session: {ex.Message}");
+            return false;
+        }
+    }
+
+    public List<ChatProject> LoadProjects()
+    {
+        try { return _db.LoadProjects(); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to load projects: {ex.Message}");
+            return new List<ChatProject>();
+        }
+    }
+
+    public bool SaveProject(ChatProject project)
+    {
+        try { lock (_writeGate) _db.SaveProject(project); return true; }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to save project: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Deletes a project; its chats stay, ungrouped. -1 = the store failed.</summary>
+    public int DeleteProject(string projectId)
+    {
+        try { lock (_writeGate) return _db.DeleteProject(projectId); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to delete project: {ex.Message}");
+            return -1;
+        }
+    }
+
     /// <summary>Auto-generate a title from the first user message.</summary>
     public static string GenerateTitle(List<ChatMessage> messages)
     {

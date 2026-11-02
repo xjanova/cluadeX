@@ -86,6 +86,28 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- A row of the sidebar's project list: picked = the chat rows' selected look (fill + accent strip). Takes a dropped chat. -->
+        <ControlTemplate x:Key="SidebarProjectRowTemplate" TargetType="Button">
+            <Grid>
+                <Border x:Name="bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="6"
+                        BorderThickness="1" BorderBrush="Transparent">
+                    <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                </Border>
+                <Border x:Name="strip" Width="3" HorizontalAlignment="Left" Margin="0,4" CornerRadius="2"
+                        Background="{DynamicResource Accent.1}" Visibility="Collapsed"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Subtle}"/>
+                    <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
+                </Trigger>
+                <!-- Tag "picked" is set by the row's own style (a project's IsSelected, or the "No project" filter) -->
+                <Trigger Property="Tag" Value="picked">
+                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
+                    <Setter TargetName="strip" Property="Visibility" Value="Visible"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
         <DataTemplate DataType="{x:Type vm:ChatViewModel}">
             <views:ChatView/>
         </DataTemplate>
@@ -744,6 +766,136 @@
                             <!-- Search box, then what the list holds: the top rows often stay the same when the filter changes,
                                  so the count is what shows the button did something -->
                             <StackPanel Grid.Row="1">
+                            <!-- Projects: named groups of chats (owner 2026-11-01). A row shows only its chats (again = all); a chat
+                                 dropped on it moves in; right-click for a new chat in it, rename, its folder, delete. -->
+                            <StackPanel Margin="10,0,10,6">
+                                <Grid Margin="2,0,4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Command="{Binding ChatVM.ToggleProjectsExpandedCommand}" HorizontalAlignment="Left"
+                                            Background="Transparent" BorderThickness="0" Cursor="Hand" Padding="4,3"
+                                            ToolTip="{services:Loc sidebar.projects.toggleTip}" Template="{StaticResource SidebarProjectRowTemplate}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Text.Muted}"
+                                                       Visibility="{Binding ChatVM.IsProjectsExpanded, Converter={StaticResource BoolVis}}"/>
+                                            <TextBlock Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Text.Muted}"
+                                                       Visibility="{Binding ChatVM.IsProjectsExpanded, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                            <TextBlock Text="{services:Loc sidebar.projects}" FontSize="11" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <!-- a project is picked: back to every chat -->
+                                    <Button Grid.Column="1" Width="22" Height="22" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                            Command="{Binding ChatVM.ClearProjectFilterCommand}" ToolTip="{services:Loc sidebar.project.clearFilter}"
+                                            Template="{StaticResource SidebarProjectRowTemplate}" Padding="0"
+                                            Visibility="{Binding ChatVM.HasProjectFilter, Converter={StaticResource BoolVis}}">
+                                        <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9" Foreground="{DynamicResource Accent.1}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Button>
+                                    <Button Grid.Column="2" Width="22" Height="22" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                            Command="{Binding ChatVM.NewProjectCommand}" ToolTip="{services:Loc sidebar.project.newTip}"
+                                            Template="{StaticResource SidebarProjectRowTemplate}" Padding="0">
+                                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Text.Secondary}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Button>
+                                </Grid>
+                                <StackPanel Visibility="{Binding ChatVM.IsProjectsExpanded, Converter={StaticResource BoolVis}}">
+                                    <!-- empty state: what a project is for and how a chat gets into one -->
+                                    <TextBlock Text="{services:Loc sidebar.projects.empty}" FontSize="10.5" TextWrapping="Wrap" Margin="6,2,6,4"
+                                               Foreground="{DynamicResource Text.Faint}"
+                                               Visibility="{Binding ChatVM.HasChatProjects, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                    <ScrollViewer MaxHeight="150" VerticalScrollBarVisibility="Auto" Focusable="False">
+                                        <ItemsControl ItemsSource="{Binding ChatVM.ChatProjects}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Command="{Binding DataContext.ChatVM.SelectProjectFilterCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            CommandParameter="{Binding Id}" Template="{StaticResource SidebarProjectRowTemplate}"
+                                                            Background="Transparent" BorderThickness="0" Cursor="Hand" Padding="8,4" Margin="0,1"
+                                                            HorizontalContentAlignment="Stretch" AllowDrop="True"
+                                                            DragOver="ProjectRow_DragOver" Drop="ProjectRow_Drop" MouseRightButtonUp="ProjectRow_RightClick"
+                                                            ToolTip="{services:Loc sidebar.project.rowTip}">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                        <Setter Property="Tag" Value="picked"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" VerticalAlignment="Center"
+                                                                       Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                                                            <!-- a bound folder that is not there any more -->
+                                                            <TextBlock Grid.Column="2" Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="4,0,0,0"
+                                                                       VerticalAlignment="Center" Foreground="{DynamicResource Status.Warning}"
+                                                                       ToolTip="{services:Loc sidebar.project.folderMissingTip}"
+                                                                       Visibility="{Binding FolderMissing, Converter={StaticResource BoolVis}}"/>
+                                                            <Grid Grid.Column="3" Margin="6,0,0,0" MinWidth="20">
+                                                                <TextBlock Text="{Binding ChatCount}" FontSize="10.5" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                                           FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"
+                                                                           Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                                                <StackPanel Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}}">
+                                                                    <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                            Command="{Binding DataContext.ChatVM.NewChatInProjectCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                            CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.project.newChat}">
+                                                                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Text.Muted}"
+                                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    </Button>
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </Grid>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                    <!-- the chats in no project: pick them, or drop a chat here to take it out of its project -->
+                                    <Button Command="{Binding ChatVM.SelectProjectFilterCommand}" CommandParameter=""
+                                            Template="{StaticResource SidebarProjectRowTemplate}"
+                                            Background="Transparent" BorderThickness="0" Cursor="Hand" Padding="8,4" Margin="0,1"
+                                            HorizontalContentAlignment="Stretch" AllowDrop="True"
+                                            DragOver="ProjectRow_DragOver" Drop="ProjectRow_Drop"
+                                            ToolTip="{services:Loc sidebar.project.noneTip}"
+                                            Visibility="{Binding ChatVM.HasChatProjects, Converter={StaticResource BoolVis}}">
+                                        <Button.Style>
+                                            <Style TargetType="Button">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ChatVM.IsUngroupedSelected}" Value="True">
+                                                        <Setter Property="Tag" Value="picked"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="&#xE8BD;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Text.Faint}"/>
+                                            <TextBlock Grid.Column="1" Text="{services:Loc sidebar.project.none}" FontSize="12" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Text.Secondary}" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding ChatVM.UngroupedChatCount}" FontSize="10.5" Margin="6,0,0,0"
+                                                       VerticalAlignment="Center" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"/>
+                                        </Grid>
+                                    </Button>
+                                </StackPanel>
+                            </StackPanel>
                             <Border Margin="14,2,14,6" Padding="8,0"
                                     Background="{DynamicResource Surface.Input}"
                                     BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
@@ -904,11 +1056,15 @@
                                                         </Grid.Triggers>
                                                     </Grid>
                                                 </Grid>
+                                                <!-- right-click: pin, rename, move to a project, delete; drag it onto a project row to move it -->
                                                 <Button Command="{Binding DataContext.ChatVM.LoadSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding Id}"
                                                         Background="Transparent" BorderThickness="0"
                                                         Foreground="{DynamicResource Text.Secondary}"
-                                                        HorizontalContentAlignment="Stretch" Cursor="Hand">
+                                                        HorizontalContentAlignment="Stretch" Cursor="Hand"
+                                                        MouseRightButtonUp="ChatRow_RightClick"
+                                                        PreviewMouseLeftButtonDown="ChatRow_MouseDown"
+                                                        PreviewMouseMove="ChatRow_MouseMove">
                                                     <Button.Style>
                                                         <Style TargetType="Button">
                                                             <Setter Property="Margin" Value="0,1"/>
@@ -1218,6 +1374,13 @@
                                                                     CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.unpinTip}"
                                                                     Visibility="{Binding IsPinned, Converter={StaticResource BoolVis}}">
                                                                 <TextBlock Text="&#xE77A;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Accent.1}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                            <!-- rename -->
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.RenameChatCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.rename.title}">
+                                                                <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Text.Muted}"
                                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                             </Button>
                                                             <!-- a chat that split work off: put away its finished split chats -->
