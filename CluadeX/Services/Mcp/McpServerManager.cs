@@ -1484,6 +1484,8 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
 
         SetState(name, McpServerState.Starting);
         int startupSeconds = StartupTimeoutFor(name, config);
+        // The limit covers the whole start — spawning the process (or connecting) as well as initialize.
+        long startedAtMs = Environment.TickCount64;
 
         try
         {
@@ -1517,7 +1519,8 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
 
             if (startupSeconds != DefaultStartupTimeoutSeconds)
                 Log(name, $"Waiting up to {startupSeconds}s for initialize (first start of a package runner, or the entry's startupTimeoutSeconds).");
-            var initResponse = await transport.SendRequestAsync("initialize", initParams, timeoutMs: startupSeconds * 1000, ct: ct);
+            int initTimeoutMs = (int)Math.Max(1000, startupSeconds * 1000L - (Environment.TickCount64 - startedAtMs));
+            var initResponse = await transport.SendRequestAsync("initialize", initParams, timeoutMs: initTimeoutMs, ct: ct);
 
             if (!initResponse.IsSuccess)
             {
@@ -1565,12 +1568,13 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         catch (TimeoutException)
         {
             string stderrHint = "";
-            if (_transports.TryGetValue(name, out var timedOut))
+            if (_transports.TryRemove(name, out var timedOut))
             {
                 stderrHint = timedOut.LastStartupError.Trim();
-                await timedOut.StopAsync();
+                // Dispose (kill the process tree now), not StopAsync: a server that has not answered initialize will
+                // not answer shutdown either, and the polite sequence (shutdown, exit, close stdin, wait 3 s, kill)
+                // put another ~5 s on top of the limit — a 15 s startupTimeoutSeconds failed at 20-22 s.
                 timedOut.Dispose();
-                _transports.TryRemove(name, out _);
             }
             // Shown on the MCP page and in the status chip's tooltip — localized, with the real limit and the fix.
             string detail = !string.IsNullOrEmpty(stderrHint)
