@@ -178,6 +178,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         string cmd = TerminalInput?.Trim() ?? "";
         if (cmd.Length == 0) return;
         AppendTerminal($"> {cmd}");
+        NoteTerminalCommand(cmd);
         _terminal.Send(cmd);
         TerminalInput = "";
     }

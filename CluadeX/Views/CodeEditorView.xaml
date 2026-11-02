@@ -1249,6 +1249,10 @@
                     <TextBlock Text="{Binding SearchSummary}" FontSize="10"
                                FontFamily="{DynamicResource Font.Mono.Display}"
                                Foreground="{DynamicResource Text.Faint}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    <!-- Results / references into the chat box as context (CodeEditorView.Problems.cs; shown when there are any) -->
+                    <Button x:Name="SearchToChat" HorizontalAlignment="Left" Margin="0,4,0,0" Visibility="Collapsed"
+                            Style="{StaticResource EdTextBtn}" Content="{services:Loc search.toChat}"
+                            ToolTip="{services:Loc search.toChatTip}" Click="OnSearchToChat"/>
                     <TextBlock Text="{Binding SearchError}" FontSize="10" TextWrapping="Wrap" Margin="0,2,0,0"
                                Foreground="{DynamicResource Accent.3}"
                                Visibility="{Binding HasSearchError, Converter={StaticResource BoolVis}}"/>
@@ -2228,9 +2232,15 @@
                         <DockPanel DockPanel.Dock="Top" Margin="12,4,6,4">
                             <Button DockPanel.Dock="Right" Style="{StaticResource EdToolBtn}" Content="&#xE711;" FontSize="10"
                                     Click="OnProblemsClose" ToolTip="{services:Loc lsp.close}"/>
+                            <!-- Runs the project's own checkers (dart analyze, tsc, a Python syntax pass, dotnet build…);
+                                 hidden when the project has none. Click again while it runs = stop. -->
+                            <Button x:Name="ProblemsCheck" DockPanel.Dock="Right" Style="{StaticResource EdTextBtn}" Visibility="Collapsed"
+                                    Content="{services:Loc problems.checkNow}" Click="OnProblemsCheck" Margin="0,0,4,0"/>
                             <TextBlock Text="{services:Loc lsp.problems}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
                                        Foreground="{DynamicResource Text.Secondary}"/>
                             <TextBlock x:Name="ProblemsServer" Margin="12,0,0,0" FontSize="11" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="ProblemsBuildStatus" Margin="12,0,0,0" FontSize="11" VerticalAlignment="Center"
                                        Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"/>
                         </DockPanel>
                         <Border x:Name="ProblemsInstall" DockPanel.Dock="Top" Visibility="Collapsed" Margin="12,0,12,6" Padding="10,6"
@@ -2280,7 +2290,7 @@
                                 </ListBox.ItemContainerStyle>
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <Grid>
+                                        <Grid Opacity="{Binding RowOpacity}" ToolTip="{Binding StaleTip}">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>

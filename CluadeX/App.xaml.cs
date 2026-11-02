@@ -91,6 +91,8 @@ public partial class App : Application
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
         // The editor view finds it through EditorLanguageService.Current. Starts nothing until a file is shown.
         _ = _serviceProvider.GetRequiredService<Services.Lsp.EditorLanguageService>();
+        // Reads every build / test / command the agent runs from now on — so it must exist before the first run.
+        _ = _serviceProvider.GetRequiredService<Services.Problems.BuildProblemsService>();
         // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
         var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
         _ = Task.Run(checkpoints.Prune);
@@ -1033,6 +1035,10 @@ public partial class App : Application
         // editor shows the install command when not. Servers stop with the project and on exit.
         services.AddSingleton(sp => new Services.Lsp.EditorLanguageService(sp.GetService<FileSystemService>()));
         services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<Services.Lsp.EditorLanguageService>());
+        // BuildProblemsService — the same squiggles and Problems from the output of builds, tests and checks the app
+        // already runs (the agent's tools, the editor's terminal, the Problems panel's Check button): no install needed.
+        services.AddSingleton(sp => new Services.Problems.BuildProblemsService(sp.GetService<CodeAgentService>(), sp.GetService<FileSystemService>()));
+        services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<Services.Problems.BuildProblemsService>());
         // SubAgentService — Sprint 1 #1: registry of specialised subagents
         // (code-reviewer, security-reviewer, architect, ...). Built-in 10
         // plus discovery of ~/.cluadex/agents/*.md and project agents.

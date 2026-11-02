@@ -22,9 +22,11 @@ namespace LspTest;
 ///       ignores shutdown), a project switch, app exit
 ///   L*  the real Dart analysis server, when this machine has a Dart / Flutter SDK (skip with --offline)
 ///   X*  the Problems row's "ask AI" snippet and the Thai strings
+///   B* T* R* E*  errors from build / check output with no language server, and the editor's messages to the chat
+///       (BuildProblemsTests.cs)
 /// Run: build CluadeX (-nodeReuse:false), then `dotnet run` here (or -p:CluadeXBin=&lt;OutDir&gt;\).
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly List<string> Problems = new();
@@ -49,6 +51,7 @@ internal static class Program
             Service();
             if (!args.Contains("--offline")) LiveDart();
             Extras();
+            BuildProblems();
         }
         catch (Exception ex) { Console.WriteLine("FATAL " + ex); Fail++; }
         finally
@@ -551,11 +554,12 @@ internal static class Program
         // Every key the editor uses exists (a missing key renders as the raw key).
         string root = FindRepoRoot();
         var used = new HashSet<string>();
-        foreach (var f in new[] { "CluadeX/Views/CodeEditorView.Lsp.cs", "CluadeX/Views/CodeEditorView.xaml" })
-            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(Path.Combine(root, f)), @"[""\s](lsp\.[A-Za-z.]+)[""}]"))
+        foreach (var f in new[] { "CluadeX/Views/CodeEditorView.Lsp.cs", "CluadeX/Views/CodeEditorView.Problems.cs", "CluadeX/Views/CodeEditorView.xaml" })
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(Path.Combine(root, f)),
+                         @"[""\s]((?:lsp|problems)\.[A-Za-z.]+|search\.toChat[A-Za-z]*|editor\.(?:menu|ask)\.[A-Za-z]+|editor\.(?:askChangeHint|contextAdded))[""}]"))
                 used.Add(m.Groups[1].Value);
         var missing = used.Where(k => !keys.ContainsKey(k)).ToList();
-        Check("X4", "every lsp.* key the editor uses is defined", used.Count > 10 && missing.Count == 0, $"used {used.Count}; missing: {string.Join(", ", missing)}");
+        Check("X4", "every lsp.* / problems.* / editor-to-chat key the editor uses is defined", used.Count > 30 && missing.Count == 0, $"used {used.Count}; missing: {string.Join(", ", missing)}");
     }
 
     static string Placeholders(string s)

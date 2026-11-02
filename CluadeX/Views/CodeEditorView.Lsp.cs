@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using CluadeX.Services;
 using CluadeX.Services.Lsp;
+using CluadeX.Services.Problems;
 using CluadeX.ViewModels;
 using CluadeX.Views.Editor;
 using ICSharpCode.AvalonEdit.Document;
@@ -60,6 +61,7 @@ public partial class CodeEditorView
         Editor.TextArea.TextView.MouseHoverStopped += (_, _) => CloseHoverTip();
         Editor.TextArea.TextEntering += (_, _) => CloseHoverTip();
         ProblemsPanel.Visibility = s_problemsOpen ? Visibility.Visible : Visibility.Collapsed;
+        InitializeBuildProblems();
     }
 
     /// <summary>The service lives as long as the app; this view does not — subscribe on attach, unsubscribe on detach.</summary>
@@ -69,6 +71,7 @@ public partial class CodeEditorView
         _lspHooked = true;
         _lsp.DiagnosticsChanged += OnLspEvent;
         _lsp.StatusChanged += OnLspEvent;
+        HookBuildProblems();
     }
 
     /// <summary>From DetachVm (via StopToolTimers): let go of the service and close the file with the server.</summary>
@@ -80,6 +83,7 @@ public partial class CodeEditorView
             _lsp.StatusChanged -= OnLspEvent;
             if (_lspPath != null) _lsp.CloseDocument(_lspPath);
         }
+        DetachBuildProblems();
         _lspHooked = false;
         _lspPath = null;
         _diagMarks.Clear();
@@ -155,20 +159,25 @@ public partial class CodeEditorView
         if (_lsp == null) return;
         try
         {
-            var current = _lspPath != null ? _lsp.DiagnosticsFor(_lspPath) : Array.Empty<EditorDiagnostic>();
-            if (_lspPath != null && LspTracking) _diagMarks.Set(Editor.Document, current);
+            // The language server's errors (while typing) and the last build's / check's — the latter only while the
+            // file has not changed since that run (stale ones are listed, not drawn: their lines may have moved).
+            var fromServer = _lspPath != null && LspTracking ? _lsp.DiagnosticsFor(_lspPath) : Array.Empty<EditorDiagnostic>();
+            var fromBuild = _build?.ProblemsFor(_boundTab?.FullPath) ?? Array.Empty<BuildProblemEntry>();
+            var current = MergeDiagnostics(fromServer, fromBuild.Where(b => !b.Stale).Select(b => b.Problem));
+            if (_boundTab != null) _diagMarks.Set(Editor.Document, current);
             else _diagMarks.Clear();
             Editor.TextArea.TextView.InvalidateLayer(_diagMarks.Layer);
             var status = _lsp.StatusFor(_boundTab?.FullPath);
             UpdateProblemsButton(status, current);
-            UpdateProblemsPanel(status, current);
+            UpdateProblemsPanel(status, current, fromBuild.Where(b => b.Stale).ToList());
         }
         catch (Exception ex) { CommandErrorSink.Report(nameof(RefreshLsp), ex); }
     }
 
     private void UpdateProblemsButton(LanguageServerStatus status, IReadOnlyList<EditorDiagnostic> current)
     {
-        if (_boundTab == null || status.State == LspServerState.NotSupported)
+        // Shown for any file once something can report on it: a language server, a checker, or a run that found problems.
+        if (_boundTab == null || status.State == LspServerState.NotSupported && current.Count == 0 && !HasBuildContext)
         {
             StProblems.Visibility = Visibility.Collapsed;
             return;
@@ -185,23 +194,20 @@ public partial class CodeEditorView
             Text = text, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0),
             Foreground = brush ?? ThemeService.BrushOf("Text.Muted"),
         });
+        // The counts for this file always come first — from the server and from the last build or check alike.
+        int errors = current.Count(d => d.Severity == LspSeverity.Error);
+        int warnings = current.Count(d => d.Severity == LspSeverity.Warning);
+        Glyph("", errors > 0 ? DiagnosticMarkerRenderer.BrushFor(LspSeverity.Error) : ThemeService.BrushOf("Text.Muted"));
+        Text(errors.ToString(), errors > 0 ? DiagnosticMarkerRenderer.BrushFor(LspSeverity.Error) : null);
+        Glyph("", warnings > 0 ? DiagnosticMarkerRenderer.BrushFor(LspSeverity.Warning) : ThemeService.BrushOf("Text.Muted"));
+        Text(warnings.ToString(), warnings > 0 ? DiagnosticMarkerRenderer.BrushFor(LspSeverity.Warning) : null);
+        if (_build?.IsChecking == true) Text(LF("problems.checking", _build.CheckingLabel ?? ""));
         switch (status.State)
         {
-            case LspServerState.Running:
-                int errors = current.Count(d => d.Severity == LspSeverity.Error);
-                int warnings = current.Count(d => d.Severity == LspSeverity.Warning);
-                Glyph("", errors > 0 ? DiagnosticMarkerRenderer.BrushFor(LspSeverity.Error) : ThemeService.BrushOf("Text.Muted"));
-                Text(errors.ToString(), errors > 0 ? DiagnosticMarkerRenderer.BrushFor(LspSeverity.Error) : null);
-                Glyph("", warnings > 0 ? DiagnosticMarkerRenderer.BrushFor(LspSeverity.Warning) : ThemeService.BrushOf("Text.Muted"));
-                Text(warnings.ToString(), warnings > 0 ? DiagnosticMarkerRenderer.BrushFor(LspSeverity.Warning) : null);
-                break;
             case LspServerState.Starting:
                 Text(LF("lsp.st.starting", status.LanguageName));
                 break;
-            case LspServerState.NotInstalled:
-                Glyph("", DiagnosticMarkerRenderer.BrushFor(LspSeverity.Warning));
-                Text(LF("lsp.st.notInstalled", status.LanguageName), DiagnosticMarkerRenderer.BrushFor(LspSeverity.Warning));
-                break;
+            // Not installed is no longer a warning here: builds and checks report without it; the panel says how to add it.
             case LspServerState.Failed:
                 Glyph("", DiagnosticMarkerRenderer.BrushFor(LspSeverity.Error));
                 Text(LF("lsp.st.failed", status.LanguageName), DiagnosticMarkerRenderer.BrushFor(LspSeverity.Error));
@@ -213,8 +219,9 @@ public partial class CodeEditorView
         StProblems.Content = row;
     }
 
-    private void UpdateProblemsPanel(LanguageServerStatus status, IReadOnlyList<EditorDiagnostic> current)
+    private void UpdateProblemsPanel(LanguageServerStatus status, IReadOnlyList<EditorDiagnostic> current, IReadOnlyList<BuildProblemEntry> staleHere)
     {
+        UpdateBuildHeader();
         if (ProblemsPanel.Visibility != Visibility.Visible) return;   // rebuilt when it opens
 
         ProblemsServer.Text = status.State switch
@@ -247,10 +254,15 @@ public partial class CodeEditorView
             ProblemsRecheck.Tag = status.LanguageKey;
         }
 
-        // Rows: this file first, then any other file the server reported on.
+        // Rows: this file first (then what an earlier run found in it before it changed), then other files — the
+        // server's, then the builds' and checks'.
         var rows = new List<ProblemRow>();
-        string? here = _lspPath;
-        if (here != null) rows.AddRange(current.Where(d => d.Severity != LspSeverity.Hint).Select(d => new ProblemRow(here, d)));
+        string? here = _boundTab?.FullPath;
+        if (here != null)
+        {
+            rows.AddRange(current.Where(d => d.Severity != LspSeverity.Hint).Select(d => new ProblemRow(here, d)));
+            rows.AddRange(staleHere.Where(b => b.Problem.Severity != LspSeverity.Hint).Select(b => new ProblemRow(here, b.Problem.ToDiagnostic(), stale: true)));
+        }
         if (_lsp != null)
             foreach (var (path, items) in _lsp.AllDiagnostics().OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase))
             {
@@ -258,15 +270,21 @@ public partial class CodeEditorView
                 rows.AddRange(items.Where(d => d.Severity != LspSeverity.Hint).Select(d => new ProblemRow(path, d)));
                 if (rows.Count >= MaxProblemRows) break;
             }
+        if (_build != null && rows.Count < MaxProblemRows)
+            foreach (var b in _build.All(MaxProblemRows))
+            {
+                if (LspPaths.SamePath(b.Problem.Path, here) || b.Problem.Severity == LspSeverity.Hint || !InProject(b.Problem.Path)) continue;
+                rows.Add(new ProblemRow(b.Problem.Path, b.Problem.ToDiagnostic(), b.Stale));
+                if (rows.Count >= MaxProblemRows) break;
+            }
         ProblemsList.ItemsSource = rows.Count > MaxProblemRows ? rows.GetRange(0, MaxProblemRows) : rows;
 
         ProblemsEmpty.Text = rows.Count > 0 ? "" : status.State switch
         {
-            LspServerState.Running => L("lsp.none"),
             LspServerState.Starting => L("lsp.waiting"),
             LspServerState.TooLarge => L("lsp.tooLargeHint"),
             LspServerState.NotSupported => L("lsp.unsupported"),
-            _ => "",
+            _ => L("lsp.none"),
         };
         ProblemsEmpty.Visibility = rows.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -302,8 +320,9 @@ public partial class CodeEditorView
         catch (Exception ex) { CommandErrorSink.Report(nameof(OnProblemClick), ex); }
     }
 
-    /// <summary>Put the problem, and the numbered lines around it, in the chat box — not sent: the user reads it and
-    /// presses Enter (an AI run costs money; a click on a list row should not start one by surprise).</summary>
+    /// <summary>"Fix this error": the problem and the numbered lines around it go to the chat — to the AI already working
+    /// in the project if there is one (its next step reads it), else as a new turn; a draft in the box is never sent
+    /// with it (the text is added below the draft instead). The button says what it does, so a click is the ask.</summary>
     private void OnProblemAskAi(object sender, RoutedEventArgs e)
     {
         try
@@ -315,8 +334,7 @@ public partial class CodeEditorView
             string word = L(d.Severity switch { LspSeverity.Error => "lsp.word.error", LspSeverity.Warning => "lsp.word.warning", _ => "lsp.word.info" });
             string who = string.IsNullOrEmpty(d.Source) ? L("lsp.theServer") : d.Source;
             string message = string.IsNullOrEmpty(d.Code) ? d.Message : $"{d.Code}: {d.Message}";
-            _vm.ChatVM.UserInput = LF("lsp.askAiPrompt", word, who, RelativeName(row.Path), row.Line, message, snippet);
-            Say(L("lsp.askAiDone"));
+            SendToChat(LF("lsp.askAiPrompt", word, who, RelativeName(row.Path), row.Line, message, snippet));
         }
         catch (Exception ex) { CommandErrorSink.Report(nameof(OnProblemAskAi), ex); }
     }
@@ -470,18 +488,24 @@ public partial class CodeEditorView
 /// <summary>One row of the Problems list.</summary>
 public sealed class ProblemRow
 {
-    public ProblemRow(string path, EditorDiagnostic diagnostic)
+    public ProblemRow(string path, EditorDiagnostic diagnostic, bool stale = false)
     {
         Path = path;
         Diagnostic = diagnostic;
+        Stale = stale;
     }
 
     public string Path { get; }
     public EditorDiagnostic Diagnostic { get; }
+    /// <summary>Found by a run before the file last changed: maybe fixed, its line may have moved — listed dimmed.</summary>
+    public bool Stale { get; }
+    public double RowOpacity => Stale ? 0.55 : 1.0;
+    public string? StaleTip => Stale ? LocalizedResources.Instance["problems.stale"] : null;
     /// <summary>1-based, as the editor numbers lines.</summary>
     public int Line => Diagnostic.StartLine + 1;
     public string Message => Diagnostic.Message.Replace("\r", "").Replace('\n', ' ');
-    public string Location => $"{System.IO.Path.GetFileName(Path)} {Line}:{Diagnostic.StartCharacter + 1}";
+    public string Location => $"{System.IO.Path.GetFileName(Path)} {Line}:{Diagnostic.StartCharacter + 1}"
+                              + (string.IsNullOrEmpty(Diagnostic.Source) ? "" : " · " + Diagnostic.Source);
     public string Glyph => GlyphFor(Diagnostic.Severity);
     public Brush GlyphBrush => DiagnosticMarkerRenderer.BrushFor(Diagnostic.Severity);
 
