@@ -1078,6 +1078,12 @@ public partial class App : Application
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.ProjectToolModule(sp.GetService<SettingsService>(), sp.GetService<ProjectRegistryService>()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AppRestartToolModule());
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AttachmentToolModule(sp.GetService<SettingsService>()));
+        // verify_change, find_references / rename_symbol / impact_of, checkpoint_*, gh_* / git_blame / git_show, debug.
+        // AgentToolService is resolved at call time: it takes the modules, so it cannot be a constructor argument.
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.EngineeringToolModule(
+            () => sp.GetService<AgentToolService>(), sp.GetService<CodeIntelligenceService>(), sp.GetService<CheckpointService>(),
+            sp.GetService<DebugAdapterService>(), sp.GetService<SettingsService>(), sp.GetService<ActivationService>(),
+            sp.GetService<RepoMapService>()));
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 

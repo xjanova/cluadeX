@@ -1253,7 +1253,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "lsp_diagnostics", Description = "Check a source file for errors/warnings via its language server (OmniSharp/pylsp/tsserver/rust-analyzer/gopls, if installed). Use after editing to verify your change compiles. Returns a hint if no server is installed.", InputSchema = MakeSchema(("path", "string", "Path to the source file to check", true)) });
         schemas.Add(new() { Name = "list_symbols", Description = "Outline a source file — its classes/methods/functions with line numbers — WITHOUT reading the whole file. Use it to navigate a file cheaply before read_file/edit_file.", InputSchema = MakeSchema(("path", "string", "Path to the source file", true)) });
         schemas.Add(new() { Name = "find_symbol", Description = "Find where a symbol (class/method/function/type) is DEFINED across the project, by NAME — a lightweight 'go to definition' that needs no language server. Returns file:line for each likely definition. Use this instead of blind-grepping to locate where to edit.", InputSchema = MakeSchema(("name", "string", "The symbol name to locate (e.g. a class or method name)", true)) });
-        schemas.Add(new() { Name = "run_build", Description = "Build / type-check the project to verify your changes compile. Auto-detects the command from the project (dotnet/cargo/go/npm/tsc/maven/gradle/make/cmake, also in subfolders). Call this after editing, before saying you're done — read the errors and fix them. Pass 'command' to override the auto-detected one.", InputSchema = MakeSchema(("command", "string", "Optional explicit build command (otherwise auto-detected)", false)) });
+        schemas.Add(new() { Name = "run_build", Description = "Build / type-check the project to verify your changes compile. Auto-detects the command from the project (dotnet/cargo/go/npm/tsc/maven/gradle/make/cmake, also in subfolders). Call this after editing, before saying you're done — read the errors and fix them. Pass 'command' to override the auto-detected one. If a running program holds an output file (MSB3027/MSB3021), the result names the process (PID) and kills nothing: call again with scratch=\"true\" to build into a scratch folder outside the project instead.", InputSchema = MakeSchema(("command", "string", "Optional explicit build command (otherwise auto-detected)", false), ("scratch", "string", "\"true\" = build into a scratch output folder (dotnet/msbuild only) — for when a running program locks the normal output", false)) });
         schemas.Add(new() { Name = "run_tests", Description = "Run the project's test suite and get a DISTILLED result: a pass/fail summary plus only the failing tests + their assertions (not a giant stdout blob). Auto-detects the runner (dotnet test/cargo test/go test/pytest/npm test/maven/gradle). Use it to verify behavior after a change. Pass 'command' to override.", InputSchema = MakeSchema(("command", "string", "Optional explicit test command (otherwise auto-detected)", false)) });
         schemas.Add(new() { Name = "codebase_search", Description = "Find the most relevant files/lines for a natural-language query across the whole repo, ranked by filename + symbol + content relevance (smarter than raw grep for 'where is X handled?'). Then read_file the top hits.", InputSchema = MakeSchema(("query", "string", "What you're looking for (keywords or a question)", true), ("limit", "string", "Max results (default 12)", false)) });
         schemas.Add(new() { Name = "instinct_evolve", Description = "Housekeeping: merge near-duplicate learned instincts via embedding similarity (preserves occurrence/accept counts, deletes redundant copies). Needs an Ollama embedding model; no-ops gracefully without one.", InputSchema = MakeSchema() });
@@ -1750,6 +1750,8 @@ public class AgentToolService : IDisposable
 
             51. run_build - Build the project (auto-detected, even in a subfolder) and return just the
                 compiler errors as file(line,col): message. Run it after editing, before saying you're done.
+                If a running program locks the output (MSB3027), it names the PID and kills nothing;
+                scratch: true then builds into a scratch folder instead.
                 [ACTION: run_build][/ACTION]
 
             52. run_tests - Run the test suite and return failures
@@ -2795,23 +2797,60 @@ public class AgentToolService : IDisposable
     }
 
     private async Task<ToolResult> ExecuteRunBuildAsync(ToolCall call, CancellationToken ct)
+        => (await RunBuildCoreAsync(call, call.GetArg("command"), IsTrue(call.GetArg("scratch")), ct)).Result;
+
+    /// <summary>One build as run_build runs it, with what verify_change needs to see behind the text.</summary>
+    /// <param name="Command">What actually ran (with the scratch OutDir when one was used); "" when nothing ran.</param>
+    /// <param name="RawOutput">The build's whole output, before distilling.</param>
+    /// <param name="Locked">Output files a running program held open (MSB3027 / MSB3021); empty otherwise.</param>
+    /// <param name="ScratchDir">The scratch output folder this build wrote to, or null.</param>
+    public sealed record BuildRun(ToolResult Result, string Command, string RawOutput,
+        IReadOnlyList<CluadeX.Helpers.LockedFiles.LockedOutput> Locked, string? ScratchDir);
+
+    private static bool IsTrue(string? v) => v?.Trim().ToLowerInvariant() is "true" or "1" or "yes" or "on";
+
+    /// <summary>
+    /// The project's build (detected, or <paramref name="command"/>) from the project root, through the same guards as
+    /// run_command (dangerous-command check, the red prompt). <paramref name="scratch"/>: an MSBuild build writes into
+    /// <see cref="CluadeX.Helpers.LockedFiles.ScratchOutDir"/> instead of its normal output folder. A build that failed
+    /// only because a running program holds an output file says who holds it and how to build into scratch — it never
+    /// kills anything. Callers have already passed the permission gate.
+    /// </summary>
+    public async Task<BuildRun> RunBuildCoreAsync(ToolCall call, string? command, bool scratch, CancellationToken ct)
     {
-        string cmd = call.GetArg("command");
+        string cmd = command ?? "";
         string foundIn = "";
         if (string.IsNullOrEmpty(cmd))
         {
             var detected = _fileSystem.DetectProjectCommand(test: false);
             if (detected != null) { cmd = detected.Command; foundIn = detected.FoundIn; }
         }
+        BuildRun Failed(string msg) => new(Fail(call, msg), "", "", Array.Empty<CluadeX.Helpers.LockedFiles.LockedOutput>(), null);
         if (string.IsNullOrEmpty(cmd))
-            return Fail(call, "run_build: couldn't detect a build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
+            return Failed($"{call.ToolName}: couldn't detect a build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
+
+        string? scratchDir = null;
+        if (scratch)
+        {
+            if (!_fileSystem.HasWorkingDirectory)
+                return Failed("No project folder is open — open one first so commands have a working directory.");
+            if (!CluadeX.Helpers.LockedFiles.AcceptsOutDir(cmd))
+                return Failed($"{call.ToolName}: scratch=\"true\" works only for MSBuild builds (dotnet build / msbuild); '{cmd}' takes no output folder. Ask the user to close the program that holds the output, then build normally.");
+            scratchDir = CluadeX.Helpers.LockedFiles.ScratchOutDir(_fileSystem.WorkingDirectory);
+            // It goes into the command line in double quotes: nothing in it may be expanded by a shell.
+            if (scratchDir.IndexOfAny(new[] { '"', '$', '`', '%', '!' }) >= 0)
+                return Failed($"The scratch folder {scratchDir} has a character a shell would expand; set TEMP to a plain folder, or ask the user to close the program and build normally.");
+            try { Directory.CreateDirectory(scratchDir); }
+            catch (Exception ex) { return Failed($"Could not create the scratch output folder {scratchDir}: {ex.Message}"); }
+            cmd = CluadeX.Helpers.LockedFiles.WithOutDir(cmd, scratchDir);
+        }
 
         var danger = CheckDangerousCommand(cmd, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell));
-        if (danger != null) return Fail(call, danger);
+        if (danger != null) return Failed(danger);
 
         // Always from the project root: detected commands are root-relative, whatever `cd` the model did.
         var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
-        if (run.Error != null) return Fail(call, run.Error);
+        if (run.Error != null) return Failed(run.Error);
         var r = run.Result!;
 
         bool ok = r.ExitCode == 0 && !r.TimedOut && !r.Cancelled;
@@ -2819,20 +2858,42 @@ public class AgentToolService : IDisposable
             ? "Build timed out after 300 s. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
             : CluadeX.Helpers.BuildOutputDistiller.Distill(r.Output, ok, _fileSystem.WorkingDirectory, ShellOutputBudget());
 
-        return new ToolResult
+        var locked = ok ? new List<CluadeX.Helpers.LockedFiles.LockedOutput>()
+            : CluadeX.Helpers.LockedFiles.Find(r.Output, _fileSystem.WorkingDirectory);
+        if (locked.Count > 0)
+            body += "\n\n" + CluadeX.Helpers.LockedFiles.Explain(locked, cmd,
+                CluadeX.Helpers.LockedFiles.ScratchOutDir(_fileSystem.WorkingDirectory),
+                canScratch: scratchDir == null && CluadeX.Helpers.LockedFiles.AcceptsOutDir(cmd));
+        if (ok && scratchDir != null)
+            body += $"\n\n[Built into the scratch folder {scratchDir} — the normal output folder still has the previous build.]";
+
+        var result = new ToolResult
         {
             Type = call.Type,
             ToolName = call.ToolName,
             Success = ok,
             Output = $"$ {cmd}{(foundIn.Length > 0 ? $"   (detected: {foundIn})" : "")}\n{body}",
-            Error = ok ? "" : (r.TimedOut ? "Build timed out" : $"Build failed (exit code {r.ExitCode})"),
-            Summary = ok ? $"Build OK ({cmd})" : $"Build FAILED ({cmd}) — read the errors and fix them",
+            Error = ok ? "" : r.TimedOut ? "Build timed out"
+                : locked.Count > 0 ? $"Build output is locked by a running program (exit code {r.ExitCode})"
+                : $"Build failed (exit code {r.ExitCode})",
+            Summary = ok ? $"Build OK ({cmd})"
+                : locked.Count > 0 ? "Build output LOCKED by a running program — nothing killed; scratch=\"true\" builds anyway"
+                : $"Build FAILED ({cmd}) — read the errors and fix them",
         };
+        return new BuildRun(result, cmd, r.Output ?? "", locked, scratchDir);
     }
 
+    /// <summary>The build or test command the project's files point to, or null (verify_change's prompt and report).</summary>
+    public string? DetectedProjectCommand(bool test) => _fileSystem.HasWorkingDirectory ? _fileSystem.DetectProjectCommand(test)?.Command : null;
+
     private async Task<ToolResult> ExecuteRunTestsAsync(ToolCall call, CancellationToken ct)
+        => (await RunTestsCoreAsync(call, call.GetArg("command"), ct)).Result;
+
+    /// <summary>The project's tests (detected, or <paramref name="command"/>) as run_tests runs them, with the runner's
+    /// whole output (verify_change reads the counts from it). Callers have already passed the permission gate.</summary>
+    public async Task<(ToolResult Result, string RawOutput)> RunTestsCoreAsync(ToolCall call, string? command, CancellationToken ct)
     {
-        string cmd = call.GetArg("command");
+        string cmd = command ?? "";
         string foundIn = "";
         if (string.IsNullOrEmpty(cmd))
         {
@@ -2840,13 +2901,13 @@ public class AgentToolService : IDisposable
             if (detected != null) { cmd = detected.Command; foundIn = detected.FoundIn; }
         }
         if (string.IsNullOrEmpty(cmd))
-            return Fail(call, "run_tests: couldn't detect a test runner in the project or the folders below it (no test project, Cargo.toml, go.mod, pyproject, package.json, pom.xml…). Pass an explicit 'command', or use run_command.");
+            return (Fail(call, "run_tests: couldn't detect a test runner in the project or the folders below it (no test project, Cargo.toml, go.mod, pyproject, package.json, pom.xml…). Pass an explicit 'command', or use run_command."), "");
 
         var danger = CheckDangerousCommand(cmd, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell));
-        if (danger != null) return Fail(call, danger);
+        if (danger != null) return (Fail(call, danger), "");
 
         var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
-        if (run.Error != null) return Fail(call, run.Error);
+        if (run.Error != null) return (Fail(call, run.Error), "");
         var r = run.Result!;
 
         // Success comes from the runner's EXIT CODE (reliable across runners). The distiller only shapes the
@@ -2857,7 +2918,7 @@ public class AgentToolService : IDisposable
             : CluadeX.Helpers.OutputBudget.HeadAndTail(
                 CluadeX.Helpers.TestOutputDistiller.Distill(r.Output, ok ? "" : $"Exit code: {r.ExitCode}", cmd), ShellOutputBudget());
 
-        return new ToolResult
+        return (new ToolResult
         {
             Type = call.Type,
             ToolName = call.ToolName,
@@ -2865,7 +2926,7 @@ public class AgentToolService : IDisposable
             Output = $"$ {cmd}{(foundIn.Length > 0 ? $"   (detected: {foundIn})" : "")}\n{distilled}",
             Error = ok ? "" : (r.TimedOut ? "Tests timed out" : $"Tests failed (exit code {r.ExitCode})"),
             Summary = ok ? $"Tests passed ({cmd})" : $"Tests FAILED ({cmd}) — read the failures and fix them",
-        };
+        }, r.Output ?? "");
     }
 
     /// <summary>

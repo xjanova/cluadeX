@@ -44,6 +44,7 @@ public static class ChatToolBridge
         }
         .Concat(BrowserToolModule.ToolNames)
         .Concat(Desktop.DesktopToolModule.ToolNames)
+        .Concat(EngineeringToolModule.ToolNames)
         .Select(n => $"mcp__{ServerName}__{n}")
         .ToArray();
 
@@ -171,6 +172,10 @@ public static class ChatToolBridge
 
         /// <summary>The desktop calls' lane: one mouse, one keyboard, one foreground window.</summary>
         public SemaphoreSlim DesktopLane { get; } = new(1, 1);
+
+        /// <summary>The engineering tools that change or run something (verify_change, rename_symbol, checkpoint_restore,
+        /// debug): one at a time — two builds into one output folder, or a rename during a restore, would collide.</summary>
+        public SemaphoreSlim WorkLane { get; } = new(1, 1);
     }
 
     private static readonly ConcurrentDictionary<string, Registration> Turns = new(StringComparer.Ordinal);
@@ -346,13 +351,17 @@ public static class ChatToolBridge
             return AnswerAgentGate(root, reg);
         bool browser = BrowserToolModule.ToolNames.Contains(tool);
         bool desktop = !browser && Desktop.DesktopToolModule.ToolNames.Contains(tool);
+        bool engineering = !browser && !desktop && EngineeringToolModule.ToolNames.Contains(tool);
         var type = browser ? BrowserToolModule.TypeOf(tool)
             : desktop ? Desktop.DesktopToolModule.TypeOf(tool)
+            : engineering ? EngineeringToolModule.TypeOf(tool)
             : new ProjectToolModule().ResolveToolType(tool);
-        if (type == null || (!browser && !desktop && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat)))
+        if (type == null || (!browser && !desktop && !engineering && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat)))
             return (false, $"CluadeX: '{tool}' is not one of its tools for CLI agents (open_project, new_chat, close_chat, "
-                           + "ask_user, browser_open … browser_close, desktop_windows … desktop_wait).");
-        var lane = browser ? reg.BrowserLane : desktop ? reg.DesktopLane : null;
+                           + "ask_user, browser_open … browser_close, desktop_windows … desktop_wait, verify_change, find_references, "
+                           + "rename_symbol, impact_of, checkpoint_list/diff/restore, gh_pr_view, gh_pr_checks, gh_run_log, git_blame, git_show, debug).");
+        var lane = browser ? reg.BrowserLane : desktop ? reg.DesktopLane
+            : engineering && !new ToolCall { Type = type.Value }.IsReadOnly ? reg.WorkLane : null;
 
         var call = new ToolCall
         {
@@ -814,6 +823,12 @@ public static class ChatToolBridge
         description = s.Description,
         inputSchema = CliSchema(s.InputSchema),
         annotations = new { readOnlyHint = Desktop.DesktopToolModule.TypeOf(s.Name) is { } t && new ToolCall { Type = t }.IsReadOnly },
+    })).Concat(EngineeringToolModule.Schemas().Select(s => (object)new
+    {
+        name = s.Name,
+        description = s.Description,
+        inputSchema = CliSchema(s.InputSchema),
+        annotations = new { readOnlyHint = EngineeringToolModule.TypeOf(s.Name) is { } t && new ToolCall { Type = t }.IsReadOnly },
     })).Append(new
     {
         name = ApproveToolName,

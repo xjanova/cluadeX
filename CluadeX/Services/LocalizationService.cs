@@ -427,6 +427,16 @@ public class LocalizationService
             ["en"] = "{0} is not available right now — the {1} component did not answer. Try again; if it keeps happening, restart CluadeX.",
             ["th"] = "{0} ใช้งานไม่ได้ในขณะนี้ — ส่วน {1} ไม่ตอบสนอง ลองใหม่อีกครั้ง ถ้ายังเป็นอยู่ให้เปิด CluadeX ใหม่",
         },
+        ["eng.gh.locked"] = new()
+        {
+            ["en"] = "{0} is a GitHub tool: switch on GitHub integration on the Features page (it needs an activated license).",
+            ["th"] = "{0} เป็นเครื่องมือ GitHub — เปิด GitHub integration ที่หน้า Features ก่อน (ต้องเปิดใช้งานไลเซนส์)",
+        },
+        ["eng.git.locked"] = new()
+        {
+            ["en"] = "{0} is a Git tool: switch on Git integration on the Features page.",
+            ["th"] = "{0} เป็นเครื่องมือ Git — เปิด Git integration ที่หน้า Features ก่อน",
+        },
         ["mcp.policy.hidden"] = new() { ["en"] = "{0} is not available to the agent.", ["th"] = "{0} ไม่ได้เปิดให้เอเจนต์ใช้งาน" },
         ["mcp.launch.failed"] = new()
         {

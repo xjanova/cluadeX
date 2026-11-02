@@ -36,6 +36,8 @@ public partial class CodeAgentService
         "read_file", "list_files", "search_files", "search_content", "glob", "grep_search", "codebase_search",
         "list_symbols", "find_symbol", "lsp_diagnostics", "git_status", "git_diff", "git_log", "git_branch",
         "web_fetch", "web_search", "brain_recall", "gh_pr_list", "gh_issue_list", "gh_repo_view",
+        "find_references", "impact_of", "git_blame", "git_show", "gh_pr_view", "gh_pr_checks", "gh_run_log",
+        "checkpoint_list", "checkpoint_diff",
     };
 
     /// <summary>The tool set a sub-agent of this type gets, from the main loop's catalogue. "explore": reading,

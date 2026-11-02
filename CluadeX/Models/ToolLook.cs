@@ -13,18 +13,18 @@ public static class ToolLook
         string t = (tool ?? "").ToLowerInvariant();
         if (t.StartsWith("mcp__", StringComparison.Ordinal)) return ("", "tool.verb.mcp");
         if (t.StartsWith("browser_", StringComparison.Ordinal)) return ("", "tool.verb.browser");
-        if (t.StartsWith("git_", StringComparison.Ordinal) || t.StartsWith("github_", StringComparison.Ordinal)) return ("", "tool.verb.git");
+        if (t.StartsWith("git_", StringComparison.Ordinal) || t.StartsWith("github_", StringComparison.Ordinal) || t.StartsWith("gh_", StringComparison.Ordinal)) return ("", "tool.verb.git");
         if (t.StartsWith("bg_", StringComparison.Ordinal)) return ("", "tool.verb.background");
         if (t.StartsWith("memory_", StringComparison.Ordinal)) return ("", "tool.verb.memory");
         return t switch
         {
             "read_file" or "notebook_read" => ("", "tool.verb.read"),
             "write_file" or "create_directory" => ("", "tool.verb.write"),
-            "edit_file" or "multi_edit" or "notebook_edit" => ("", "tool.verb.edit"),
+            "edit_file" or "multi_edit" or "notebook_edit" or "rename_symbol" => ("", "tool.verb.edit"),
             "list_files" or "glob" or "search_files" => ("", "tool.verb.list"),
-            "search_content" or "grep" or "find_symbol" or "list_symbols" => ("", "tool.verb.search"),
+            "search_content" or "grep" or "find_symbol" or "list_symbols" or "find_references" or "impact_of" => ("", "tool.verb.search"),
             "run_command" or "powershell" or "repl" => ("", "tool.verb.run"),
-            "run_build" => ("", "tool.verb.build"),
+            "run_build" or "verify_change" => ("", "tool.verb.build"),
             "run_tests" => ("", "tool.verb.test"),
             "web_fetch" or "web_search" => ("", "tool.verb.web"),
             "agent_spawn" or "subagent_invoke" => ("", "tool.verb.agent"),
