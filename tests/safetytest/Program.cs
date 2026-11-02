@@ -55,6 +55,7 @@ internal static class Program
             AntigravityGuardChecks(work);
             ChatTools(work);
             AgentControlChecks.Run(work, Check, MatchingExe);
+            SupervisionChecks.Run(Check, MatchingExe);
             GeminiCliReal.Run(work, Check, MatchingExe);
             RunGates(work);
             DayApprovalChecks(work);

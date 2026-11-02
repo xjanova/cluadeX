@@ -222,8 +222,9 @@ public static class GuardHook
     public static string? NeverRun(string command)
     {
         string c = System.Text.RegularExpressions.Regex.Replace(command ?? "", @"\s+", " ").Trim().ToLowerInvariant();
-        foreach (var bad in new[] { "git push --force", "git push -f", "git reset --hard", "git clean", "shutdown" })
-            if (c.StartsWith(bad, StringComparison.Ordinal) || c.Contains("&& " + bad) || c.Contains("; " + bad) || c.Contains("| " + bad))
+        // A whole word: `shutdown_server.sh` is not `shutdown` (Claude Dev's Bash and PowerShell come here too).
+        foreach (var bad in new[] { "git push --force", "git push -f", "git reset --hard", "git clean", "shutdown", "stop-computer", "restart-computer" })
+            if (System.Text.RegularExpressions.Regex.IsMatch(c, @"(^|&& |; |\| |&& \(|\()" + System.Text.RegularExpressions.Regex.Escape(bad) + @"(\s|$|;|&|\|)"))
                 return $"CluadeX safety: `{bad}` is never run by a headless agent — ask the user to run it themselves.";
         // A force push written any other way: the flag after the remote/branch (`git push origin main --force`,
         // `--force-with-lease`, `-fu`), a `+branch` refspec, or `git -C <dir> push … -f`.
@@ -276,7 +277,8 @@ public static class GuardHook
                 foreach (var key in new[] { "command", "file_path" })
                     if (turnIn.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String && TouchesTurnDir(called, v.GetString() ?? "", turnDir))
                         return Block("CluadeX safety: this turn's guard files are off limits — leave GEMINI_CLI_HOME alone.");
-            if (called == "run_shell_command" && root.TryGetProperty("tool_input", out var cmdIn) && cmdIn.ValueKind == JsonValueKind.Object
+            // Claude Dev's Bash and PowerShell too: --disallowedTools covers them by prefix rules, this covers any wording.
+            if (called is "run_shell_command" or "Bash" or "PowerShell" && root.TryGetProperty("tool_input", out var cmdIn) && cmdIn.ValueKind == JsonValueKind.Object
                 && cmdIn.TryGetProperty("command", out var cmd) && cmd.ValueKind == JsonValueKind.String && NeverRun(cmd.GetString() ?? "") is { } never)
                 return Block(never);
         }

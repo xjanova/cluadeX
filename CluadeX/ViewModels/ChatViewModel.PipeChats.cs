@@ -16,6 +16,20 @@ public sealed record PipeChatInfo(string Id, string Title, string Project, DateT
     public string? WaitingFor { get; init; }
     /// <summary>The step it is on, as the sidebar shows it.</summary>
     public string? Doing { get; init; }
+    /// <summary>A running turn's progress (null when nothing runs in it).</summary>
+    public PipeRunProgress? Progress { get; init; }
+}
+
+/// <summary>
+/// A running turn as a supervisor sees it: who started it, the last tool (its name only), how long it has run, how long
+/// since its last sign of work, its step and its sub-agents. A supervisor could not tell the owner's own turn from a stuck
+/// one, nor see a 47-minute run move, without reading codex.db or the CLI's transcripts (TPIX run, 2026-11-01).
+/// </summary>
+public sealed record PipeRunProgress(string StartedBy, string? LastTool, DateTime StartedAt, DateTime LastProgressUtc, int Step,
+    int SubAgentsRunning, int SubAgentsTotal, int PlanDone, int PlanTotal, string? PlanCurrent)
+{
+    public int ElapsedSeconds(DateTime nowLocal) => Math.Max(0, (int)(nowLocal - StartedAt).TotalSeconds);
+    public int SinceProgressSeconds(DateTime nowUtc) => Math.Max(0, (int)(nowUtc - LastProgressUtc).TotalSeconds);
 }
 
 /// <summary>A sub-agent as the pipe reports it.</summary>
@@ -27,7 +41,11 @@ public sealed record PipeRunStats(string StartedBy, string Provider, string? Mod
 
 /// <summary>cluadex.task_status: a chat as it stands now. Stats = null: no run of it since the app started.</summary>
 public sealed record PipeTaskStatus(string ChatId, string Title, string Project, string? TaskId, string Activity, string? WaitingFor,
-    string? Doing, PipeRunStats? Stats, IReadOnlyList<PipeAgentInfo> SubAgents, string? LastReply, McpTaskOutcome? Outcome);
+    string? Doing, PipeRunStats? Stats, IReadOnlyList<PipeAgentInfo> SubAgents, string? LastReply, McpTaskOutcome? Outcome)
+{
+    /// <summary>The running turn's progress; null when nothing runs.</summary>
+    public PipeRunProgress? Progress { get; init; }
+}
 
 /// <summary>
 /// Carrying on an existing chat over the cluadex-mcp pipe. An orchestrator could only START chats (cluadex.write_code);
@@ -59,20 +77,53 @@ public partial class ChatViewModel
     /// <summary>write_code's Accept-edits dialog: the task has no chat yet, and the call just hangs while it is up.</summary>
     private readonly ConcurrentDictionary<string, string> _pipeConsents = new(StringComparer.Ordinal);
 
+    /// <summary>write_code with wait:false — where the task stands a moment after it started: the chat it got (null = none
+    /// yet) and whether it is held at its Accept-edits dialog.</summary>
+    public (string? ChatId, bool AtDialog) PipeTaskPlace(string taskId) =>
+        (_pipeTasks.TryGetValue(taskId, out var t) ? t.ChatId : null, _pipeConsents.ContainsKey(taskId));
+
+    /// <summary>A pipe task of this id is still going (held at its dialog, or its call has not ended).</summary>
+    public bool PipeTaskActive(string taskId) =>
+        _pipeConsents.ContainsKey(taskId) || (_pipeTasks.TryGetValue(taskId, out var t) && t.Outcome == null);
+
+    /// <summary>
+    /// write_code's Accept-edits question, as it is true for <paramref name="folder"/>: when the owner's own Allow rule for
+    /// commands already lets them run unasked (the rule that gives a CLI agent its run grant), the question says so — it
+    /// said "commands still ask" while flutter ran with no permission row (TPIX run, 2026-11-01). Pure apart from the rules.
+    /// </summary>
+    public static string PipeConsentKey(PermissionService? perms, string folder) =>
+        CodeAgentService.DecideWorkerGrant(perms, folder)?.Run == true ? "chat.acceptEdits.pipeConfirmRuns" : "chat.acceptEdits.pipeConfirm";
+
     /// <summary>What each chat's last run used (UI thread). Dropped oldest first past the limit.</summary>
     private readonly Dictionary<string, PipeRunStats> _lastRunStats = new();
     private readonly Queue<string> _lastRunOrder = new();
     private const int MaxLastRunStats = 200;
 
-    private static PipeRunStats StatsOf(AgentRunScope s) => new(s.FromPipe ? "pipe" : "user", s.ProviderType?.ToString() ?? "",
-        s.ProviderType is { } p ? LiveModelReport.For(s, p)?.Model : null, s.Step, s.InputTokens, s.OutputTokens, s.CacheReadTokens, s.CacheWriteTokens, s.CostUsd);
+    private static PipeRunStats StatsOf(ChatRun run)
+    {
+        var s = run.Scope;
+        return new(run.StartedBy, s.ProviderType?.ToString() ?? "", s.ProviderType is { } p ? LiveModelReport.For(s, p)?.Model : null,
+            s.Step, s.InputTokens, s.OutputTokens, s.CacheReadTokens, s.CacheWriteTokens, s.CostUsd);
+    }
+
+    /// <summary>A running turn's progress (UI thread). Names and counts only: no tool arguments, no file contents.</summary>
+    private static PipeRunProgress ProgressOf(ChatRun run)
+    {
+        var nodes = run.AgentMapMsg?.AgentNodes?.ToList() ?? new List<AgentNode>();
+        List<TodoItem> plan;
+        try { plan = run.Scope.Todos.ToList(); } catch { plan = new(); }
+        string? current = plan.FirstOrDefault(t => t.Status == "in_progress")?.Content;
+        if (current != null) current = ForPipe(current.Length > 160 ? current[..160] + "…" : current);
+        return new PipeRunProgress(run.StartedBy, run.LastTool, run.Scope.StartedAt, run.LastProgressUtc, run.Scope.Step,
+            nodes.Count(n => n.IsRunning), nodes.Count, plan.Count(t => t.Status == "completed"), plan.Count, current);
+    }
 
     /// <summary>A run ended: what it used stays readable (UI thread).</summary>
     private void RememberRunStats(ChatRun run)
     {
         string id = run.Session.Id;
         if (!_lastRunStats.ContainsKey(id)) _lastRunOrder.Enqueue(id);
-        _lastRunStats[id] = StatsOf(run.Scope);
+        _lastRunStats[id] = StatsOf(run);
         while (_lastRunOrder.Count > MaxLastRunStats) _lastRunStats.Remove(_lastRunOrder.Dequeue());
     }
 
@@ -82,7 +133,7 @@ public partial class ChatViewModel
                                            || m.Role == MessageRole.Question && !m.QuestionAnswered);
         if (open == null) return null;
         string text = open.Role == MessageRole.PermissionRequest ? open.PermissionHeadlineText : open.Content ?? "";
-        return text.Length > 200 ? text[..200] + "…" : text;
+        return ForPipe(text.Length > 200 ? text[..200] + "…" : text);
     }
 
     private (string Activity, string? Waiting, string? Doing) ActivityOf(ChatRun? run, bool paused)
@@ -91,7 +142,15 @@ public partial class ChatViewModel
         string? waiting = OpenPrompt(run.Messages);
         if (waiting != null) return ("waiting_consent", waiting, null);
         string doing = (run.ActiveStatus?.Content ?? "").TrimStart('⏵', ' ');
-        return ("running", null, doing.Length > 0 ? doing : run.StatusBase);
+        return ("running", null, ForPipe(doing.Length > 0 ? doing : run.StatusBase));
+    }
+
+    /// <summary>A status line as the pipe shows it: a key, token or password written into a command or a prompt is masked
+    /// (a status poll is for progress, not for the run's secrets), and it stays one short line.</summary>
+    internal static string ForPipe(string text)
+    {
+        text = Services.Mcp.McpServerManager.RedactSecrets(text ?? "");
+        return text.Length > 240 ? text[..240] + "…" : text;
     }
 
     /// <summary>The built-in commands that act on the chat and start no reply.</summary>
@@ -122,21 +181,26 @@ public partial class ChatViewModel
                 .Select(c => new PipeChatInfo("", c.Key, c.Value, DateTime.Now, false, false)
                 {
                     Activity = "waiting_consent",
-                    WaitingFor = $"Accept edits in {c.Value}",
+                    WaitingFor = ConsentWaitText(c.Value),
                 }));
         return rows;
     }
+
+    /// <summary>What a task held at write_code's Accept-edits dialog waits on.</summary>
+    private static string ConsentWaitText(string folder) => $"the owner's approval: Accept edits in {folder} (CluadeX's dialog)";
 
     private sealed record ChatRow(string Id, string Title, string Project, DateTime UpdatedAt, bool Running, bool? Paused)
     {
         public string Activity { get; init; } = "";
         public string? WaitingFor { get; init; }
         public string? Doing { get; init; }
+        public PipeRunProgress? Progress { get; init; }
         public PipeChatInfo Info(bool paused) => new(Id, Title, Project, UpdatedAt, Running, paused)
         {
             Activity = Activity.Length > 0 ? Activity : paused ? "paused" : "idle",
             WaitingFor = WaitingFor,
             Doing = Doing,
+            Progress = Progress,
         };
     }
 
@@ -171,6 +235,7 @@ public partial class ChatViewModel
                     Activity = run != null ? activity : "",
                     WaitingFor = waiting,
                     Doing = doing,
+                    Progress = run != null ? ProgressOf(run) : null,
                 });
             }
             return rows;
@@ -190,16 +255,25 @@ public partial class ChatViewModel
         string? task = taskId?.Trim();
         var record = !string.IsNullOrEmpty(task) && _pipeTasks.TryGetValue(task, out var t) ? t : null;
         id = string.IsNullOrEmpty(id) ? record?.ChatId : id;
-        var all = await AllChatsForPipeAsync();
-        // A task from before the app restarted: its chat carries the task's id as its title.
-        var chat = !string.IsNullOrEmpty(id) ? all.FirstOrDefault(c => c.Id == id)
-            : string.IsNullOrEmpty(task) ? null
-            : all.Where(c => c.Title == task).OrderByDescending(c => c.UpdatedAt).FirstOrDefault();
+        // A chat with a run in progress is answered from memory: a supervisor polls this, and the chat list is a database read.
+        string? liveId = id;
+        var chat = string.IsNullOrEmpty(liveId) ? null : await Application.Current.Dispatcher.InvokeAsync(() =>
+            _runs.FirstOrDefault(r => r.Session.Id == liveId) is { } r
+                ? new ChatRow(r.Session.Id, r.Session.Title ?? "", r.Session.ProjectPath ?? "", r.Session.UpdatedAt, true, null)
+                : null);
+        if (chat == null)
+        {
+            var all = await AllChatsForPipeAsync();
+            // A task from before the app restarted: its chat carries the task's id as its title.
+            chat = !string.IsNullOrEmpty(id) ? all.FirstOrDefault(c => c.Id == id)
+                : string.IsNullOrEmpty(task) ? null
+                : all.Where(c => c.Title == task).OrderByDescending(c => c.UpdatedAt).FirstOrDefault();
+        }
         if (chat == null)
         {
             // Held at its Accept-edits dialog, or refused before it got a chat.
             if (!string.IsNullOrEmpty(task) && _pipeConsents.TryGetValue(task, out var folder))
-                return new PipeTaskStatus("", task, folder, task, "waiting_consent", $"Accept edits in {folder}", null, null, Array.Empty<PipeAgentInfo>(), null, null);
+                return new PipeTaskStatus("", task, folder, task, "waiting_consent", ConsentWaitText(folder), null, null, Array.Empty<PipeAgentInfo>(), null, null);
             return null;
         }
         // A chat not in a run: its rows come from the database, off the UI thread.
@@ -216,8 +290,11 @@ public partial class ChatViewModel
             var agents = map?.AgentNodes?.Select(n => new PipeAgentInfo(n.Label, n.Kind, n.Task, n.State, n.Action, n.Model, n.ToolCalls, n.CostUsd)).ToList()
                 ?? new List<PipeAgentInfo>();
             var (activity, waiting, doing) = ActivityOf(run, IsPausedReply(reply));
-            var stats = run != null ? StatsOf(run.Scope) : _lastRunStats.GetValueOrDefault(chat.Id);
-            return new PipeTaskStatus(chat.Id, chat.Title, chat.Project, task, activity, waiting, doing, stats, agents, reply, record?.Outcome);
+            var stats = run != null ? StatsOf(run) : _lastRunStats.GetValueOrDefault(chat.Id);
+            return new PipeTaskStatus(chat.Id, chat.Title, chat.Project, task, activity, waiting, doing, stats, agents, reply, record?.Outcome)
+            {
+                Progress = run != null ? ProgressOf(run) : null,
+            };
         });
     }
 

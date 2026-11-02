@@ -90,9 +90,18 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>Commands the CLI is never let run headless, whatever the rules say: rewriting git history and shutting
     /// the machine down. Recursive deletes are NOT here any more (owner, 2026-10-18): `rm -rf build` must just run, and a
     /// delete aimed at a drive, the root or a home folder is caught by the --cx-guard hook and put to the user on CluadeX's
-    /// red prompt (Safety.DangerApproval) — it runs only on their yes.</summary>
+    /// red prompt (Safety.DangerApproval) — it runs only on their yes. The same for the CLI's PowerShell tool, which the
+    /// run grant opens beside Bash; the guard hook refuses them too (GuardHook.NeverRun), whatever the rule syntax does.</summary>
     private const string NeverTools =
-        "Bash(git push --force:*),Bash(git push -f:*),Bash(git reset --hard:*),Bash(git clean:*),Bash(shutdown:*)";
+        "Bash(git push --force:*),Bash(git push -f:*),Bash(git reset --hard:*),Bash(git clean:*),Bash(shutdown:*)," +
+        "PowerShell(git push --force:*),PowerShell(git push -f:*),PowerShell(git reset --hard:*),PowerShell(git clean:*)," +
+        "PowerShell(shutdown:*),PowerShell(Stop-Computer:*),PowerShell(Restart-Computer:*)";
+
+    /// <summary>The CLI's shell tools the run grant opens. Claude Code on Windows has a PowerShell tool beside Bash; only
+    /// Bash was allowed, so a PowerShell command ran while the CLI judged it read-only (it lets those through by itself)
+    /// and the first one that wrote or built went to the permission prompt and was refused mid-turn — "'PowerShell' is
+    /// not open in this turn" (TPIX run, 2026-11-01).</summary>
+    public const string ShellTools = "Bash,PowerShell";
 
     /// <summary>The CLI's own sub-agent tool (named Task in older CLIs, Agent in newer ones): a worker splits independent
     /// parts across sub-agents itself. They run inside the same CLI session, so they carry the same --settings guard hook
@@ -244,7 +253,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         string tools = AllowedTools + "," + AgentTools;
         if (chatTools) tools += "," + string.Join(",", Tools.ChatToolBridge.QualifiedToolNames);
         if (grant is { Edit: true }) tools += "," + EditTools;
-        if (grant is { Run: true }) tools += ",Bash";
+        if (grant is { Run: true }) tools += "," + ShellTools;
         bool noSubAgents = dispatch is { Legacy: false, SubAgents: false };
         if (worker && !noSubAgents) tools += "," + SubAgentTools;
 
@@ -273,7 +282,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         if (worker)
         {
             try { args.Append(" --settings ").Append(Quote(Safety.GuardHook.SettingsFile())); }
-            catch { args.Append(" --disallowedTools ").Append(Quote("Bash,PowerShell")); }   // no guard → no shell
+            catch { args.Append(" --disallowedTools ").Append(Quote(ShellTools)); }   // no guard → no shell
         }
         else
         {

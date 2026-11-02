@@ -37,6 +37,11 @@ internal static class DispatchKeys
             ["en"] = "Per CLI, API-equivalent. Once reached, no new turn starts on it today. 0 = no limit.",
             ["th"] = "แยกตาม CLI คิดเป็นมูลค่าเทียบ API ถึงแล้ววันนี้จะไม่เริ่มเทิร์นใหม่ ใส่ 0 = ไม่จำกัด",
         },
+        ["agent.subAgentsLate"] = new()
+        {
+            ["en"] = "{0} sub-agent(s) finished after this reply was written, so their results were not acted on yet: {1}",
+            ["th"] = "มีเอเจนต์ย่อย {0} ตัวทำงานเสร็จหลังจากเขียนคำตอบนี้แล้ว ผลของมันจึงยังไม่ถูกนำไปทำต่อ: {1}",
+        },
         ["agent.subAgentsUnfinished"] = new()
         {
             ["en"] = "{0} sub-agent(s) did not finish, so this task is not complete: {1}",

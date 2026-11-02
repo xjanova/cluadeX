@@ -354,7 +354,11 @@ public partial class App : Application
         {
             // Every call in the debug log (not its spec — that can hold anything): when a chat starts or the model changes
             // with nobody at the keyboard, the log says whether a pipe caller did it (owner 2026-10-17: "แชทถูกปลุกกลับมา").
-            if (invocation.ToolName != "cluadex.get_active_model")
+            // A status poll that comes too fast is refused before it touches the UI thread or the database.
+            if (invocation.ToolName is "cluadex.task_status" or "cluadex.list_chats" && PipePolls.Take(invocation.ToolName) is { } retry)
+                return ErrorResult($"{invocation.ToolName} is called too often — try again in {Math.Ceiling(retry.TotalMilliseconds)} ms "
+                    + $"(at most {PipePolls.Burst} at once, then {PipePolls.PerSecond:0.#} a second).");
+            if (invocation.ToolName is not ("cluadex.get_active_model" or "cluadex.task_status"))
             {
                 string Arg(string n) => invocation.Arguments.ValueKind == System.Text.Json.JsonValueKind.Object
                     && invocation.Arguments.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
@@ -417,9 +421,67 @@ public partial class App : Application
         if (!TryReadMaxSteps(args, out int? maxSteps, out string? stepsError))
             return ErrorResult(stepsError!);
         bool? acceptEdits = ReadBool(args, "acceptEdits");
+        if (ReadBool(args, "wait") == false)
+            return await StartDetachedWriteCodeAsync(chatVm, taskId, spec, lessons, contextFiles, cwd, maxSteps, acceptEdits);
 
         var outcome = await chatVm.RunMcpTaskAsync(taskId, spec, lessons, contextFiles, cwd, ct, maxSteps, acceptEdits);
         return ToMcpResult(outcome);
+    }
+
+    /// <summary>The pipe's status calls: a supervisor polls them, a runaway loop must not.</summary>
+    internal static readonly PollLimiter PipePolls = new();
+
+    /// <summary>write_code tasks started with wait:false that are still going (by taskId).</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task<ViewModels.McpTaskOutcome>> _detachedTasks = new(StringComparer.Ordinal);
+
+    /// <summary>At most this many wait:false tasks at once: each is a whole agent run nobody's connection holds.</summary>
+    public const int MaxDetachedTasks = 4;
+
+    /// <summary>How long write_code with wait:false waits for the task's first moments (its chat, its dialog, a refusal).</summary>
+    private static readonly TimeSpan DetachedStartWait = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// write_code with wait:false: the run starts and the call answers at once with a handle — { taskId, chatId, status,
+    /// poll } — instead of holding the connection for the whole run (a 47-minute run, 2026-11-01: the supervisor saw nothing
+    /// until it ended, and a dropped connection would have stopped it). The run is not tied to the caller: only Stop in
+    /// CluadeX ends it. cluadex.task_status with the taskId shows its progress and, once it ends, callResult / callFailed.
+    /// A refusal that comes at once (no such folder) is the answer itself.
+    /// </summary>
+    private async Task<McpToolResult> StartDetachedWriteCodeAsync(ViewModels.ChatViewModel chatVm, string taskId, string spec,
+        IReadOnlyList<string>? lessons, IReadOnlyList<string>? contextFiles, string? cwd, int? maxSteps, bool? acceptEdits)
+    {
+        Task<ViewModels.McpTaskOutcome> run;
+        lock (_detachedTasks)
+        {
+            foreach (var done in _detachedTasks.Where(t => t.Value.IsCompleted).Select(t => t.Key).ToList())
+                _detachedTasks.TryRemove(done, out _);
+            if (_detachedTasks.ContainsKey(taskId) || chatVm.PipeTaskActive(taskId))
+                return ErrorResult($"Task '{taskId}' is still going — cluadex.task_status shows it. Give a new task another taskId.");
+            if (_detachedTasks.Count >= MaxDetachedTasks)
+                return ErrorResult($"{MaxDetachedTasks} tasks started with wait:false are still running — wait for one to end "
+                    + "(cluadex.task_status), or call with wait:true.");
+            run = Task.Run(() => chatVm.RunMcpTaskAsync(taskId, spec, lessons, contextFiles, cwd, CancellationToken.None, maxSteps, acceptEdits));
+            _detachedTasks[taskId] = run;
+        }
+        _ = run.ContinueWith(t => TryLogToDebugService(CluadeX.Models.LogLevel.Error, "MCP", $"write_code {taskId} (wait:false) failed", t.Exception),
+            TaskContinuationOptions.OnlyOnFaulted);
+        var until = DateTime.UtcNow + DetachedStartWait;
+        (string? ChatId, bool AtDialog) place = (null, false);
+        while (DateTime.UtcNow < until && !run.IsCompleted)
+        {
+            place = chatVm.PipeTaskPlace(taskId);
+            if (place.ChatId != null || place.AtDialog) break;
+            await Task.Delay(100);
+        }
+        if (run.IsCompleted) return run.IsFaulted ? ErrorResult($"write_code '{taskId}' failed — details are in CluadeX's Debug Log.") : ToMcpResult(run.Result);
+        return TextResult(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            taskId,
+            chatId = place.ChatId,
+            status = place.AtDialog ? "waiting_consent" : "running",
+            poll = "cluadex.task_status with this taskId: activity, progress, and callResult / callFailed once the run ends. "
+                 + "The run goes on if this connection closes; Stop in CluadeX ends it.",
+        }));
     }
 
     /// <summary>A run that failed, hit its step limit, was stopped in CluadeX or lost its caller is an error result —
@@ -833,6 +895,12 @@ public partial class App : Application
             activity = c.Activity,
             waitingFor = c.WaitingFor,
             doing = c.Doing,
+            startedBy = c.Progress?.StartedBy,
+            lastTool = c.Progress?.LastTool,
+            step = c.Progress?.Step,
+            elapsedSeconds = c.Progress?.ElapsedSeconds(DateTime.Now),
+            sinceProgressSeconds = c.Progress?.SinceProgressSeconds(DateTime.UtcNow),
+            subAgentsRunning = c.Progress?.SubAgentsRunning,
         })));
     }
 
@@ -866,6 +934,10 @@ public partial class App : Application
             cacheWriteTokens = s.Stats?.CacheWriteTokens,
             costUsd = s.Stats?.CostUsd,
             subAgents = s.SubAgents.Select(a => new { a.Label, a.Kind, a.Task, a.State, a.Action, a.Model, a.ToolCalls, a.CostUsd }),
+            lastTool = s.Progress?.LastTool,
+            elapsedSeconds = s.Progress?.ElapsedSeconds(DateTime.Now),
+            sinceProgressSeconds = s.Progress?.SinceProgressSeconds(DateTime.UtcNow),
+            plan = s.Progress is { PlanTotal: > 0 } p ? new { done = p.PlanDone, total = p.PlanTotal, current = p.PlanCurrent } : null,
             lastReply = s.LastReply,
             callResult = s.Outcome?.Text,
             callFailed = s.Outcome?.IsError,
