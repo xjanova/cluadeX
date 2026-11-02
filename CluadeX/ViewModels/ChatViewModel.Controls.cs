@@ -17,8 +17,8 @@ public partial class ChatViewModel
     // ─── Model ───
 
     /// <summary>One pick in the model box: a model of an API provider that has a key, with its list price.</summary>
-    /// <summary>One model in the composer's box. <paramref name="NeedsKey"/>: its vendor has no API key yet (listed so every
-    /// vendor CluadeX supports is in one place; picking it says where to add the key instead of switching).</summary>
+    /// <summary>One model in the composer's box. <paramref name="NeedsKey"/>: its vendor is not connected yet, no API key or no
+    /// CLI (listed so every vendor CluadeX supports is in one place; picking it opens the vendor's wizard instead of switching).</summary>
     public sealed record ChatModelChoice(AiProviderType Provider, string Model, string ProviderLabel, string PriceLabel, bool NeedsKey = false)
     {
         /// <summary>The girl who stands for this vendor (Assets\Girls), shown as a small portrait in the box.</summary>
@@ -81,7 +81,9 @@ public partial class ChatViewModel
     private bool _codexInstalled;
     private bool _geminiCliProbed;
 
-    private async void ProbeGeminiCliForChatBox()
+    private async void ProbeGeminiCliForChatBox() => await ProbeCliForChatBoxAsync();
+
+    private async Task ProbeCliForChatBoxAsync()
     {
         if (_geminiCliProbed) return;
         _geminiCliProbed = true;
@@ -109,7 +111,9 @@ public partial class ChatViewModel
     private bool _ollamaProbing;
 
     /// <summary>Ask Ollama (quietly, at most every 30 s) whether it is there, and list its models in the box if so.</summary>
-    private async void ProbeOllamaForChatBox(bool force = false)
+    private async void ProbeOllamaForChatBox(bool force = false) => await ProbeOllamaAsync(force);
+
+    private async Task ProbeOllamaAsync(bool force)
     {
         if (_ollamaProbing || !force && DateTime.UtcNow - _ollamaProbedAt < TimeSpan.FromSeconds(30)) return;
         if (_providerManager.GetProvider(AiProviderType.Ollama) is not OllamaProvider ollama) return;
@@ -156,6 +160,7 @@ public partial class ChatViewModel
             if (!ccModels.Contains(cc)) ccModels.Insert(0, cc);
             list.AddRange(ccModels.Select(m => new ChatModelChoice(AiProviderType.ClaudeDev, m, ccLabel, Loc("chat.model.claudeCodePlan"))));
         }
+        else list.Add(NotSetUp(AiProviderType.ClaudeDev));
         // Gemini Dev: the installed Gemini CLI on the owner's own Google sign-in (no API key, no per-token price).
         if (_geminiCliInstalled)
         {
@@ -166,6 +171,7 @@ public partial class ChatViewModel
             if (!gdModels.Contains(gd)) gdModels.Insert(0, gd);
             list.AddRange(gdModels.Select(m => new ChatModelChoice(AiProviderType.GeminiDev, m, gdLabel, Loc("chat.model.geminiCliPlan"))));
         }
+        else list.Add(NotSetUp(AiProviderType.GeminiDev));
         // Antigravity Dev: Google's agy on the owner's Google sign-in — where personal Google AI Pro accounts went when the
         // Gemini CLI stopped serving them (2026-06-18). "default" plus the slugs `agy models` listed.
         if (_agyInstalled)
@@ -177,6 +183,7 @@ public partial class ChatViewModel
             if (!agModels.Contains(ag)) agModels.Insert(0, ag);
             list.AddRange(agModels.Select(m => new ChatModelChoice(AiProviderType.AntigravityDev, m, agLabel, Loc("chat.model.agyPlan"))));
         }
+        else list.Add(NotSetUp(AiProviderType.AntigravityDev));
         // OpenAI Dev: the Codex CLI on the owner's ChatGPT sign-in (no API key, no per-token price) — owner 2026-10-20:
         // "อยากให้เพิ่ม openai DEV คือติดต่อตรงผ่าน codex".
         if (_codexInstalled)
@@ -188,6 +195,7 @@ public partial class ChatViewModel
             if (!odModels.Contains(od)) odModels.Insert(0, od);
             list.AddRange(odModels.Select(m => new ChatModelChoice(AiProviderType.OpenAIDev, m, odLabel, Loc("chat.model.codexPlan"))));
         }
+        else list.Add(NotSetUp(AiProviderType.OpenAIDev));
         // Ollama: every model it has, whenever it answers (the quiet probe below) — Ollama loads the picked one itself.
         // (owner 2026-10-19: "ต้องมีให้เลือกทุกอย่างที่ใช้งานได้แล้ว ... ติดต่อ local ai ได้ ต้องโชว์ให้หมด")
         if (_ollamaModels is { Count: > 0 } ollamaModels)
@@ -195,8 +203,10 @@ public partial class ChatViewModel
             string ollamaLabel = _providerManager.GetProvider(AiProviderType.Ollama).DisplayName;
             list.AddRange(ollamaModels.Select(m => new ChatModelChoice(AiProviderType.Ollama, m, ollamaLabel, Loc("chat.model.thisPc"))));
         }
+        else if (_providerManager.PickedProviderType != AiProviderType.Ollama) list.Add(NotSetUp(AiProviderType.Ollama));
         // A GGUF on this PC (in-process or llama-server) — listed while it answers. Picking another one is the local picker's
         // and the Models page's job: it loads weights into VRAM.
+        bool ggufListed = false;
         if (_providerManager.PickedProviderType is AiProviderType.Local or AiProviderType.LlamaServer
             || _providerManager.PickedProviderType == AiProviderType.Ollama && _ollamaModels is not { Count: > 0 })
         {
@@ -205,11 +215,16 @@ public partial class ChatViewModel
                 ? (s.ProviderConfigs.TryGetValue(nameof(AiProviderType.Ollama), out var oc) ? oc.EffectiveModelId ?? "" : "")
                 : s.SelectedModelName ?? "";
             if (!string.IsNullOrWhiteSpace(name))
+            {
                 list.Add(new ChatModelChoice(at, name.Trim(), _providerManager.GetProvider(at).DisplayName, Loc("chat.model.thisPc")));
+                ggufListed = at != AiProviderType.Ollama;
+            }
         }
+        if (!ggufListed) list.Add(NotSetUp(AiProviderType.Local));
         // The BrainX cowork room: offered whenever the brain is connected — the agents in the room answer.
         if (BrainSyncService.Current?.IsBrainAvailable == true)
             list.Add(new ChatModelChoice(AiProviderType.BrainX, BrainXRoomModel, "BrainX", Loc("chat.model.brainxRoom")));
+        else list.Add(NotSetUp(AiProviderType.BrainX));
 
         // What can answer now first; the vendors still waiting for a key go last (stable: each keeps its own order).
         list = list.OrderBy(c => c.NeedsKey).ToList();
@@ -237,6 +252,64 @@ public partial class ChatViewModel
         RefreshChatModelPlaceholder();
     }
 
+    /// <summary>A provider that is not connected yet, listed so the box shows everything CluadeX can talk to.</summary>
+    private ChatModelChoice NotSetUp(AiProviderType type) => new(type, DefaultModelOf(type) is { Length: > 0 } m ? m : "default",
+        _providerManager.GetProvider(type).DisplayName, Loc("chat.model.needsSetupLabel"), NeedsKey: true);
+
+    /// <summary>The owner wants a provider that is not connected: the wizard opens (MainViewModel). False when nobody
+    /// listens (a harness), so the caller says why itself.</summary>
+    public event Action<AiProviderType, string?>? ConnectionRequested;
+
+    private bool RequestConnection(AiProviderType provider, string? model)
+    {
+        if (ConnectionRequested == null) return false;
+        StatusText = LocF("chat.model.opensWizard", _providerManager.GetProvider(provider).DisplayName);
+        ConnectionRequested(provider, model);
+        return true;
+    }
+
+    /// <summary>When each CLI was last seen signed in, or last sent to its wizard: one look every ten minutes, and a wizard
+    /// closed without signing in does not come back on the next Send — the turn runs and heals itself as it always did.</summary>
+    private readonly Dictionary<AiProviderType, DateTime> _signInLooked = new();
+    private static readonly TimeSpan SignInLookEvery = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan SignInLookLimit = TimeSpan.FromSeconds(8);
+
+    /// <summary>Is this CLI known to be signed out? A slow or failed look counts as no: it must never hold up a message.</summary>
+    private async Task<bool> SignedOutAsync(IAiProvider provider)
+    {
+        if (provider is not IDelegatedCliProvider cli) return false;
+        var type = _providerManager.ActiveProviderType;
+        if (_signInLooked.TryGetValue(type, out var at) && DateTime.UtcNow - at < SignInLookEvery) return false;
+        _signInLooked[type] = DateTime.UtcNow;
+        try
+        {
+            using var limit = new CancellationTokenSource(SignInLookLimit);
+            return !await cli.IsLoggedInAsync(limit.Token) && !limit.IsCancellationRequested;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException) { return false; }
+    }
+
+    /// <summary>What the chat says when a provider cannot answer and nobody is at the keyboard to open its wizard.</summary>
+    private static string NotReadyKey(AiProviderType type) => type switch
+    {
+        AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev => "chat.err.notReady.cli",
+        AiProviderType.Ollama => "chat.err.notReady.ollama",
+        AiProviderType.BrainX => "chat.err.notReady.brainx",
+        _ => "chat.err.providerNotReady",
+    };
+
+    /// <summary>The wizard finished: look again at what is installed, then answer with what the owner picked.</summary>
+    public async Task ConnectionReadyAsync(AiProviderType provider, string? model)
+    {
+        _geminiCliProbed = false;
+        await ProbeCliForChatBoxAsync();
+        await ProbeOllamaAsync(force: true);
+        RefreshChatModelChoices();
+        var choice = ChatModelChoices.FirstOrDefault(c => c.Provider == provider && c.Model == model && !c.NeedsKey)
+                     ?? ChatModelChoices.FirstOrDefault(c => c.Provider == provider && !c.NeedsKey);
+        if (choice != null) await SwitchChatModelAsync(choice);
+    }
+
     /// <summary>A pick is being carried out (the chat's run stopping): a second pick waits for it.</summary>
     private bool _switchingModel;
 
@@ -253,7 +326,12 @@ public partial class ChatViewModel
         _switchingModel = true;
         try
         {
-            if (c.NeedsKey) { StatusText = LocF("chat.model.needsKey", c.ProviderLabel); return; }
+            if (c.NeedsKey)
+            {
+                // Only the owner's own pick opens a page: a call from outside is told no, with nobody's screen changed.
+                if (!carryOnNow || !RequestConnection(c.Provider, c.Model)) StatusText = LocF("chat.model.needsKey", c.ProviderLabel);
+                return;
+            }
             // A GGUF on this PC is only listed while it answers: nothing to switch. (An Ollama model is: Ollama loads it.)
             if (c.Provider is AiProviderType.Local or AiProviderType.LlamaServer) return;
             bool otherProvider = _providerManager.PickedProviderType != c.Provider;
@@ -263,7 +341,11 @@ public partial class ChatViewModel
             {
                 if (carryOnNow ? pipeRun : _runs.Count > 0) { StatusText = Loc("chat.model.providerBusy"); return; }
                 // Cloud providers are the paid tier — the same gate as Settings ▸ AI Provider. (The BrainX room is not.)
-                if (c.Provider is not (AiProviderType.BrainX or AiProviderType.Ollama) && _activation?.IsActivated != true) { StatusText = Loc("settings.activationRequired"); return; }
+                if (c.Provider is not (AiProviderType.BrainX or AiProviderType.Ollama) && _activation?.IsActivated != true)
+                {
+                    if (!carryOnNow || !RequestConnection(c.Provider, c.Model)) StatusText = Loc("settings.activationRequired");
+                    return;
+                }
             }
             var carryOn = carryOnNow && !pipeRun ? onScreen : null;
             if (carryOn != null)

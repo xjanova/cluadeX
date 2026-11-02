@@ -130,6 +130,14 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 - XDREAMER = ai.xman4289.com (`ConnectorCatalog.XDreamerUrl`), keys `axm-…` from /developer, `ConnectorNeed.None`.
 - Proven offline by `tests/mcptest` N1–N8 (in-process fake server) and `tests/setuptest` C1, C9b, C9c.
 
+## Connection wizard (Setup page)
+- `Services/Setup/ProviderConnections.cs` turns the setup rows' facts into one provider's steps (pure, so the wizard and
+  the checklist cannot disagree). `ViewModels/ConnectWizardViewModel.cs` drives it; the overlay and hub cards are in `SetupView.xaml`.
+- The chat jumps there only for the owner's own click or Send (`ConnectionRequested`), with the message left in the box.
+  `ChooseFromOutsideAsync` stays a plain refusal, and a wizard closed unfinished never traps the next Send (`_signInLooked`).
+- The test step never runs for Local / LlamaServer: a test must not load weights into VRAM.
+- Art is in `Assets/Wizard/` (made in ChatGPT). Proven by `tests/setuptest/WizardTests.cs` and `tests/chattest/ConnectWizardTests.cs`.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.
