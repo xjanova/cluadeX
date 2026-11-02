@@ -38,6 +38,14 @@ public static class ToolCallNormalizer
         ["create_file"] = "write_file", ["str_replace"] = "edit_file", ["replace_in_file"] = "edit_file",
         ["view_file"] = "read_file", ["open_file"] = "read_file", ["cat"] = "read_file", ["browse"] = "web_fetch",
         ["list_dir"] = "list_files", ["find_in_files"] = "grep_search", ["ripgrep"] = "grep_search", ["rg"] = "grep_search",
+        // GitHub's MCP server
+        ["get_pull_request"] = "gh_pr_view", ["get_pull_request_status"] = "gh_pr_checks", ["get_job_logs"] = "gh_run_log",
+        ["get_commit"] = "git_show",
+        // Serena / VS Code Copilot / language-server agents
+        ["find_referencing_symbols"] = "find_references", ["list_code_usages"] = "find_references",
+        ["find_all_references"] = "find_references", ["rename_symbol_refactor"] = "rename_symbol",
+        // Claude Code's rewind
+        ["rewind"] = "checkpoint_restore",
     };
 
     /// <summary>The name to try when <paramref name="name"/> itself is not a tool: lowercased, with a "functions." /
@@ -124,6 +132,43 @@ public static class ToolCallNormalizer
                 Rename(args, new[] { ("uri", "url"), ("link", "url"), ("href", "url"), ("prompt", "query") }); break;
             case ToolType.WebSearch:
                 Rename(args, new[] { ("q", "query"), ("search_query", "query"), ("search", "query"), ("text", "query") }); break;
+            case ToolType.FindReferences or ToolType.ImpactOf:
+                Rename(args, SymbolKeys); break;
+            case ToolType.RenameSymbol:
+                Rename(args, new[] { ("symbol", "old_name"), ("name", "old_name"), ("old", "old_name"), ("from", "old_name"),
+                    ("oldName", "old_name"), ("oldname", "old_name"), ("name_path", "old_name"), ("new", "new_name"),
+                    ("to", "new_name"), ("newName", "new_name"), ("newname", "new_name"), ("new_symbol", "new_name") }); break;
+            case ToolType.GhPrView or ToolType.GhPrChecks:
+                Rename(args, new[] { ("pull_number", "pr"), ("pullNumber", "pr"), ("number", "pr"), ("pr_number", "pr"),
+                    ("pull_request", "pr"), ("id", "pr") });
+                OwnerRepo(args); break;
+            case ToolType.GhRunLog:
+                Rename(args, new[] { ("runId", "run_id"), ("id", "run_id"), ("run", "run_id"), ("workflow_run_id", "run_id") });
+                OwnerRepo(args); break;
+            case ToolType.GitBlame or ToolType.GitShow:
+                Rename(args, PathKeys);
+                Rename(args, new[] { ("revision", "rev"), ("commit", "rev"), ("sha", "rev"), ("ref", "rev"), ("hash", "rev"), ("commit_hash", "rev") }); break;
+            case ToolType.CheckpointDiff or ToolType.CheckpointRestore:
+                Rename(args, new[] { ("checkpoint_id", "id"), ("point_id", "id"), ("checkpoint", "id"), ("point", "id") });
+                Rename(args, PathKeys); break;
+            case ToolType.Debug:
+                Rename(args, new[] { ("op", "action"), ("command", "action"), ("expr", "expression") });
+                Rename(args, PathKeys); break;
+        }
+    }
+
+    private static readonly (string From, string To)[] SymbolKeys =
+        { ("name", "symbol"), ("symbol_name", "symbol"), ("identifier", "symbol"), ("query", "symbol"), ("name_path", "symbol"),
+          ("symbolName", "symbol") };
+
+    /// <summary>GitHub's MCP style — owner and repo apart — as one "owner/name".</summary>
+    private static void OwnerRepo(Dictionary<string, string> args)
+    {
+        if (args.TryGetValue("owner", out var owner) && args.TryGetValue("repo", out var repo)
+            && owner.Length > 0 && repo.Length > 0 && !repo.Contains('/'))
+        {
+            args["repo"] = owner.Trim() + "/" + repo.Trim();
+            args.Remove("owner");
         }
     }
 

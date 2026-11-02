@@ -136,11 +136,8 @@ public sealed class CheckpointService
     {
         try
         {
-            var entries = ReadIndex(IndexPath(project));
-            var target = entries.FirstOrDefault(e => e.Id == pointId);
-            if (target == null) return (false, 0, "restore point not found");
-            var after = entries.Where(e => e.TimeUtc >= target.TimeUtc).OrderBy(e => e.TimeUtc).ToList();
-            var earliestPerFile = after.GroupBy(e => e.File.ToLowerInvariant()).Select(g => g.First()).ToList();
+            var earliestPerFile = RestorePlan(project, pointId);
+            if (earliestPerFile == null) return (false, 0, "restore point not found");
 
             // Undo point: the files as they are now.
             string undoId = "restore-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss");
@@ -177,6 +174,26 @@ public sealed class CheckpointService
             _log?.Warn("Checkpoint", $"restore to {pointId} failed", ex);
             return (false, 0, ex.Message);
         }
+    }
+
+    /// <summary>What <see cref="RestoreTo"/> would put back for <paramref name="pointId"/>: per file that point or a later
+    /// one touched, its earliest captured state from then on (<see cref="Entry.Existed"/> false = the file is removed).
+    /// Null when the point is not in the project's index.</summary>
+    public List<Entry>? RestorePlan(string project, string pointId)
+    {
+        var entries = ReadIndex(IndexPath(project));
+        var target = entries.FirstOrDefault(e => e.Id == pointId);
+        if (target == null) return null;
+        return entries.Where(e => e.TimeUtc >= target.TimeUtc).OrderBy(e => e.TimeUtc)
+            .GroupBy(e => e.File.ToLowerInvariant()).Select(g => g.First()).ToList();
+    }
+
+    /// <summary>The kept content of <paramref name="e"/> (null when the file did not exist then, or the copy is gone).</summary>
+    public byte[]? ReadKept(Entry e)
+    {
+        if (!e.Existed || string.IsNullOrEmpty(e.Blob) || e.Blob.Length < 3 || !e.Blob.All(Uri.IsHexDigit)) return null;
+        try { string bp = BlobPath(e.Blob); return File.Exists(bp) ? File.ReadAllBytes(bp) : null; }
+        catch { return null; }
     }
 
     /// <summary>

@@ -167,6 +167,21 @@ public enum ToolType
     DesktopWindowAction, // focus / maximize / minimize / restore / move / resize / close a window
     DesktopRead,         // An element's whole text (Text / Value pattern), a page at a time
     DesktopClipboard,    // Read or set the clipboard's text
+
+    // Engineering (Services/Tools/EngineeringToolModule) — appended last: a ToolType is stored by number
+    VerifyChange,        // Build from the latest source, check the tested binary is not stale, run tests, compare to a baseline
+    FindReferences,      // Every whole-word use of a symbol, definitions marked
+    RenameSymbol,        // Preview (default) or apply a whole-word rename across the project
+    ImpactOf,            // What depends on a symbol or a file: referencing files, tests, projects
+    CheckpointList,      // The project's restore points (what the agent changed, per step)
+    CheckpointDiff,      // What restoring a point would change, as a diff
+    CheckpointRestore,   // Put the files back to a restore point (asks the user every time)
+    GhPrView,            // A pull request's title, state, body (gh, read-only)
+    GhPrChecks,          // A pull request's CI checks (gh, read-only)
+    GhRunLog,            // A workflow run's failed-step log, or the recent runs (gh, read-only)
+    GitBlame,            // Who last changed each line of a file
+    GitShow,             // A commit (stat + patch), or a file as it was at a revision
+    Debug,               // Drive the debugger: adapters / start / stack / eval / step / continue / stop
 }
 
 /// <summary>
@@ -205,7 +220,9 @@ public class ToolCall
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
         or ToolType.BrowserRead or ToolType.BrowserFind
-        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead => true,
+        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead
+        or ToolType.FindReferences or ToolType.ImpactOf or ToolType.CheckpointList or ToolType.CheckpointDiff
+        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow => true,
         _ => false,
     };
 
@@ -224,7 +241,9 @@ public class ToolCall
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
         or ToolType.BrowserRead or ToolType.BrowserFind
-        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead => true,
+        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead
+        or ToolType.FindReferences or ToolType.ImpactOf or ToolType.CheckpointList or ToolType.CheckpointDiff
+        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow => true,
         _ => false,
     };
 }
