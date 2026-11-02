@@ -4,6 +4,7 @@ using System.Windows.Threading;
 using CluadeX.Models;
 using CluadeX.Services;
 using CluadeX.Services.Agents;
+using CluadeX.Services.Background;
 
 namespace CluadeX.ViewModels;
 
@@ -22,6 +23,9 @@ public partial class ChatViewModel
     private readonly ConcurrentDictionary<string, WorkflowCard> _workflowCards = new(StringComparer.Ordinal);
     /// <summary>Workflows the owner resumed from a card: their end is told to the chat (a tool run reports its own).</summary>
     private readonly ConcurrentDictionary<string, byte> _resumedFromCard = new(StringComparer.Ordinal);
+    /// <summary>Background commands that ended, per chat, merged when several end within 2 s.</summary>
+    private readonly Dictionary<string, List<BgSnapshot>> _bgEnded = new(StringComparer.Ordinal);
+    private DispatcherTimer? _bgTimer;
 
     private void InitOrchestration()
     {
@@ -47,6 +51,9 @@ public partial class ChatViewModel
         ChatMessage.SplitChipsFor = m => new ObservableCollection<ChatSession>(
             (m.ToolOutput ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(id => Sessions.FirstOrDefault(s => s.Id == id)).OfType<ChatSession>());
+
+        if (_cleanup?.Background is { } bg)
+            bg.Ended += (snap, owner) => App.Current?.Dispatcher.BeginInvoke(() => OnBackgroundEnded(snap, owner));
     }
 
     // ─── the "N running" line ───
@@ -150,6 +157,37 @@ public partial class ChatViewModel
     /// <summary>How a notice reads to the model (in its history and as a mid-run note).</summary>
     public const string NoticePrefix = "[CluadeX notice] ";
 
+    private void OnBackgroundEnded(BgSnapshot snap, string? owner)
+    {
+        // An explicit stop (the agent's bg_stop, the owner's button, the app closing) is not news to whoever stopped it.
+        if (owner == null || snap.Status == "stopped") return;
+        if (!_bgEnded.TryGetValue(owner, out var ended)) _bgEnded[owner] = ended = new();
+        ended.Add(snap);
+        if (_bgTimer == null)
+        {
+            _bgTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(2) };
+            _bgTimer.Tick += (_, _) => { _bgTimer!.Stop(); FlushBackgroundNotices(); };
+        }
+        if (!_bgTimer.IsEnabled) _bgTimer.Start();
+    }
+
+    /// <summary>One notice per chat for the commands that ended in the last 2 s (UI thread; public for the harness).</summary>
+    public void FlushBackgroundNotices()
+    {
+        foreach (var (chat, ended) in _bgEnded.ToList())
+        {
+            _bgEnded.Remove(chat);
+            string Line(BgSnapshot s) => LocF("orch.bg.one", s.Name,
+                s.ExitCode is { } code ? LocF("orch.bg.exit", code) : s.Status, WorkflowCard.FormatElapsed(s.Uptime.TotalSeconds));
+            string shown = ended.Count == 1 ? Line(ended[0])
+                : LocF("orch.bg.many", ended.Count) + "\n" + string.Join("\n", ended.Select(s => "• " + Line(s)));
+            string forModel = string.Join("\n", ended.Select(s =>
+                $"Background command #{s.Id} \"{s.Name}\" ended ({s.Status}, exit {s.ExitCode?.ToString() ?? "?"}). Log: {s.LogPath}"
+                + (string.IsNullOrWhiteSpace(s.LastLine) ? "" : $" Last line: {s.LastLine}")));
+            AddNotice(chat, "⏹ " + shown, forModel);
+        }
+    }
+
     // ─── split chips ───
 
     /// <summary>new_chat opened <paramref name="child"/> from <paramref name="parentId"/>: a chip on the asking command's
@@ -170,6 +208,15 @@ public partial class ChatViewModel
         var chips = row.SplitChips;   // built from ToolOutput on first use — the new id is already in it
         if (chips != null && !chips.Contains(child)) chips.Add(child);
         row.Content = "💬 " + string.Join(", ", (chips ?? new()).Select(c => c.Title));
+    }
+
+    /// <summary>The gist of a finished split turn for its parent: the last thing it answered, short.</summary>
+    private static string GistOf(IEnumerable<ChatMessage>? messages)
+    {
+        var last = messages?.LastOrDefault(m => m.Role == MessageRole.Assistant && !m.HasError && !string.IsNullOrWhiteSpace(m.Content));
+        if (last == null) return "";
+        string text = string.Join(" ", last.Content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return text.Length > 240 ? text[..240] + "…" : text;
     }
 
 }

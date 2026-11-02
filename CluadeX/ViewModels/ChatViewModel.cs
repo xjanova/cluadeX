@@ -3220,6 +3220,10 @@ public partial class ChatViewModel : ViewModelBase
                 case MessageRole.ToolAction when includeTools:
                     result.Add(m);
                     break;
+                case MessageRole.System when m.IsNotice && !string.IsNullOrWhiteSpace(m.Content):
+                    // A background command or a split chat finished: the model hears it (it may have been told mid-run too).
+                    result.Add(new ChatMessage { Role = MessageRole.User, Content = NoticePrefix + m.Content, Timestamp = m.Timestamp });
+                    break;
             }
         }
         return result;

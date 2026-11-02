@@ -422,7 +422,7 @@ public partial class ChatViewModel
         }
         done.TrySetResult();
         RaiseRunStateChanged();
-        if (run != null) TellParentSplitFinished(run.Session);
+        if (run != null) TellParentSplitFinished(run.Session, run.Messages);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
     }
@@ -430,21 +430,18 @@ public partial class ChatViewModel
     /// <summary>
     /// A split chat finished its turn: the chat that opened it hears so (a side note in its live list, when it is
     /// running or on screen) and the sidebar's tree updates its count — so the asking chat, or the owner, can put the
-    /// finished one away (close_chat / the sidebar's box button).
+    /// finished one away (close_chat / the sidebar's box button). It is a notice with the gist of what the split
+    /// answered, so the parent's agent reads it too — at its next step while it runs, else on its next turn.
     /// </summary>
-    private void TellParentSplitFinished(ChatSession child)
+    private void TellParentSplitFinished(ChatSession child, IEnumerable<ChatMessage>? childMessages = null)
     {
         if (child.ParentId is not { } pid) return;
-        var parent = Sessions.FirstOrDefault(s => s.Id == pid);
-        if (parent != null)
+        if (Sessions.Any(s => s.Id == pid))
         {
-            var list = RunOf(parent)?.Messages ?? (ReferenceEquals(parent, CurrentSession) ? Messages : null);
-            list?.Add(new ChatMessage
-            {
-                Role = MessageRole.System,
-                IsSideNote = true,
-                Content = "✅ " + LocF("chat.split.finishedNote", child.Title),
-            });
+            string gist = GistOf(childMessages);
+            AddNotice(pid,
+                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)),
+                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : ""));
         }
         RebuildVisibleSessions();
     }
