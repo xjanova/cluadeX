@@ -22,7 +22,8 @@ public class LocalizationService
                                       Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys, Localization.UsageKeys.Keys,
                                       Localization.DispatchKeys.Keys, Localization.DesktopKeys.Keys,
                                       Localization.StudioKeys.Keys, Localization.StudioPageKeys.Keys, Localization.SetupKeys.Keys,
-                                      Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys })
+                                      Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys,
+                                      Localization.OrchestrationKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

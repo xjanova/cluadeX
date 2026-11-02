@@ -401,6 +401,7 @@ public partial class ChatViewModel
         List<(string Text, object? Tag)>? leftover = null;
         if (run != null)
         {
+            Services.Agents.RunActivity.ClearRun(run.Session.Id);
             PostRunCostSummary(run);
             RememberRunStats(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.

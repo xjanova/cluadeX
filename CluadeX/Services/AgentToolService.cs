@@ -1128,6 +1128,7 @@ public class AgentToolService : IDisposable
                 },
                 ["required"] = new[] { "task", "files" },
             },
+            "done" => new Dictionary<string, object> { ["type"] = "integer" },
             _ => new Dictionary<string, object> { ["type"] = "string" },
         };
 
@@ -1226,8 +1227,10 @@ public class AgentToolService : IDisposable
         // Meta tools
         // 'action' was missing from the schema, so completing/listing/clearing todos was
         // unreachable and "mark done" silently appended a duplicate instead.
-        schemas.Add(new() { Name = "todo_write", Description = "Your plan, shown to the user as a live checklist. Prefer `todos`: send the WHOLE list in one call (it replaces the plan), and send it again with new statuses as items finish. One item in_progress at a time.",
+        schemas.Add(new() { Name = "todo_write", Description = "Your plan, shown to the user as a live checklist pinned under the latest message. Send the WHOLE list once with `todos` (it replaces the plan); then move along with `advance: true` (finish the current item, start the next) or `done` + `start`, instead of resending the list. One item in_progress at a time; what runs under the active item (sub-agents, workflows, background commands) is shown to the user automatically.",
             InputSchema = MakeSchema(("todos", "array", "The whole plan, e.g. [{\"content\":\"Read the client\",\"status\":\"completed\"},{\"content\":\"Fix the timeout\",\"status\":\"in_progress\"},{\"content\":\"Run the tests\",\"status\":\"pending\"}]", false),
+                ("advance", "boolean", "true: finish the item in progress and start the next pending one (no need to resend the list)", false),
+                ("done", "array", "Step numbers (1-based) to mark finished, e.g. [2]", false), ("start", "integer", "Step number (1-based) to start now", false),
                 ("action", "string", "Without todos: add|complete|list|clear (default add)", false), ("content", "string", "Without todos: the item text (add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
         schemas.Add(new() { Name = "ask_user", Description = "Ask the user a question for clarification", InputSchema = MakeSchema(("question", "string", "Question to ask", true), ("options", "string", "Comma-separated options", false)) });
@@ -1620,6 +1623,13 @@ public class AgentToolService : IDisposable
                 content: Implement authentication system
                 [/ACTION]
                 Actions: add, complete (index: N or content: text), list, clear
+                Or the whole plan, then step along (also named update_plan):
+                [ACTION: update_plan]
+                todos: [{"content":"Read the client","status":"in_progress"},{"content":"Fix it","status":"pending"}]
+                [/ACTION]
+                [ACTION: update_plan]
+                advance: true
+                [/ACTION]
 
             34. plan_mode - Create an execution plan before implementing
                 [ACTION: plan_mode]
@@ -3527,7 +3537,22 @@ public class AgentToolService : IDisposable
     {
         // The whole plan in one call (Claude Code's TodoWrite): five separate "add" calls used to be the only way to
         // write a five-item plan (Reverse X run, 2026-10-16).
-        string todosJson = call.GetArg("todos");
+        string todosJson = call.GetArg("todos", call.GetArg("items"));
+        // update_plan's step operations (Claude Code's shape): advance, or done [n…] + start n — on the plan already there.
+        bool advance = Agents.PlanOps.IsTrue(call.GetArg("advance"));
+        var doneSteps = Agents.PlanOps.Numbers(call.GetArg("done"));
+        int? startStep = int.TryParse(call.GetArg("start").Trim(), out int startArg) ? startArg : null;
+        if (string.IsNullOrWhiteSpace(todosJson) && (advance || doneSteps.Count > 0 || startStep != null))
+        {
+            if (Agents.PlanOps.Apply(_todoItems, advance, doneSteps, startStep) is { } refusal) return Fail(call, refusal);
+            TodoChanged?.Invoke();
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = Agents.PlanOps.Describe(_todoItems),
+                Summary = $"Plan: {_todoItems.Count(t => t.Status == "completed")}/{_todoItems.Count}",
+            };
+        }
         if (!string.IsNullOrWhiteSpace(todosJson))
         {
             List<TodoItem> items;
@@ -3551,13 +3576,15 @@ public class AgentToolService : IDisposable
             catch (System.Text.Json.JsonException ex) { return Fail(call, "'todos' is not valid JSON: " + ex.Message); }
             _todoItems.Clear();
             _todoItems.AddRange(items);
+            // Whole list plus a step operation in one call ("here is the plan, start step 1").
+            if (advance || doneSteps.Count > 0 || startStep != null)
+                Agents.PlanOps.Apply(_todoItems, advance, doneSteps, startStep);
             TodoChanged?.Invoke();
             int doneCount = items.Count(t => t.Status == "completed");
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = $"Plan updated: {items.Count} item(s), {doneCount} done"
-                         + (items.FirstOrDefault(t => t.Status == "in_progress") is { } cur ? $", now: {cur.Content}" : ""),
+                Output = Agents.PlanOps.Describe(items),
                 Summary = $"Plan: {doneCount}/{items.Count}",
             };
         }
@@ -4111,7 +4138,7 @@ public class AgentToolService : IDisposable
             "agent_spawn" or "spawn_agent" or "sub_agent" => ToolType.AgentSpawn,
 
             // Agent meta-tools
-            "todo_write" or "todowrite" or "todo" or "update_todo" => ToolType.TodoWrite,
+            "todo_write" or "todowrite" or "todo" or "update_todo" or "update_plan" or "updateplan" or "plan_update" => ToolType.TodoWrite,
             "plan_mode" or "planmode" or "plan" or "enter_plan" => ToolType.PlanMode,
 
             // Phase 3: New tools

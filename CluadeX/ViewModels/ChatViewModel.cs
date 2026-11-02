@@ -1239,6 +1239,10 @@ public partial class ChatViewModel : ViewModelBase
             });
         };
 
+        // Claude-Code-style orchestration views: the plan's "N running" line, workflow cards, split chips, notices,
+        // the next-step box (ChatViewModel.Orchestration.cs).
+        InitOrchestration();
+
         // Agent map: every sub-agent this command started, live, as one tree card per command.
         _agentService.OnSubAgentEvent += e =>
         {
@@ -1281,6 +1285,8 @@ public partial class ChatViewModel : ViewModelBase
                     "in_progress" or "active" => "active",
                     _ => "pending",
                 })).ToList();
+                if (planItems.FirstOrDefault(p => p.IsActive) is { } activeStep)
+                    activeStep.Running = RunningLineFor(todoRun?.Session.Id ?? CurrentSession?.Id);
                 int planDone = planItems.Count(p => p.IsDone);
                 string planHeader = planDone == planItems.Count
                     ? LocF("chat.plan.done", planDone, planItems.Count)

@@ -152,8 +152,14 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
     /// <summary>Raised (on any thread) when a process starts, becomes ready or ends.</summary>
     public event Action? Changed;
 
+    /// <summary>Raised once (on any thread) when a process ends, with the chat whose agent run started it (null = the
+    /// user or the Task Manager page) — the chat's "background command finished" notice.</summary>
+    public event Action<BgSnapshot, string?>? Ended;
+
     public BackgroundProcessService(SettingsService? settings = null, FileSystemService? fileSystem = null, string? logDirectory = null)
     {
+        // The plan's "N running" line asks here how many commands a chat has running (it never keeps its own copy).
+        Agents.RunActivity.BackgroundCount = RunningFor;
         _settings = settings;
         _fileSystem = fileSystem;
         // DataRootg in the app (portable-aware). Constructed bare (a harness, a tool) there are no log files — the
@@ -792,6 +798,17 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
         UpdateItem(e);
         TrimFinished();
         RaiseChanged();
+        string? owner;
+        lock (_lock) owner = _owners.TryGetValue(e.Id, out var k) ? k : null;
+        try { Ended?.Invoke(e.Snapshot(), owner); } catch { }
+        Agents.RunActivity.BackgroundChanged(owner);
+    }
+
+    /// <summary>Processes an agent run of chat <paramref name="sessionKey"/> started that are still running.</summary>
+    public int RunningFor(string sessionKey)
+    {
+        lock (_lock)
+            return _entries.Count(e => e.IsRunning && _owners.TryGetValue(e.Id, out var k) && k == sessionKey);
     }
 
     /// <summary>Read a process's output. <paramref name="fromStart"/>: the newest <paramref name="maxLines"/> of
@@ -878,7 +895,11 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
 
     private void NoteOwner(int id)
     {
-        if (AgentRunScope.Current?.SessionKey is { Length: > 0 } key) _owners[id] = key;
+        if (AgentRunScope.Current?.SessionKey is { Length: > 0 } key)
+        {
+            _owners[id] = key;
+            Agents.RunActivity.BackgroundChanged(key);
+        }
     }
 
     /// <summary>Stop every running process an agent run of chat <paramref name="sessionKey"/> started (the chat was
