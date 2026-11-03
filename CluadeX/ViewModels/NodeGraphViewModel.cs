@@ -99,6 +99,8 @@ public sealed class NodeGraphViewModel : ViewModelBase
             else QueuePrebuild();
         };
         studio.FilesChanged += OnFilesChanged;
+        _dispatcher = Dispatcher.CurrentDispatcher;
+        Services.Agents.FileActivity.Touched += OnFileActivity;
         _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _liveTimer.Tick += (_, _) => LiveTick();
         _prebuildTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
@@ -129,6 +131,7 @@ public sealed class NodeGraphViewModel : ViewModelBase
     private string T(string key) => _loc.T(key);
     private string T(string key, params object[] args) => _loc.T(key, args);
     internal string Tr(string key) => _loc.T(key);
+    internal void Log(string message) => _log?.Info("NodeGraph", message);
 
     public event Action? GraphChanged;
     public event Action? FitRequested;
@@ -161,6 +164,33 @@ public sealed class NodeGraphViewModel : ViewModelBase
     /// by the AI in the chat shows where it landed.</summary>
     public Dictionary<string, DateTime> RecentlyChanged { get; } = new(StringComparer.OrdinalIgnoreCase);
     public static readonly TimeSpan ChangeGlow = TimeSpan.FromSeconds(4);
+
+    /// <summary>Files an agent tool is reading or changing now (id → when, and whether it writes): the GPU graph lights
+    /// the node and runs data along its wires for <see cref="ActivityGlow"/>. Kept while the page is hidden too, so a
+    /// page opened mid-run shows what is being worked on.</summary>
+    public Dictionary<string, (DateTime At, bool Write)> RecentlyActive { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public static readonly TimeSpan ActivityGlow = TimeSpan.FromSeconds(6);
+    public event Action? ActivityChanged;
+    private readonly Dispatcher _dispatcher;
+
+    /// <summary>Where the GPU graph's browser keeps its profile (its own: a UI Studio page crash does not take it down).</summary>
+    public string WebDataFolder => Path.Combine(_settings.DataRoot, "NodeGraph", "WebView2");
+
+    private void OnFileActivity(string fullPath, bool write)
+    {
+        if (!_dispatcher.CheckAccess()) { _dispatcher.BeginInvoke(() => OnFileActivity(fullPath, write)); return; }
+        string? root = RootPath;
+        if (root == null || IsLive) return;
+        string prefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return;
+        var now = DateTime.UtcNow;
+        string id = fullPath[prefix.Length..].Replace('\\', '/');
+        // a read right after a write of the same file keeps showing the write
+        if (!write && RecentlyActive.TryGetValue(id, out var was) && was.Write && now - was.At < ActivityGlow) write = true;
+        RecentlyActive[id] = (now, write);
+        foreach (var old in RecentlyActive.Where(x => now - x.Value.At > ActivityGlow).Select(x => x.Key).ToList()) RecentlyActive.Remove(old);
+        ActivityChanged?.Invoke();
+    }
 
     private void OnFilesChanged(IReadOnlyCollection<string> paths)
     {

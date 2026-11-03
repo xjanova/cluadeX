@@ -48,36 +48,51 @@ internal static class GraphChecks
         if (graph == null) { check("node graph: the page exists", false, "no NodeGraphVM"); return; }
         void Send(string json) => studio.HandleOverlayMessage(OverlayMessage.Parse(json)!);
 
+        // the page draws on the GPU when it can (a WebView2 off screen counts as hidden to Chromium unless told otherwise)
+        Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-features=CalculateNativeWinOcclusion");
         studio.NotePageLoaded();
         graph.Mode = "live";
         Send(TreeJson(300, "12:00:00"));
         vm.NavigateToCommand.Execute("NodeGraph");
         await Task.Delay(1500);
         var canvas = Tree(win).OfType<NodeGraphCanvas>().FirstOrDefault(c => c.IsVisible);
-        check("node graph: the live tree is drawn on the page", canvas != null && graph.Graph is { Nodes.Count: > 300 }, $"{graph.Graph?.Nodes.Count} nodes");
-        if (canvas == null) return;
+        var gpu = Tree(win).OfType<NodeGraphGpu>().FirstOrDefault(c => c.IsVisible);
+        for (int i = 0; i < 100 && gpu != null && !gpu.IsReady; i++) await Task.Delay(100);
+        check($"node graph: the live tree is drawn on the page ({(gpu != null ? "GPU: " + gpu.Renderer : "WPF canvas")})",
+            (canvas != null || gpu is { IsReady: true }) && graph.Graph is { Nodes.Count: > 300 }, $"{graph.Graph?.Nodes.Count} nodes, gpu {gpu != null}");
+        if (canvas == null && gpu is not { IsReady: true }) return;
         var framesProp = typeof(NodeGraphCanvas).GetProperty("Frames");
-        int Frames() => framesProp?.GetValue(canvas) is int f ? f : -1;
+        var web = gpu == null ? null : (Microsoft.Web.WebView2.Wpf.WebView2?)typeof(NodeGraphGpu).GetField("_web", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(gpu);
+        async Task<int> Frames()
+        {
+            if (web != null) return int.TryParse(await web.CoreWebView2.ExecuteScriptAsync("window.__graphStats.frames"), out int f) ? f : -1;
+            return framesProp?.GetValue(canvas) is int c ? c : -1;
+        }
+        int Uploads() => gpu?.GraphUploads ?? 0;
         int changes = 0;
         graph.GraphChanged += () => changes++;
 
-        int f0 = Frames();
+        await Task.Delay(500);   // the GPU view's first fit
+        int f0 = await Frames();
         await Task.Delay(2000);
-        int idle = Frames() - f0;
-        check("node graph: an idle page draws no frame (2 s)", framesProp != null && idle == 0, framesProp == null ? "no frame counter" : $"{idle} frames");
+        int idle = await Frames() - f0;
+        check("node graph: an idle page draws no frame (2 s)", f0 >= 0 && idle == 0, f0 < 0 ? "no frame counter" : $"{idle} frames");
 
         var before = graph.Graph;
-        f0 = Frames();
+        f0 = await Frames();
+        int u0 = Uploads();
         for (int i = 0; i < 5; i++) { Send(TreeJson(300, "12:00:00")); await Task.Delay(80); }
         await Task.Delay(400);
+        int same = await Frames() - f0;
         check("node graph: the same tree sent again 5× keeps the graph and redraws nothing",
-            ReferenceEquals(graph.Graph, before) && changes == 0 && Frames() == f0, $"same graph {ReferenceEquals(graph.Graph, before)}, {changes} changes, {Frames() - f0} frames");
+            ReferenceEquals(graph.Graph, before) && changes == 0 && same == 0 && Uploads() == u0, $"same graph {ReferenceEquals(graph.Graph, before)}, {changes} changes, {same} frames, {Uploads() - u0} uploads");
 
         Send(TreeJson(300, "12:00:01"));
         await Task.Delay(400);
+        int drawn = await Frames() - f0;
         check("node graph: one changed element gives a new graph, drawn once",
-            !ReferenceEquals(graph.Graph, before) && changes >= 1 && Frames() - f0 >= 1 && graph.Graph!.ById["n2"].Detail == "12:00:01",
-            $"{changes} changes, {Frames() - f0} frames, clock {graph.Graph?.ById.GetValueOrDefault("n2")?.Detail}");
+            !ReferenceEquals(graph.Graph, before) && changes >= 1 && drawn >= 1 && graph.Graph!.ById["n2"].Detail == "12:00:01",
+            $"{changes} changes, {drawn} frames, clock {graph.Graph?.ById.GetValueOrDefault("n2")?.Detail}");
 
         graph.Mode = "project";
         vm.NavigateToCommand.Execute("Chat");

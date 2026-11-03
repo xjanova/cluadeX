@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.234</Version>
+    <Version>3.0.235</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -61,6 +61,7 @@
        Services/UiStudio/StudioTemplates.cs as "UiStudio/<path>" (portable: nothing is downloaded). -->
   <ItemGroup>
     <EmbeddedResource Include="Resources\UiStudio\**\*" LogicalName="UiStudio/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Resources\NodeGraph\*" LogicalName="NodeGraph/%(Filename)%(Extension)" />
     <None Remove="Resources\UiStudio\**\*" />
   </ItemGroup>
 

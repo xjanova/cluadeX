@@ -1,0 +1,1020 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>Node Graph</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg, #0b0f17); user-select: none; -webkit-user-select: none;
+               font-family: "Segoe UI", "Leelawadee UI", sans-serif; }
+  canvas { position: absolute; display: block; }
+  #gl, #txt { left: 0; top: 0; width: 100%; height: 100%; }
+  #gl { cursor: default; outline: none; }
+  #txt { pointer-events: none; }
+  #mini { right: 12px; bottom: 12px; width: 180px; height: 120px; border-radius: 8px; cursor: pointer;
+          box-shadow: 0 6px 24px rgba(0, 0, 0, .28); }
+  #legend { position: absolute; left: 12px; bottom: 12px; padding: 6px 10px; border-radius: 8px; display: flex; align-items: center;
+            flex-wrap: wrap; gap: 4px 12px; max-width: calc(100% - 230px); font-size: 11px; pointer-events: none;
+            background: var(--panel); border: 1px solid var(--subtle); color: var(--secondary); box-shadow: 0 6px 24px rgba(0, 0, 0, .22); }
+  #legend .k { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  #legend .sw { width: 10px; height: 10px; border-radius: 2px; }
+  #legend .ln { width: 18px; height: 0; border-top: 2px solid var(--secondary); }
+  #legend .ln.d { border-top-style: dashed; }
+  #legend .bar { width: 16px; height: 3px; border-radius: 1.5px; }
+  #legend .sep { width: 1px; align-self: stretch; background: var(--subtle); }
+  #legend .hint { color: var(--faint); white-space: nowrap; }
+  #busy { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); padding: 5px 14px; border-radius: 999px; font-size: 12px;
+          pointer-events: none; background: var(--panel); border: 1px solid var(--subtle); color: var(--muted); display: none; }
+  #busy::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px;
+                  background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { #busy::before { animation: none; } }
+</style>
+</head>
+<body>
+<canvas id="gl" tabindex="0"></canvas>
+<canvas id="txt"></canvas>
+<canvas id="mini"></canvas>
+<div id="legend"></div>
+<div id="busy"></div>
+<script>
+'use strict';
+// The Node Graph drawn on the GPU (WebGL2). The app (NodeGraphGpu.cs) sends the graph, the selection, the filters, the
+// theme and what changed or is being worked on; this page draws, handles pan / zoom / drag / pick itself and posts back
+// what the user did. It draws only when something changed or moves: an idle graph draws no frame, a hidden page none.
+
+const host = window.chrome && window.chrome.webview;
+// every message carries the graph it is about (g), so a click on the old graph that crosses a new one on the way is dropped
+const post = m => { if (host) host.postMessage(Object.assign({ g: S.gen }, m)); };
+
+const glc = document.getElementById('gl'), txc = document.getElementById('txt'), mini = document.getElementById('mini');
+const legendEl = document.getElementById('legend'), busyEl = document.getElementById('busy');
+const gl = glc.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: true, depth: false, stencil: false,
+                                      preserveDrawingBuffer: false, powerPreference: 'default' });
+const tx = txc.getContext('2d');
+const mx = mini.getContext('2d');
+
+// ───────────────────────────── state ─────────────────────────────
+const T0 = performance.now();
+const now = () => (performance.now() - T0) / 1000;
+const S = {
+  nodes: [], edges: [], byIdx: null, gen: 0,
+  zoom: 1, panX: 40, panY: 40, W: 1, H: 1, dpr: 1,
+  sel: -1, selEdge: -1, hl: new Set(), hidden: new Set(), inferred: true, group: false, live: false,
+  hover: -1, drag: -1, dragMoved: false, panning: false, downX: 0, downY: 0, lastX: 0, lastY: 0, dragOff: [0, 0],
+  glow: new Map(),            // node index → { start, dur, kind }  kind 0 changed · 1 read · 2 write
+  selStart: 0,                // when the selection's wires started showing their direction
+  visible: true, reduced: false, light: false,
+  theme: null, ready: false,
+};
+const stats = { frames: 0, textFrames: 0, lastMs: 0, maxMs: 0, sumMs: 0, edges: 0, nodes: 0, particles: 0, uploads: 0 };
+window.__graphStats = stats;
+
+const hex = (s, a) => {
+  if (!s) return [0.5, 0.5, 0.5, a ?? 1];
+  s = s.replace('#', '');
+  let al = 1;
+  if (s.length === 8) { al = parseInt(s.slice(0, 2), 16) / 255; s = s.slice(2); }
+  return [parseInt(s.slice(0, 2), 16) / 255, parseInt(s.slice(2, 4), 16) / 255, parseInt(s.slice(4, 6), 16) / 255, a ?? al];
+};
+const css = c => `rgba(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)},${c[3]})`;
+
+// ───────────────────────────── shaders ─────────────────────────────
+function shader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); u[info.name] = gl.getUniformLocation(p, info.name); }
+  return { p, u };
+}
+
+const COMMON = `#version 300 es
+precision highp float;
+uniform vec3 u_view;   // zoom, pan x, pan y (CSS px)
+uniform vec2 u_res;    // CSS px
+vec4 clip(vec2 world) { vec2 s = world * u_view.x + u_view.yz; return vec4(s.x / u_res.x * 2. - 1., 1. - s.y / u_res.y * 2., 0., 1.); }
+vec2 bz(vec2 p0, vec2 c1, vec2 c2, vec2 p3, float t) { float u = 1. - t; return u*u*u*p0 + 3.*u*u*t*c1 + 3.*u*t*t*c2 + t*t*t*p3; }
+vec2 dbz(vec2 p0, vec2 c1, vec2 c2, vec2 p3, float t) { float u = 1. - t; return 3.*u*u*(c1-p0) + 6.*u*t*(c2-c1) + 3.*t*t*(p3-c2); }
+`;
+
+// background: the theme's sunken surface, a soft light in the middle, and the dot grid in world space
+const BG_VS = `#version 300 es
+layout(location=0) in vec2 a; out vec2 v; void main() { v = a; gl_Position = vec4(a * 2. - 1., 0., 1.); }`;
+const BG_FS = COMMON + `
+in vec2 v; uniform vec4 u_bg; uniform vec4 u_dot; uniform float u_light; out vec4 o;
+void main() {
+  vec2 s = vec2(v.x, 1. - v.y) * u_res;
+  float r = length((v - .5) * vec2(u_res.x / u_res.y, 1.));
+  vec3 c = u_bg.rgb * (1. + (u_light > .5 ? .025 : .10) * (1. - smoothstep(0., .9, r)));
+  float gs = 24. * u_view.x;
+  if (gs >= 9.) {
+    vec2 g = mod(s - u_view.yz, gs);
+    vec2 d = min(g, gs - g);
+    float a = 1. - smoothstep(.6, 1.4, length(d));
+    c = mix(c, u_dot.rgb, a * u_dot.a * smoothstep(9., 16., gs));
+  }
+  o = vec4(c, 1.);
+}`;
+
+// wires: one cubic curve per instance, a strip of 24 segments, widened in the vertex shader by its screen width
+const EDGE_VS = COMMON + `
+layout(location=0) in vec2 a_tv;     // t along the curve, side -1 / +1
+layout(location=1) in vec4 a_p03;
+layout(location=2) in vec4 a_c12;
+layout(location=3) in vec4 a_col;
+layout(location=4) in vec4 a_sty;    // dashed, -, length (world), -
+uniform float u_w;                   // width, screen px
+out float v_side; out float v_s; flat out vec4 v_col; flat out float v_dash;
+void main() {
+  vec2 p0 = a_p03.xy, p3 = a_p03.zw, c1 = a_c12.xy, c2 = a_c12.zw;
+  float t = a_tv.x;
+  vec2 p = bz(p0, c1, c2, p3, t), d = dbz(p0, c1, c2, p3, t);
+  if (dot(d, d) < 1e-6) d = p3 - p0 + vec2(1e-3, 0.);
+  vec2 n = normalize(vec2(-d.y, d.x));
+  float hw = u_w * .5 + 1.;
+  gl_Position = clip(p + n * a_tv.y * hw / u_view.x);
+  v_side = a_tv.y * hw;
+  v_s = t * a_sty.z * u_view.x;
+  v_col = a_col; v_dash = a_sty.x;
+}`;
+const EDGE_FS = `#version 300 es
+precision highp float;
+in float v_side; in float v_s; flat in vec4 v_col; flat in float v_dash;
+uniform float u_w; uniform float u_a; uniform float u_glow; out vec4 o;
+void main() {
+  float hw = u_w * .5, d = abs(v_side), a;
+  if (u_glow > .5) a = exp(-d * d / max(1., hw * hw * .45));
+  else {
+    a = clamp(hw + .5 - d, 0., 1.);
+    if (v_dash > .5) { float per = 7. * max(u_w, 1.2); if (mod(v_s, per) > per * .57) a = 0.; }
+  }
+  a *= u_a * v_col.a;
+  o = vec4(v_col.rgb * a, a);
+}`;
+
+// arrow heads: a triangle at the end of each wire, along the curve's last tangent
+const HEAD_VS = COMMON + `
+layout(location=0) in vec2 a_k;      // (along, across) of the triangle's corner
+layout(location=1) in vec4 a_p03;
+layout(location=2) in vec4 a_c12;
+layout(location=3) in vec4 a_col;
+uniform float u_s; flat out vec4 v_col;
+void main() {
+  vec2 p3 = a_p03.zw, c2 = a_c12.zw;
+  vec2 d = p3 - c2; if (dot(d, d) < 1e-6) d = p3 - a_p03.xy;
+  d = normalize(d); vec2 n = vec2(-d.y, d.x);
+  gl_Position = clip(p3 - d * a_k.x * u_s * 1.6 + n * a_k.y * u_s);
+  v_col = a_col;
+}`;
+const HEAD_FS = `#version 300 es
+precision highp float; flat in vec4 v_col; uniform float u_a; out vec4 o;
+void main() { float a = u_a * v_col.a; o = vec4(v_col.rgb * a, a); }`;
+
+// nodes and folder frames: a rounded box per instance, its glow drawn around it in the same pass
+const NODE_VS = COMMON + `
+layout(location=0) in vec2 a_q;
+layout(location=1) in vec4 a_rect;
+layout(location=2) in vec4 a_fill;
+layout(location=3) in vec4 a_stripe;   // rgb, collapsed
+layout(location=4) in vec4 a_flags;    // selected, hover, highlighted, alpha
+layout(location=5) in vec4 a_glow;     // start, duration, kind, folder frame
+out vec2 v_p; flat out vec4 v_rect; flat out vec4 v_fill; flat out vec4 v_stripe; flat out vec4 v_flags; flat out vec4 v_glow;
+void main() {
+  float m = 18. / u_view.x;
+  vec2 p = a_rect.xy - m + a_q * (a_rect.zw + 2. * m);
+  gl_Position = clip(p);
+  v_p = p; v_rect = a_rect; v_fill = a_fill; v_stripe = a_stripe; v_flags = a_flags; v_glow = a_glow;
+}`;
+const NODE_FS = `#version 300 es
+precision highp float;
+in vec2 v_p; flat in vec4 v_rect; flat in vec4 v_fill; flat in vec4 v_stripe; flat in vec4 v_flags; flat in vec4 v_glow;
+uniform vec3 u_view; uniform float u_time; uniform vec3 u_accent; uniform vec4 u_border; uniform vec3 u_hl; uniform float u_light;
+uniform float u_still;
+out vec4 o;
+float box(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.)) + min(max(q.x, q.y), 0.) - r; }
+void main() {
+  float z = u_view.x;
+  bool frame = v_glow.w > .5;
+  vec2 hb = v_rect.zw * .5, c = v_rect.xy + hb;
+  float d = box(v_p - c, hb, min(frame ? 10. : 8., min(hb.x, hb.y))) * z;     // px from the edge, < 0 inside
+  float gi = 0.; vec3 gc = vec3(0.);
+  if (!frame) {
+    float age = u_time - v_glow.x;
+    if (v_glow.y > 0. && age >= 0. && age < v_glow.y) {
+      float t = 1. - age / v_glow.y;
+      float wave = u_still > .5 ? 1. : 0.;
+      if (v_glow.z < .5)      { gi = t * mix(.65 + .35 * sin(age * 7.14), .85, wave); gc = vec3(.29, .87, .50); }
+      else if (v_glow.z < 1.5){ gi = t * mix(.55 + .45 * sin(age * 6.0), .75, wave);  gc = vec3(.13, .83, .93); }
+      else                    { gi = t * mix(.75 + .25 * sin(age * 9.0), .9, wave);  gc = vec3(.53, .94, .47); }
+    }
+    if (v_flags.x > .5) { if (gi < .6) { gi = .6; gc = u_accent; } }
+    else if (v_flags.z > .5) { if (gi < .5) { gi = .5; gc = u_hl; } }
+    else if (v_flags.y > .5) { if (gi < .32) { gi = .32; gc = v_stripe.rgb; } }
+  }
+  float fa = clamp(.5 - d, 0., 1.);
+  vec3 fc = v_fill.rgb;
+  if (!frame) {
+    if (gi > 0.) fc = mix(fc, gc, .14 * gi);
+    if (v_p.x - v_rect.x < max(2. / z, 4.)) fc = v_stripe.rgb;                 // the kind stripe
+    if (v_stripe.w > .5) {                                                       // collapsed: a dot on the right
+      vec2 dc = vec2(v_rect.x + v_rect.z - 11.2, c.y);
+      fc = mix(v_stripe.rgb, fc, clamp((length(v_p - dc) - 7.) * z + .5, 0., 1.));
+    }
+  }
+  float bw = frame ? 1. : (v_flags.x > .5 || v_flags.z > .5 ? 2. : 1.);
+  vec3 bc = frame ? u_border.rgb : (v_flags.x > .5 ? u_accent : v_flags.z > .5 ? u_hl : u_border.rgb);
+  float ba = clamp(.5 - abs(d + bw * .5) + bw * .5, 0., 1.) * (frame ? .7 : 1.);
+  fc = mix(fc, bc, ba);
+  vec4 inside = vec4(fc, 1.) * fa * (frame ? max(v_fill.a, ba) : v_fill.a);
+  float g = gi * exp(-max(d, 0.) / 5.5) * (1. - fa) * (u_light > .5 ? .55 : .9);
+  o = (inside + vec4(gc * g, g)) * v_flags.w;
+}`;
+
+// data on the move: a glowing dot running along a wire, many per wire, all moved by the GPU from the time alone
+const DOT_VS = COMMON + `
+layout(location=0) in vec2 a_q;
+layout(location=1) in vec4 a_p03;
+layout(location=2) in vec4 a_c12;
+layout(location=3) in vec4 a_col;
+layout(location=4) in vec4 a_pp;      // phase, speed (curve / s), start, duration
+uniform float u_time;
+out vec2 v_q; flat out vec4 v_col; out float v_f;
+void main() {
+  float age = u_time - a_pp.z;
+  if (age < 0. || age > a_pp.w) { gl_Position = vec4(2., 2., 0., 1.); return; }
+  float t = fract(a_pp.x + age * a_pp.y);
+  vec2 p = bz(a_p03.xy, a_c12.xy, a_c12.zw, a_p03.zw, t);
+  float size = clamp(4.5 * u_view.x + 2.5, 3.5, 8.);
+  vec4 cp = clip(p);
+  cp.xy += a_q * size * 2.2 / u_res * vec2(2., -2.);
+  gl_Position = cp;
+  v_q = a_q; v_col = a_col;
+  v_f = smoothstep(0., .35, age) * (1. - smoothstep(a_pp.w - 1.2, a_pp.w, age)) * smoothstep(0., .08, t) * (1. - smoothstep(.92, 1., t));
+}`;
+const DOT_FS = `#version 300 es
+precision highp float;
+in vec2 v_q; flat in vec4 v_col; in float v_f; uniform float u_light; out vec4 o;
+void main() {
+  float r = length(v_q);
+  if (r > 1.) discard;
+  float core = 1. - smoothstep(.12, .34, r);
+  float halo = exp(-r * r * 5.5);
+  vec3 c = mix(v_col.rgb, vec3(1.), u_light > .5 ? core * .15 : core * .65);
+  float a = (halo * .75 + core) * v_f * v_col.a;
+  o = vec4(c * a, u_light > .5 ? a : a * .6);
+}`;
+
+let P = null;   // programs
+let B = null;   // buffers and vertex arrays
+
+function setupGL() {
+  P = {
+    bg: program(BG_VS, BG_FS), edge: program(EDGE_VS, EDGE_FS), head: program(HEAD_VS, HEAD_FS),
+    node: program(NODE_VS, NODE_FS), dot: program(DOT_VS, DOT_FS),
+  };
+  const buf = (data, usage) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, usage); return b; };
+  const quad = buf(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+  const centered = buf(new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const SEG = 24, strip = new Float32Array((SEG + 1) * 4);
+  for (let i = 0; i <= SEG; i++) { const t = i / SEG; strip.set([t, -1, t, 1], i * 4); }
+  const stripBuf = buf(strip, gl.STATIC_DRAW);
+  const tri = buf(new Float32Array([0, 0, 1, -1, 1, 1]), gl.STATIC_DRAW);
+
+  // an instanced vertex array: attribute 0 from the shape, then vec4s from the instance buffer
+  function vao(shape, shapeSize, inst, vec4s) {
+    const v = gl.createVertexArray();
+    gl.bindVertexArray(v);
+    gl.bindBuffer(gl.ARRAY_BUFFER, shape);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, shapeSize, gl.FLOAT, false, 0, 0);
+    if (inst) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, inst);
+      for (let i = 0; i < vec4s; i++) {
+        gl.enableVertexAttribArray(1 + i);
+        gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, vec4s * 16, i * 16);
+        gl.vertexAttribDivisor(1 + i, 1);
+      }
+    }
+    gl.bindVertexArray(null);
+    return v;
+  }
+  const cold = gl.createBuffer(), hot = gl.createBuffer(), nodes = gl.createBuffer(), frames = gl.createBuffer(), dots = gl.createBuffer();
+  B = {
+    SEG, bg: vao(quad, 2, null, 0),
+    coldEdges: vao(stripBuf, 2, cold, 4), hotEdges: vao(stripBuf, 2, hot, 4),
+    coldHeads: vao(tri, 2, cold, 4), hotHeads: vao(tri, 2, hot, 4),
+    nodes: vao(quad, 2, nodes, 5), frames: vao(quad, 2, frames, 5), dots: vao(centered, 2, dots, 4),
+    cold, hot, nodeBuf: nodes, frameBuf: frames, dotBuf: dots,
+    nCold: 0, nHot: 0, nNodes: 0, nFrames: 0, nDots: 0,
+  };
+}
+
+function upload(buffer, data) { gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW); stats.uploads++; }
+
+// ───────────────────────────── the graph: wires laid out like the app's canvas ─────────────────────────────
+// Each wire leaves and enters its node at a port spread over the side in the order of the nodes at its other end, so
+// the wires of one node run side by side; a wire runs down when its target starts left of the source's right edge.
+let visEdges = [];          // indices of the edges the filters let through
+let ports = new Map();      // edge index → [from 0..1, to 0..1]
+let curves = [];            // edge index → Float32Array(8) p0, p3, c1, c2
+
+function nodeVisible(n) { return n && !n.hidden; }
+
+function layoutWires() {
+  const N = S.nodes, E = S.edges;
+  visEdges = [];
+  for (let i = 0; i < E.length; i++) {
+    const e = E[i];
+    if (S.hidden.has(e.k) || (e.i && !S.inferred)) continue;
+    if (!nodeVisible(N[e.a]) || !nodeVisible(N[e.b])) continue;
+    visEdges.push(i);
+  }
+  ports = new Map();
+  const outs = new Map(), ins = new Map();
+  for (const i of visEdges) {
+    const e = E[i];
+    (outs.get(e.a) || outs.set(e.a, []).get(e.a)).push(i);
+    (ins.get(e.b) || ins.set(e.b, []).get(e.b)).push(i);
+    ports.set(i, [0.5, 0.5]);
+  }
+  const cmp = (key, other) => (x, y) => {
+    const ex = E[x], ey = E[y], nx = N[ex[other]], ny = N[ey[other]];
+    return nx.y - ny.y || (nx.id < ny.id ? -1 : nx.id > ny.id ? 1 : 0) || ex.k - ey.k;
+  };
+  for (const list of outs.values()) if (list.length > 1) { list.sort(cmp('a', 'b')); list.forEach((i, k) => ports.get(i)[0] = (k + 1) / (list.length + 1)); }
+  for (const list of ins.values()) if (list.length > 1) { list.sort(cmp('b', 'a')); list.forEach((i, k) => ports.get(i)[1] = (k + 1) / (list.length + 1)); }
+  curves = new Array(E.length);
+  for (const i of visEdges) curves[i] = curve(i);
+}
+
+function curve(i) {
+  const e = S.edges[i], a = S.nodes[e.a], b = S.nodes[e.b], pt = ports.get(i) || [0.5, 0.5];
+  const vertical = b.x < a.x + a.w;
+  const p0 = vertical ? [a.x + a.w * pt[0], a.y + a.h] : [a.x + a.w, a.y + a.h * pt[0]];
+  const p3 = vertical ? [b.x + b.w * pt[1], b.y] : [b.x, b.y + b.h * pt[1]];
+  const bend = Math.max(30, Math.abs(p3[0] - p0[0]) * 0.5);
+  const c1 = vertical ? [p0[0], p0[1] + bend] : [p0[0] + bend, p0[1]];
+  const c2 = vertical ? [p3[0], p3[1] - bend] : [p3[0] - bend, p3[1]];
+  return new Float32Array([p0[0], p0[1], p3[0], p3[1], c1[0], c1[1], c2[0], c2[1]]);
+}
+
+function curveLen(c) {
+  const d = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
+  return (d(c[0], c[1], c[2], c[3]) + d(c[0], c[1], c[4], c[5]) + d(c[4], c[5], c[6], c[7]) + d(c[6], c[7], c[2], c[3])) / 2;
+}
+
+function isHot(i) {
+  const e = S.edges[i];
+  return i === S.selEdge || (S.sel >= 0 && (e.a === S.sel || e.b === S.sel)) || (S.drag >= 0 && (e.a === S.drag || e.b === S.drag));
+}
+
+let hotList = [];
+function edgeData(list) {
+  const out = new Float32Array(list.length * 16);
+  let o = 0;
+  for (const i of list) {
+    const c = curves[i], e = S.edges[i], col = edgeColor(e.k);
+    out.set(c.subarray(0, 4), o); out.set(c.subarray(4, 8), o + 4);
+    out[o + 8] = col[0]; out[o + 9] = col[1]; out[o + 10] = col[2]; out[o + 11] = 1;
+    out[o + 12] = e.i ? 1 : 0; out[o + 13] = 0; out[o + 14] = curveLen(c); out[o + 15] = 0;
+    o += 16;
+  }
+  return out;
+}
+
+function uploadEdges() {
+  const cold = [];
+  hotList = [];
+  for (const i of visEdges) (isHot(i) ? hotList : cold).push(i);
+  upload(B.cold, edgeData(cold)); B.nCold = cold.length;
+  upload(B.hot, edgeData(hotList)); B.nHot = hotList.length;
+  stats.edges = visEdges.length;
+}
+function uploadHot() {   // a drag frame: only the dragged node's wires move
+  for (const i of hotList) curves[i] = curve(i);
+  upload(B.hot, edgeData(hotList));
+}
+
+function edgeColor(k) { return (S.theme && S.theme.edge[k]) || [0.6, 0.6, 0.6, 1]; }
+function kindColor(k) { return (S.theme && S.theme.kind[k]) || [0.6, 0.6, 0.6, 1]; }
+
+let neighbours = new Set();
+function uploadNodes() {
+  const N = S.nodes, out = new Float32Array(N.length * 20), t = S.theme;
+  neighbours = new Set();
+  const focus = S.sel >= 0 || S.selEdge >= 0;
+  if (S.sel >= 0) { neighbours.add(S.sel); for (const i of visEdges) { const e = S.edges[i]; if (e.a === S.sel) neighbours.add(e.b); else if (e.b === S.sel) neighbours.add(e.a); } }
+  if (S.selEdge >= 0 && S.edges[S.selEdge]) { neighbours.add(S.edges[S.selEdge].a); neighbours.add(S.edges[S.selEdge].b); }
+  let o = 0, count = 0;
+  for (let i = 0; i < N.length; i++) {
+    const n = N[i];
+    if (!nodeVisible(n)) continue;
+    const kc = kindColor(n.k), hover = i === S.hover;
+    const fill = hover ? mix(t.card, kc, 0.15) : t.card;
+    const g = S.glow.get(i);
+    out.set([n.x, n.y, n.w, n.h, fill[0], fill[1], fill[2], 1, kc[0], kc[1], kc[2], n.c ? 1 : 0,
+             i === S.sel ? 1 : 0, hover ? 1 : 0, S.hl.has(i) ? 1 : 0, focus && !neighbours.has(i) ? 0.42 : 1,
+             g ? g.start : 0, g ? g.dur : 0, g ? g.kind : 0, 0], o);
+    o += 20; count++;
+  }
+  upload(B.nodeBuf, out.subarray(0, o)); B.nNodes = count;
+  stats.nodes = count;
+}
+const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, 1];
+
+// folder frames (project graph, "group by folder"): a soft box around each folder's nodes, its name on top
+let frames = [];
+function layoutFrames() {
+  frames = [];
+  if (!S.group) { B.nFrames = 0; return; }
+  const by = new Map();
+  S.nodes.forEach(n => { if (nodeVisible(n) && n.k !== 5) { const f = n.f || ''; (by.get(f) || by.set(f, []).get(f)).push(n); } });
+  const out = [];
+  for (const [f, list] of by) {
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+    for (const n of list) { l = Math.min(l, n.x); t = Math.min(t, n.y); r = Math.max(r, n.x + n.w); b = Math.max(b, n.y + n.h); }
+    l -= 14; t -= 30; r += 14; b += 14;
+    frames.push({ name: f.length ? f + '/' : '/', x: l, y: t, w: r - l, h: b - t });
+    const th = S.theme;
+    out.push(l, t, r - l, b - t, th.inset[0], th.inset[1], th.inset[2], th.inset[3], 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1);
+  }
+  upload(B.frameBuf, new Float32Array(out)); B.nFrames = frames.length;
+}
+
+// the dots: wires of a node that changed or is being read or written carry data while it lasts; the selected node's
+// wires show which way they run for a few seconds after the pick
+const DOT_CAP = 6000;
+function uploadDots() {
+  const t = now(), out = [], flows = new Map();   // edge → { start, dur, bright, speed }
+  if (S.reduced) { upload(B.dotBuf, new Float32Array(0)); B.nDots = 0; stats.particles = 0; return; }   // the glow alone shows it
+  for (const [n, g] of S.glow) {
+    if (t - g.start >= g.dur) continue;
+    for (const i of visEdges) {
+      const e = S.edges[i];
+      if (e.a !== n && e.b !== n) continue;
+      const prev = flows.get(i);
+      if (!prev || prev.start + prev.dur < g.start + g.dur) flows.set(i, { start: g.start, dur: g.dur, bright: g.kind === 1 ? 0.85 : 1, speed: 260 });
+    }
+  }
+  if (S.sel >= 0 && !S.reduced) for (const i of hotList) if (!flows.has(i)) flows.set(i, { start: S.selStart, dur: 6, bright: 0.7, speed: 120 });
+  // a hub (App.xaml.cs, a router) touches hundreds of wires: one dimmer dot each there, or the screen turns to sparkle
+  const crowd = flows.size > 80;
+  for (const [i, f] of flows) {
+    const c = curves[i]; if (!c) continue;
+    const len = Math.max(40, curveLen(c)), col = edgeColor(S.edges[i].k);
+    const count = crowd ? 1 : Math.min(5, Math.max(2, Math.round(len / 260)));
+    for (let k = 0; k < count && out.length / 16 < DOT_CAP; k++)
+      out.push(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], col[0], col[1], col[2], crowd ? f.bright * 0.65 : f.bright, k / count + (i % 7) * 0.031, f.speed / len, f.start, f.dur);
+  }
+  upload(B.dotBuf, new Float32Array(out)); B.nDots = out.length / 16;
+  stats.particles = B.nDots;
+}
+
+// ───────────────────────────── view ─────────────────────────────
+const toWorld = (x, y) => [(x - S.panX) / S.zoom, (y - S.panY) / S.zoom];
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const W = Math.max(1, glc.clientWidth), H = Math.max(1, glc.clientHeight);
+  if (W === S.W && H === S.H && dpr === S.dpr) return;
+  S.W = W; S.H = H; S.dpr = dpr;
+  glc.width = Math.round(W * dpr); glc.height = Math.round(H * dpr);
+  txc.width = glc.width; txc.height = glc.height;
+  mini.width = Math.round(180 * dpr); mini.height = Math.round(120 * dpr);
+  miniCache = null;
+  invalidate(true);
+}
+new ResizeObserver(resize).observe(glc);
+
+function bounds() {
+  let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+  for (const n of S.nodes) if (nodeVisible(n)) { l = Math.min(l, n.x); t = Math.min(t, n.y); r = Math.max(r, n.x + n.w); b = Math.max(b, n.y + n.h); }
+  return l === Infinity ? null : { x: l, y: t, w: r - l, h: b - t };
+}
+
+// the view eases to where a fit or a "go to" asked for (instant with reduced motion, or the first fit)
+let tween = null;
+function goTo(zoom, panX, panY, animate) {
+  if (!animate || S.reduced) { tween = null; S.zoom = zoom; S.panX = panX; S.panY = panY; invalidate(true); return; }
+  tween = { from: [S.zoom, S.panX, S.panY], to: [zoom, panX, panY], start: performance.now(), ms: 320 };
+  invalidate(true);
+}
+function stepTween() {
+  if (!tween) return false;
+  const k = Math.min(1, (performance.now() - tween.start) / tween.ms), e = 1 - Math.pow(1 - k, 3);
+  // zoom eases in log space so a big zoom change does not rush at the end
+  const z = Math.exp(Math.log(tween.from[0]) + (Math.log(tween.to[0]) - Math.log(tween.from[0])) * e);
+  // keep the point under the view's centre moving along a straight line
+  const cx = S.W / 2, cy = S.H / 2;
+  const w0 = [(cx - tween.from[1]) / tween.from[0], (cy - tween.from[2]) / tween.from[0]];
+  const w1 = [(cx - tween.to[1]) / tween.to[0], (cy - tween.to[2]) / tween.to[0]];
+  const wx = w0[0] + (w1[0] - w0[0]) * e, wy = w0[1] + (w1[1] - w0[1]) * e;
+  S.zoom = z; S.panX = cx - wx * z; S.panY = cy - wy * z;
+  if (k >= 1) { S.zoom = tween.to[0]; S.panX = tween.to[1]; S.panY = tween.to[2]; tween = null; }
+  textDirty = true;
+  return true;
+}
+
+let fittedOnce = false;
+function fit(animate) {
+  const b = bounds();
+  if (!b || S.W < 10 || S.H < 10) return;
+  const m = 40;
+  const z = Math.min(1.4, Math.max(0.08, Math.min((S.W - m * 2) / Math.max(1, b.w), (S.H - m * 2) / Math.max(1, b.h))));
+  goTo(z, m - b.x * z + (S.W - m * 2 - b.w * z) / 2, m - b.y * z + (S.H - m * 2 - b.h * z) / 2, animate && fittedOnce);
+  fittedOnce = true;
+}
+function centerOn(i) {
+  const n = S.nodes[i]; if (!n) return;
+  const z = S.zoom < 0.5 ? 0.8 : S.zoom;
+  goTo(z, S.W / 2 - (n.x + n.w / 2) * z, S.H / 2 - (n.y + n.h / 2) * z, true);
+}
+
+// ───────────────────────────── picking ─────────────────────────────
+const CELL = 512;
+let grid = new Map();
+function buildGrid() {
+  grid = new Map();
+  S.nodes.forEach((n, i) => {
+    if (!nodeVisible(n)) return;
+    for (let gx = Math.floor(n.x / CELL); gx <= Math.floor((n.x + n.w) / CELL); gx++)
+      for (let gy = Math.floor(n.y / CELL); gy <= Math.floor((n.y + n.h) / CELL); gy++) {
+        const k = gx + ',' + gy;
+        (grid.get(k) || grid.set(k, []).get(k)).push(i);
+      }
+  });
+}
+function hitNode(x, y) {
+  const [wx, wy] = toWorld(x, y);
+  const list = grid.get(Math.floor(wx / CELL) + ',' + Math.floor(wy / CELL));
+  if (!list) return -1;
+  for (let k = list.length - 1; k >= 0; k--) {   // last drawn is on top
+    const n = S.nodes[list[k]];
+    if (wx >= n.x && wx <= n.x + n.w && wy >= n.y && wy <= n.y + n.h) return list[k];
+  }
+  return -1;
+}
+function hitEdge(x, y) {
+  const [wx, wy] = toWorld(x, y), slack = 6 / S.zoom;
+  let best = -1, bestD = slack;
+  const test = i => {
+    const c = curves[i]; if (!c) return;
+    const l = Math.min(c[0], c[2], c[4], c[6]) - slack, r = Math.max(c[0], c[2], c[4], c[6]) + slack;
+    const t = Math.min(c[1], c[3], c[5], c[7]) - slack, b = Math.max(c[1], c[3], c[5], c[7]) + slack;
+    if (wx < l || wx > r || wy < t || wy > b) return;
+    let px = c[0], py = c[1];
+    for (let s = 1; s <= 20; s++) {
+      const u = s / 20, v = 1 - u;
+      const qx = v * v * v * c[0] + 3 * v * v * u * c[4] + 3 * v * u * u * c[6] + u * u * u * c[2];
+      const qy = v * v * v * c[1] + 3 * v * v * u * c[5] + 3 * v * u * u * c[7] + u * u * u * c[3];
+      const dx = qx - px, dy = qy - py, len2 = dx * dx + dy * dy;
+      const k = len2 > 0 ? Math.max(0, Math.min(1, ((wx - px) * dx + (wy - py) * dy) / len2)) : 0;
+      const d = Math.hypot(wx - (px + dx * k), wy - (py + dy * k));
+      if (d < bestD) { bestD = d; best = i; }
+      px = qx; py = qy;
+    }
+  };
+  for (let k = hotList.length - 1; k >= 0; k--) test(hotList[k]);
+  if (best >= 0) return best;
+  for (let k = visEdges.length - 1; k >= 0; k--) test(visEdges[k]);
+  return best;
+}
+
+// ───────────────────────────── drawing ─────────────────────────────
+let glDirty = true, textDirty = true, scheduled = false;
+function invalidate(text) { glDirty = true; if (text) textDirty = true; schedule(); }
+
+// Frame pacing: on a 120/144 Hz screen draw every 2nd vsync; when nobody touched the page for 3.5 s and only the glow
+// or the dots move, ~30 fps (the dots are slow enough not to show it).
+let hz = 60, lastRaf = 0, vsyncs = 0, lastWake = performance.now(), lastFrameT = 0;
+const wake = () => { lastWake = performance.now(); };
+['pointermove', 'pointerdown', 'wheel', 'keydown'].forEach(n => addEventListener(n, wake, { passive: true, capture: true }));
+
+function schedule() {
+  if (scheduled || !S.visible || !S.ready || document.hidden) return;
+  scheduled = true;
+  requestAnimationFrame(frame);
+}
+
+function animating() {
+  if (tween) return true;
+  const t = now();
+  for (const g of S.glow.values()) if (t - g.start < g.dur) return true;
+  if (S.sel >= 0 && !S.reduced && t - S.selStart < 6 && hotList.length) return true;
+  return false;
+}
+
+function frame(ts) {
+  scheduled = false;
+  if (!S.visible || document.hidden) return;
+  if (lastRaf) { const d = ts - lastRaf; if (d > 2 && d < 50) hz = hz * 0.9 + (1000 / d) * 0.1; }
+  lastRaf = ts;
+  const interacting = performance.now() - lastWake < 3500 || S.panning || S.drag >= 0 || tween;
+  const every = interacting ? Math.max(1, Math.floor(hz / 55)) : Math.max(1, Math.floor(hz / 28));
+  const anim = animating();
+  if (anim && !glDirty && ++vsyncs < every) { scheduled = true; requestAnimationFrame(frame); return; }
+  vsyncs = 0;
+  if (stepTween()) glDirty = true;
+  if (glDirty || anim) draw();
+  if (textDirty) drawText();
+  glDirty = false;
+  if (anim || tween) { scheduled = true; requestAnimationFrame(frame); }
+}
+
+function draw() {
+  const t0 = performance.now();
+  const th = S.theme;
+  gl.viewport(0, 0, glc.width, glc.height);
+  gl.disable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  const view = [S.zoom, S.panX, S.panY], res = [S.W, S.H], time = now();
+  const common = (pr) => { gl.useProgram(pr.p); gl.uniform3fv(pr.u.u_view, view); gl.uniform2fv(pr.u.u_res, res); };
+
+  // background
+  gl.disable(gl.BLEND);
+  common(P.bg);
+  gl.uniform4fv(P.bg.u.u_bg, th.bg); gl.uniform4fv(P.bg.u.u_dot, [th.dot[0], th.dot[1], th.dot[2], 0.9]); gl.uniform1f(P.bg.u.u_light, S.light ? 1 : 0);
+  gl.bindVertexArray(B.bg); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+  // folder frames
+  const nodeUniforms = () => {
+    gl.uniform1f(P.node.u.u_time, time); gl.uniform3fv(P.node.u.u_accent, th.accent.slice(0, 3));
+    gl.uniform4fv(P.node.u.u_border, th.border); gl.uniform3fv(P.node.u.u_hl, [0.98, 0.8, 0.08]);
+    gl.uniform1f(P.node.u.u_light, S.light ? 1 : 0); gl.uniform1f(P.node.u.u_still, S.reduced ? 1 : 0);
+  };
+  if (B.nFrames) { common(P.node); nodeUniforms(); gl.bindVertexArray(B.frames); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, B.nFrames); }
+
+  // wires: the cold ones, faded when something is picked, then the hot ones over a soft glow
+  const focus = S.sel >= 0 || S.selEdge >= 0, z = S.zoom, verts = (B.SEG + 1) * 2;
+  common(P.edge);
+  if (B.nCold) {
+    gl.uniform1f(P.edge.u.u_w, focus ? Math.max(1, z) : Math.max(1, 1.3 * z));
+    gl.uniform1f(P.edge.u.u_a, focus ? 50 / 255 : 165 / 255); gl.uniform1f(P.edge.u.u_glow, 0);
+    gl.bindVertexArray(B.coldEdges); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, verts, B.nCold);
+  }
+  if (B.nHot) {
+    if (!S.light) gl.blendFunc(gl.ONE, gl.ONE);
+    gl.uniform1f(P.edge.u.u_w, Math.max(6, 9 * z)); gl.uniform1f(P.edge.u.u_a, S.light ? 0.22 : 0.5); gl.uniform1f(P.edge.u.u_glow, 1);
+    gl.bindVertexArray(B.hotEdges); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, verts, B.nHot);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniform1f(P.edge.u.u_w, Math.max(1.6, (S.drag >= 0 ? 2.8 : 2.3) * z)); gl.uniform1f(P.edge.u.u_a, 1); gl.uniform1f(P.edge.u.u_glow, 0);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, verts, B.nHot);
+  }
+  if (z > 0.25) {
+    common(P.head);
+    gl.uniform1f(P.head.u.u_s, 5 * Math.max(0.6, z) / z);
+    if (B.nCold) { gl.uniform1f(P.head.u.u_a, focus ? 50 / 255 : 165 / 255); gl.bindVertexArray(B.coldHeads); gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, B.nCold); }
+    if (B.nHot) { gl.uniform1f(P.head.u.u_a, 1); gl.bindVertexArray(B.hotHeads); gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, B.nHot); }
+  }
+
+  // the data on the move, over the wires and under the nodes
+  if (B.nDots) {
+    common(P.dot);
+    gl.uniform1f(P.dot.u.u_time, time); gl.uniform1f(P.dot.u.u_light, S.light ? 1 : 0);
+    if (!S.light) gl.blendFunc(gl.ONE, gl.ONE);
+    gl.bindVertexArray(B.dots); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, B.nDots);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  // nodes
+  if (B.nNodes) { common(P.node); nodeUniforms(); gl.bindVertexArray(B.nodes); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, B.nNodes); }
+  gl.bindVertexArray(null);
+
+  const ms = performance.now() - t0;
+  stats.frames++; stats.lastMs = ms; stats.sumMs += ms; stats.maxMs = Math.max(stats.maxMs, ms);
+}
+
+// node names: laid out once per graph (trimmed to the node), drawn in world space so the text scales with the zoom
+let labels = [];
+const FONT_L = '600 12.5px "Segoe UI", "Leelawadee UI", sans-serif', FONT_D = '10.5px "Segoe UI", "Leelawadee UI", sans-serif';
+const FONT_F = '600 11px "Segoe UI", "Leelawadee UI", sans-serif';
+function trim(ctx, s, max) {
+  if (!s) return '';
+  if (ctx.measureText(s).width <= max) return s;
+  let lo = 0, hi = s.length;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ctx.measureText(s.slice(0, m) + '…').width <= max) lo = m; else hi = m - 1; }
+  return s.slice(0, lo) + '…';
+}
+function layoutLabels() {
+  labels = S.nodes.map(n => {
+    const max = Math.min(150, n.w - 16 - (n.c ? 14 : 0));
+    tx.font = FONT_L; const l = trim(tx, n.l, max);
+    tx.font = FONT_D; const d = n.d ? trim(tx, n.d, max) : '';
+    return { l, d };
+  });
+}
+
+function drawText() {
+  textDirty = false;
+  stats.textFrames++;
+  const c = tx, th = S.theme;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, txc.width, txc.height);
+  const k = S.dpr * S.zoom;
+  c.setTransform(k, 0, 0, k, S.dpr * S.panX, S.dpr * S.panY);
+  const [vl, vt] = toWorld(-40, -40), [vr, vb] = toWorld(S.W + 40, S.H + 40);
+  c.textBaseline = 'top';
+  if (S.group && S.zoom >= 0.25) {
+    c.font = FONT_F; c.fillStyle = css(th.muted);
+    for (const f of frames) if (f.x < vr && f.x + f.w > vl && f.y < vb && f.y + f.h > vt) c.fillText(trim(c, f.name, Math.max(10, f.w - 16)), f.x + 10, f.y + 8);
+  }
+  if (S.zoom >= 0.32) {
+    const focus = S.sel >= 0 || S.selEdge >= 0;
+    for (let i = 0; i < S.nodes.length; i++) {
+      const n = S.nodes[i];
+      if (!nodeVisible(n) || n.x > vr || n.x + n.w < vl || n.y > vb || n.y + n.h < vt) continue;
+      const lb = labels[i]; if (!lb) continue;
+      c.globalAlpha = focus && !neighbours.has(i) ? 0.45 : 1;
+      const y = n.y + (lb.d ? 6 : 13);
+      c.font = FONT_L; c.fillStyle = css(th.text); c.fillText(lb.l, n.x + 10, y);
+      if (lb.d) { c.font = FONT_D; c.fillStyle = css(th.muted); c.fillText(lb.d, n.x + 10, y + 18); }
+    }
+    c.globalAlpha = 1;
+  }
+  drawMini();
+}
+
+// the minimap: the nodes drawn once into a picture, the view's box over it on each move
+let miniCache = null, miniScale = 1, miniB = null, miniOx = 4, miniOy = 4;   // the map is centred in the box
+function drawMini() {
+  const show = S.W >= 180 * 2.2 && S.nodes.length > 0;
+  mini.style.display = show ? 'block' : 'none';
+  if (!show) return;
+  const th = S.theme, d = S.dpr, W = 180, H = 120;
+  if (!miniCache) {
+    miniB = bounds();
+    if (!miniB) return;
+    miniCache = document.createElement('canvas');
+    miniCache.width = W * d; miniCache.height = H * d;
+    const m = miniCache.getContext('2d');
+    m.scale(d, d);
+    m.fillStyle = css(th.panel); m.fillRect(0, 0, W, H);
+    miniScale = Math.min((W - 8) / Math.max(1, miniB.w), (H - 8) / Math.max(1, miniB.h));
+    miniOx = (W - miniB.w * miniScale) / 2; miniOy = (H - miniB.h * miniScale) / 2;
+    S.nodes.forEach((n, i) => {
+      if (!nodeVisible(n)) return;
+      const kc = kindColor(n.k);
+      m.fillStyle = css([kc[0], kc[1], kc[2], i === S.sel ? 1 : 0.6]);
+      m.fillRect(miniOx + (n.x - miniB.x) * miniScale, miniOy + (n.y - miniB.y) * miniScale, Math.max(1.5, n.w * miniScale), Math.max(1.5, n.h * miniScale));
+    });
+  }
+  mx.setTransform(1, 0, 0, 1, 0, 0);
+  mx.clearRect(0, 0, mini.width, mini.height);
+  mx.drawImage(miniCache, 0, 0);
+  mx.setTransform(d, 0, 0, d, 0, 0);
+  const [l, t] = toWorld(0, 0), [r, b] = toWorld(S.W, S.H);
+  const x0 = Math.max(0, miniOx + (l - miniB.x) * miniScale), y0 = Math.max(0, miniOy + (t - miniB.y) * miniScale);
+  const x1 = Math.min(W, miniOx + (r - miniB.x) * miniScale), y1 = Math.min(H, miniOy + (b - miniB.y) * miniScale);
+  if (x1 > x0 && y1 > y0) { mx.strokeStyle = css(th.accent); mx.lineWidth = 1.2; mx.strokeRect(x0, y0, x1 - x0, y1 - y0); }
+  mx.strokeStyle = css(th.subtle); mx.lineWidth = 1; mx.strokeRect(0.5, 0.5, W - 1, H - 1);
+}
+
+// ───────────────────────────── input ─────────────────────────────
+function pos(e) { const r = glc.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+
+glc.addEventListener('mousedown', e => {
+  glc.focus();
+  const [x, y] = pos(e);
+  S.downX = S.lastX = x; S.downY = S.lastY = y; S.dragMoved = false;
+  const hit = hitNode(x, y);
+  if (e.button === 0 && e.detail === 2) {
+    if (hit >= 0) post({ t: 'activate', n: hit });
+    else { const w = hitEdge(x, y); if (w >= 0) post({ t: 'edgeActivate', e: w }); }
+    return;
+  }
+  if (e.button === 2 && hit >= 0) { select(hit, true); post({ t: 'context', n: hit, x: e.screenX, y: e.screenY }); return; }
+  if (e.button === 0 && hit >= 0) {
+    select(hit, true);
+    S.drag = hit;
+    const [wx, wy] = toWorld(x, y), n = S.nodes[hit];
+    S.dragOff = [wx - n.x, wy - n.y];
+    uploadEdges();
+  } else if (e.button === 0 || e.button === 1) {
+    S.panning = true;
+    glc.style.cursor = 'grabbing';
+  }
+  e.preventDefault();
+});
+
+addEventListener('mousemove', e => {
+  const [x, y] = pos(e);
+  const dx = x - S.lastX, dy = y - S.lastY;
+  if (S.drag >= 0 && (e.buttons & 1)) {
+    if (Math.hypot(x - S.downX, y - S.downY) > 0.5) S.dragMoved = true;
+    const [wx, wy] = toWorld(x, y), n = S.nodes[S.drag];
+    n.x = Math.round((wx - S.dragOff[0]) / 4) * 4; n.y = Math.round((wy - S.dragOff[1]) / 4) * 4;
+    uploadHot(); uploadNodes();
+    invalidate(true);
+  } else if (S.panning) {
+    S.panX += dx; S.panY += dy;
+    if (Math.hypot(x - S.downX, y - S.downY) > 2) S.dragMoved = true;
+    tween = null;
+    invalidate(true);
+  } else if (e.target === glc) {
+    const hit = hitNode(x, y);
+    if (hit !== S.hover) { S.hover = hit; glc.style.cursor = hit >= 0 ? 'pointer' : 'default'; uploadNodes(); invalidate(false); }
+  }
+  S.lastX = x; S.lastY = y;
+});
+
+addEventListener('mouseup', e => {
+  const [x, y] = pos(e);
+  if (S.drag >= 0) {
+    const n = S.nodes[S.drag], i = S.drag;
+    S.drag = -1;
+    if (S.dragMoved) {
+      post({ t: 'moved', n: i, x: n.x, y: n.y });
+      layoutWires(); buildGrid(); miniCache = null; layoutFrames();
+    }
+    uploadEdges(); uploadNodes(); uploadDots();
+    invalidate(true);
+  }
+  if (S.panning) {
+    S.panning = false;
+    glc.style.cursor = S.hover >= 0 ? 'pointer' : 'default';
+    if (!S.dragMoved && e.button === 0 && e.target === glc) {
+      // a click (no drag) off the nodes: on a wire picks the wire, on empty space clears the pick
+      const w = hitEdge(x, y);
+      S.selEdge = w;
+      select(-1, true);
+      post({ t: 'edge', e: w });
+      uploadEdges(); uploadNodes(); uploadDots();
+      invalidate(true);
+    }
+  }
+});
+
+glc.addEventListener('contextmenu', e => e.preventDefault());
+glc.addEventListener('dblclick', e => e.preventDefault());
+
+glc.addEventListener('wheel', e => {
+  e.preventDefault();
+  const [x, y] = pos(e);
+  const [wx, wy] = toWorld(x, y);
+  const lines = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+  const factor = Math.pow(1.12, -lines / 100);
+  tween = null;
+  S.zoom = Math.min(3, Math.max(0.06, S.zoom * factor));
+  S.panX = x - wx * S.zoom; S.panY = y - wy * S.zoom;
+  invalidate(true);
+}, { passive: false });
+
+glc.addEventListener('keydown', e => {
+  if (e.key === 'f' || e.key === 'F') { fit(true); e.preventDefault(); }
+  else if (e.key === 'Enter' && S.sel >= 0) { post({ t: 'activate', n: S.sel }); e.preventDefault(); }
+  else if (e.key === 'Escape') { select(-1, true); S.selEdge = -1; uploadEdges(); uploadNodes(); uploadDots(); invalidate(true); e.preventDefault(); }
+});
+
+mini.addEventListener('mousedown', e => {
+  if (!miniB) return;
+  const r = mini.getBoundingClientRect();
+  const wx = miniB.x + (e.clientX - r.left - miniOx) / miniScale, wy = miniB.y + (e.clientY - r.top - miniOy) / miniScale;
+  goTo(S.zoom, S.W / 2 - wx * S.zoom, S.H / 2 - wy * S.zoom, true);
+  e.preventDefault();
+});
+
+function select(i, fromUser) {
+  if (S.sel === i) return;
+  S.sel = i;
+  S.selStart = now();
+  if (i >= 0) S.selEdge = -1;
+  if (fromUser) post({ t: 'select', n: i });
+  uploadEdges(); uploadNodes(); uploadDots();
+  miniCache = null;
+  invalidate(true);
+}
+
+// ───────────────────────────── from the app ─────────────────────────────
+function applyTheme(m) {
+  const t = {
+    bg: hex(m.bg), dot: hex(m.dot), card: hex(m.card), border: hex(m.border), text: hex(m.text), muted: hex(m.muted),
+    secondary: hex(m.secondary), faint: hex(m.faint), accent: hex(m.accent), panel: hex(m.panel), inset: hex(m.inset), subtle: hex(m.subtle),
+    kind: {}, edge: {},
+  };
+  for (const k in m.kinds) t.kind[k] = hex(m.kinds[k]);
+  for (const k in m.edges) t.edge[k] = hex(m.edges[k]);
+  S.theme = t;
+  S.light = !!m.light;
+  S.reduced = !!m.reduced;
+  const root = document.documentElement.style;
+  for (const k of ['bg', 'panel', 'subtle', 'secondary', 'faint', 'muted', 'accent']) root.setProperty('--' + k, css(t[k]));
+  document.body.style.background = css(t.bg);
+  legend(m.legend || {});
+}
+
+let legendSpec = {};
+function legend(spec) {
+  legendSpec = spec;
+  const h = [];
+  if (!S.live) {
+    for (const k of spec.kinds || []) h.push(`<span class="k"><span class="sw" style="background:${k.color}"></span>${esc(k.name)}</span>`);
+    h.push('<span class="sep"></span>');
+    h.push(`<span class="k"><span class="ln"></span>${esc(spec.confirmed || '')}</span>`);
+    h.push(`<span class="k"><span class="ln d"></span>${esc(spec.inferred || '')}</span>`);
+  } else {
+    h.push(`<span class="k"><span class="bar" style="background:${spec.containsColor || '#2DD4BF'}"></span>${esc(spec.contains || '')}</span>`);
+  }
+  if (spec.flow) h.push(`<span class="k"><span class="sw" style="background:#22D3EE;border-radius:50%;box-shadow:0 0 6px #22D3EE"></span>${esc(spec.flow)}</span>`);
+  h.push(`<span class="hint">${esc(spec.hint || '')}</span>`);
+  legendEl.innerHTML = h.join('');
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function applyGraph(m) {
+  S.gen = m.gen | 0;
+  S.nodes = m.nodes;
+  S.edges = m.edges;
+  if (S.sel >= S.nodes.length) S.sel = -1;
+  if (S.selEdge >= S.edges.length) S.selEdge = -1;
+  if (S.hover >= S.nodes.length) S.hover = -1;
+  S.drag = -1;
+  // the glow keys on node index: a new graph re-sends it
+  S.glow = new Map();
+  layoutWires(); buildGrid(); layoutLabels(); layoutFrames();
+  miniCache = null;
+  uploadEdges(); uploadNodes(); uploadDots();
+  invalidate(true);
+}
+
+function applyState(m) {
+  const filters = S.inferred !== m.inferred || S.group !== m.group || S.live !== m.live
+    || m.hidden.length !== S.hidden.size || m.hidden.some(k => !S.hidden.has(k));
+  if (m.sel !== S.sel) { S.sel = m.sel; S.selStart = now(); }
+  S.selEdge = m.edge;
+  S.hl = new Set(m.hl);
+  S.hidden = new Set(m.hidden);
+  S.inferred = m.inferred;
+  S.group = m.group;
+  if (S.live !== m.live) { S.live = m.live; legend(legendSpec); }
+  busyEl.textContent = m.busy || '';
+  busyEl.style.display = m.busy ? 'block' : 'none';
+  if (filters) { layoutWires(); layoutFrames(); }
+  miniCache = null;
+  uploadEdges(); uploadNodes(); uploadDots();
+  invalidate(true);
+}
+
+function applyGlow(m) {
+  const t = now(), next = new Map();
+  for (const [n, ageMs, kind, durMs] of m.items) if (n >= 0 && n < S.nodes.length) next.set(n, { start: t - ageMs / 1000, dur: durMs / 1000, kind });
+  S.glow = next;
+  uploadNodes(); uploadDots();
+  vsyncs = 99;   // draw the first frame of a new glow at once
+  invalidate(false);
+}
+
+function handle(m) {
+  try {
+    switch (m.t) {
+      case 'theme': applyTheme(m); if (S.nodes.length) { layoutFrames(); uploadEdges(); uploadNodes(); uploadDots(); } miniCache = null; invalidate(true); break;
+      case 'graph': applyGraph(m); break;
+      case 'state': applyState(m); break;
+      case 'glow': applyGlow(m); break;
+      case 'fit': resize(); fit(!!m.animate); break;
+      case 'center': resize(); centerOn(m.n); break;
+      case 'visible': S.visible = !!m.on; if (S.visible) invalidate(true); break;
+      case 'view': S.zoom = m.zoom; S.panX = m.x; S.panY = m.y; tween = null; invalidate(true); break;
+    }
+  } catch (err) { post({ t: 'error', why: String(err && err.stack || err) }); }
+}
+if (host) host.addEventListener('message', e => handle(e.data));
+window.__graph = { handle, S, stats, hitNode, hitEdge, fit, toWorld };   // for the harness
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) invalidate(true); });
+
+glc.addEventListener('webglcontextlost', e => { e.preventDefault(); S.ready = false; });
+glc.addEventListener('webglcontextrestored', () => {
+  try { setupGL(); S.ready = true; if (S.nodes.length) { layoutFrames(); uploadEdges(); uploadNodes(); uploadDots(); } invalidate(true); }
+  catch (err) { post({ t: 'ready', gl: false, why: 'restore: ' + err }); }
+});
+
+// ───────────────────────────── start ─────────────────────────────
+if (!gl) post({ t: 'ready', gl: false, why: 'WebGL2 is not available' });
+else {
+  try {
+    setupGL();
+    S.ready = true;
+    S.theme = { bg: [0.05, 0.06, 0.09, 1], dot: [0.2, 0.22, 0.3, 1], card: [0.1, 0.12, 0.17, 1], border: [0.25, 0.28, 0.35, 1], text: [1, 1, 1, 1],
+                muted: [0.6, 0.6, 0.7, 1], secondary: [0.7, 0.7, 0.8, 1], faint: [0.5, 0.5, 0.6, 1], accent: [0.3, 0.6, 1, 1],
+                panel: [0.08, 0.09, 0.12, 1], inset: [0, 0, 0, 0], subtle: [0.2, 0.22, 0.3, 1], kind: {}, edge: {} };
+    resize();
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    post({ t: 'ready', gl: true, renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER) });
+  } catch (err) { post({ t: 'ready', gl: false, why: String(err) }); }
+}
+</script>
+</body>
+</html>
