@@ -277,12 +277,7 @@ public class AutoUpdateService : IAppShutdownHook
             using (new System.Threading.Timer(_ => Publish(force: true), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)))
                 await Vpk.DownloadUpdatesAsync(info, OnVelopackPercent, _shutdown.Token).ConfigureAwait(false);
             _vpkPending = info;
-            bool fromCache;
-            lock (_progressLock) fromCache = _stagedWithoutBytes = !_composer.Read(DateTime.UtcNow).AnyBytes;
-            _log?.Info("Update", fromCache
-                ? $"Velopack: v{target} was already downloaded — applies on exit or on Install"
-                : $"Velopack: v{target} staged in {sw.Elapsed.TotalSeconds:0} s — applies on exit or on Install");
-            SetPhase(UpdatePhase.Staged, target);
+            MarkDownloadStaged(target, sw.Elapsed);
             OnUpdateStatus?.Invoke($"Update v{target} downloaded — restart to apply.");
             return target;
         }
@@ -306,6 +301,20 @@ public class AutoUpdateService : IAppShutdownHook
             SetPhase(UpdatePhase.Failed, target, why);
             return null;
         }
+    }
+
+    /// <summary>The download ended and the package is staged. No byte arrived = Velopack found it already on disk, which
+    /// the snapshot says as <see cref="UpdateProgressInfo.FromCache"/> ("already downloaded" on the splash). True = from
+    /// disk. Its own method so the harness drives this real step (tests/apitest UpdateProgressWire).</summary>
+    private bool MarkDownloadStaged(string target, TimeSpan took)
+    {
+        bool fromCache;
+        lock (_progressLock) fromCache = _stagedWithoutBytes = !_composer.Read(DateTime.UtcNow).AnyBytes;
+        _log?.Info("Update", fromCache
+            ? $"Velopack: v{target} was already downloaded — applies on exit or on Install"
+            : $"Velopack: v{target} staged in {took.TotalSeconds:0} s — applies on exit or on Install");
+        SetPhase(UpdatePhase.Staged, target);
+        return fromCache;
     }
 
     /// <summary>
