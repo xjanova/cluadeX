@@ -762,7 +762,8 @@ function drawMini() {
     const m = miniCache.getContext('2d');
     m.scale(d, d);
     m.fillStyle = css(th.panel); m.fillRect(0, 0, W, H);
-    miniScale = Math.min((W - 8) / Math.max(1, miniB.w), (H - 8) / Math.max(1, miniB.h));
+    // a small graph is not blown up to fill the box (one file became a big orange bar)
+    miniScale = Math.min(0.12, (W - 8) / Math.max(1, miniB.w), (H - 8) / Math.max(1, miniB.h));
     miniOx = (W - miniB.w * miniScale) / 2; miniOy = (H - miniB.h * miniScale) / 2;
     S.nodes.forEach((n, i) => {
       if (!nodeVisible(n)) return;

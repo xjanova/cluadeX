@@ -10,6 +10,7 @@ using CluadeX.Services.UiStudio;
 using CluadeX.ViewModels;
 using CluadeX.Views;
 using CluadeX.Views.PopOut;
+using CluadeX.Views.UiStudio;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Web.WebView2.Core;
 
@@ -229,6 +230,8 @@ internal static partial class Program
 
         // ── PO7: the Node Graph ──
         var graph = MainVm.NodeGraphVM!;
+        // (windows off screen are "covered" to Chromium, which then stops drawing a page; the GPU graph's browser starts here)
+        Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-features=CalculateNativeWinOcclusion");
         Invoke(MainVm, "NavigateTo", "NodeGraph");
         var gview = await WaitFor(() => Find<NodeGraphView>(MainWin).FirstOrDefault(v => v.IsVisible));
         await Idle(300);
@@ -246,6 +249,21 @@ internal static partial class Program
             Check("PO7 the window's graph has the 'put back' button, the title is localised",
                 gwin != null && Find<PopOutButton>(gwin).Count() == 1 && Find<PopOutButton>(gwin).First().Command == PagePopOut.BringBackCommand
                 && gwin.Title == Lc("popout.title.graph"));
+            // the floating graph draws on the GPU too (the WebGL2 page in its own window; a shot of the page itself,
+            // since a WPF render of the window cannot see into a WebView2)
+            var fgpu = gwin == null ? null : Find<NodeGraphGpu>(gwin).FirstOrDefault();
+            for (int i = 0; i < 150 && fgpu != null && !fgpu.IsReady && !NodeGraphGpu.Disabled; i++) await Idle(100);
+            Check($"PO7 the floating graph draws on the GPU ({fgpu?.Renderer ?? NodeGraphGpu.DisabledWhy ?? "no GPU view"})",
+                fgpu is { IsReady: true }, $"graph {graph.Graph?.Nodes.Count} nodes");
+            if (fgpu is { IsReady: true } && graph.Graph != null
+                && typeof(NodeGraphGpu).GetField("_web", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(fgpu) is Microsoft.Web.WebView2.Wpf.WebView2 gweb)
+            {
+                await Idle(600);
+                string nodes = await gweb.CoreWebView2.ExecuteScriptAsync("window.__graphStats.nodes");
+                Check("PO7 …with the project's graph on it", nodes == graph.Graph.Nodes.Count(n => !n.Hidden).ToString() || int.TryParse(nodes, out int nn) && nn > 0, $"{nodes} drawn of {graph.Graph.Nodes.Count}");
+                using (var shot = File.Create(Path.Combine(renders, "popout-graph-gpu.png")))
+                    await gweb.CoreWebView2.CapturePreviewAsync(Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png, shot);
+            }
             if (gwin != null && themes != null)
             {
                 await RenderWindow(gwin, Path.Combine(renders, "popout-graph-dark.png"));
@@ -265,6 +283,10 @@ internal static partial class Program
             await Idle(600);
             Check("PO7 back on the graph's page: one view in the main window again, on screen",
                 Find<NodeGraphView>(MainWin).Count(v => v.IsVisible) == 1 && graph.IsVisible && host.Placeholder?.IsVisible != true);
+            var mgpu = Find<NodeGraphGpu>(MainWin).FirstOrDefault();
+            for (int i = 0; i < 100 && mgpu != null && !mgpu.IsReady && !NodeGraphGpu.Disabled; i++) await Idle(100);
+            Check("PO7 …and it draws on the GPU again, without the closed window's browser", mgpu is { IsReady: true } && fgpu != null && (ReferenceEquals(mgpu, fgpu) || !fgpu.IsReady),
+                $"main gpu {mgpu?.IsReady} same={ReferenceEquals(mgpu, fgpu)} floating ready={fgpu?.IsReady}");
             // (PageHost: a rebuilt page left for a kept one — the chat — really goes; it used to stay loaded, hidden)
             Invoke(MainVm, "NavigateTo", "Chat");
             await Idle(400);
