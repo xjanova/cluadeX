@@ -1249,6 +1249,10 @@
                     <TextBlock Text="{Binding SearchSummary}" FontSize="10"
                                FontFamily="{DynamicResource Font.Mono.Display}"
                                Foreground="{DynamicResource Text.Faint}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    <!-- Results / references into the chat box as context (CodeEditorView.Problems.cs; shown when there are any) -->
+                    <Button x:Name="SearchToChat" HorizontalAlignment="Left" Margin="0,4,0,0" Visibility="Collapsed"
+                            Style="{StaticResource EdTextBtn}" Content="{services:Loc search.toChat}"
+                            ToolTip="{services:Loc search.toChatTip}" Click="OnSearchToChat"/>
                     <TextBlock Text="{Binding SearchError}" FontSize="10" TextWrapping="Wrap" Margin="0,2,0,0"
                                Foreground="{DynamicResource Accent.3}"
                                Visibility="{Binding HasSearchError, Converter={StaticResource BoolVis}}"/>
@@ -1906,6 +1910,72 @@
                             </ContextMenu>
                         </Button.ContextMenu>
                     </Button>
+                    <!-- Auto-comment (phase 5, owner 2026-11-01: "วิเคราะห์โค๊ดและคอมเม้นต์ อัตโนมัติ"): the AI comments code that
+                         already exists. It only names lines and writes text; AutoCommentService inserts, proves the code
+                         unchanged and the diff panel previews it before anything is written. -->
+                    <Button x:Name="TbAutoComment" Style="{StaticResource EdToolBtn}" Click="OnAutoCommentMenu"
+                            ToolTip="{services:Loc edt.acm.tip}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE90A;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsAutoCommenting}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{services:Loc edt.acm.button}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Margin="5,0,4,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="AutoCommentMenu">
+                                <MenuItem Header="{services:Loc edt.acm.scopeHead}" IsEnabled="False" FontWeight="SemiBold"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.functions}" IsChecked="{Binding AcmScopeIsFunctions, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="functions"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.changed}" IsChecked="{Binding AcmScopeIsChanged, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="changed"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.key}" IsChecked="{Binding AcmScopeIsKey, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="key"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.file}" IsChecked="{Binding AcmScopeIsFile, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="file"/>
+                                <MenuItem Header="{services:Loc edt.acm.scope.selection}" IsChecked="{Binding AcmScopeIsSelection, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentScopeCommand}" CommandParameter="selection"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.acm.langHead}" IsEnabled="False" FontWeight="SemiBold"/>
+                                <MenuItem Header="{services:Loc edt.acm.lang.th}" IsChecked="{Binding AcmLangIsThai, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentLanguageCommand}" CommandParameter="th"/>
+                                <MenuItem Header="{services:Loc edt.acm.lang.en}" IsChecked="{Binding AcmLangIsEnglish, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentLanguageCommand}" CommandParameter="en"/>
+                                <MenuItem Header="{services:Loc edt.acm.lang.match}" IsChecked="{Binding AcmLangIsMatch, Mode=OneWay}"
+                                          Command="{Binding SetAutoCommentLanguageCommand}" CommandParameter="match"/>
+                                <Separator/>
+                                <!-- Filled as the menu opens (OnAutoCommentMenu): the provider's models. -->
+                                <MenuItem x:Name="AcmModelMenu" Header="{services:Loc edt.acm.modelHead}"/>
+                                <Separator/>
+                                <MenuItem IsEnabled="False">
+                                    <MenuItem.Header>
+                                        <TextBlock Text="{Binding AutoCommentEstimate}" TextWrapping="Wrap" MaxWidth="420"/>
+                                    </MenuItem.Header>
+                                </MenuItem>
+                                <MenuItem Header="{services:Loc edt.acm.start}" FontWeight="SemiBold" Click="OnAutoCommentStart"
+                                          IsEnabled="{Binding CanStartAutoComment}"/>
+                                <MenuItem Header="{services:Loc edt.acm.cancel}" Command="{Binding CancelAutoCommentCommand}"
+                                          IsEnabled="{Binding IsAutoCommenting}"/>
+                                <MenuItem Header="{Binding AutoCommentUndoLabel}" Command="{Binding UndoAutoCommentCommand}"
+                                          IsEnabled="{Binding CanUndoAutoComment}"/>
+                                <Separator/>
+                                <MenuItem IsEnabled="False">
+                                    <MenuItem.Header>
+                                        <TextBlock Text="{services:Loc edt.acm.note}" TextWrapping="Wrap" MaxWidth="420"/>
+                                    </MenuItem.Header>
+                                </MenuItem>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
                 </WrapPanel>
             </Border>
 
@@ -2147,12 +2217,16 @@
                 </StackPanel>
             </Border>
 
-            <!-- Code area + minimap -->
+            <!-- Code area + minimap (+ the Problems panel under them) -->
             <Grid Grid.Row="4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="80"/>
                 </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
                 <!-- Editor (line gutter + TextBox) -->
                 <Grid Grid.Column="0" Background="{DynamicResource Bg.Window}">
@@ -2214,6 +2288,98 @@
                         Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}">
                     <editor:MinimapControl x:Name="Minimap" Margin="0,4"/>
                 </Border>
+
+                <!-- ══════════ PROBLEMS — the language server's errors for the file (CodeEditorView.Lsp.cs) ══════════
+                     Click a row to jump to it; the sparkle asks the AI to fix it. When no server is installed this is
+                     where the install command is (no dead buttons). -->
+                <Border x:Name="ProblemsPanel" Grid.Row="1" Grid.ColumnSpan="2" Height="190" Visibility="Collapsed"
+                        Background="{DynamicResource Bg.Panel}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Border.Subtle}">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="12,4,6,4">
+                            <Button DockPanel.Dock="Right" Style="{StaticResource EdToolBtn}" Content="&#xE711;" FontSize="10"
+                                    Click="OnProblemsClose" ToolTip="{services:Loc lsp.close}"/>
+                            <!-- Runs the project's own checkers (dart analyze, tsc, a Python syntax pass, dotnet build…);
+                                 hidden when the project has none. Click again while it runs = stop. -->
+                            <Button x:Name="ProblemsCheck" DockPanel.Dock="Right" Style="{StaticResource EdTextBtn}" Visibility="Collapsed"
+                                    Content="{services:Loc problems.checkNow}" Click="OnProblemsCheck" Margin="0,0,4,0"/>
+                            <TextBlock Text="{services:Loc lsp.problems}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Text.Secondary}"/>
+                            <TextBlock x:Name="ProblemsServer" Margin="12,0,0,0" FontSize="11" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="ProblemsBuildStatus" Margin="12,0,0,0" FontSize="11" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"/>
+                        </DockPanel>
+                        <Border x:Name="ProblemsInstall" DockPanel.Dock="Top" Visibility="Collapsed" Margin="12,0,12,6" Padding="10,6"
+                                CornerRadius="6" Background="{DynamicResource State.Fill.Faint}"
+                                BorderThickness="1" BorderBrush="{DynamicResource Status.Warning.Border}">
+                            <StackPanel>
+                                <TextBlock x:Name="ProblemsInstallText" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}"/>
+                                <WrapPanel Margin="0,6,0,0">
+                                    <Border x:Name="ProblemsCommandBox" Background="{DynamicResource Surface.Input}" CornerRadius="4"
+                                            BorderThickness="1" BorderBrush="{DynamicResource Border.Default}" Margin="0,0,4,0">
+                                        <TextBox x:Name="ProblemsCommand" Style="{StaticResource EdFindInput}" IsReadOnly="True" MinWidth="260"/>
+                                    </Border>
+                                    <Button x:Name="ProblemsCopy" Style="{StaticResource EdTextBtn}" Content="{services:Loc lsp.copy}" Click="OnLspCopyInstall"/>
+                                    <Button x:Name="ProblemsRunInstall" Style="{StaticResource EdTextBtn}" Content="{services:Loc lsp.runInTerminal}"
+                                            Click="OnLspRunInstall" ToolTip="{services:Loc lsp.runInTerminalTip}"/>
+                                    <Button x:Name="ProblemsOpenPage" Style="{StaticResource EdTextBtn}" Content="{services:Loc lsp.openPage}" Click="OnLspOpenPage"/>
+                                    <Button x:Name="ProblemsRecheck" Style="{StaticResource EdTextBtn}" Content="{services:Loc lsp.checkAgain}" Click="OnLspRecheck"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                        <Grid>
+                            <TextBlock x:Name="ProblemsEmpty" Margin="14,6" FontSize="11" Foreground="{DynamicResource Text.Faint}"
+                                       TextWrapping="Wrap"/>
+                            <ListBox x:Name="ProblemsList" Background="Transparent" BorderThickness="0" Padding="0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="12,2,6,2"/>
+                                        <Setter Property="Cursor" Value="Hand"/>
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <Border x:Name="bd" Background="Transparent" Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <EventSetter Event="PreviewMouseLeftButtonUp" Handler="OnProblemClick"/>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Opacity="{Binding RowOpacity}" ToolTip="{Binding StaleTip}">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Glyph}" Foreground="{Binding GlyphBrush}" FontFamily="Segoe MDL2 Assets"
+                                                       FontSize="11" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding Message}" FontSize="12" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Message}"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding Location}" FontSize="11" Margin="10,0,6,0" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Text.Muted}" FontFamily="{DynamicResource Font.Mono.Display}"/>
+                                            <Button Grid.Column="3" Style="{StaticResource EdToolBtn}" Content="&#xE945;" FontSize="11" Height="20"
+                                                    Tag="{Binding}" Click="OnProblemAskAi" ToolTip="{services:Loc lsp.askAiTip}"
+                                                    Foreground="{DynamicResource Accent.1}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </DockPanel>
+                </Border>
             </Grid>
 
             <!-- ══════════ SIDE-BY-SIDE DIFF editor ══════════
@@ -2225,6 +2391,7 @@
                     Visibility="{Binding IsDiffViewActive, Converter={StaticResource BoolVis}}">
                 <Grid Background="{DynamicResource Editor.Background}">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
@@ -2272,24 +2439,75 @@
                         </Grid>
                     </Border>
 
+                    <!-- Auto-comment preview: Apply writes (restore point kept), Discard drops it. -->
+                    <Border Grid.Row="1" Padding="12,8" Background="{DynamicResource Bg.Panel}"
+                            BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Accent.1}"
+                            Visibility="{Binding HasAutoCommentPreview, Converter={StaticResource BoolVis}}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="{Binding AutoCommentBanner}" TextWrapping="Wrap" FontSize="11"
+                                           Foreground="{DynamicResource Text.Primary}"/>
+                                <TextBlock Text="{Binding AutoCommentSkipped}" TextWrapping="Wrap" FontSize="10" Margin="0,2,0,0"
+                                           Foreground="{DynamicResource Text.Faint}"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Command="{Binding ApplyAutoCommentCommand}" Cursor="Hand"
+                                    Padding="10,4" Margin="10,0,6,0" FontSize="11" VerticalAlignment="Center"
+                                    Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                    Foreground="{DynamicResource Button.Flat.Foreground}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="{services:Loc edt.acm.apply}"/>
+                            </Button>
+                            <Button Grid.Column="2" Command="{Binding DiscardAutoCommentCommand}" Cursor="Hand"
+                                    Padding="10,4" Margin="0" FontSize="11" VerticalAlignment="Center"
+                                    Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                    Foreground="{DynamicResource Button.Flat.Foreground}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="{services:Loc edt.acm.discard}"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+
                     <!-- Column captions -->
-                    <Grid Grid.Row="1" Background="{DynamicResource Surface.Sunken}">
+                    <Grid Grid.Row="2" Background="{DynamicResource Surface.Sunken}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="46"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="46"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="1" Text="{services:Loc editor.diffHead}" FontSize="9" Padding="6,3"
+                        <TextBlock Grid.Column="1" Text="{Binding DiffLeftCaption}" FontSize="9" Padding="6,3"
                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                    Foreground="{DynamicResource Text.Faint}"/>
-                        <TextBlock Grid.Column="3" Text="{services:Loc editor.diffWorking}" FontSize="9" Padding="6,3"
+                        <TextBlock Grid.Column="3" Text="{Binding DiffRightCaption}" FontSize="9" Padding="6,3"
                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                    Foreground="{DynamicResource Text.Faint}"/>
                     </Grid>
 
                     <!-- Rows -->
-                    <ListBox Grid.Row="2" ItemsSource="{Binding DiffRows}"
+                    <ListBox Grid.Row="3" ItemsSource="{Binding DiffRows}"
                              Background="Transparent" BorderThickness="0"
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -2372,6 +2590,12 @@
                                Foreground="{DynamicResource Text.Secondary}"/>
                     <TextBlock x:Name="StSelection" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"/>
                     <TextBlock x:Name="StLines" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"/>
+                    <!-- Errors / warnings from the language server, or its state ("no C# server: install") — opens Problems -->
+                    <Button x:Name="StProblems" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="8,0,0,0"
+                            Click="OnProblemsToggle" ToolTip="{services:Loc lsp.problemsTip}" Visibility="Collapsed"/>
+                    <!-- How many places the AI's last turn changed in this file — click = the next one (CodeEditorView.AiChanges.cs) -->
+                    <Button x:Name="StAiChanges" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="8,0,0,0"
+                            Click="OnAiChangesNext" ToolTip="{services:Loc ai.changesTip}" Visibility="Collapsed"/>
                     <Button x:Name="StZoom" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnZoomReset"
                             ToolTip="{services:Loc edt.zoomReset}" Margin="0,0,6,0"/>
                     <TextBlock x:Name="StOverwrite" DockPanel.Dock="Right" Style="{StaticResource EdStatusText}" Margin="8,0"
@@ -2436,8 +2660,8 @@
                             <RowDefinition Height="170"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
+                        <!-- No Text binding: the code-behind feeds this box chunk by chunk (OnTerminalText). -->
                         <TextBox x:Name="TerminalOut" Grid.Row="0"
-                                 Text="{Binding TerminalOutput, Mode=OneWay}"
                                  IsReadOnly="True" TextWrapping="NoWrap"
                                  Background="{DynamicResource Editor.Background}" BorderThickness="0"
                                  Foreground="{DynamicResource Text.Secondary}"

@@ -78,6 +78,32 @@ public static class GirlArt
         }
     }
 
+    private static readonly Dictionary<string, ImageSource> Small = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The girl's picture decoded at most <paramref name="pixelHeight"/> pixels tall — what a backdrop shows,
+    /// not the full 820-pixel cut-out. Cached per name and height, frozen; null when there is no such girl.</summary>
+    public static ImageSource? Image(string? name, int pixelHeight)
+    {
+        if (string.IsNullOrEmpty(name) || pixelHeight <= 0) return null;
+        string key = name + "@" + pixelHeight;
+        lock (Small)
+        {
+            if (Small.TryGetValue(key, out var cached)) return cached;
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri($"pack://application:,,,/CluadeX;component/Assets/Girls/{name}.png", UriKind.Absolute);
+                bmp.DecodePixelHeight = pixelHeight;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                return Small[key] = bmp;
+            }
+            catch { return null; }
+        }
+    }
+
     /// <summary>Each girl's own glow, so the halo matches her outfit (her ChatCharacter colour).</summary>
     public static Color Glow(string? name) => ChatCharacter.ForGirl(name).Accent;
 }

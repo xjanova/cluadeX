@@ -22,6 +22,9 @@ public sealed class SessionCleanupService
         _settings = settings;
     }
 
+    /// <summary>The background processes (the chat page's "command finished" notices listen here).</summary>
+    public BackgroundProcessService? Background => _bg;
+
     public sealed record Result(int ProcessesStopped, bool PreviewClosed, int ImagesDeleted)
     {
         public bool Any => ProcessesStopped > 0 || PreviewClosed || ImagesDeleted > 0;

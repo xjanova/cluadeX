@@ -87,12 +87,22 @@ public class ContextMemoryService
     {
         int total = 0;
         foreach (var msg in messages)
-        {
-            total += EstimateTokens(msg.Content);
-            if (msg.ToolOutput != null)
-                total += EstimateTokens(msg.ToolOutput);
-        }
+            total += TokensOf(msg);
         return total;
+    }
+
+    /// <summary>One row's estimate, counted once per Content / ToolOutput string: each recount re-scanned every
+    /// character of the whole chat, though only the row being streamed ever changes (owner 2026-11-02: the chat
+    /// hitched every 5 s, worse the longer it got). Strings are immutable, so the same reference is the same text.</summary>
+    private int TokensOf(ChatMessage msg)
+    {
+        string content = msg.Content;
+        string? output = msg.ToolOutput;
+        if (msg.ContextTokens is { } c && ReferenceEquals(c.Content, content) && ReferenceEquals(c.Output, output))
+            return c.Tokens;
+        int tokens = EstimateTokens(content) + (output != null ? EstimateTokens(output) : 0);
+        msg.ContextTokens = new ChatMessage.ContextTokenCount(content, output, tokens);
+        return tokens;
     }
 
     /// <summary>The context window of the model that answers this chat. It used to be Settings.ContextSize for
@@ -179,7 +189,8 @@ public class ContextMemoryService
                 return 200_000;   // the room's agents run the Claude Code CLI's standard window
 
             default:
-                return 128_000;
+                // An OpenAI-compatible service: the window its /models reported for the model, else 128K.
+                return Providers.CompatibleProvider.ContextWindowOf(provider, modelId) ?? 128_000;
         }
     }
 

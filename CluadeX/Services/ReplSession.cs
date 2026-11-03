@@ -63,6 +63,7 @@ public sealed class ReplSession : IDisposable
         };
 
         _process.Start();
+        Background.AppChildren.Adopt(_process);
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
 

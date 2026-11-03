@@ -7,6 +7,7 @@
              xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:vm="clr-namespace:CluadeX.ViewModels"
              xmlns:views="clr-namespace:CluadeX.Views"
+             xmlns:sys="clr-namespace:System;assembly=mscorlib"
              views:CharacterLook.Show="{DynamicResource Fx.Flourish}">
 
     <UserControl.Resources>
@@ -208,6 +209,84 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+
+        <!-- ═══ New chat page (ChatViewModel.Starters) ═══ -->
+        <!-- Its sizes: ChatView.xaml.cs swaps in the compact ones on NewChatPage when the chat is narrow (docked in the editor). -->
+        <sys:Double x:Key="Starter.Tile.Width">134</sys:Double>
+        <sys:Double x:Key="Starter.Tile.Height">98</sys:Double>
+        <sys:Double x:Key="Starter.Title.Size">30</sys:Double>
+        <!-- A starter's icon in its tone (StarterTemplate.Tone): theme colours only, so every theme paints its own. -->
+        <Style x:Key="StarterGlyph" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Tone}" Value="2"><Setter Property="Foreground" Value="{DynamicResource Accent.2}"/></DataTrigger>
+                <DataTrigger Binding="{Binding Tone}" Value="3"><Setter Property="Foreground" Value="{DynamicResource Accent.3}"/></DataTrigger>
+                <DataTrigger Binding="{Binding Tone}" Value="4"><Setter Property="Foreground" Value="{DynamicResource Status.Success}"/></DataTrigger>
+                <DataTrigger Binding="{Binding Tone}" Value="5"><Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/></DataTrigger>
+                <DataTrigger Binding="{Binding Tone}" Value="6"><Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/></DataTrigger>
+                <DataTrigger Binding="{Binding Tone}" Value="7"><Setter Property="Foreground" Value="{DynamicResource Status.Info}"/></DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <!-- A tile: the card lights its edge and glows on hover (Fx.Card.Glow: none in Classic). No animation. -->
+        <Style x:Key="StarterTile" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Width" Value="{DynamicResource Starter.Tile.Width}"/>
+            <Setter Property="Height" Value="{DynamicResource Starter.Tile.Height}"/>
+            <Setter Property="Margin" Value="5"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Tile" CornerRadius="14" BorderThickness="1"
+                                Background="{DynamicResource Surface.Card}" BorderBrush="{DynamicResource Border.Default}">
+                            <Border x:Name="Shine" CornerRadius="13" Background="Transparent">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Tile" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                <Setter TargetName="Tile" Property="Effect" Value="{DynamicResource Fx.Card.Glow}"/>
+                                <Setter TargetName="Shine" Property="Background" Value="{DynamicResource State.Hover}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Tile" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Shine" Property="Background" Value="{DynamicResource State.Pressed}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- A project in the starter's question. -->
+        <Style x:Key="StarterProjectRow" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="0,3"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Row" CornerRadius="10" BorderThickness="1" Padding="12,8"
+                                Background="{DynamicResource State.Fill.Faint}" BorderBrush="{DynamicResource Border.Subtle}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Row" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                <Setter TargetName="Row" Property="Background" Value="{DynamicResource State.Hover}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Row" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Grid Background="{DynamicResource Bg.Elevated}">
@@ -256,6 +335,12 @@
                         Command="{Binding CloseChatSearchCommand}"
                         ToolTip="{services:Loc chat.closeSearchTip}"/>
             </Grid>
+        </Border>
+
+        <!-- ═══ NEW CHAT BACKDROP: every girl, faint, behind the empty chat (Views/GirlsBackdrop). Classic hides it. ═══ -->
+        <Border Grid.Row="1" IsHitTestVisible="False" Visibility="{DynamicResource Fx.Flourish}">
+            <views:GirlsBackdrop x:Name="NewChatBackdrop" Opacity="0.2"
+                                 Visibility="{Binding Messages.Count, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}"/>
         </Border>
 
         <!-- ═══ CHAT MESSAGES AREA (Virtualized) ═══ -->
@@ -1201,6 +1286,7 @@
                                         <ItemsControl ItemsSource="{Binding PlanItems}" Margin="2,0,0,0">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
+                                                    <StackPanel>
                                                     <StackPanel Orientation="Horizontal" Margin="0,2">
                                                         <Grid Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,10,0">
                                                             <Ellipse StrokeThickness="1.4">
@@ -1239,9 +1325,124 @@
                                                             </TextBlock.Style>
                                                         </TextBlock>
                                                     </StackPanel>
+                                                    <!-- under the active step: what runs now (sub-agents, workflows, background commands) -->
+                                                    <TextBlock Text="{Binding Running}" Margin="26,0,0,2" FontSize="11"
+                                                               Foreground="{DynamicResource Accent.1}"
+                                                               Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
+                                                    </StackPanel>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ Workflow card (docs/agent-orchestration.md §3) ═══ -->
+                                <ContentControl Grid.Row="1" Content="{Binding Workflow}" Focusable="False"
+                                                Visibility="{Binding ShowsWorkflowCard, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate><views:WorkflowCardView/></DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
+
+                                <!-- ═══ Split-chat chips: the chats this command split off, each with the sidebar's own state ═══ -->
+                                <Border Grid.Row="1" Margin="20,6,0,4" Padding="12,8" CornerRadius="8" BorderThickness="1"
+                                        Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}"
+                                        Visibility="{Binding IsSplitChips, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc orch.splits.header}" FontSize="11.5" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,6"/>
+                                        <ItemsControl ItemsSource="{Binding SplitChips}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Margin="0,0,6,4" Padding="9,3" Cursor="Hand" ToolTip="{services:Loc orch.splits.openTip}"
+                                                            Command="{Binding DataContext.GoToChatCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                            CommandParameter="{Binding Id}">
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <Border x:Name="Chip" CornerRadius="10" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                        BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource State.Fill.Faint}">
+                                                                    <ContentPresenter/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Chip" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <Ellipse x:Name="StateDot" Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                                     Fill="{DynamicResource Text.Faint}"/>
+                                                            <TextBlock Text="{Binding Title}" FontSize="11.5" MaxWidth="260" TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{DynamicResource Text.Primary}"/>
+                                                            <TextBlock x:Name="StateText" Text="{services:Loc orch.splits.idle}" Margin="6,0,0,0" FontSize="11"
+                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                        </StackPanel>
+                                                    </Button>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="working">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Accent.1}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.working}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="waiting">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Warning}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.waiting}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="done">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Success}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.done}"/>
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ Next-step box (wrap_up): recap, one question, one or two answers ═══ -->
+                                <Border Grid.Row="1" Margin="20,8,0,4" Padding="14,10" CornerRadius="10" BorderThickness="1"
+                                        Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1.Border.Soft}"
+                                        Visibility="{Binding ShowsNextStep, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <StackPanel DataContext="{Binding NextStep}">
+                                        <TextBlock Text="{services:Loc orch.next.title}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Accent.1}"/>
+                                        <TextBlock Text="{Binding Recap}" Margin="0,4,0,0" FontSize="12.5" TextWrapping="Wrap" Foreground="{DynamicResource Text.Primary}"/>
+                                        <TextBlock Text="{Binding Ask}" Margin="0,8,0,0" FontSize="12.5" FontWeight="SemiBold" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource Text.Primary}" Visibility="{Binding HasAsk, Converter={StaticResource BoolVis}}"/>
+                                        <ItemsControl ItemsSource="{Binding Actions}" Margin="0,8,0,0"
+                                                      Visibility="{Binding HasActions, Converter={StaticResource BoolVis}}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button x:Name="Act" Command="{Binding Command}" Margin="0,0,8,0" Padding="14,5" Cursor="Hand">
+                                                        <!-- a style setter, not a local value: the primary trigger below must win over it -->
+                                                        <Button.Style><Style TargetType="Button"><Setter Property="Background" Value="Transparent"/></Style></Button.Style>
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <Border x:Name="Bd" CornerRadius="7" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                        Background="{TemplateBinding Background}" BorderBrush="{DynamicResource Accent.1.Border.Soft}">
+                                                                    <ContentPresenter/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Bd" Property="Opacity" Value="0.85"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                        <TextBlock x:Name="ActText" Text="{Binding Label}" FontSize="12" Foreground="{DynamicResource Text.Primary}"/>
+                                                    </Button>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding IsPrimary}" Value="True">
+                                                            <Setter TargetName="Act" Property="Background" Value="{DynamicResource Accent.1}"/>
+                                                            <Setter TargetName="ActText" Property="Foreground" Value="{DynamicResource Text.OnAccent}"/>
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock Text="{Binding PickedText}" Margin="0,8,0,0" FontSize="11.5" Foreground="{DynamicResource Text.Muted}"
+                                                   Visibility="{Binding IsAnswered, Converter={StaticResource BoolVis}}"/>
                                     </StackPanel>
                                 </Border>
 
@@ -1401,6 +1602,9 @@
                                                 <DataTrigger Binding="{Binding IsAgentMap}" Value="True">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsOrchestrationCard}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Grid.Style>
@@ -1555,6 +1759,29 @@
                                                 </StackPanel>
                                             </Grid>
                                         </Border>
+
+                                        <!-- Typed during the run, not read yet: Send now has the agent read it at once (a user
+                                             bubble is never the running balloon, so the two never share this row) -->
+                                        <Button Grid.Row="7" Margin="0,6,0,0" Padding="9,2" Cursor="Hand" HorizontalAlignment="Left"
+                                                ToolTip="{services:Loc chat.steer.sendNowTip}"
+                                                Visibility="{Binding IsQueuedNote, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                Command="{Binding DataContext.SendNowCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                CommandParameter="{Binding}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="Chip" CornerRadius="9" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                            BorderBrush="{DynamicResource Accent.1}" Background="{DynamicResource State.Fill.Faint}">
+                                                        <TextBlock Text="{services:Loc chat.steer.sendNow}" FontSize="11.5" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource Accent.1}"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
 
 
                                         <!-- Row 0: Role label + Tool Badge + Success/Fail + Hover Actions -->
@@ -2245,11 +2472,15 @@
                                       Visibility="{Binding IsStickyPlanExpanded, Converter={StaticResource BoolVis}}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
+                                    <StackPanel>
                                     <StackPanel Orientation="Horizontal" Margin="0,2">
                                         <TextBlock x:Name="M" Text="&#xE739;" FontFamily="Segoe MDL2 Assets" FontSize="11" Width="20"
                                                    Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                                         <TextBlock x:Name="T" Text="{Binding Text}" FontSize="12" TextTrimming="CharacterEllipsis"
                                                    Foreground="{DynamicResource Text.Secondary}"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Running}" Margin="20,0,0,2" FontSize="11" Foreground="{DynamicResource Accent.1}"
+                                               Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
                                     </StackPanel>
                                     <DataTemplate.Triggers>
                                         <DataTrigger Binding="{Binding IsDone}" Value="True">
@@ -2302,89 +2533,166 @@
                 </Border>
         </Grid>
 
-        <!-- ═══ EMPTY STATE with Suggested Prompts ═══ -->
-        <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Visibility="{Binding Messages.Count, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}">
-            <TextBlock Text="&#x2728;" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,16"/>
-            <TextBlock Text="{services:Loc chat.welcomeTitle}"
-                       Foreground="{DynamicResource Text.Primary}"
-                       FontSize="24" FontWeight="Bold"
-                       FontFamily="{DynamicResource Font.Ui.Display}"
-                       HorizontalAlignment="Center"/>
-            <TextBlock Text="{services:Loc chat.welcomeSubtitle}"
-                       Foreground="{DynamicResource Text.Secondary}"
-                       FontSize="14" HorizontalAlignment="Center"
-                       Margin="0,8,0,0"/>
+        <!-- ═══ NEW CHAT PAGE: "what do you want to make?" (ChatViewModel.Starters) ═══ -->
+        <!-- A starter asks which project first (a new chat has no folder), then fills an editable prompt into the box.
+             It never sends: the [bracketed] part is selected for the user to type over (ChatView.xaml.cs). -->
+        <ScrollViewer x:Name="NewChatPage" Grid.Row="1" Focusable="False"
+                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Visibility="{Binding Messages.Count, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16,24,16,24" MaxWidth="900">
+                <TextBlock Text="{services:Loc starter.title}"
+                           Foreground="{DynamicResource Accent.Gradient}"
+                           FontSize="{DynamicResource Starter.Title.Size}" FontWeight="Bold"
+                           FontFamily="{DynamicResource Font.Ui.Display}"
+                           TextAlignment="Center" TextWrapping="Wrap" HorizontalAlignment="Center"/>
+                <TextBlock Text="{services:Loc starter.subtitle}"
+                           Foreground="{DynamicResource Text.Secondary}"
+                           FontSize="14" TextAlignment="Center" TextWrapping="Wrap" HorizontalAlignment="Center"
+                           Margin="0,8,0,0" MaxWidth="560"/>
 
-            <!-- Suggested Prompts -->
-            <WrapPanel HorizontalAlignment="Center" Margin="0,24,0,0" MaxWidth="600">
-                <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
-                        Click="SuggestedPrompt_Click"
-                        Tag="{services:Loc chat.suggestExplainPrompt}">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Accent.2}"/>
-                        <TextBlock Text="{services:Loc chat.suggestExplain}" FontSize="12" FontFamily="{DynamicResource Font.Ui.Display}"/>
-                    </StackPanel>
-                </Button>
-                <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
-                        Click="SuggestedPrompt_Click"
-                        Tag="{services:Loc chat.suggestBugsPrompt}">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Status.Danger}"/>
-                        <TextBlock Text="{services:Loc chat.suggestBugs}" FontSize="12" FontFamily="{DynamicResource Font.Ui.Display}"/>
-                    </StackPanel>
-                </Button>
-                <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
-                        Click="SuggestedPrompt_Click"
-                        Tag="{services:Loc chat.suggestTestsPrompt}">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE8A0;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Status.Success}"/>
-                        <TextBlock Text="{services:Loc chat.suggestTests}" FontSize="12" FontFamily="{DynamicResource Font.Ui.Display}"/>
-                    </StackPanel>
-                </Button>
-                <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
-                        Click="SuggestedPrompt_Click"
-                        Tag="{services:Loc chat.suggestReviewPrompt}">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Accent.1}"/>
-                        <TextBlock Text="{services:Loc chat.suggestReview}" FontSize="12" FontFamily="{DynamicResource Font.Ui.Display}"/>
-                    </StackPanel>
-                </Button>
-            </WrapPanel>
+                <!-- The starters -->
+                <ItemsControl x:Name="StarterList" ItemsSource="{Binding StarterTemplates}" Margin="0,24,0,0" Focusable="False"
+                              Visibility="{Binding IsChoosingStarterProject, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel HorizontalAlignment="Center"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Style="{StaticResource StarterTile}" ToolTip="{Binding Hint}"
+                                    AutomationProperties.Name="{Binding Label}"
+                                    Command="{Binding DataContext.PickStarterCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                    CommandParameter="{Binding}">
+                                <StackPanel>
+                                    <Border Width="42" Height="42" CornerRadius="12" HorizontalAlignment="Center"
+                                            Background="{DynamicResource State.Fill.Faint}" BorderThickness="1"
+                                            BorderBrush="{DynamicResource Border.Subtle}">
+                                        <TextBlock Text="{Binding Glyph}" FontSize="19" Style="{StaticResource StarterGlyph}"/>
+                                    </Border>
+                                    <TextBlock Text="{Binding Label}" Margin="4,9,4,0" MaxWidth="122"
+                                               FontSize="12.5" FontWeight="SemiBold" FontFamily="{DynamicResource Font.Ui.Display}"
+                                               Foreground="{DynamicResource Text.Primary}"
+                                               TextAlignment="Center" TextWrapping="Wrap" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
 
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
-                <Button Style="{StaticResource SecondaryButton}"
-                        Command="{Binding OpenFolderCommand}"
-                        Padding="16,10" Margin="0,0,8,0">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                                   FontSize="16" VerticalAlignment="Center"
-                                   Margin="0,0,8,0"/>
-                        <TextBlock Text="{services:Loc chat.openProjectFolder}" FontFamily="{DynamicResource Font.Ui.Display}"
-                                   FontSize="13" VerticalAlignment="Center"/>
+                <!-- Which project? -->
+                <Border x:Name="StarterProjectCard" Margin="0,24,0,0" MaxWidth="580" Padding="20,18" CornerRadius="16"
+                        BorderThickness="1" Background="{DynamicResource Surface.Card}" BorderBrush="{DynamicResource Accent.1.Border}"
+                        Effect="{DynamicResource Fx.Card.Glow}"
+                        Visibility="{Binding IsChoosingStarterProject, Converter={StaticResource BoolVis}}">
+                    <StackPanel>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Left" Width="38" Height="38" CornerRadius="11" Margin="0,0,12,0"
+                                    Background="{DynamicResource State.Fill.Faint}" DataContext="{Binding PendingStarter}">
+                                <TextBlock Text="{Binding Glyph}" FontSize="18" Style="{StaticResource StarterGlyph}"/>
+                            </Border>
+                            <TextBlock Text="{Binding StarterProjectTitle}" VerticalAlignment="Center" TextWrapping="Wrap"
+                                       FontSize="16" FontWeight="SemiBold" FontFamily="{DynamicResource Font.Ui.Display}"
+                                       Foreground="{DynamicResource Text.Primary}"/>
+                        </DockPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0"
+                                    Visibility="{Binding StarterWillReplaceInput, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Status.Warning}" Margin="0,0,6,0"/>
+                            <TextBlock x:Name="StarterReplaceWarning" Text="{services:Loc starter.project.replaceWarning}" FontSize="12"
+                                       TextWrapping="Wrap" Foreground="{DynamicResource Status.Warning}"/>
+                        </StackPanel>
+
+                        <TextBlock Text="{services:Loc starter.project.recent}" Margin="0,14,0,4" FontSize="11"
+                                   Foreground="{DynamicResource Text.Muted}"
+                                   Visibility="{Binding HasStarterProjects, Converter={StaticResource BoolVis}}"/>
+                        <ItemsControl x:Name="StarterProjectList" ItemsSource="{Binding StarterProjects}" Focusable="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Style="{StaticResource StarterProjectRow}" ToolTip="{Binding Path}"
+                                            AutomationProperties.Name="{Binding Name}"
+                                            Command="{Binding DataContext.UseStarterProjectCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Accent.2}" Margin="0,0,10,0"/>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource Text.Primary}"/>
+                                                <TextBlock Text="{Binding Path}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource Text.Muted}" FontFamily="{DynamicResource Font.Mono}"/>
+                                            </StackPanel>
+                                            <Border Grid.Column="2" CornerRadius="8" Padding="8,2" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                    Background="{DynamicResource Accent.1.Tint}"
+                                                    Visibility="{Binding IsCurrent, Converter={StaticResource BoolVis}}">
+                                                <TextBlock Text="{services:Loc starter.project.current}" FontSize="10.5"
+                                                           Foreground="{DynamicResource Accent.1}"/>
+                                            </Border>
+                                        </Grid>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{services:Loc starter.project.empty}" Margin="0,14,0,0" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource Text.Secondary}"
+                                   Visibility="{Binding HasStarterProjects, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+
+                        <WrapPanel Margin="0,14,0,0">
+                            <Button x:Name="StarterBrowseButton" Style="{StaticResource PrimaryButton}" Padding="14,8" Margin="0,4,8,0"
+                                    Command="{Binding BrowseStarterProjectCommand}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <TextBlock Text="{services:Loc starter.project.browse}" FontSize="12.5" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="StarterNoProjectButton" Style="{StaticResource SecondaryButton}" Padding="14,8" Margin="0,4,8,0"
+                                    ToolTip="{services:Loc starter.project.noneTip}"
+                                    Command="{Binding StarterWithoutProjectCommand}">
+                                <TextBlock Text="{services:Loc starter.project.none}" FontSize="12.5"/>
+                            </Button>
+                            <Button x:Name="StarterCancelButton" Style="{StaticResource SecondaryButton}" Padding="14,8" Margin="0,4,0,0"
+                                    Command="{Binding CancelStarterCommand}">
+                                <TextBlock Text="{services:Loc starter.project.cancel}" FontSize="12.5"/>
+                            </Button>
+                        </WrapPanel>
                     </StackPanel>
-                </Button>
-                <Button Style="{StaticResource SecondaryButton}"
-                        Command="{Binding CloneRepoCommand}"
-                        Padding="16,10" Margin="8,0,0,0">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE753;" FontFamily="Segoe MDL2 Assets"
-                                   FontSize="16" VerticalAlignment="Center"
-                                   Margin="0,0,8,0" Foreground="{DynamicResource Accent.2}"/>
-                        <TextBlock Text="{services:Loc chat.connectRepo}" FontFamily="{DynamicResource Font.Ui.Display}"
-                                   FontSize="13" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Button>
+                </Border>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,22,0,0">
+                    <Button Style="{StaticResource SecondaryButton}"
+                            Command="{Binding OpenFolderCommand}"
+                            Padding="14,8" Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
+                                       FontSize="14" VerticalAlignment="Center"
+                                       Margin="0,0,8,0"/>
+                            <TextBlock Text="{services:Loc chat.openProjectFolder}" FontFamily="{DynamicResource Font.Ui.Display}"
+                                       FontSize="12.5" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource SecondaryButton}"
+                            Command="{Binding CloneRepoCommand}"
+                            Padding="14,8" Margin="8,0,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE753;" FontFamily="Segoe MDL2 Assets"
+                                       FontSize="14" VerticalAlignment="Center"
+                                       Margin="0,0,8,0" Foreground="{DynamicResource Accent.2}"/>
+                            <TextBlock Text="{services:Loc chat.connectRepo}" FontFamily="{DynamicResource Font.Ui.Display}"
+                                       FontSize="12.5" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+                <TextBlock Text="{services:Loc chat.openHint}"
+                           Foreground="{DynamicResource Text.Muted}"
+                           FontSize="11" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                           Margin="0,6,0,0"/>
             </StackPanel>
-            <TextBlock Text="{services:Loc chat.openHint}"
-                       Foreground="{DynamicResource Text.Muted}"
-                       FontSize="11" HorizontalAlignment="Center"
-                       Margin="0,6,0,0"/>
-        </StackPanel>
+        </ScrollViewer>
 
         <!-- ════ STRATEGIC COMPACTION TOAST (Sprint 2 #2) ════ -->
         <!-- Non-blocking nudge that fires at logical breakpoints (50+ tool calls /
@@ -2908,6 +3216,15 @@
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <TextBlock Text="{services:Loc chat.think}" FontSize="12" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
+
+                                <!-- Ultra: this chat may run multi-agent workflows (off by default, per chat) -->
+                                <CheckBox x:Name="UltraToggle" IsChecked="{Binding IsUltra}" Foreground="{DynamicResource Accent.2}"
+                                          VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc orch.ultraTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8B9;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{services:Loc orch.ultra}" FontSize="12" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </CheckBox>
 

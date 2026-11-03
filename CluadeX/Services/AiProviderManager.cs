@@ -68,6 +68,9 @@ public class AiProviderManager : IDisposable
         _providers[AiProviderType.AntigravityDev] = new AntigravityDevProvider(settingsService, fileSystemService);
         // OpenAI's Codex CLI on the user's ChatGPT sign-in (OpenAIDevProvider).
         _providers[AiProviderType.OpenAIDev] = new OpenAIDevProvider(settingsService, fileSystemService);
+        // Every OpenAI-compatible service (OpenRouter, Groq, DeepSeek, …): one client, one preset each.
+        foreach (var preset in CompatiblePresets.All)
+            _providers[preset.Type] = new CompatibleProvider(settingsService, preset, costTracker);
 
         // Set initial active provider
         var activeType = settingsService.Settings.ActiveProvider;

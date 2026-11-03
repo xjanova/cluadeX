@@ -220,6 +220,8 @@ public sealed partial class UiStudioViewModel
         _pagesCts.Cancel();
         _pagesCts = new CancellationTokenSource();
         lock (_queue) _queue.Clear();
+        _sourcesChanged = false;
+        IsDiscovering = false;
         _allCards.Clear();
         _loaded.Clear();
         PageRows.Clear();
@@ -297,7 +299,7 @@ public sealed partial class UiStudioViewModel
             _log?.Warn("UiStudio", "page discovery failed", ex);
             Status(T("studio.pages.failed"), error: true);
         }
-        finally { IsDiscovering = false; }
+        finally { if (ct == _pagesCts.Token) IsDiscovering = false; }   // (a project left: the next one's reading goes on)
     }
 
     private void BuildCards()
@@ -564,6 +566,7 @@ public sealed partial class UiStudioViewModel
             }
         }
         finally { _pumping = false; }
+        if (ct.IsCancellationRequested) Pump();   // (stopped by a project change: the new project's queue was left waiting)
     }
 
     /// <summary>Draw every screen of a simulated app, one by one in the background.</summary>
@@ -587,9 +590,10 @@ public sealed partial class UiStudioViewModel
                 if (!c.HasThumb && !c.IsBusy) c.SetState(sk != null ? "sketch" : "failed", sk != null ? T("studio.pages.simulated") : T("studio.pages.noSketch"));
                 if (ReferenceEquals(c, StageCard)) StageSketch = sk;
             }
-            UpdateSummary();
+            if (!ct.IsCancellationRequested) UpdateSummary();
         }
         finally { _sketching = false; }
+        if (ct.IsCancellationRequested) _ = SketchAllAsync();   // (the new project's screens were left waiting for this pass)
     }
 
     private void OnDeviceChangedForPages()

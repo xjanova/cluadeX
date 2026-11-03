@@ -348,7 +348,9 @@ public class CodeWorkspaceService
     {
         SetStamp(tab, StampOf(bytes, tab.FullPath));
         // Only clear the dirty flag if nothing was typed during the write; otherwise the newer
-        // keystrokes would show as saved when they are not.
+        // keystrokes would show as saved when they are not. In a large file those keystrokes may
+        // still be only in the editor (its copy into Content waits for a pause), so copy them first.
+        tab.FlushPendingEdits();
         if (string.Equals(tab.Content, content, StringComparison.Ordinal)) tab.MarkSaved();
         return new SaveResult(SaveOutcome.Saved, null);
     }

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using CluadeX.Models;
 using CluadeX.Services;
 using CluadeX.Services.Mcp;
@@ -15,6 +16,10 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     private readonly DebugLogService? _log;
     private readonly Action<string, McpServerState> _stateHandler;
     private readonly Action _configHandler;
+    private readonly DispatcherTimer? _liveTimer;
+    // The status line as the summary last set it: a state change may refresh that, never a page action's own message.
+    private string _lastSummary = "";
+    private string _brainLine = "";
 
     /// <summary>
     /// Per-server log text, owned here rather than by the list item. Items used to be rebuilt on every state
@@ -58,6 +63,8 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     public bool IsAddingServer { get => _isAddingServer; set => SetProperty(ref _isAddingServer, value); }
     public bool IsEditing { get => _isEditing; set => SetProperty(ref _isEditing, value); }
     public string StatusText { get => _statusText; set => SetProperty(ref _statusText, value); }
+    /// <summary>BrainX in one line, as of now: connected or why not, the version running and the one installed.</summary>
+    public string BrainLine { get => _brainLine; private set => SetProperty(ref _brainLine, value); }
 
     // Localized labels
     public string PageTitle => _loc.T("mcp.title");
@@ -87,7 +94,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         StartServerCommand = new AsyncRelayCommand(StartSelectedServer,
             () => HasSel() && SelectedServer!.Status is not ("running" or "starting"));
         StopServerCommand = new AsyncRelayCommand(StopSelectedServer,
-            () => HasSel() && (SelectedServer!.Status is "running" or "starting" or "reconnecting"));
+            () => HasSel() && (SelectedServer!.Status is "running" or "unresponsive" or "starting" or "reconnecting"));
         RestartServerCommand = new AsyncRelayCommand(RestartSelectedServer, HasSel);
         AddServerCommand = new RelayCommand(AddServer,
             () => !string.IsNullOrWhiteSpace(NewServerName) && !string.IsNullOrWhiteSpace(NewServerCommand));
@@ -112,8 +119,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         // tool registry the exit path is mutating.
         // It updates the one item IN PLACE: rebuilding the list here is what used to wipe the log, overwrite
         // the error state and throw away an edit in progress every time any server changed state.
-        _stateHandler = (name, _) =>
-            Application.Current?.Dispatcher.BeginInvoke(new Action(() => OnServerStateChanged(name)));
+        _stateHandler = (name, _) => Post(() => OnServerStateChanged(name));
         _mcpManager.OnServerStateChanged += _stateHandler;
         // This page is built BEFORE the startup load (MainViewModel takes it at construction), so what its
         // constructor sees is the empty pre-load state: a file that then fails to load has to reach the status
@@ -126,10 +132,34 @@ public class McpServersViewModel : ViewModelBase, IDisposable
             OnPropertyChanged(nameof(PageTitle));
             OnPropertyChanged(nameof(PageSubtitle));
             foreach (var s in Servers) ApplyState(s);
+            RefreshBrainLine();
         };
 
         SyncServers();
         StatusText = Summary();
+        RefreshBrainLine();
+
+        // "Last answer 8 s ago" has to move by itself, or the page is back to showing what was true when it was drawn.
+        if (Application.Current != null)
+        {
+            _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            _liveTimer.Tick += (_, _) => RefreshLive();
+            _liveTimer.Start();
+        }
+    }
+
+    /// <summary>Redraw what depends on the clock. Public so the contract harness can read the page without a timer.</summary>
+    public void RefreshLive()
+    {
+        foreach (var s in Servers) ApplyLive(s);
+        RefreshBrainLine();
+    }
+
+    /// <summary>Later on the UI thread, never blocking the caller; with no WPF application (a headless test host), now.</summary>
+    private static void Post(Action action)
+    {
+        if (Application.Current?.Dispatcher is { } d) d.BeginInvoke(action);
+        else action();
     }
 
     /// <summary>Run on the UI thread: inline when already there (keeps the order of status lines a page action
@@ -148,6 +178,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         SyncServers();
         RefreshSelectedTools();
         StatusText = Summary();
+        RefreshBrainLine();
     }
 
     // ─── Sync (in place) ───
@@ -155,7 +186,9 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     /// <summary>The page's status line at rest: a config-file problem first (it is why the list may be empty
     /// or short, and why edits aren't saved), then servers a re-read brought back that are not started yet,
     /// otherwise the server count.</summary>
-    private string Summary()
+    private string Summary() => _lastSummary = BuildSummary();
+
+    private string BuildSummary()
     {
         if (_mcpManager.ConfigLoadFailed) return _loc.T("mcp.config.unreadable");
         var unreadable = _mcpManager.UnreadableServers;
@@ -251,7 +284,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         var state = _mcpManager.GetServerState(item.Name);
         item.Status = state switch
         {
-            McpServerState.Ready => "running",
+            McpServerState.Ready => _mcpManager.IsResponding(item.Name) ? "running" : "unresponsive",
             McpServerState.Starting => "starting",
             McpServerState.Reconnecting => "reconnecting",
             McpServerState.Failed => "error",
@@ -260,6 +293,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         item.StatusLabel = item.Status switch
         {
             "running" => _loc.T("mcpm.statusRunning"),
+            "unresponsive" => _loc.T("mcpm.statusUnresponsive"),
             "starting" => _loc.T("mcpm.statusStarting"),
             "reconnecting" => _loc.T("mcpm.statusReconnecting"),
             "error" => _loc.T("mcpm.statusError"),
@@ -268,6 +302,66 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         item.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(item.Name).Count;
         item.ToolCountText = ToolsAndVersion(item);
         item.EnabledLabel = item.Enabled ? _loc.T("mcpm.enabledBadge") : _loc.T("mcpm.disabledBadge");
+        ApplyLive(item);
+    }
+
+    private string Span(TimeSpan t)
+    {
+        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
+        return t.TotalSeconds < 60 ? _loc.T("mcpm.span.seconds", (int)t.TotalSeconds)
+            : t.TotalMinutes < 60 ? _loc.T("mcpm.span.minutes", (int)t.TotalMinutes)
+            : _loc.T("mcpm.span.hours", (int)t.TotalHours);
+    }
+
+    /// <summary>The connection and any update, in words: what the clock or the manager can change, not the status.</summary>
+    private void ApplyLive(McpServerDisplayItem item)
+    {
+        var now = DateTime.UtcNow;
+        var info = _mcpManager.GetConnectionInfo(item.Name);
+        string heard = Span(now - (info.LastHeardUtc ?? now));
+        item.ConnectionText = item.Status switch
+        {
+            "running" => _loc.T("mcpm.live.connected", Span(now - (info.ConnectedSinceUtc ?? now)), heard),
+            "unresponsive" => _loc.T("mcpm.live.unresponsive", heard),
+            "starting" => _loc.T("mcpm.live.starting"),
+            "reconnecting" => _loc.T("mcpm.live.reconnecting", Math.Max(1, _mcpManager.ReconnectAttempt(item.Name)), McpServerManager.ReconnectAttemptsMax),
+            "error" => _mcpManager.GetServerLastError(item.Name) is { Length: > 0 } why
+                ? _loc.T("mcpm.live.error", FirstLine(why))
+                : _loc.T("mcpm.live.errorNoDetail"),
+            _ => _loc.T("mcpm.live.stopped"),
+        };
+        var update = _mcpManager.GetUpdateStatus(item.Name);
+        item.UpdateText = update?.Kind switch
+        {
+            McpUpdateKind.Waiting => _loc.T("mcpm.update.waiting", update.TargetVersion),
+            McpUpdateKind.Switching => _loc.T("mcpm.update.switching", update.TargetVersion),
+            McpUpdateKind.Failed => _loc.T("mcpm.update.failed", update.TargetVersion, _mcpManager.ServerVersion(item.Name) ?? "?", FirstLine(update.Detail ?? "")),
+            _ => "",
+        };
+    }
+
+    private static string FirstLine(string text)
+    {
+        string line = text.Trim().Split('\n')[0].TrimEnd('\r');
+        return line.Length <= 200 ? line : line[..200] + "…";
+    }
+
+    private void RefreshBrainLine()
+    {
+        string? running = _mcpManager.BrainVersion;
+        BrainLine = _mcpManager.GetBrainInstallState() switch
+        {
+            McpServerManager.BrainInstall.Connected when !_mcpManager.IsResponding(_mcpManager.BrainServerName!)
+                => _loc.T("mcpm.brain.unresponsive", running ?? "?"),
+            McpServerManager.BrainInstall.Connected
+                => _loc.T("mcpm.brain.connected", running ?? "?", _mcpManager.InstalledBrainVersion ?? running ?? "?"),
+            McpServerManager.BrainInstall.Starting => _loc.T("mcpm.brain.connecting"),
+            McpServerManager.BrainInstall.Configured => _mcpManager.BrainState == McpServerState.Failed
+                ? _loc.T("mcpm.brain.down") : _loc.T("mcpm.brain.stopped"),
+            McpServerManager.BrainInstall.InstalledNotConfigured => _mcpManager.BrainAutoConnectDeclined
+                ? _loc.T("mcpm.brain.declined") : _loc.T("mcpm.brain.notConnected"),
+            _ => _loc.T("mcpm.brain.notInstalled"),
+        };
     }
 
     private void OnServerStateChanged(string name)
@@ -276,6 +370,9 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         if (item == null) SyncServers();
         else ApplyState(item);
         if (ReferenceEquals(item, SelectedServer)) RefreshSelectedTools();
+        // "2 running" must not outlive the server that died — but a page action's own message is not the summary.
+        if (StatusText == _lastSummary) StatusText = Summary();
+        RefreshBrainLine();
         CommandManager.InvalidateRequerySuggested();
     }
 
@@ -536,13 +633,15 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     /// <summary>"128 tools"; the version the server reported (serverInfo.version) goes on the item's badge.</summary>
     private string ToolsAndVersion(McpServerDisplayItem item)
     {
-        item.VersionText = _mcpManager.ServerVersion(item.Name) is { Length: > 0 } v ? "v" + v.TrimStart('v', 'V') : "";
+        // Only a live connection has a version: a stopped server's badge would be the one it had when it was last up.
+        item.VersionText = item.Status is "running" or "unresponsive" && _mcpManager.ServerVersion(item.Name) is { Length: > 0 } v
+            ? "v" + v.TrimStart('v', 'V') : "";
         return _loc.T("mcpm.toolCount", item.ToolCount);
     }
 
     private void OnToolsChanged()
     {
-        Application.Current?.Dispatcher.BeginInvoke(() =>
+        Post(() =>
         {
             foreach (var s in Servers)
             {
@@ -557,6 +656,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _liveTimer?.Stop();
         _mcpManager.OnServerLog -= OnServerLog;
         _mcpManager.OnToolsChanged -= OnToolsChanged;
         _mcpManager.OnServerStateChanged -= _stateHandler;

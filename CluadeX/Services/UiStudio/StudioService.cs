@@ -129,6 +129,30 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         NavigateRequested?.Invoke(url);
     }
 
+    /// <summary>What the browser is sent to when its project is gone: no page shows under another project's name.</summary>
+    public const string BlankPage = "about:blank";
+
+    /// <summary>The browser may still hold the last project's page (until a navigation lands). What that page sends
+    /// — a pick, a tree, an inline edit whose line numbers mean another project's files — is dropped.</summary>
+    public bool PageIsOld { get; private set; }
+
+    /// <summary>The view reports that a navigation landed: messages now come from a page opened for this project.</summary>
+    public void NotePageLoaded() => PageIsOld = false;
+
+    private void LeavePage()
+    {
+        PageIsOld = true;
+        PageUrl = null;
+        PageIsLocal = false;
+        LastRequestedUrl = null;
+        ServerBaseUrl = null;
+        Selection = null;
+        Tree = null;
+        TreeTruncated = false;
+        _undo.Clear();
+        NavigateRequested?.Invoke(BlankPage);
+    }
+
     public int UndoCount => _undo.Count;
 
     // ───────────────────────────── project & serving ─────────────────────────────
@@ -142,13 +166,8 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
             return;
         }
         StopServing();
-        _undo.Clear();
         Project = StudioProject.Detect(root);
-        ServerBaseUrl = null;
-        Selection = null;
-        Tree = null;
-        LastRequestedUrl = null;
-        _pendingReload = null;
+        LeavePage();
         StartWatching();
         _log?.Info("UiStudio", $"project {root} → {Project.Kind} ({Project.Framework})");
         ProjectChanged?.Invoke();
@@ -160,12 +179,8 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     {
         StopServing();
         StopWatching();
-        _undo.Clear();
-        LastRequestedUrl = null;
         Project = new StudioProjectInfo();
-        Selection = null;
-        Tree = null;
-        PageUrl = null;
+        LeavePage();
         ProjectChanged?.Invoke();
         SelectionChanged?.Invoke();
         TreeChanged?.Invoke();
@@ -177,6 +192,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         if (!HasProject) return "studio.err.noProject";
         if (IsServing || IsStarting) { if (PageUrl != null) RequestNavigate(PageUrl); return null; }
         IsStarting = true;
+        int start = ++_startRun;
         ServingChanged?.Invoke();
         try
         {
@@ -202,7 +218,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                 {
                     var dev = new DevServerRunner(Root);
                     var dispatcher = Application.Current?.Dispatcher;
-                    dev.Output += line => dispatcher?.BeginInvoke(() => ServerOutput?.Invoke(line));
+                    dev.Output += line => dispatcher?.BeginInvoke(() => { if (ReferenceEquals(_dev, dev)) ServerOutput?.Invoke(line); });
                     dev.UrlFound += url => dispatcher?.BeginInvoke(() =>
                     {
                         if (!ReferenceEquals(_dev, dev)) return;
@@ -251,16 +267,24 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         }
         finally
         {
-            IsStarting = false;
-            ServingChanged?.Invoke();
+            // (a start that was stopped: the next project's own start may be running by now, and it keeps its flag)
+            if (start == _startRun)
+            {
+                IsStarting = false;
+                ServingChanged?.Invoke();
+            }
         }
     }
+
+    private int _startRun;
 
     public void StopServing()
     {
         try { _startCts?.Cancel(); } catch { }
         _startCts?.Dispose();
         _startCts = null;
+        _startRun++;
+        IsStarting = false;
         _pendingReload = null;   // (the project's watcher stays: it belongs to the project, not to the preview)
         _static?.Dispose();
         _static = null;
@@ -283,6 +307,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
 
     public void HandleOverlayMessage(OverlayMessage msg)
     {
+        if (PageIsOld) return;
         switch (msg.Type)
         {
             case "select":
@@ -336,14 +361,16 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
             var w = new FileSystemWatcher(Root)
             {
                 IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                // DirectoryName too: deleting or renaming a folder raises one event for the folder, none for its files
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size,
                 InternalBufferSize = 64 * 1024,   // an AI or a git checkout writing many files at once
             };
             FileSystemEventHandler onChange = (_, e) => Changed(e.FullPath);
             w.Changed += onChange;
-            w.Created += onChange;
-            w.Deleted += onChange;
-            w.Renamed += (_, e) => { Changed(e.OldFullPath); Changed(e.FullPath); };
+            w.Created += (_, e) => Changed(e.FullPath, folder: Directory.Exists(e.FullPath));
+            // a deleted path cannot be asked whether it was a folder: one without an extension is taken as one
+            w.Deleted += (_, e) => Changed(e.FullPath, folder: true);
+            w.Renamed += (_, e) => { Changed(e.OldFullPath, folder: true); Changed(e.FullPath, folder: Directory.Exists(e.FullPath)); };
             w.Error += (_, e) => _log?.Warn("UiStudio", "file watcher overflow", e.GetException());
             w.EnableRaisingEvents = true;
             _watcher = w;
@@ -352,14 +379,20 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     }
 
     /// <summary>Whether a changed file is the project's own source, worth reacting to. Called on the watcher's thread:
-    /// it touches no state.</summary>
-    public static bool IsSourceChange(string root, string path)
+    /// it touches no state. <paramref name="folder"/>: the path may be a folder (created, deleted or renamed), which
+    /// has no extension but takes its files with it.</summary>
+    public static bool IsSourceChange(string root, string path, bool folder = false)
     {
         if (root.Length == 0 || !path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
         string rel = path[root.Length..];
-        foreach (var seg in rel.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
+        var segs = rel.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var seg in segs)
             if (seg.StartsWith('.') || IgnoredDirs.Contains(seg)) return false;
+        // Laravel's root `artisan` has no extension but is half of what makes a folder Laravel: an AI that writes it
+        // after composer.json must still get the folder detected again. It never reloads the page (ReloadsPage).
+        if (segs.Length == 1 && segs[0].Equals("artisan", StringComparison.OrdinalIgnoreCase)) return true;
         string ext = Path.GetExtension(path).ToLowerInvariant();
+        if (folder && ext.Length == 0) return true;
         return ext is not ("" or ".tmp" or ".swp" or ".bak" or ".log" or ".lock") && !path.EndsWith('~');
     }
 
@@ -375,10 +408,10 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         else _quietWrites.Remove(path);
     }
 
-    private void Changed(string path)
+    private void Changed(string path, bool folder = false)
     {
         string root = Root;
-        if (!IsSourceChange(root, path)) return;
+        if (!IsSourceChange(root, path, folder)) return;
         string ext = Path.GetExtension(path).ToLowerInvariant();
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -399,7 +432,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     /// <summary>Does this file change what the preview shows, where the Studio (not a dev server) has to reload?</summary>
     private bool ReloadsPage(string path, string ext) => Project.Kind switch
     {
-        StudioProjectKind.Static => true,
+        StudioProjectKind.Static => ext.Length > 0,   // not the extensionless root `artisan` (IsSourceChange lets it through)
         // Blade views, routes and controllers render the page; CSS/JS count only where the site serves them as they are.
         StudioProjectKind.Server => ext == ".php"
             || ext is ".css" or ".js" && path.Contains(Path.DirectorySeparatorChar + "public" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
@@ -518,20 +551,31 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
 
     /// <summary>Put files back as they were (the review's "undo all"): each path gets its old text, a file that did
     /// not exist (null) is deleted. The undo stack is cleared — its entries no longer match the files. Returns the
-    /// paths that could not be restored.</summary>
+    /// paths that could not be restored.
+    /// Restores run first and recreate a folder the AI moved or removed. The deletes run only when every restore
+    /// worked: after `git mv lib/screens lib/pages` the moved files are the only other copy of that text, so they
+    /// are never deleted while an original could not be put back.</summary>
     public List<string> RestoreFiles(IReadOnlyDictionary<string, string?> before)
     {
         var failed = new List<string>();
         foreach (var (path, text) in before)
         {
+            if (text == null) continue;
             try
             {
-                if (text == null) { if (File.Exists(path)) File.Delete(path); continue; }
                 if (File.Exists(path) && CluadeX.Helpers.TextFileCodec.Read(path).Text == text) continue;
                 bool bom = File.Exists(path) && CluadeX.Helpers.TextFileCodec.Read(path).HasBom;
+                if (Path.GetDirectoryName(path) is { Length: > 0 } dir) Directory.CreateDirectory(dir);
                 CluadeX.Helpers.TextFileCodec.Write(path, text, bom);
                 SourceWritten?.Invoke(path);
             }
+            catch (Exception ex) { _log?.Warn("UiStudio", "restore failed " + path, ex); failed.Add(path); }
+        }
+        foreach (var (path, text) in before)
+        {
+            if (text != null) continue;
+            if (failed.Count > 0) { failed.Add(path); continue; }
+            try { if (File.Exists(path)) File.Delete(path); }
             catch (Exception ex) { _log?.Warn("UiStudio", "restore failed " + path, ex); failed.Add(path); }
         }
         _undo.Clear();

@@ -169,6 +169,49 @@ public sealed partial class UiStudioViewModel
         RaiseSession();
     }
 
+    /// <summary>Rounds left for review when the chat moved to another project (project → its round): each is put back
+    /// when the Studio is on that project again, so "undo all" is never lost to a chat switch and no project's round
+    /// ever shows on another.</summary>
+    private readonly Dictionary<string, ChangeSession> _parkedRounds = new(StringComparer.OrdinalIgnoreCase);
+
+    private static string RoundKey(string root) => root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private void ParkRound()
+    {
+        if (_session is { } s && (s.Changed.Count > 0 || s.AiAsked) && _studio.HasProject) _parkedRounds[RoundKey(_studio.Root)] = s;
+    }
+
+    private void TakeParkedRound()
+    {
+        if (!_parkedRounds.Remove(RoundKey(_studio.Root), out var s)) return;
+        _session = s;
+        RaiseSession();
+        _ = CatchUpRoundAsync(s, _studio.Root);
+    }
+
+    /// <summary>The AI goes on working in its chat while the Studio shows another project, unseen by the watcher: what
+    /// it changed by now joins the round.</summary>
+    private async Task CatchUpRoundAsync(ChangeSession s, string root)
+    {
+        var before = s.Before.ToList();
+        var known = s.Before.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var unread = s.Unread.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool full = s.FullSnapshot;
+        List<string> changed;
+        try
+        {
+            changed = await Task.Run(() =>
+            {
+                var found = before.Where(f => f.Value == null ? File.Exists(f.Key) : !File.Exists(f.Key) || ReadSource(f.Key) != f.Value).Select(f => f.Key).ToList();
+                if (full) found.AddRange(AppFiles(root).Where(f => !known.Contains(f) && !unread.Contains(f)));
+                return found;
+            });
+        }
+        catch (Exception ex) { _log?.Warn("UiStudio", "looking over a round after coming back failed", ex); return; }
+        if (!ReferenceEquals(_session, s)) return;
+        foreach (var f in changed) NoteSourceChanged(f);
+    }
+
     /// <summary>The same problem drawn twice reads the same ("overflowed by 31 pixels" vs "by 29 pixels").</summary>
     private static string ProblemKey(string p) => Regex.Replace(p, @"\d+(\.\d+)?", "#").Trim();
 
@@ -299,7 +342,9 @@ public sealed partial class UiStudioViewModel
         foreach (var p in changed) _selfWrites.Remove(p);
         _pendingFocus = null;
         StageBox = null;
-        EndSession();
+        // A failed restore keeps the round open: s.Before is the only copy of the text that could not be put back,
+        // and Undo All can be pressed again (restored files compare equal and are skipped).
+        if (failed.Count == 0) EndSession();
         CheckPassed = null;
         OnPropertyChanged(nameof(CanUndo));
         Status(failed.Count == 0 ? T("studio.session.undone", changed.Count) : T("studio.session.undoFailed", failed.Count), error: failed.Count > 0);

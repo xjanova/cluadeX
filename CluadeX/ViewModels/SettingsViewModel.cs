@@ -60,6 +60,9 @@ public partial class SettingsViewModel : ViewModelBase
         // Dispatch policy (Services/Agents/DispatchPolicy.cs)
         [nameof(DispatchPolicyEnabled)] = (vm, s) => s.DispatchPolicyEnabled = vm.DispatchPolicyEnabled,
         [nameof(DesktopControlEnabled)] = (vm, s) => s.DesktopControlEnabled = vm.DesktopControlEnabled,
+        [nameof(DesktopBlockedAppsText)] = (vm, s) => s.DesktopBlockedApps = (vm.DesktopBlockedAppsText ?? "")
+            .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(200).ToList(),
         [nameof(CliRunBudgetUsd)] = (vm, s) => s.CliRunBudgetUsd = Math.Max(0, vm.CliRunBudgetUsd),
         [nameof(CliDailyBudgetUsd)] = (vm, s) => s.CliDailyBudgetUsd = Math.Max(0, vm.CliDailyBudgetUsd),
         [nameof(MaxParallelAgents)] = (vm, s) => s.MaxParallelAgents = Math.Clamp(vm.MaxParallelAgents, 1, Services.Agents.DispatchPolicy.MaxParallelCap),
@@ -112,6 +115,8 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(HuggingFaceToken)] = (vm, s) => s.HuggingFaceToken = string.IsNullOrWhiteSpace(vm.HuggingFaceToken) ? null : vm.HuggingFaceToken.Trim(),
         // General
         [nameof(LiveEditFollow)] = (vm, s) => s.LiveEditFollow = vm.LiveEditFollow,
+        [nameof(FollowReturnToChat)] = (vm, s) => s.FollowReturnToChat = vm.FollowReturnToChat,
+        [nameof(FollowReturnSeconds)] = (vm, s) => s.FollowReturnSeconds = Math.Clamp(vm.FollowReturnSeconds, 10, 600),
         [nameof(AutoOpenEditorOnAgentEdit)] = (vm, s) => s.AutoOpenEditorOnAgentEdit = vm.AutoOpenEditorOnAgentEdit,
         [nameof(LiveCodingAnimationEnabled)] = (vm, s) => s.LiveCodingAnimationEnabled = vm.LiveCodingAnimationEnabled,
         [nameof(TempDirectory)] = (vm, s) => s.TempDirectory = vm.TempDirectory,
@@ -163,6 +168,9 @@ public partial class SettingsViewModel : ViewModelBase
     public bool DispatchPolicyEnabled { get => _dispatchPolicyEnabled; set => SetProperty(ref _dispatchPolicyEnabled, value); }
     private bool _desktopControlEnabled = true;
     public bool DesktopControlEnabled { get => _desktopControlEnabled; set => SetProperty(ref _desktopControlEnabled, value); }
+    private string _desktopBlockedAppsText = "";
+    /// <summary>AppSettings.DesktopBlockedApps as one comma-separated line.</summary>
+    public string DesktopBlockedAppsText { get => _desktopBlockedAppsText; set => SetProperty(ref _desktopBlockedAppsText, value); }
     public int MaxParallelAgents { get => _maxParallelAgents; set => SetProperty(ref _maxParallelAgents, value); }
     private decimal _cliRunBudgetUsd;
     public decimal CliRunBudgetUsd { get => _cliRunBudgetUsd; set => SetProperty(ref _cliRunBudgetUsd, value); }
@@ -261,6 +269,10 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _liveEditFollow = true, _autoOpenEditor = true, _liveCodingAnimation = true;
     private string _tempDirectory = "";
     public bool LiveEditFollow { get => _liveEditFollow; set => SetProperty(ref _liveEditFollow, value); }
+    private bool _followReturnToChat = true;
+    private int _followReturnSeconds = 10;
+    public bool FollowReturnToChat { get => _followReturnToChat; set => SetProperty(ref _followReturnToChat, value); }
+    public int FollowReturnSeconds { get => _followReturnSeconds; set => SetProperty(ref _followReturnSeconds, value); }
     public bool AutoOpenEditorOnAgentEdit { get => _autoOpenEditor; set => SetProperty(ref _autoOpenEditor, value); }
     public bool LiveCodingAnimationEnabled { get => _liveCodingAnimation; set => SetProperty(ref _liveCodingAnimation, value); }
     public string TempDirectory { get => _tempDirectory; set => SetProperty(ref _tempDirectory, value); }
@@ -353,6 +365,7 @@ public partial class SettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowLicenseShortcut));
                 OnPropertyChanged(nameof(ApiKeyLink));
                 OnPropertyChanged(nameof(ApiKeyLinkText));
+                RaiseGuideChanged();
             }
         }
     }
@@ -389,16 +402,19 @@ public partial class SettingsViewModel : ViewModelBase
 
     public ObservableCollection<string> AvailableModels { get; } = new();
 
+    /// <summary>The key box. Every OpenAI-compatible service has one — LM Studio, vLLM and a custom server may be
+    /// started with a key, so theirs is optional.</summary>
     public bool NeedsApiKey => SelectedProvider is AiProviderType.OpenAI
-        or AiProviderType.Anthropic or AiProviderType.Gemini;
+        or AiProviderType.Anthropic or AiProviderType.Gemini || CompatiblePresets.IsCompatible(SelectedProvider);
     /// <summary>Only providers that actually read BaseUrl (llama-server uses its own port, ClaudeDev runs the CLI).</summary>
     public bool SupportsBaseUrl => SelectedProvider is AiProviderType.OpenAI or AiProviderType.Anthropic
-        or AiProviderType.Gemini or AiProviderType.Ollama;
+        or AiProviderType.Gemini or AiProviderType.Ollama || CompatiblePresets.IsCompatible(SelectedProvider);
     public bool IsOllamaSelected => SelectedProvider == AiProviderType.Ollama;
     public bool IsAnthropicSelected => SelectedProvider == AiProviderType.Anthropic;
     /// <summary>Providers whose model list can be fetched live (Ollama: local tags; cloud: the key's model list).</summary>
     public bool CanRefreshModels => SelectedProvider is AiProviderType.Ollama or AiProviderType.Anthropic
-        or AiProviderType.OpenAI or AiProviderType.Gemini;
+        or AiProviderType.OpenAI or AiProviderType.Gemini
+        || CompatiblePresets.For(SelectedProvider) is { ListsModels: true } or { Local: true };
     public bool CanTestConnection => SelectedProvider != AiProviderType.Local;
     public string WorkspacesLink => "https://platform.claude.com/settings/workspaces";
     public bool IsLocalSelected => SelectedProvider == AiProviderType.Local;
@@ -408,12 +424,42 @@ public partial class SettingsViewModel : ViewModelBase
         AiProviderType.OpenAI => "https://platform.openai.com/api-keys",
         AiProviderType.Anthropic => "https://platform.claude.com/settings/keys",
         AiProviderType.Gemini => "https://aistudio.google.com/apikey",
-        _ => "",
+        _ => CompatiblePresets.For(SelectedProvider)?.KeysUrl ?? "",
     };
 
     public string ApiKeyLinkText => ApiKeyLink.Length == 0 ? "" : $"{T("settings.apiKey")} → {ApiKeyLink.Replace("https://", "")}";
 
     public List<AiProviderType> ProviderOptions { get; } = Enum.GetValues<AiProviderType>().ToList();
+
+    /// <summary>The picker's rows: every provider with its logo (or badge) and name.</summary>
+    public List<ProviderOption> ProviderChoices { get; } = Enum.GetValues<AiProviderType>().Select(ProviderLogos.Option).ToList();
+
+    // ── OpenAI-compatible services: logo, key guide, base URL hint ──
+
+    /// <summary>The preset of the selected provider when it is an OpenAI-compatible service, else null.</summary>
+    public CompatiblePreset? SelectedPreset => CompatiblePresets.For(SelectedProvider);
+    public bool ShowProviderGuide => SelectedPreset != null;
+    public string ProviderGuideSteps => SelectedPreset is { } p ? T(p.GuideKey + ".steps") : "";
+    public string ProviderGuideFree => SelectedPreset is { } p ? T(p.GuideKey + ".free") : "";
+    public string ProviderKeyPage => SelectedPreset?.KeysUrl ?? "";
+    public bool HasProviderKeyPage => ProviderKeyPage.Length > 0;
+    /// <summary>Logo of the selected provider (Assets\Logos), null = its text badge is shown.</summary>
+    public System.Windows.Media.ImageSource? ProviderLogo => ProviderLogos.Image(SelectedProvider);
+    public bool HasProviderLogo => ProviderLogo != null;
+    public string ProviderBadge => ProviderLogos.Badge(SelectedProvider);
+    public bool IsLocalServerSelected => SelectedPreset?.Local == true;
+    /// <summary>The address used while the Base URL box is empty, or the example to type when there is none.</summary>
+    public string BaseUrlHint => SelectedPreset is { } p
+        ? string.Format(T("settings.agg.baseUrlExample"), p.BaseUrl.Length > 0 ? p.BaseUrl : p.BaseUrlExample)
+        : "";
+
+    private void RaiseGuideChanged()
+    {
+        foreach (var name in new[] { nameof(SelectedPreset), nameof(ShowProviderGuide), nameof(ProviderGuideSteps), nameof(ProviderGuideFree),
+                     nameof(ProviderKeyPage), nameof(HasProviderKeyPage), nameof(ProviderLogo), nameof(HasProviderLogo), nameof(ProviderBadge),
+                     nameof(IsLocalServerSelected), nameof(BaseUrlHint) })
+            OnPropertyChanged(name);
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
     //  Commands
@@ -496,7 +542,7 @@ public partial class SettingsViewModel : ViewModelBase
         });
         _providerManager.OnProviderChanged += _ =>
             App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(ActiveProviderName)));
-        _localizationService.LanguageChanged += () => OnPropertyChanged(nameof(SecretsNotice));
+        _localizationService.LanguageChanged += () => { OnPropertyChanged(nameof(SecretsNotice)); RaiseGuideChanged(); };
 
         // Theme picker: one card per shipped theme; the card in use follows the theme service (a switch made
         // anywhere — here, a future palette command — marks the right card).
@@ -654,6 +700,7 @@ public partial class SettingsViewModel : ViewModelBase
         BrainAutoRecallEnabled = src.BrainAutoRecallEnabled;
         DispatchPolicyEnabled = src.DispatchPolicyEnabled;
         DesktopControlEnabled = src.DesktopControlEnabled;
+        DesktopBlockedAppsText = string.Join(", ", src.DesktopBlockedApps ?? new List<string>());
         MaxParallelAgents = src.MaxParallelAgents;
         CliRunBudgetUsd = src.CliRunBudgetUsd;
         CliDailyBudgetUsd = src.CliDailyBudgetUsd;
@@ -710,6 +757,8 @@ public partial class SettingsViewModel : ViewModelBase
         CustomLlamaCppBackendPath = src.CustomLlamaCppBackendPath ?? "";
 
         LiveEditFollow = src.LiveEditFollow;
+        FollowReturnToChat = src.FollowReturnToChat;
+        FollowReturnSeconds = Math.Clamp(src.FollowReturnSeconds, 10, 600);
         AutoOpenEditorOnAgentEdit = src.AutoOpenEditorOnAgentEdit;
         LiveCodingAnimationEnabled = src.LiveCodingAnimationEnabled;
 
@@ -878,7 +927,7 @@ public partial class SettingsViewModel : ViewModelBase
                 AiProviderType.OpenAIDev => OpenAIDevProvider.KnownModels,
                 AiProviderType.AntigravityDev => AntigravityDevProvider.KnownModels.Concat(AntigravityDevProvider.DiscoveredModels).Distinct(),
                 AiProviderType.Ollama => ollamaProvider?.AvailableModels ?? new List<string>(),
-                _ => Array.Empty<string>(),
+                _ => CompatiblePresets.For(type)?.Models ?? Array.Empty<string>(),
             };
             SetModelList(models, savedModel);
             ConnectionTestResult = "";

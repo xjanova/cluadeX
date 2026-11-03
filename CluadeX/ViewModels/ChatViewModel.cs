@@ -76,6 +76,7 @@ public partial class ChatViewModel : ViewModelBase
             _messages.CollectionChanged -= OnMessagesChanged;
             _messages = value;
             _messages.CollectionChanged += OnMessagesChanged;
+            _ctxDirty = true;
             OnPropertyChanged();
         }
     }
@@ -195,7 +196,15 @@ public partial class ChatViewModel : ViewModelBase
     public ChatSession? CurrentSession
     {
         get => _currentSession;
-        set { if (SetProperty(ref _currentSession, value)) { RaiseRunStateChanged(); RefreshStickyPlan(); OnPropertyChanged(nameof(FollowEditsHere)); } }
+        set
+        {
+            var left = _currentSession;
+            if (!SetProperty(ref _currentSession, value)) return;
+            RaiseRunStateChanged();
+            RefreshStickyPlan();
+            OnPropertyChanged(nameof(FollowEditsHere));
+            WatchChatProject(left, value);
+        }
     }
     public string WorkingDirectory
     {
@@ -205,7 +214,7 @@ public partial class ChatViewModel : ViewModelBase
             if (SetProperty(ref _workingDirectory, value))
             {
                 HasProject = !string.IsNullOrEmpty(value);
-                RebuildVisibleSessions();
+                ScheduleSidebarRebuild();
             }
         }
     }
@@ -221,13 +230,31 @@ public partial class ChatViewModel : ViewModelBase
         set { if (SetProperty(ref _showAllProjectSessions, value)) RebuildVisibleSessions(); }
     }
 
+    /// <summary>A sidebar rebuild is queued and has not run yet.</summary>
+    private volatile bool _sidebarRebuildQueued;
+
+    /// <summary>One sidebar rebuild for a burst of changes, at Background priority (below input). Opening one chat rebuilt
+    /// the list 2-4 times in a row, each a full pass over every chat on the UI thread (owner 2026-11-02): the run state,
+    /// the save of the chat left, the project switch each asked for their own. Any thread may call this.</summary>
+    private void ScheduleSidebarRebuild()
+    {
+        var d = App.Current?.Dispatcher;
+        if (d == null) { RebuildVisibleSessions(); return; }
+        if (_sidebarRebuildQueued) return;
+        _sidebarRebuildQueued = true;
+        d.BeginInvoke(DispatcherPriority.Background, () => { if (_sidebarRebuildQueued) RebuildVisibleSessions(); });
+    }
+
     /// <summary>Rebuild VisibleSessions from Sessions, applying the project filter.</summary>
     private void RebuildVisibleSessions()
     {
         if (_bulkSessions) return;   // the start-up load adds every chat, then rebuilds once
+        _sidebarRebuildQueued = false;   // a queued rebuild has nothing left to do
 
-        // No project open, or user opted to see everything → passthrough
-        bool filter = HasProject && !ShowAllProjectSessions;
+        // A project picked in the sidebar's list: its chats only (it replaces the open folder's filter). Otherwise no
+        // folder open, or user opted to see everything → passthrough.
+        string? projectFilter = ProjectFilterId;
+        bool filter = projectFilter == null && HasProject && !ShowAllProjectSessions;
         string currentProject = WorkingDirectory ?? "";
 
         // Split chats that were put away leave the list (kept, not deleted) unless the owner shows them.
@@ -237,23 +264,53 @@ public partial class ChatViewModel : ViewModelBase
         // project filter (owner 2026-10-17: the sidebar must keep the working projects in view) — a background task in
         // another project was otherwise nowhere in the list.
         var active = Sessions.Where(IsActiveChat).ToList();
-        var flat = new List<ChatSession>(active);
         _activeChatsShown = string.Join("|", active.Select(s => s.Id));
 
-        foreach (var s in Sessions)
+        // Pinned chats come first, in the order they were pinned, whatever the project filter (owner 2026-11-02:
+        // "เพิ่มการปักหมุดแชทที่ต้องการไว้"). They have their own group at the top.
+        var pinned = PinnedOrder(Sessions);
+        var flat = new List<ChatSession>(pinned);
+        flat.AddRange(active.Where(s => !s.IsPinned));
+
+        // Newest first, by when the chat last got rows — not by where it sits in Sessions: an old chat that worked today
+        // stayed down among its old neighbours (owner 2026-11-02: today's work did not all show).
+        var activeIds = active.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        var rest = SidebarOrder(Sessions.Where(s => !activeIds.Contains(s.Id) && !s.IsPinned && !Hidden(s)));
+        int todayOthers = 0;
+        if (filter)
         {
-            if (active.Contains(s) || Hidden(s)) continue;
-            if (filter)
+            // This project's chats. Legacy rows (empty ProjectPath) also pass so we don't hide the user's pre-migration
+            // history. A split chat follows its parent into view. Chats that worked TODAY in another project stay too:
+            // they showed while running and went once seen, so today's list came and went (owner 2026-11-02).
+            var shown = new HashSet<string>(activeIds.Concat(pinned.Select(p => p.Id)), StringComparer.Ordinal);
+            foreach (var s in rest)
+                if (string.IsNullOrEmpty(s.ProjectPath) || PathEquals(s.ProjectPath, currentProject)) shown.Add(s.Id);
+            for (bool grew = true; grew;)
             {
-                // Match sessions for this project. Legacy rows (empty ProjectPath) also pass so
-                // we don't hide the user's pre-migration history. A split chat follows its parent into view.
-                bool matches = string.IsNullOrEmpty(s.ProjectPath)
-                    || PathEquals(s.ProjectPath, currentProject)
-                    || (s.ParentId is { } pid && flat.Any(p => p.Id == pid));
-                if (!matches) continue;
+                grew = false;
+                foreach (var s in rest)
+                    if (s.ParentId is { } pid && shown.Contains(pid) && shown.Add(s.Id)) grew = true;
             }
-            flat.Add(s);
+            var today = DateTime.Today;
+            foreach (var s in rest)
+                if (s.UpdatedAt >= today && shown.Add(s.Id)) todayOthers++;
+            rest = rest.Where(s => shown.Contains(s.Id)).ToList();
         }
+        else if (projectFilter != null)
+        {
+            // The project's chats; a split chat follows its parent in, as above.
+            var shown = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var s in rest)
+                if (ProjectOf(s) == projectFilter) shown.Add(s.Id);
+            for (bool grew = true; grew;)
+            {
+                grew = false;
+                foreach (var s in rest)
+                    if (s.ParentId is { } pid && shown.Contains(pid) && shown.Add(s.Id)) grew = true;
+            }
+            rest = rest.Where(s => shown.Contains(s.Id)).ToList();
+        }
+        flat.AddRange(rest);
 
         // Unchanged (a chat switch, a run's state, a title typed elsewhere): the sidebar keeps its rows. Changed: only what
         // differs is touched. Clearing and refilling re-grouped and re-templated everything on the UI thread, and threw the
@@ -276,8 +333,11 @@ public partial class ChatViewModel : ViewModelBase
         OnPropertyChanged(nameof(VisibleSessionsCount));
 
         int total = Sessions.Count(s => !Hidden(s));
+        UpdateProjectCounts(Hidden);
         SidebarFilterText = total == 0 ? ""
+            : projectFilter != null ? LocF("sidebar.filter.inProject", ProjectFilterName, VisibleSessions.Count, total)
             : filter ? LocF("sidebar.filter.project", ProjectName, VisibleSessions.Count, total)
+                       + (todayOthers > 0 ? LocF("sidebar.filter.todayOthers", todayOthers) : "")
             : LocF("sidebar.filter.all", total);
         AllProjectsTip = !HasProject ? Loc("sidebar.filter.noProjectTip")
             : ShowAllProjectSessions ? LocF("sidebar.filter.onlyTip", ProjectName)
@@ -285,6 +345,42 @@ public partial class ChatViewModel : ViewModelBase
     }
 
     private Dictionary<ChatSession, string> _rowGroups = new();
+
+    /// <summary>The chat got new rows: it moves up the history (its day group, its row time, its place in the list).
+    /// Setting UpdatedAt alone left the row in its old day group and place until something else rebuilt the list.</summary>
+    private void TouchSession(ChatSession s)
+    {
+        s.UpdatedAt = DateTime.Now;
+        ScheduleSidebarRebuild();
+    }
+
+    private DateTime _sidebarDay = DateTime.Today;
+    /// <summary>Past midnight: today's chats are yesterday's — the groups and the rows' times are drawn again.</summary>
+    private void CheckSidebarDay()
+    {
+        if (DateTime.Today == _sidebarDay) return;
+        _sidebarDay = DateTime.Today;
+        foreach (var s in Sessions) s.RaiseTimeLabels();
+        RebuildVisibleSessions();
+    }
+
+    /// <summary>The sidebar's groups in order: pinned, then the days — today, yesterday, this week, earlier (labels in the
+    /// UI language).</summary>
+    public sealed class DayGroupOrder : System.Collections.IComparer
+    {
+        private static readonly string[] Keys = { "sidebar.group.pinned", "sidebar.group.today", "sidebar.group.yesterday", "sidebar.group.week", "sidebar.group.earlier" };
+
+        public static int Rank(string? label)
+        {
+            for (int i = 0; i < Keys.Length; i++)
+                if (string.Equals(label, LocalizedResources.Instance[Keys[i]], StringComparison.Ordinal)) return i;
+            return Keys.Length;
+        }
+
+        public int Compare(object? x, object? y) =>
+            Rank((x as System.Windows.Data.CollectionViewGroup)?.Name?.ToString())
+                .CompareTo(Rank((y as System.Windows.Data.CollectionViewGroup)?.Name?.ToString()));
+    }
 
     private string _sidebarFilterText = "";
     /// <summary>The line above the chat list: whose chats it holds and how many (owner 2026-10-31: the all-projects button
@@ -297,6 +393,44 @@ public partial class ChatViewModel : ViewModelBase
 
     private bool _bulkSessions;
 
+    /// <summary>The sidebar's order below the working chats: newest first by when each last got rows (a stable sort, so
+    /// chats with the same time keep their order).</summary>
+    public static List<ChatSession> SidebarOrder(IEnumerable<ChatSession> chats) =>
+        chats.OrderByDescending(s => s.UpdatedAt).ToList();
+
+    /// <summary>The pinned chats in the order they were pinned (the settings list); any the list lost go last.</summary>
+    private List<ChatSession> PinnedOrder(IEnumerable<ChatSession> chats)
+    {
+        var order = _settingsService.Settings.PinnedChatIds;
+        return chats.Where(s => s.IsPinned)
+            .OrderBy(s => { int i = order.IndexOf(s.Id); return i < 0 ? int.MaxValue : i; })
+            .ToList();
+    }
+
+    /// <summary>Sidebar: pin a chat to the top, or unpin it.</summary>
+    public ICommand TogglePinCommand => _togglePinCommand ??= new RelayCommand<string>(id =>
+    {
+        if (Sessions.FirstOrDefault(s => s.Id == id) is not { } s) return;
+        s.IsPinned = !s.IsPinned;
+        var ids = _settingsService.Settings.PinnedChatIds.Where(x => x != s.Id).ToList();
+        if (s.IsPinned) ids.Add(s.Id);
+        _settingsService.UpdateSettings(st => st.PinnedChatIds = ids);
+        StatusText = Loc(s.IsPinned ? "sidebar.pinned" : "sidebar.unpinned");
+        RebuildVisibleSessions();
+    });
+    private ICommand? _togglePinCommand;
+
+    /// <summary>Marks the loaded chats the settings list pins, and forgets pins of chats that are gone.</summary>
+    private void ApplyPins()
+    {
+        var ids = _settingsService.Settings.PinnedChatIds;
+        if (ids.Count == 0) return;
+        var known = Sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var s in Sessions) s.IsPinned = ids.Contains(s.Id);
+        var kept = ids.Where(known.Contains).Distinct().ToList();
+        if (kept.Count != ids.Count) _settingsService.UpdateSettings(st => st.PinnedChatIds = kept);
+    }
+
     /// <summary>
     /// The list as a tree (owner 2026-10-18: "ทำผังว่าแยกไปที่ไหนทำอะไร"): each split chat right under the chat that
     /// opened it, indented one step, in that chat's day group. A tree comes up where its first member stood (a working
@@ -307,8 +441,9 @@ public partial class ChatViewModel : ViewModelBase
         var byId = new Dictionary<string, ChatSession>(StringComparer.Ordinal);
         foreach (var s in flat) byId.TryAdd(s.Id, s);
         var kids = new Dictionary<string, List<ChatSession>>(StringComparer.Ordinal);
+        // A pinned split chat stands at the top on its own (in the pinned group), not under its parent.
         foreach (var s in flat)
-            if (s.ParentId is { } p && byId.ContainsKey(p) && p != s.Id)
+            if (!s.IsPinned && s.ParentId is { } p && byId.ContainsKey(p) && p != s.Id)
                 (kids.TryGetValue(p, out var l) ? l : kids[p] = new()).Add(s);
 
         var result = new List<ChatSession>(flat.Count);
@@ -329,7 +464,7 @@ public partial class ChatViewModel : ViewModelBase
         ChatSession RootOf(ChatSession s)
         {
             var hops = new HashSet<string>(StringComparer.Ordinal) { s.Id };
-            while (s.ParentId is { } p && byId.TryGetValue(p, out var up) && hops.Add(up.Id)) s = up;
+            while (!s.IsPinned && s.ParentId is { } p && byId.TryGetValue(p, out var up) && hops.Add(up.Id)) s = up;
             return s;
         }
         foreach (var s in flat) Add(RootOf(s), 0, null, null);
@@ -344,7 +479,7 @@ public partial class ChatViewModel : ViewModelBase
         foreach (var s in Sessions)
         {
             var kids = links?.ChildrenOf(s.Id) ?? new();
-            if (kids.Count == 0) { s.SplitSummary = ""; s.HasFinishedSplits = false; s.OpenSplitCount = 0; continue; }
+            if (kids.Count == 0) { s.SplitSummary = ""; s.HasFinishedSplits = false; s.OpenSplitCount = 0; s.HasWorkingSplits = false; continue; }
             int working = 0, done = 0, away = 0;
             foreach (var (id, link) in kids)
             {
@@ -360,6 +495,7 @@ public partial class ChatViewModel : ViewModelBase
             s.SplitSummary = string.Join(" · ", parts);
             s.HasFinishedSplits = done > 0;
             s.OpenSplitCount = working + done;
+            s.HasWorkingSplits = working > 0;
         }
     }
 
@@ -487,7 +623,7 @@ public partial class ChatViewModel : ViewModelBase
     private void RebuildSidebarIfActiveChanged()
     {
         string now = string.Join("|", Sessions.Where(IsActiveChat).Select(s => s.Id));
-        if (now != _activeChatsShown) RebuildVisibleSessions();
+        if (now != _activeChatsShown) ScheduleSidebarRebuild();
     }
 
     private static bool PathEquals(string a, string b)
@@ -1096,7 +1232,9 @@ public partial class ChatViewModel : ViewModelBase
         OpenFolderCommand = new AsyncRelayCommand(OpenFolderAsync);
         CloseFolderCommand = new AsyncRelayCommand(CloseFolderAsync);
         CloneRepoCommand = new AsyncRelayCommand(CloneRepo);
-        LoadSessionCommand = new AsyncRelayCommand<string>(LoadSessionAsync);
+        // Not an AsyncRelayCommand: that one ignores a click while the last is still running, so a chat picked while
+        // another was loading never opened. Each click runs; the last one picked wins (_switchSeq).
+        LoadSessionCommand = new RelayCommand<string>(id => _ = LoadSessionReportingAsync(id));
         DeleteSessionCommand = new AsyncRelayCommand<string>(DeleteSessionAsync);
         ClearSearchCommand = new RelayCommand(ClearHistorySearch);
         LoadSearchResultCommand = new AsyncRelayCommand<string>(LoadSessionAsync);
@@ -1145,6 +1283,10 @@ public partial class ChatViewModel : ViewModelBase
             });
         };
 
+        // Claude-Code-style orchestration views: the plan's "N running" line, workflow cards, split chips, notices,
+        // the next-step box (ChatViewModel.Orchestration.cs).
+        InitOrchestration();
+
         // Agent map: every sub-agent this command started, live, as one tree card per command.
         _agentService.OnSubAgentEvent += e =>
         {
@@ -1187,6 +1329,8 @@ public partial class ChatViewModel : ViewModelBase
                     "in_progress" or "active" => "active",
                     _ => "pending",
                 })).ToList();
+                if (planItems.FirstOrDefault(p => p.IsActive) is { } activeStep)
+                    activeStep.Running = RunningLineFor(todoRun?.Session.Id ?? CurrentSession?.Id);
                 int planDone = planItems.Count(p => p.IsDone);
                 string planHeader = planDone == planItems.Count
                     ? LocF("chat.plan.done", planDone, planItems.Count)
@@ -1319,31 +1463,38 @@ public partial class ChatViewModel : ViewModelBase
         Messages.CollectionChanged += OnMessagesChanged;
 
         // Keep the sidebar-filtered VisibleSessions list in sync with Sessions automatically.
-        // Any Add/Remove/Replace/Reset on Sessions triggers a rebuild filtered by current project.
-        Sessions.CollectionChanged += (_, _) => RebuildVisibleSessions();
+        // Any Add/Remove/Replace/Reset on Sessions triggers a rebuild filtered by current project (one per burst).
+        Sessions.CollectionChanged += (_, _) => ScheduleSidebarRebuild();
         // The sidebar groups the list by day (today / yesterday / this week / earlier), newest first.
+        // The groups in day order, whichever row came first: unsorted, a group stood where its first row was, so a working
+        // chat from yesterday (working chats come first) put "Yesterday" above "Today".
         System.Windows.Data.CollectionViewSource.GetDefaultView(VisibleSessions)?.GroupDescriptions
-            .Add(new System.Windows.Data.PropertyGroupDescription(nameof(ChatSession.DateGroupLabel)));
+            .Add(new System.Windows.Data.PropertyGroupDescription(nameof(ChatSession.DateGroupLabel)) { CustomSort = new DayGroupOrder() });
 
         // Periodic context / cost refresh every 5 seconds. (It also ran nvidia-smi here — on the UI thread,
         // blocking up to 3 s every 5 s — to fill GPU properties nothing bound; MainViewModel already polls the GPU.)
         _memoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _memoryTimer.Tick += (_, _) =>
         {
-            UpdateContextInfo();
+            // Only when something could have changed it: the rows (also counted 400 ms after they change) or a reply
+            // being written. It recounted the whole chat every 5 s, idle for hours or minimized (owner 2026-11-02).
+            if (_ctxDirty || IsGenerating) UpdateContextInfo();
             CostText = _costTracker.FormatCost();
             RefreshUsageStrip();
             ProbeOllamaForChatBox();   // throttled to 30 s: lists Ollama's models in the model box while it answers
+            CheckSidebarDay();
         };
         _memoryTimer.Start();
         InitControls(activation);
         InitSidePanel();
         InitCharacter();
+        InitStarters();
         HookPendingImages();
 
         // Auto-save every 10 seconds if dirty
         _autoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
-        _autoSaveTimer.Tick += (_, _) => { AutoSave(); SaveBackgroundRuns(); };
+        // The tick only snapshots: the write runs on ChatPersistenceService's background writer.
+        _autoSaveTimer.Tick += (_, _) => { AutoSave(background: true); SaveBackgroundRuns(background: true); };
         _autoSaveTimer.Start();
 
         // Reusable debounce timer for history search
@@ -1385,6 +1536,7 @@ public partial class ChatViewModel : ViewModelBase
             List<ChatSession> savedSessions;
             try { savedSessions = _persistenceService.LoadSessionList(); }
             catch { savedSessions = new(); }
+            var savedProjects = _persistenceService.LoadProjects();
 
             ChatSession? lastSession = null;
             if (savedSessions.Count > 0)
@@ -1413,6 +1565,9 @@ public partial class ChatViewModel : ViewModelBase
                 {
                     foreach (var session in savedSessions)
                         Sessions.Add(session);
+                    ApplyPins();
+                    ChatProjects.Clear();
+                    foreach (var p in savedProjects) ChatProjects.Add(p);
                 }
                 finally { _bulkSessions = false; }
                 RebuildVisibleSessions();
@@ -1424,11 +1579,11 @@ public partial class ChatViewModel : ViewModelBase
 
                 if (lastSession != null && lastSession.Messages.Count > 0)
                 {
+                    // Onto the sidebar's own row (it holds the pin ApplyPins just set), not swapped for the copy.
+                    lastSession = AdoptLoadedSession(lastSession);
                     CurrentSession = lastSession;
-                    for (int i = 0; i < Sessions.Count; i++)
-                    {
-                        if (Sessions[i].Id == lastSession.Id) { Sessions[i] = lastSession; break; }
-                    }
+                    // The rebuild above ran before this chat was open: a put-away split chat needs one more to show.
+                    ScheduleSidebarRebuild();
                     foreach (var msg in lastSession.Messages)
                         Messages.Add(msg);
                     // Its project at once: the files panel used to keep the previous folder until the first message
@@ -1553,7 +1708,8 @@ public partial class ChatViewModel : ViewModelBase
 
     // ─── Persistence ───
 
-    private void AutoSave()
+    /// <param name="background">The autosave tick: write on the background writer instead of this thread.</param>
+    private void AutoSave(bool background = false)
     {
         if (!_isDirty || CurrentSession == null) return;
 
@@ -1568,8 +1724,8 @@ public partial class ChatViewModel : ViewModelBase
             // to ensure they are never out of sync when saving to DB
             CurrentSession.Messages = Messages.ToList();
 
-            // Auto-generate title from first user message
-            if (CurrentSession.Title == "New Chat" && CurrentSession.Messages.Count > 0)
+            // Auto-generate title from first user message — never over a name the owner gave the chat
+            if (CurrentSession.Title == "New Chat" && !CurrentSession.TitleIsCustom && CurrentSession.Messages.Count > 0)
             {
                 CurrentSession.Title = ChatPersistenceService.GenerateTitle(CurrentSession.Messages);
                 // Update in the Sessions list
@@ -1584,9 +1740,10 @@ public partial class ChatViewModel : ViewModelBase
                 }
             }
 
-            if (changed) CurrentSession.UpdatedAt = DateTime.Now;
+            if (changed) TouchSession(CurrentSession);
             CluadeX.Helpers.UiStallWatchdog.Note("saving the chat");
-            _persistenceService.SaveSession(CurrentSession);
+            if (background) _persistenceService.SaveSessionInBackground(CurrentSession);
+            else _persistenceService.SaveSession(CurrentSession);
             CluadeX.Helpers.UiStallWatchdog.Note("");
             _isDirty = false;
         }
@@ -1602,6 +1759,15 @@ public partial class ChatViewModel : ViewModelBase
         _isDirty = true;
         AutoSave();
         if (FlowRun is { } run && !ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
+    }
+
+    private async Task LoadSessionReportingAsync(string? sessionId)
+    {
+        // The user clicking the chat on screen while another is still loading: that load loses. Only the user's click —
+        // a pipe task opening the chat on screen must not cancel the chat the user just picked.
+        if (!string.IsNullOrEmpty(sessionId) && CurrentSession?.Id == sessionId) { _switchSeq++; return; }
+        try { await LoadSessionAsync(sessionId); }
+        catch (Exception ex) { CommandErrorSink.Report("LoadSession", ex); }
     }
 
     private async Task LoadSessionAsync(string? sessionId)
@@ -1623,12 +1789,15 @@ public partial class ChatViewModel : ViewModelBase
 
         // A reply running in the chat being left keeps running there (it writes into its own chat's list).
         bool leavingRun = RunOf(CurrentSession) != null;
+        var leaving = CurrentSession;
+        int mySwitch = ++_switchSeq;
 
-        // Force save current session before switching
+        // Force save current session before switching: the rows are taken now, the write happens in the background
+        // (the chat being opened is read back after it, if it is the same one).
         if (CurrentSession != null && Messages.Count > 0)
         {
             _isDirty = true;
-            AutoSave();
+            AutoSave(background: true);
         }
         // Leaving an untouched chat: drop it from the sidebar (and the DB, if a cleared chat was saved
         // empty) instead of leaving a stray "New Chat". The DB check keeps a session whose messages
@@ -1647,8 +1816,21 @@ public partial class ChatViewModel : ViewModelBase
             CurrentSession = running.Session;
             Messages = running.Messages;
             _isDirty = false;
+            // Normally the sidebar's row IS the run's chat; only a stray copy is swapped (keeping its pin).
             for (int i = 0; i < Sessions.Count; i++)
-                if (Sessions[i].Id == sessionId) { Sessions[i] = running.Session; break; }
+                if (Sessions[i].Id == sessionId)
+                {
+                    if (!ReferenceEquals(Sessions[i], running.Session))
+                    {
+                        running.Session.IsPinned = Sessions[i].IsPinned;
+                        CarryMetadata(Sessions[i], running.Session);
+                        Sessions[i] = running.Session;
+                    }
+                    break;
+                }
+            // The row is usually not replaced, so nothing else rebuilds: the chat left may be a put-away split that
+            // must leave the list now. Coalesced with the other rebuilds of this switch.
+            ScheduleSidebarRebuild();
             StatusText = Loc("chat.status.working");
             FollowChatProject(running.Session);
             UpdateContextInfo();
@@ -1657,9 +1839,17 @@ public partial class ChatViewModel : ViewModelBase
         }
 
         tSave = switchWatch.ElapsedMilliseconds;
-        // Load from database (full session with messages)
-        var session = _persistenceService.LoadSession(sessionId);
+        // Load from database (full session with messages) — off the UI thread: a long chat took a visible moment.
+        var session = await Task.Run(() => _persistenceService.LoadSession(sessionId));
         tLoad = switchWatch.ElapsedMilliseconds - tSave;
+        // Another chat was picked while this one loaded: that switch wins.
+        if (mySwitch != _switchSeq || CurrentSession?.Id == sessionId) return;
+        if (_runs.FirstOrDefault(r => r.Session.Id == sessionId) != null)
+        {
+            // A run started there meanwhile: its live list is the chat.
+            await LoadSessionAsync(sessionId);
+            return;
+        }
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
         {
             _debugLog?.Info("Perf", $"chat switch {switchWatch.ElapsedMilliseconds} ms (save {tSave} · load {tLoad} · {session?.Messages.Count ?? 0} rows · list@{tList} follow@{tFollow} ctx@{tCtx} · realized {Views.ChatView.RealizedRows()})");
@@ -1686,6 +1876,8 @@ public partial class ChatViewModel : ViewModelBase
             }
             session = inMemory;
         }
+        // The sidebar's own row becomes the chat, with the stored rows and header copied onto it.
+        else session = AdoptLoadedSession(session);
 
         // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
         CurrentSession = session;
@@ -1699,16 +1891,8 @@ public partial class ChatViewModel : ViewModelBase
         CurrentSession.Messages = Messages.ToList();
 
         _isDirty = false;
-
-        // Update the Sessions list entry to reference the full loaded session
-        for (int i = 0; i < Sessions.Count; i++)
-        {
-            if (Sessions[i].Id == sessionId)
-            {
-                Sessions[i] = session;
-                break;
-            }
-        }
+        // A put-away split chat shows in the list while it is open: one rebuild, coalesced with the others of this switch.
+        ScheduleSidebarRebuild();
 
         tList = switchWatch.ElapsedMilliseconds;
         StatusText = session.Messages.Count > 0
@@ -1720,6 +1904,34 @@ public partial class ChatViewModel : ViewModelBase
         UpdateContextInfo();
         tCtx = switchWatch.ElapsedMilliseconds;
         ScrollToBottom?.Invoke();
+
+        // The chat left behind gives its rows back: the sidebar keeps its title and date, and opening it again reads
+        // it from the database. Every chat opened in a day stayed in memory until the app closed. Not one with a run
+        // (its live list is the chat) — and it was saved above.
+        if (leaving != null && !ReferenceEquals(leaving, CurrentSession) && RunOf(leaving) == null && leaving.Messages.Count > 0)
+            leaving.Messages = new List<ChatMessage>();
+    }
+
+    /// <summary>Switches in flight: a chat whose load finishes after another chat was picked is not shown.</summary>
+    private int _switchSeq;
+
+    /// <summary>
+    /// The chat just read from the database, put onto the sidebar's own object for it: its rows and what the database
+    /// holds (title, times, project) are copied across, and that object is the one opened. Swapping the row for the
+    /// database copy lost everything kept only in memory — the pin (the chat fell out of Pinned), the related folders,
+    /// the run badge — and re-templated the row (owner 2026-11-02). No sidebar row: the database copy itself.
+    /// </summary>
+    internal ChatSession AdoptLoadedSession(ChatSession loaded)
+    {
+        var kept = Sessions.FirstOrDefault(s => s.Id == loaded.Id);
+        if (kept == null || ReferenceEquals(kept, loaded)) return loaded;
+        // A rename or a move made while it loaded is on the sidebar's row, not in the copy just read.
+        if (!kept.TitleIsCustom) { kept.Title = loaded.Title; kept.TitleIsCustom = loaded.TitleIsCustom; }
+        kept.CreatedAt = loaded.CreatedAt;
+        kept.UpdatedAt = loaded.UpdatedAt;
+        kept.ProjectPath = loaded.ProjectPath;
+        kept.Messages = loaded.Messages;
+        return kept;
     }
 
     /// <summary>
@@ -1774,6 +1986,12 @@ public partial class ChatViewModel : ViewModelBase
         // Delete from DB
         _persistenceService.DeleteSession(sessionId);
         await CleanUpSessionAsync(sessionId, deleteImages: false);   // DeleteSession already removed its screenshots
+
+        if (_settingsService.Settings.PinnedChatIds.Contains(sessionId))
+        {
+            var pins = _settingsService.Settings.PinnedChatIds.Where(x => x != sessionId).ToList();
+            _settingsService.UpdateSettings(st => st.PinnedChatIds = pins);
+        }
 
         for (int i = Sessions.Count - 1; i >= 0; i--)
         {
@@ -1833,6 +2051,18 @@ public partial class ChatViewModel : ViewModelBase
             return;
         }
         if (msg.Role is MessageRole.AgentStatus or MessageRole.PermissionRequest) return;   // transient rows
+        // A chat left behind gave its rows back (LoadSessionAsync): read them first, or the save below would store
+        // this one message as the whole chat.
+        if (target.Messages.Count == 0)
+        {
+            if (_persistenceService.LoadSession(target.Id) is { } stored) target.Messages = stored.Messages;
+            else if (_persistenceService.SessionHasMessages(target.Id))
+            {
+                // Rows that would not load (a busy database): this one row is dropped, never the chat.
+                _debugLog?.Warn("Chat", $"a message for chat {target.Id} was not stored: its rows could not be read");
+                return;
+            }
+        }
         target.Messages.Add(msg);
         _persistenceService.SaveSession(target);
     }
@@ -1840,6 +2070,7 @@ public partial class ChatViewModel : ViewModelBase
     private void OnMessagesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
         _isDirty = true;
+        _ctxDirty = true;
         // Debounced: both refreshes walk the whole chat (history rebuild + token estimate over every message and tool
         // output). Run per added row, a long run did that hundreds of times — O(n²) on the UI thread, the chat slowed
         // the longer it got. Now once, 400 ms after the rows stop changing, at Background priority (below input).
@@ -1867,9 +2098,13 @@ public partial class ChatViewModel : ViewModelBase
     private System.Windows.Threading.DispatcherTimer? _messagesChangedTimer;
     private bool _messagesChangedHooked;
 
+    /// <summary>The rows changed since the context bar was last counted (the 5 s tick skips the count otherwise).</summary>
+    private bool _ctxDirty = true;
+
     // ─── Context Tracking ───
     private void UpdateContextInfo()
     {
+        _ctxDirty = false;
         try
         {
             var messages = Messages.ToList();
@@ -2294,6 +2529,7 @@ public partial class ChatViewModel : ViewModelBase
             && !_persistenceService.SessionHasMessages(CurrentSession.Id))
         {
             CurrentSession.ProjectPath = projectPath;
+            CurrentSession.ProjectId = DefaultProjectId(projectPath);
             int at = -1;
             for (int i = 0; i < Sessions.Count; i++)
                 if (Sessions[i].Id == CurrentSession.Id) { at = i; break; }
@@ -2319,7 +2555,7 @@ public partial class ChatViewModel : ViewModelBase
 
         // Create new session — tag with the current project path so the sidebar can
         // filter to "just this project" instead of mixing every project's sessions together.
-        var session = new ChatSession { ProjectPath = projectPath };
+        var session = new ChatSession { ProjectPath = projectPath, ProjectId = DefaultProjectId(projectPath) };
         if (!leavingRun) ResolvePendingPermissionPrompts();
         CurrentSession = session;
         Messages = new ObservableCollection<ChatMessage>();
@@ -2373,11 +2609,17 @@ public partial class ChatViewModel : ViewModelBase
         NewSession();
         var chat = CurrentSession ?? throw new InvalidOperationException("no chat was created");
         if (title != null) chat.Title = title;
+        // A split chat stays in its parent's project.
+        if (parentId != null && Sessions.FirstOrDefault(s => s.Id == parentId) is { } parentChat && ProjectOf(parentChat).Length > 0)
+            chat.ProjectId = parentChat.ProjectId;
         if (inherited != null)
             foreach (var m in inherited) Messages.Add(m);
         // The split, for the sidebar's tree and for close_chat: what this chat was opened to do.
         if (parentId != null)
+        {
             ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "");
+            NoteSplitChip(parentId, chat);
+        }
         string folder = string.IsNullOrWhiteSpace(chat.ProjectPath) ? "(no project)" : chat.ProjectPath;
         Messages.Add(new ChatMessage
         {
@@ -2397,9 +2639,11 @@ public partial class ChatViewModel : ViewModelBase
         try
         {
             if (CurrentSession?.Id != chatId) return;   // the user moved on before it started
+            _splitTurnPending = chatId;                 // its run: started by the asking chat's agent, not the owner
             await SendMessageCore(message, null);
         }
         catch (Exception ex) { _debugLog?.Warn("Chat", $"new_chat: the first turn of {chatId} failed: {ex.Message}"); }
+        finally { if (_splitTurnPending == chatId) _splitTurnPending = null; }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -2432,6 +2676,8 @@ public partial class ChatViewModel : ViewModelBase
         int? maxSteps = null,
         bool? acceptEdits = null)
     {
+        // A new run of a task id: what task_status says about it is this run, not an earlier one of the same id.
+        _pipeTasks.TryRemove(taskId, out _);
         var outcome = await RunMcpTaskCoreAsync(taskId, spec, lessons, contextFiles, workingDirectory, ct, maxSteps, acceptEdits);
         // cluadex.task_status: how the call ended, for a caller that lost it. A run that never got a chat has nothing to tie it to.
         if (_pipeTasks.TryGetValue(taskId, out var task)) _pipeTasks[taskId] = task with { Outcome = outcome };
@@ -2511,7 +2757,7 @@ public partial class ChatViewModel : ViewModelBase
                     decision = await dispatcher.InvokeAsync(() =>
                         _pipeAcceptEditsApproved.Contains(key) ? 1
                         : _permissionService.AcceptsEditsIn(target) ? 2
-                        : Confirm(LocF("chat.acceptEdits.pipeConfirm", taskId, target), Loc("chat.acceptEdits.pipeConfirmTitle"))
+                        : Confirm(LocF(PipeConsentKey(_permissionService, target), taskId, target), Loc("chat.acceptEdits.pipeConfirmTitle"))
                             && _pipeAcceptEditsApproved.Add(key) ? 1 : 0);
                 }
                 finally { _pipeConsents.TryRemove(taskId, out _); }
@@ -2553,10 +2799,10 @@ public partial class ChatViewModel : ViewModelBase
 
                 // The screen belongs to the user: busy (typing, just switched chats, watching a run) or taken over a
                 // moment ago → the task runs in its own chat in the background and nothing on screen moves.
-                if (!MayTakeScreen(DateTime.UtcNow, _lastUserActivityUtc, _lastScreenTakeUtc, RunOf(CurrentSession) != null))
+                if (ProjectPageOnScreen || !MayTakeScreen(DateTime.UtcNow, _lastUserActivityUtc, _lastScreenTakeUtc, RunOf(CurrentSession) != null))
                 {
                     string folder = runDir ?? _fileSystemService.AppWorkingDirectory;
-                    var bg = new ChatSession { ProjectPath = folder, Title = taskId };
+                    var bg = new ChatSession { ProjectPath = folder, ProjectId = FolderProjectId(folder), Title = taskId };
                     _pipeChatIds.Add(bg.Id);
                     var bgList = new ObservableCollection<ChatMessage>();
                     var bgMsg = new ChatMessage { Role = MessageRole.User, Content = prompt };
@@ -2603,6 +2849,7 @@ public partial class ChatViewModel : ViewModelBase
                     // Tagged with the run's real project: an "obsidianx-task::" tag hid it from the sidebar's
                     // project filter, so the run the user was meant to watch was nowhere in the list.
                     CurrentSession.ProjectPath = project;
+                    CurrentSession.ProjectId = DefaultProjectId(project);
                     RebuildVisibleSessions();
                 }
                 // "Accept edits" for this run: the caller's request as approved above (for exactly that folder), else
@@ -2896,7 +3143,7 @@ public partial class ChatViewModel : ViewModelBase
                 snapshot = newStep || _throttle.Due ? _text.ToString() : "";
                 count = ++_tokens;
             }
-            if (Run is { } r) r.StreamingTokenCount++;
+            if (Run is { } r) { r.StreamingTokenCount++; r.Touch(); }
             if (newStep) Ui(() => OpenBubble(snapshot, step, previousText), wait: true);
             else if (snapshot.Length > 0) _throttle.Post(() => { if (!_finished && _bubble != null && _bubbleStep == step) _bubble.Content = snapshot; });
         }
@@ -3065,16 +3312,51 @@ public partial class ChatViewModel : ViewModelBase
                     break;
                 case MessageRole.Assistant when !m.HasError && !ChatMessage.IsLegacyStatusLine(m.Content):
                     // Replies saved by older builds can still carry <thinking> spans inline.
-                    result.Add(m.Content.Contains("<thinking>", StringComparison.Ordinal)
-                        ? new ChatMessage { Role = MessageRole.Assistant, Content = StripThinkingSpans(m.Content), Timestamp = m.Timestamp }
-                        : m);
+                    result.Add(m.Content.Contains("<thinking>", StringComparison.Ordinal) ? StrippedReplyCopy(m) : m);
                     break;
                 case MessageRole.ToolAction when includeTools:
                     result.Add(m);
                     break;
+                case MessageRole.System when m.IsNotice && !string.IsNullOrWhiteSpace(m.Content):
+                    // A background command or a split chat finished: the model hears it (it may have been told mid-run too).
+                    result.Add(new ChatMessage { Role = MessageRole.User, Content = NoticePrefix + m.Content, Timestamp = m.Timestamp });
+                    break;
             }
         }
         return result;
+    }
+
+    /// <summary>A legacy reply's text without its &lt;thinking&gt; spans, kept per source row with the copy last made
+    /// from it. Every context recount rebuilt the history, so each such reply was stripped and re-counted in full each
+    /// time (a chat from an older build carries them on every reply).</summary>
+    private sealed class StrippedReply
+    {
+        public StrippedReply(string source, string text) { Source = source; Text = text; }
+        public readonly string Source;   // the row's Content this was stripped from; a new string means a new strip
+        public readonly string Text;
+        public ChatMessage? LastCopy;    // its token count is handed to the next copy
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ChatMessage, StrippedReply> _strippedReplies = new();
+
+    /// <summary>A fresh copy of the reply without its &lt;thinking&gt; spans (the source row is never changed). The copy
+    /// shares the cached stripped string and the last copy's token count; ContextMemoryService only reuses that count
+    /// while it was taken from the same string, so a stale one can never be used.</summary>
+    private static ChatMessage StrippedReplyCopy(ChatMessage m)
+    {
+        string content = m.Content;
+        if (!_strippedReplies.TryGetValue(m, out var s) || !ReferenceEquals(s.Source, content))
+        {
+            s = new StrippedReply(content, StripThinkingSpans(content));
+            _strippedReplies.AddOrUpdate(m, s);
+        }
+        var copy = new ChatMessage
+        {
+            Role = MessageRole.Assistant, Content = s.Text, Timestamp = m.Timestamp,
+            ContextTokens = s.LastCopy?.ContextTokens,
+        };
+        s.LastCopy = copy;
+        return copy;
     }
 
     /// <summary>
@@ -3166,7 +3448,13 @@ public partial class ChatViewModel : ViewModelBase
     }
 
     // ─── Send Message ───
-    private Task SendMessage() => SendMessageCore(UserInput?.Trim() ?? "", pipe: null);
+    private Task SendMessage()
+    {
+        string input = UserInput?.Trim() ?? "";
+        // The owner's own words, for the workflow opt-in (a pipe caller's or an agent's text never counts).
+        if (CurrentSession is { } s && input.Length > 0) Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+        return SendMessageCore(input, pipe: null);
+    }
 
     /// <summary>Pressing Send: <paramref name="input"/> is what the box holds. <paramref name="pipe"/> set = the same
     /// path for a message a pipe caller sent (cluadex.continue_chat): the box and its attached images are the user's
@@ -3256,7 +3544,7 @@ public partial class ChatViewModel : ViewModelBase
             return;
         }
 
-        if (!await EnsureProviderReadyAsync()) return;
+        if (!await EnsureProviderReadyAsync(fromBox)) return;
 
         // The chat on screen since startup was never opened through LoadSessionAsync: its folder comes back here.
         FollowChatProject(CurrentSession);
@@ -3336,14 +3624,70 @@ public partial class ChatViewModel : ViewModelBase
         var run = RunOf(CurrentSession);
         if (run?.Scope == null) return;
         if (text.StartsWith("/")) { StatusText = Loc("chat.steer.noSlash"); return; }
-        var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = text, IsQueuedNote = true };
         run.Messages.Add(bubble);
         // Said in the chat, not only the status bar: the user sees it was taken and when it will be done.
-        run.Messages.Add(new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") });
+        bubble.QueueRow = new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") };
+        run.Messages.Add(bubble.QueueRow);
         run.Scope.AddUserNote(text, bubble);
         UserInput = string.Empty;
         StatusText = Loc("chat.steer.queued");
         _pet?.NoteMessage(text);
+    }
+
+    /// <summary>
+    /// "Send now" on a message waiting for the running agent (owner 2026-11-02: "ปุ่มงับแชทใหม่มาคิดทันที เหมือน send now").
+    /// The native tool loop stops the reply it is waiting on and reads the message at once, the run going on; tool calls
+    /// not started yet wait for it. A run that cannot stop one reply (a CLI agent, the [ACTION:] loop) is stopped, and
+    /// what was typed goes out as the next turn — not back into the box, as after the user's own Stop.
+    /// </summary>
+    public ICommand SendNowCommand => _sendNowCommand ??= new RelayCommand<ChatMessage>(SendNow);
+    private ICommand? _sendNowCommand;
+
+    /// <summary>Ctrl+Enter while this chat's reply runs: what was typed is queued and sent now. False when no reply
+    /// runs — the key is then an ordinary send.</summary>
+    public bool SendNowFromBox()
+    {
+        if (!IsGenerating) return false;
+        string input = (UserInput ?? string.Empty).Trim();
+        if (input.Length > 0)
+        {
+            SendIntoRunningReply(input);
+            if (input.StartsWith("/")) return true;   // refused: it stays in the box, nothing to send now
+        }
+        SendNow(null);
+        return true;
+    }
+
+    private void SendNow(ChatMessage? bubble)
+    {
+        var run = bubble == null ? RunOf(CurrentSession) : _runs.FirstOrDefault(r => r.Messages.Contains(bubble)) ?? RunOf(CurrentSession);
+        if (run?.Scope == null || !run.Scope.HasUserNotes) return;
+        _debugLog?.Info("Chat", $"Send now · {(run.Scope.AcceptsInterrupts ? "stop this reply" : "stop the run, send next")}");
+        foreach (var m in run.Messages.Where(m => m.IsQueuedNote && m.QueueRow != null)) m.QueueRow!.Content = Loc("chat.steer.sendingNow");
+        if (run.Scope.AcceptsInterrupts)
+        {
+            run.Scope.InterruptStep();
+            StatusText = Loc("chat.steer.sendingNow");
+            return;
+        }
+        run.SendNotesAfterStop = true;
+        run.Cts?.Cancel();
+        StatusText = Loc("chat.steer.sendingNow");
+    }
+
+    /// <summary>The agent read what was typed (run thread): those bubbles stop waiting.</summary>
+    private void OnUserNotesTaken(ChatRun run, IReadOnlyList<object?> tags)
+    {
+        App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag is not ChatMessage bubble) continue;
+                bubble.IsQueuedNote = false;
+                if (bubble.QueueRow != null) bubble.QueueRow.Content = Loc("chat.steer.taken");
+            }
+        });
     }
 
     /// <summary>A run ended with something typed that its agent never read (it finished first, or the provider answers
@@ -3352,13 +3696,29 @@ public partial class ChatViewModel : ViewModelBase
     private void SendLeftoverNotes(ChatRun run, List<(string Text, object? Tag)> notes)
     {
         string text = string.Join("\n\n", notes.Select(n => n.Text));
-        foreach (var n in notes) if (n.Tag is ChatMessage b) run.Messages.Remove(b);
-        if (!ReferenceEquals(run.Session, CurrentSession) || run.Cts?.IsCancellationRequested == true)
+        if (!ReferenceEquals(run.Session, CurrentSession))
         {
-            if (ReferenceEquals(run.Session, CurrentSession))
-                UserInput = string.IsNullOrWhiteSpace(UserInput) ? text : UserInput + "\n" + text;
-            else
-                _debugLog?.Warn("Chat", "a message typed during a run that is no longer on screen was not sent");
+            // Its chat is not on screen: nothing can be sent there now, and nothing typed may vanish — the bubbles stay
+            // in that chat, saying they were not sent (they used to be removed, the text lost).
+            foreach (var n in notes)
+                if (n.Tag is ChatMessage b)
+                {
+                    b.IsQueuedNote = false;
+                    if (b.QueueRow != null) b.QueueRow.Content = Loc("chat.steer.notSent");
+                }
+            SaveRunChat(run);
+            _debugLog?.Warn("Chat", "a message typed during a run that is no longer on screen was kept in its chat, not sent");
+            return;
+        }
+        foreach (var n in notes)
+            if (n.Tag is ChatMessage b)
+            {
+                run.Messages.Remove(b);
+                if (b.QueueRow != null) run.Messages.Remove(b.QueueRow);
+            }
+        if (run.Cts?.IsCancellationRequested == true && !run.SendNotesAfterStop)
+        {
+            UserInput = string.IsNullOrWhiteSpace(UserInput) ? text : UserInput + "\n" + text;
             return;
         }
         var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
@@ -3369,10 +3729,17 @@ public partial class ChatViewModel : ViewModelBase
     /// <summary>True when the active provider can answer. Waits for (or retries) its initialise — after a
     /// restart an API provider was never initialised and every first message failed. When it still can't,
     /// posts one honest bubble: no model loaded, or the provider's own reason (bad key, no credit, …).</summary>
-    private async Task<bool> EnsureProviderReadyAsync()
+    /// <param name="fromTheOwner">The owner pressed Send: a provider that is not connected opens its wizard, and the message
+    /// stays in the box. Nobody is at the keyboard for a pipe caller or a carried-on task, so those get the bubble.</param>
+    private async Task<bool> EnsureProviderReadyAsync(bool fromTheOwner = false)
     {
         var provider = _providerManager.ActiveProvider;
-        if (provider.IsReady) return true;
+        if (provider.IsReady)
+        {
+            if (!fromTheOwner || !await SignedOutAsync(provider)) return true;
+            RequestConnection(_providerManager.ActiveProviderType, null);
+            return false;
+        }
 
         StatusText = LocF("chat.status.connecting", provider.DisplayName);
         bool ready;
@@ -3390,12 +3757,13 @@ public partial class ChatViewModel : ViewModelBase
         }
 
         provider = _providerManager.ActiveProvider;
+        if (fromTheOwner && RequestConnection(_providerManager.ActiveProviderType, null)) return false;
         bool local = _providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer;
         string reason = SanitizeErrorMessage(string.IsNullOrWhiteSpace(provider.StatusMessage) ? "" : provider.StatusMessage);
         Messages.Add(new ChatMessage
         {
             Role = MessageRole.Assistant,
-            Content = local ? Loc("chat.err.noModel") : LocF("chat.err.providerNotReady", provider.DisplayName, reason),
+            Content = local ? Loc("chat.err.noModel") : LocF(NotReadyKey(_providerManager.ActiveProviderType), provider.DisplayName, reason),
             HasError = true,
         });
         StatusText = local ? Loc("chat.status.noModel") : LocF("chat.status.providerNotReady", provider.DisplayName);
@@ -3760,7 +4128,10 @@ public partial class ChatViewModel : ViewModelBase
         // Clear the generic "thinking" placeholder — the autonomous loop posts its own phase banners.
         RemoveActiveStatus();
 
-        var result = await _autonomousService.RunAsync(history, input, ct);
+        // On the pool, as RunAgentic does: awaited from here, every synchronous stretch of the loop (tools, builds, the
+        // verify step, the provider's reads) ran on the UI thread and the window stuttered for minutes (owner
+        // 2026-11-02). Its phase banners and prompts already marshal through the Dispatcher.
+        var result = await Task.Run(() => _autonomousService.RunAsync(history, input, ct), CancellationToken.None);
 
         var final = new ChatMessage
         {
@@ -3816,6 +4187,13 @@ public partial class ChatViewModel : ViewModelBase
         // Bubbles whose text is final (their step ended, or the turn did). A batched update queued earlier can run
         // after that — Invoke outranks BeginInvoke — and must not put a shorter snapshot back. UI thread only.
         var closedBubbles = new HashSet<ChatMessage>();
+        // Thinking chunks waiting for the UI. Each chunk was its own Normal-priority update growing the block a few
+        // characters at a time — hundreds a second from a reasoning model, ahead of the keyboard. Now the chunks that
+        // arrive while one update waits join it: one Background-priority update, nothing lost.
+        var thoughtBuf = new StringBuilder();
+        var thoughtLock = new object();
+        bool thoughtQueued = false;
+        int thoughtStep = 0;
 
         void OnStreamToken(string token, int step)
         {
@@ -3824,12 +4202,30 @@ public partial class ChatViewModel : ViewModelBase
             // the reply text.
             if (TryUnwrapThinking(token, out var thought))
             {
-                if (thought.Length > 0)
-                    App.Current?.Dispatcher.BeginInvoke(() =>
+                if (thought.Length == 0) return;
+                bool schedule;
+                lock (thoughtLock)
+                {
+                    thoughtBuf.Append(thought);
+                    thoughtStep = step;
+                    schedule = !thoughtQueued;
+                    thoughtQueued = true;
+                }
+                if (schedule)
+                    App.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
                     {
-                        if (!ShowThinking) return;
-                        if (streamingMsg != null && step == lastStreamStep) streamingMsg.ThinkingContent += thought;
-                        else pendingThinking += thought;
+                        string chunk;
+                        int chunkStep;
+                        lock (thoughtLock)
+                        {
+                            chunk = thoughtBuf.ToString();
+                            chunkStep = thoughtStep;
+                            thoughtBuf.Clear();
+                            thoughtQueued = false;
+                        }
+                        if (!ShowThinking || chunk.Length == 0) return;
+                        if (streamingMsg != null && chunkStep == lastStreamStep) streamingMsg.ThinkingContent += chunk;
+                        else pendingThinking += chunk;
                     });
                 return;
             }
@@ -3876,11 +4272,13 @@ public partial class ChatViewModel : ViewModelBase
                     ScrollToBottom?.Invoke();
                 });
                 run.StreamingTokenCount++;
+                run.Touch();
                 return;
             }
 
             streamSb.Append(token);
             run.StreamingTokenCount++;
+            run.Touch();
 
             // Paced UI updates (~12/s, below keyboard input — see UiThrottle)
             if (tokenThrottle.Due)
@@ -4039,6 +4437,17 @@ public partial class ChatViewModel : ViewModelBase
                 PostTurnMessage(target, finalBubble);
             }
 
+            // Chunks still waiting for their coalesced update are this turn's too: in now, before the turn closes.
+            lock (thoughtLock)
+            {
+                if (thoughtBuf.Length > 0 && ShowThinking)
+                {
+                    if (streamingMsg != null && thoughtStep == lastStreamStep) streamingMsg.ThinkingContent += thoughtBuf.ToString();
+                    else pendingThinking += thoughtBuf.ToString();
+                }
+                thoughtBuf.Clear();
+            }
+
             // Thinking from a final tool-only step has no later bubble to sit on — put it on the answer.
             if (!string.IsNullOrEmpty(pendingThinking) && finalBubble != null)
             {
@@ -4138,6 +4547,9 @@ public partial class ChatViewModel : ViewModelBase
         var run = Cur;   // the run whose tool is starting, captured at event time (its chat may not be on screen)
         if (run == null) return;
         if (toolName != "agent") run.ToolStarts.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp());
+        // For a supervisor on the pipe: the tool's name only — its arguments (paths, commands) stay in the chat.
+        if (toolName != "agent") run.LastTool = toolName;
+        run.Touch();
         App.Current?.Dispatcher.BeginInvoke(async () =>
         {
             DropDraft(run);   // the call it was writing is now running: its own row/status takes over
@@ -4331,6 +4743,7 @@ public partial class ChatViewModel : ViewModelBase
         // The run whose tool finished, captured at event time: the row goes into ITS chat's live list whether or not
         // that chat is on screen. Without a run (a callback after the run ended, a tool run by hand) it goes on screen.
         var run = Cur;
+        run?.Touch();
         ChatSession? target = run?.Session;
         App.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -4764,65 +5177,76 @@ public partial class ChatViewModel : ViewModelBase
         int tokenCount = 0;
         bool firstToken = true;
         var tokenThrottle = new CluadeX.Helpers.UiThrottle();
+        var thinkThrottle = new CluadeX.Helpers.UiThrottle(150);
         bool replyComplete = false;   // UI thread only
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
+        // The stream is read on the pool, not here: awaited from the UI thread, the provider's whole read loop ran on the
+        // dispatcher, and its synchronous waits for the next chunk froze the window — through Ollama's prefill before the
+        // first token, and in every pause between Claude's thinking chunks, Stop included (owner 2026-11-02). The body
+        // touches the screen only through Dispatcher.Invoke and the throttles, which queue onto the UI thread.
+        await Task.Run(async () =>
         {
-            // Thinking chunks go to the reply's collapsed Thinking block — never into the reply text.
-            if (TryUnwrapThinking(token, out var thought))
+            await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
             {
-                if (thought.Length == 0 || !ShowThinking) continue;
-                bool firstThought = thinkSb.Length == 0;
-                thinkSb.Append(thought);
-                string thinkSnap = thinkSb.ToString();
-                App.Current?.Dispatcher.BeginInvoke(() =>
+                // Thinking chunks go to the reply's collapsed Thinking block — never into the reply text.
+                if (TryUnwrapThinking(token, out var thought))
                 {
-                    assistantMsg.ThinkingContent = thinkSnap;
-                    if (firstThought && firstToken && _activeAgentStatusMsg != null)
-                        _activeAgentStatusMsg.Content = "💭 " + Loc("chat.thinkingInline").Trim();
-                });
-                continue;
-            }
-
-            sb.Append(token);
-            tokenCount++;
-            _streamingTokenCount = tokenCount;
-
-            // First token: sync update to guarantee bubble visible before more tokens arrive
-            if (firstToken)
-            {
-                firstToken = false;
-                App.Current?.Dispatcher.Invoke(() =>
-                {
-                    if (_activeAgentStatusMsg != null)
-                        _activeAgentStatusMsg.Content = "⚡ " + Loc("chat.status.generating");
-                    PostTurnMessage(target, assistantMsg);
-                    assistantMsg.Content = sb.ToString();
-                    ScrollToBottom?.Invoke();
-                });
-                continue;
-            }
-
-            // Subsequent tokens: paced (~12/s, below keyboard input — see UiThrottle)
-            if (tokenThrottle.Due)
-            {
-                int capturedCount = tokenCount;
-                string snapshot = sb.ToString();
-                tokenThrottle.Post(() =>
-                {
-                    if (!replyComplete) assistantMsg.Content = snapshot;
-                    if (_activeAgentStatusMsg != null)
+                    if (thought.Length == 0 || !ShowThinking) continue;
+                    bool firstThought = thinkSb.Length == 0;
+                    thinkSb.Append(thought);
+                    // A snapshot of the whole block per chunk was O(n²) and one UI update each: paced instead — the
+                    // end of the reply sets the full text.
+                    if (!firstThought && !thinkThrottle.Due) continue;
+                    string thinkSnap = thinkSb.ToString();
+                    thinkThrottle.Post(() =>
                     {
-                        int elapsed = (int)sw.Elapsed.TotalSeconds;
-                        double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;
-                        _activeAgentStatusMsg.Content = "⚡ " + (tps > 0
-                            ? LocF("chat.status.generatingRate", capturedCount, tps)
-                            : LocF("chat.status.generatingCount", capturedCount));
-                    }
-                });
+                        assistantMsg.ThinkingContent = thinkSnap;
+                        if (firstThought && firstToken && _activeAgentStatusMsg != null)
+                            _activeAgentStatusMsg.Content = "💭 " + Loc("chat.thinkingInline").Trim();
+                    });
+                    continue;
+                }
+
+                sb.Append(token);
+                tokenCount++;
+                _streamingTokenCount = tokenCount;
+
+                // First token: sync update to guarantee bubble visible before more tokens arrive
+                if (firstToken)
+                {
+                    firstToken = false;
+                    App.Current?.Dispatcher.Invoke(() =>
+                    {
+                        if (_activeAgentStatusMsg != null)
+                            _activeAgentStatusMsg.Content = "⚡ " + Loc("chat.status.generating");
+                        PostTurnMessage(target, assistantMsg);
+                        assistantMsg.Content = sb.ToString();
+                        ScrollToBottom?.Invoke();
+                    });
+                    continue;
+                }
+
+                // Subsequent tokens: paced (~12/s, below keyboard input — see UiThrottle)
+                if (tokenThrottle.Due)
+                {
+                    int capturedCount = tokenCount;
+                    string snapshot = sb.ToString();
+                    tokenThrottle.Post(() =>
+                    {
+                        if (!replyComplete) assistantMsg.Content = snapshot;
+                        if (_activeAgentStatusMsg != null)
+                        {
+                            int elapsed = (int)sw.Elapsed.TotalSeconds;
+                            double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;
+                            _activeAgentStatusMsg.Content = "⚡ " + (tps > 0
+                                ? LocF("chat.status.generatingRate", capturedCount, tps)
+                                : LocF("chat.status.generatingCount", capturedCount));
+                        }
+                    });
+                }
             }
-        }
+        }, CancellationToken.None);
 
         // Final content flush — ensure last tokens are shown. A batched update still queued runs after this (Invoke
         // outranks BeginInvoke) and must not cut the reply back to an older snapshot.
@@ -4903,7 +5327,8 @@ public partial class ChatViewModel : ViewModelBase
         var progress = new Progress<string>(status =>
             App.Current?.Dispatcher.Invoke(() => StatusText = status));
 
-        var result = await _agentService.ExecuteWithAutoFixAsync(history, input, progress, ct);
+        // On the pool, like RunAgentic and RunAutonomous: generating, extracting and running the code blocked the window.
+        var result = await Task.Run(() => _agentService.ExecuteWithAutoFixAsync(history, input, progress, ct), CancellationToken.None);
 
         // Remove thinking indicator after async completes
         RemoveActiveStatus();
@@ -5200,13 +5625,15 @@ public partial class ChatViewModel : ViewModelBase
         _searchDebounceTimer.Start();
     }
 
-    private void ExecuteHistorySearch(string query)
+    private async void ExecuteHistorySearch(string query)
     {
         try
         {
-            var results = _persistenceService.SearchSessions(query);
+            // Full-text search over every chat: off the UI thread, and dropped if the box changed meanwhile.
+            var results = await Task.Run(() => _persistenceService.SearchSessions(query));
+            if (!string.Equals(query, _pendingSearchQuery, StringComparison.Ordinal) || string.IsNullOrWhiteSpace(HistorySearchQuery)) return;
             SearchResults.Clear();
-            foreach (var r in results)
+            foreach (var r in WithTitleHits(query, results))
                 SearchResults.Add(r);
             IsSearchingHistory = true;
         }

@@ -81,6 +81,60 @@ public abstract class ApiProviderBase : IAiProvider
     /// <summary>Call after a native tool request succeeds.</summary>
     protected void ConfirmNativeTools() => _nativeToolsConfirmed = true;
 
+    // ── Tool names on the wire ──
+    // OpenAI, Gemini and the OpenAI-compatible local servers take a function name of 64 characters at most, of letters,
+    // digits, '_' and '-' (Gemini also '.'), starting with a letter or '_'. An MCP tool's qualified name can be longer
+    // (mcp__long-server-key__long_tool_name): one such name got the WHOLE request refused, and that refusal then turned
+    // native tools off for the session. A name that does not fit goes out as a short alias with a hash; the alias maps
+    // back to the real name when the model calls it (AgentToolService resolves it), and the history sends it again.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> WireToOriginal = new(StringComparer.Ordinal);
+
+    /// <summary>The name a tool goes out under: itself when the APIs accept it, else a ≤64-character alias.</summary>
+    public static string WireToolName(string? name)
+    {
+        name ??= "";
+        if (WireNameOk(name)) return name;
+        string clean = System.Text.RegularExpressions.Regex.Replace(name, "[^A-Za-z0-9_]", "_");
+        string hash = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(Encoding.UTF8.GetBytes(name)))[..8].ToLowerInvariant();
+        if (clean.Length == 0 || !(char.IsAsciiLetter(clean[0]) || clean[0] == '_')) clean = "t_" + clean;
+        string wire = (clean.Length > 55 ? clean[..55] : clean) + "_" + hash;
+        WireToOriginal[wire] = name;
+        return wire;
+    }
+
+    /// <summary>The real tool name behind a wire alias, or null when <paramref name="wire"/> is not one.</summary>
+    public static string? OriginalToolName(string? wire) =>
+        wire != null && WireToOriginal.TryGetValue(wire, out var o) ? o : null;
+
+    private static bool WireNameOk(string n)
+    {
+        if (n.Length is 0 or > 64 || !(char.IsAsciiLetter(n[0]) || n[0] == '_')) return false;
+        foreach (char c in n) if (!(char.IsAsciiLetterOrDigit(c) || c is '_' or '-')) return false;
+        return true;
+    }
+
+    // ── One refused MCP schema must not take every tool down ──
+    private bool _mcpToolsRefused;
+
+    /// <summary>The tools a request carries: without the MCP ones once the API refused a request because of them.</summary>
+    protected List<ToolSchema> UsableTools(List<ToolSchema> tools) =>
+        _mcpToolsRefused ? tools.Where(t => !t.Name.StartsWith("mcp__", StringComparison.Ordinal)).ToList() : tools;
+
+    /// <summary>A 400/422 on a request that carried MCP tools (and is not an overflow or a quota): drop them for the
+    /// session and try once more. A connected server's odd schema used to switch the provider to the text protocol.</summary>
+    protected bool RetryWithoutMcpTools(int status, string explained, List<ToolSchema> tools)
+    {
+        if (_mcpToolsRefused || status is not (400 or 422)) return false;
+        if (explained.Contains("too long", StringComparison.OrdinalIgnoreCase)
+            || explained.Contains("context", StringComparison.OrdinalIgnoreCase)
+            || explained.Contains("quota", StringComparison.OrdinalIgnoreCase)
+            || explained.Contains("exceeds the maximum number of tokens", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!tools.Any(t => t.Name.StartsWith("mcp__", StringComparison.Ordinal))) return false;
+        _mcpToolsRefused = true;
+        return true;
+    }
+
     /// <summary>For a failed native tool request: when it looks like "this endpoint/model doesn't take
     /// these tool fields" (400/422 before any success), turn native tools off and return the turn's
     /// error; otherwise null and the caller reports the error normally.</summary>
@@ -268,7 +322,7 @@ public abstract class ApiProviderBase : IAiProvider
                 return new Dictionary<string, object>
                 {
                     ["type"] = "function",
-                    ["function"] = new Dictionary<string, object> { ["name"] = toolChoice.Trim() },
+                    ["function"] = new Dictionary<string, object> { ["name"] = WireToolName(toolChoice.Trim()) },
                 };
         }
     }
@@ -311,7 +365,7 @@ public abstract class ApiProviderBase : IAiProvider
                             ["type"] = "function",
                             ["function"] = new Dictionary<string, object>
                             {
-                                ["name"] = block.Name ?? "",
+                                ["name"] = WireToolName(block.Name),
                                 ["arguments"] = argsValue,
                             },
                         });
@@ -331,6 +385,10 @@ public abstract class ApiProviderBase : IAiProvider
                     if (block.Type == "tool_result")
                     {
                         string content = block.Content ?? "";
+                        // A role:"tool" message has no error flag: say it in the text, as OpenAI's and Gemini's forms do,
+                        // or a local model reads a failed call as done and carries on.
+                        if (block.IsError == true && !content.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+                            content = "ERROR: " + content;
                         if (block.Images is { Count: > 0 } imgs)
                         {
                             // Chat-completions tool messages are text-only everywhere: the pixels ride in one
@@ -491,7 +549,7 @@ public abstract class ApiProviderBase : IAiProvider
             ["type"] = "function",
             ["function"] = new Dictionary<string, object>
             {
-                ["name"] = t.Name,
+                ["name"] = WireToolName(t.Name),
                 ["description"] = t.Description,
                 ["parameters"] = t.InputSchema.ValueKind == JsonValueKind.Object
                     ? (object)t.InputSchema
@@ -565,16 +623,29 @@ public abstract class ApiProviderBase : IAiProvider
     {
         if (!fn.TryGetProperty("arguments", out var argsEl))
             return EmptyObjectElement();
-        if (argsEl.ValueKind == JsonValueKind.String)
-        {
-            string raw = argsEl.GetString() ?? "";
-            if (string.IsNullOrWhiteSpace(raw)) return EmptyObjectElement();
-            try { using var d = JsonDocument.Parse(raw); return d.RootElement.Clone(); }
-            catch { return EmptyObjectElement(); }
-        }
+        if (argsEl.ValueKind == JsonValueKind.String) return ParseArgumentsText(argsEl.GetString());
         // Ollama path: arguments is already a value. Only an object is valid tool input — anything else
         // (array/scalar from a misbehaving model) would break downstream property extraction.
-        return argsEl.ValueKind == JsonValueKind.Object ? argsEl.Clone() : EmptyObjectElement();
+        return argsEl.ValueKind == JsonValueKind.Object ? argsEl.Clone() : ParseArgumentsText(argsEl.GetRawText());
+    }
+
+    /// <summary>A tool call's arguments as sent in text. Trailing commas and comments are forgiven; arguments that are
+    /// still not a JSON object come back as <c>{"__invalid_arguments": "…"}</c>, so the tool answers "your arguments were
+    /// not valid JSON" — they used to become {} and the model was told "Missing 'path'", which sent weaker models round
+    /// in circles.</summary>
+    protected internal static JsonElement ParseArgumentsText(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return EmptyObjectElement();
+        var lenient = new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip };
+        try
+        {
+            using var d = JsonDocument.Parse(raw, lenient);
+            if (d.RootElement.ValueKind == JsonValueKind.Object) return d.RootElement.Clone();
+        }
+        catch (JsonException) { }
+        string kept = raw.Length > 2000 ? raw[..2000] : raw;
+        using var bad = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string> { [CluadeX.Helpers.ToolCallNormalizer.InvalidArgumentsKey] = kept }));
+        return bad.RootElement.Clone();
     }
 
     /// <summary>A detached, empty JSON object element (survives its source document's disposal).</summary>

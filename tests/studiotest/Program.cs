@@ -182,6 +182,7 @@ internal static partial class Program
             SampleOverrides(temp);
             WpfViews(temp);
             LiveSync();
+            RestoreAfterFolderMove();
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
         finally { try { Directory.Delete(temp, true); } catch { } }

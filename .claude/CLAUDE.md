@@ -49,6 +49,10 @@ The workbench left panel is a three-mode activity bar: **EXPLORER | SEARCH | DEB
 | Autocomplete | `Ctrl+Space` | also auto-opens after 2 chars |
 | Side-by-side diff | diff button in Source Control | HEAD vs working tree |
 | Breakpoints | click the editor gutter | |
+| Live errors + hover | status-bar ⊗/⚠ count → Problems | real language server per project (`Services/Lsp/`) |
+| Errors with no install | Problems ▸ Check | parsed from builds/tests/terminal runs (`Services/Problems/`) |
+| What the AI changed | `Alt+F5` / `Shift+Alt+F5`, gutter click | vs the file before the AI's last turn (checkpoints); revert one hunk with confirm |
+| Editor → chat | right-click selection, ✦ on a Problem, "to chat" on search | into the running AI's queue when one works here |
 
 **Design rule these all follow — no dead buttons.** Nothing here requires an install to be useful:
 navigation/search/rename/completion work off a bounded workspace scan plus `RepoMapService`
@@ -56,6 +60,14 @@ heuristics, and *upgrade* to real semantic results when a language server happen
 (none is installed on the dev machine — that is exactly why the fallback exists). The debugger is
 the one feature that genuinely needs an external adapter, so it **probes** for `debugpy` /
 `netcoredbg` and shows the install command instead of offering a Start button that does nothing.
+Live errors follow the same rule: `EditorLanguageService` probes for csharp-ls/OmniSharp,
+typescript-language-server, pyright/pylsp and `dart language-server`; absent → the Problems panel shows the install
+command (Copy / Run in terminal / Check again). Edits go incrementally after a pause; servers stop with the project
+and on exit. Proven by `tests/lsptest` (fake stdio server + the real Dart SDK when present; `--offline` skips it).
+The language server is optional: `BuildProblemsService` reads the output of every build/test/check the agent or the
+editor terminal runs (dotnet, tsc, eslint, dart/flutter, cargo, go, python, pytest…) into the same squiggles. After an
+AI run only checks that run none of the project's own code start by themselves (dart analyze, the Python AST pass);
+MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a Check click.
 
 ## What Was Already Done (10 Phases)
 1. ✅ System prompt (10 sections, env info, git status, Claude Code standard)
@@ -129,6 +141,47 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 - https anywhere, plain http only to loopback (`McpHttpClient.IsAllowedEndpoint`).
 - XDREAMER = ai.xman4289.com (`ConnectorCatalog.XDreamerUrl`), keys `axm-…` from /developer, `ConnectorNeed.None`.
 - Proven offline by `tests/mcptest` N1–N8 (in-process fake server) and `tests/setuptest` C1, C9b, C9c.
+
+## Connection wizard (Setup page)
+- `Services/Setup/ProviderConnections.cs` turns the setup rows' facts into one provider's steps (pure, so the wizard and
+  the checklist cannot disagree). `ViewModels/ConnectWizardViewModel.cs` drives it; the overlay and hub cards are in `SetupView.xaml`.
+- The chat jumps there only for the owner's own click or Send (`ConnectionRequested`), with the message left in the box.
+  `ChooseFromOutsideAsync` stays a plain refusal, and a wizard closed unfinished never traps the next Send (`_signInLooked`).
+- The test step never runs for Local / LlamaServer: a test must not load weights into VRAM.
+- Art is in `Assets/Wizard/` (made in ChatGPT). Proven by `tests/setuptest/WizardTests.cs` and `tests/chattest/ConnectWizardTests.cs`.
+
+## MCP page is live, and CluadeX follows BrainX (`McpServerManager.Live.cs`)
+- The page reads state, not a snapshot: state changes post to the VM, a 5 s timer redraws "connected for / last answer",
+  and pings (30 s local, 60 s remote) turn a process that is alive but silent into `unresponsive` — 2 missed in a row. A
+  server with a call in flight is never pinged (brainx-mcp reads stdin on one thread, busy is not hung), -32601 counts as
+  alive, -32603 does not (a launcher with no worker), and a server that never answered a ping is simply not pinged again.
+- BrainX's own launcher does the swap: `~\.brainx\mcp` is the same path for every version, the client's process is a thin
+  launcher, and it swaps its worker when idle, on the same pipe, ending with `tools/list_changed`. Its replayed initialize
+  answer is swallowed, so **nothing tells CluadeX the new version**: the brain (only the brain) is asked with a second
+  `initialize` when disk ≠ reported. Never send that to another server.
+- CluadeX steps in when the launcher didn't move within `BrainSwapGrace` (45 s) or the brain stops answering:
+  `ReplaceBrainAsync` starts the new process **beside** the old, handshake + tools + `SwapSoak`, then one atomic
+  `_transports.TryUpdate`. Old process drains its calls and stops; state never leaves Ready, tools never vanish. A build
+  that fails leaves the old serving, says so on the page, and is tried once per build stamp (dll mtime:length).
+- Only a `brainx-mcp` program is followed, not any server with "brain" in its name. A brain the user stopped stays stopped.
+- Proven by `tests/mcptest` L1–L20 (this exe copied to brainx-mcp.exe, a version is the text of runtime.version) and, on
+  demand, `dotnet run -- --real-launcher <copy of ~\.brainx\mcp with the old dll, new one in next\>` (R1–R4,
+  `BRAINX_SANDBOX=1` + throwaway vault).
+
+## Auto-comment existing code (phase 5, 2026-11-02)
+- Code Editor toolbar ▸ **Auto-comment** (beside ▸ AI comments, which only shapes code the AI *writes*). Scope: every
+  function / only changed lines (`git diff -U0 HEAD`) / key points / whole file / selection; comment language; model.
+- `Services/AutoComment/`: the model returns only `{line, text}` (forced `submit_comments` tool, or JSON as text);
+  `CommentLexer` decides which line starts are plain code (C#, Python, JS/TS/JSX, Dart, PHP, Java, Go, C/C++, XML/XAML);
+  `CommentPlanner` inserts whole comment lines and `Verify` proves strip = original + unchanged lexer state;
+  `AutoCommentService.Apply` keeps a Time Machine point, writes atomically, re-proves the bytes from disk, else restores.
+- From the chat: the `add_code_comments` tool (`AutoCommentToolModule`, a tool module — no edit to `AgentToolService`)
+  and the `/comment` skill, which allows only that tool (+ glob / list_files), so the chat model cannot edit code. No
+  path = the file open in the Code Editor; a tab with unsaved typing is refused. The permission prompt carries the cost
+  estimate and is shown even with permissions off when the run is paid; inside a chat run the restore point is that
+  run's step (`Apply` uses the current `AgentRunScope`).
+- Proven by `tests/commenttest` (109 checks, mocked model, no network; T* = the chat tool through the real
+  `AgentToolService`). Not yet driven by hand in the running app.
 
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).

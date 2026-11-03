@@ -13,18 +13,18 @@ public static class ToolLook
         string t = (tool ?? "").ToLowerInvariant();
         if (t.StartsWith("mcp__", StringComparison.Ordinal)) return ("", "tool.verb.mcp");
         if (t.StartsWith("browser_", StringComparison.Ordinal)) return ("", "tool.verb.browser");
-        if (t.StartsWith("git_", StringComparison.Ordinal) || t.StartsWith("github_", StringComparison.Ordinal)) return ("", "tool.verb.git");
+        if (t.StartsWith("git_", StringComparison.Ordinal) || t.StartsWith("github_", StringComparison.Ordinal) || t.StartsWith("gh_", StringComparison.Ordinal)) return ("", "tool.verb.git");
         if (t.StartsWith("bg_", StringComparison.Ordinal)) return ("", "tool.verb.background");
         if (t.StartsWith("memory_", StringComparison.Ordinal)) return ("", "tool.verb.memory");
         return t switch
         {
             "read_file" or "notebook_read" => ("", "tool.verb.read"),
             "write_file" or "create_directory" => ("", "tool.verb.write"),
-            "edit_file" or "multi_edit" or "notebook_edit" => ("", "tool.verb.edit"),
+            "edit_file" or "multi_edit" or "notebook_edit" or "rename_symbol" => ("", "tool.verb.edit"),
             "list_files" or "glob" or "search_files" => ("", "tool.verb.list"),
-            "search_content" or "grep" or "find_symbol" or "list_symbols" => ("", "tool.verb.search"),
+            "search_content" or "grep" or "find_symbol" or "list_symbols" or "find_references" or "impact_of" => ("", "tool.verb.search"),
             "run_command" or "powershell" or "repl" => ("", "tool.verb.run"),
-            "run_build" => ("", "tool.verb.build"),
+            "run_build" or "verify_change" => ("", "tool.verb.build"),
             "run_tests" => ("", "tool.verb.test"),
             "web_fetch" or "web_search" => ("", "tool.verb.web"),
             "agent_spawn" or "subagent_invoke" => ("", "tool.verb.agent"),
@@ -114,11 +114,29 @@ public sealed record ToolStepView(string? Kind, string Verb, string? Target, str
 }
 
 /// <summary>One step of the agent's plan, as the plan card shows it.</summary>
-public sealed record PlanItemView(int Number, string Text, string State)
+public sealed record PlanItemView(int Number, string Text, string State) : System.ComponentModel.INotifyPropertyChanged
 {
     public bool IsDone => State == "done";
     public bool IsActive => State == "active";
     public bool IsPending => State == "pending";
+
+    private string _running = "";
+    /// <summary>On the active step only: what runs under it now ("กำลังรัน: เอเจนต์ย่อย 2 · คำสั่งเบื้องหลัง 1"), set in
+    /// place on the same row so the card does not redraw its list (Services/Agents/RunActivity).</summary>
+    public string Running
+    {
+        get => _running;
+        set
+        {
+            if (_running == value) return;
+            _running = value;
+            PropertyChanged?.Invoke(this, new(nameof(Running)));
+            PropertyChanged?.Invoke(this, new(nameof(HasRunning)));
+        }
+    }
+    public bool HasRunning => _running.Length > 0;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 }
 
 /// <summary>One sub-agent on the agent map card: what it was given, what it is doing, how it ended. Updated in place

@@ -16,7 +16,7 @@ public sealed class DatabaseService : IDisposable
     private bool _disposed;
 
     /// <summary>Current schema version stored in PRAGMA user_version.</summary>
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     public DatabaseService(SettingsService settingsService)
     {
@@ -25,6 +25,15 @@ public sealed class DatabaseService : IDisposable
 
         InitializeDatabase();
         MigrateFromJson(settingsService);
+    }
+
+    /// <summary>A chat database at <paramref name="dbPath"/>, created or migrated like the app's own (no JSON import).
+    /// For the harnesses, which prove the migrations on databases of their own.</summary>
+    public DatabaseService(string dbPath)
+    {
+        _dbPath = dbPath;
+        _connectionString = $"Data Source={_dbPath}";
+        InitializeDatabase();
     }
 
     // ──────────────────────────── Schema ────────────────────────────
@@ -102,7 +111,8 @@ public sealed class DatabaseService : IDisposable
                 END;
             ");
 
-            Execute(conn, $"PRAGMA user_version = {SchemaVersion};");
+            // v2's column is in the CREATE above; v3 (below) still has to run on a fresh file.
+            Execute(conn, "PRAGMA user_version = 2;");
         }
 
         // ─── Schema v2: project_path column on sessions ───
@@ -120,8 +130,11 @@ public sealed class DatabaseService : IDisposable
                 // Already added — proceed.
             }
             Execute(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_project_path ON sessions(project_path);");
-            Execute(conn, $"PRAGMA user_version = {SchemaVersion};");
+            Execute(conn, "PRAGMA user_version = 2;");
         }
+
+        // ─── Schema v3: projects (named groups of chats) and names the owner gave chats ───
+        if (currentVersion < 3) MigrateToV3(conn);
 
         // Pipe chats were titled "[ObsidianX] <task>": the same word on every row of the sidebar (owner 2026-10-17:
         // "หัวข้อแชท ให้ล้างที่มันซ้ำออกให้หมด"). Now just the task; old titles lose the prefix. Every start (cheap,
@@ -135,12 +148,171 @@ public sealed class DatabaseService : IDisposable
     /// <summary>Removes <see cref="PipeTitlePrefix"/> from stored titles (a title that is only the prefix is kept).</summary>
     public const string StripPipeTitlePrefixSql =
         "UPDATE sessions SET title = ltrim(substr(title, 12)) " +
-        "WHERE substr(title, 1, 11) = '[ObsidianX]' AND length(ltrim(substr(title, 12))) > 0;";
+        "WHERE substr(title, 1, 11) = '[ObsidianX]' AND length(ltrim(substr(title, 12))) > 0 AND title_custom = 0;";
+
+    /// <summary>
+    /// v3: a <c>projects</c> table, and two columns on <c>sessions</c>: <c>project_id</c> (the chat's group, "" = none)
+    /// and <c>title_custom</c> (the owner named the chat, so saves never write over the name). The chats' folders become
+    /// projects, one per folder, so the history is grouped from the first start. Safe to run again on a file that has
+    /// it already: a duplicate column is skipped, a folder that already has a project is reused, a chat already in a
+    /// project stays where it is.
+    /// </summary>
+    private static void MigrateToV3(SqliteConnection conn)
+    {
+        foreach (var column in new[] { "project_id TEXT NOT NULL DEFAULT ''", "title_custom INTEGER NOT NULL DEFAULT 0" })
+        {
+            try { Execute(conn, $"ALTER TABLE sessions ADD COLUMN {column};"); }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+            {
+                // Already added — proceed.
+            }
+        }
+        Execute(conn, @"
+            CREATE TABLE IF NOT EXISTS projects (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                folder     TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);");
+        try { ImportProjectsFromFolders(conn); }
+        catch (SqliteException ex)
+        {
+            // The chats open ungrouped; the version stays at 2, so the next start tries the import again.
+            System.Diagnostics.Debug.WriteLine($"[DB] Project import failed: {ex.Message}");
+            return;
+        }
+        Execute(conn, $"PRAGMA user_version = {SchemaVersion};");
+    }
+
+    /// <summary>Each folder the ungrouped chats were started in becomes a project (or joins the project that has that
+    /// folder already), named after the folder, and those chats go into it. A tag that is not a full folder path is
+    /// skipped. Returns how many chats were grouped.</summary>
+    private static int ImportProjectsFromFolders(SqliteConnection conn)
+    {
+        using var tx = conn.BeginTransaction();
+        var paths = new List<string>();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "SELECT DISTINCT project_path FROM sessions WHERE project_id = '' AND project_path <> '';";
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) paths.Add(r.GetString(0));
+        }
+        var byFolder = new Dictionary<string, string>(StringComparer.Ordinal);   // folder key → project id
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "SELECT id, name, folder FROM projects ORDER BY created_at;";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                names.Add(r.GetString(1));
+                string key = ChatProject.FolderKey(r.GetString(2));
+                if (key.Length > 0) byFolder.TryAdd(key, r.GetString(0));
+            }
+        }
+        int grouped = 0;
+        foreach (var path in paths)
+        {
+            bool rooted;
+            try { rooted = Path.IsPathFullyQualified(path.Trim()); } catch { rooted = false; }
+            if (!rooted) continue;
+            string key = ChatProject.FolderKey(path);
+            if (!byFolder.TryGetValue(key, out var projectId))
+            {
+                string folder = path.Trim().TrimEnd('\\', '/');
+                if (folder.EndsWith(':')) folder += Path.DirectorySeparatorChar;   // "D:" alone is not the drive's root
+                string name = Path.GetFileName(folder.TrimEnd('\\', '/'));
+                if (name.Length == 0) name = folder;
+                if (names.Contains(name))
+                {
+                    // Two folders of one name (D:\a\app, E:\b\app): the second says where it is.
+                    string parent = Path.GetFileName(Path.GetDirectoryName(folder.TrimEnd('\\', '/')) ?? "");
+                    string candidate = parent.Length > 0 ? $"{name} ({parent})" : name;
+                    for (int n = 2; names.Contains(candidate); n++) candidate = $"{name} ({n})";
+                    name = candidate;
+                }
+                names.Add(name);
+                projectId = Guid.NewGuid().ToString();
+                byFolder[key] = projectId;
+                using var add = conn.CreateCommand();
+                add.Transaction = tx;
+                add.CommandText = "INSERT INTO projects (id, name, folder, created_at) VALUES ($id, $name, $folder, $at);";
+                add.Parameters.AddWithValue("$id", projectId);
+                add.Parameters.AddWithValue("$name", name);
+                add.Parameters.AddWithValue("$folder", folder);
+                add.Parameters.AddWithValue("$at", DateTime.Now.ToString("o"));
+                add.ExecuteNonQuery();
+            }
+            using var move = conn.CreateCommand();
+            move.Transaction = tx;
+            move.CommandText = "UPDATE sessions SET project_id = $pid WHERE project_id = '' AND project_path = $path;";
+            move.Parameters.AddWithValue("$pid", projectId);
+            move.Parameters.AddWithValue("$path", path);
+            grouped += move.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return grouped;
+    }
 
     // ──────────────────────────── Sessions CRUD ────────────────────────────
 
+    /// <summary>One message as it is stored: plain values only, so a snapshot taken on the UI thread can be written
+    /// from another thread while the live message keeps changing.</summary>
+    public sealed record MessageRow(string Id, int Role, string Content, string Timestamp,
+        object ToolName, object ToolSummary, object ToolOutput, int ToolSuccess, int HasError, int SortOrder);
+
+    /// <summary>A chat as it is stored, taken at one moment (<see cref="Snapshot"/>). <see cref="Seq"/> orders the
+    /// snapshots of one chat: ChatPersistenceService never writes an older one over a newer one.</summary>
+    public sealed record SessionSnapshot(string Id, string Title, string CreatedAt, string ProjectPath, List<MessageRow> Messages,
+        string ProjectId = "", bool TitleCustom = false)
+    {
+        private static long _next;
+        public long Seq { get; } = Interlocked.Increment(ref _next);
+    }
+
     /// <summary>Save or update a chat session and all its messages.</summary>
-    public void SaveSession(ChatSession session)
+    public void SaveSession(ChatSession session) => WriteSession(Snapshot(session));
+
+    /// <summary>The rows <see cref="WriteSession"/> stores for a chat — cheap (no SQL), so the UI thread takes it and a
+    /// background writer does the slow part. The whole transcript: see the DELETE in WriteSession.</summary>
+    public static SessionSnapshot Snapshot(ChatSession session)
+    {
+        var rows = new List<MessageRow>(session.Messages.Count);
+        for (int i = 0; i < session.Messages.Count; i++)
+        {
+            var msg = session.Messages[i];
+            // Transient UI rows are not history. A permission prompt's Allow/Deny callback can't be persisted
+            // (a reloaded one would render as a dead button; the resulting tool action, with its diff, is
+            // saved separately). Status lines ("⏵ Reading…", "✓ N tokens · …") were saved as Assistant
+            // messages, reloaded, and sent back to the model as turns it never wrote.
+            if (msg.Role is MessageRole.PermissionRequest or MessageRole.AgentStatus or MessageRole.Thinking) continue;
+            // A user message's attached images ride in its (otherwise unused) tool columns — no schema change on
+            // a file that has been damaged before.
+            // Images only keep the old "@images" list (older builds read it); with other files too, "@attach" holds both.
+            bool userFiles = msg.Role == MessageRole.User && msg.AttachedFiles.Count > 0;
+            bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0 && !userFiles;
+            // …and an agent map card its nodes, the same way, so a reopened chat shows the card again.
+            bool agentMap = msg.AgentNodes != null;
+            object toolName = userFiles ? AttachmentsTag : userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value;
+            object toolSummary = agentMap ? (object?)msg.AgentMapHeader ?? DBNull.Value : (object?)msg.ToolSummary ?? DBNull.Value;
+            object toolOutput = userFiles
+                ? System.Text.Json.JsonSerializer.Serialize(new AttachmentsRow { Images = msg.AttachedImages, Files = msg.AttachedFiles })
+                : userImages
+                ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
+                : agentMap ? System.Text.Json.JsonSerializer.Serialize(msg.AgentNodes!.Select(AgentNodeRow.From).ToList())
+                : (object?)msg.ToolOutput ?? DBNull.Value;
+            rows.Add(new MessageRow(msg.Id, (int)msg.Role, msg.Content ?? "", msg.Timestamp.ToString("o"),
+                toolName, toolSummary, toolOutput, msg.ToolSuccess ? 1 : 0, msg.HasError ? 1 : 0, i));
+        }
+        return new SessionSnapshot(session.Id, session.Title, session.CreatedAt.ToString("o"), session.ProjectPath ?? "", rows,
+            session.ProjectId ?? "", session.TitleIsCustom);
+    }
+
+    /// <summary>Store a snapshot: the session row, and its messages replaced by the snapshot's. Any thread.</summary>
+    public void WriteSession(SessionSnapshot session)
     {
         using var conn = Open();
         using var tx = conn.BeginTransaction();
@@ -151,18 +323,24 @@ public sealed class DatabaseService : IDisposable
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
+                // A chat's group and a name the owner gave it are metadata (RenameSession, SetSessionProject): a save sets
+                // them only on the chat's first write. A snapshot taken before a rename or a move and written after it
+                // would otherwise put the old name or the old group back.
                 cmd.CommandText = @"
-                    INSERT INTO sessions (id, title, created_at, updated_at, project_path)
-                    VALUES ($id, $title, $created, $updated, $project)
+                    INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id, title_custom)
+                    VALUES ($id, $title, $created, $updated, $project, $projectId, $custom)
                     ON CONFLICT(id) DO UPDATE SET
-                        title = excluded.title,
+                        title = CASE WHEN sessions.title_custom = 1 THEN sessions.title ELSE excluded.title END,
+                        title_custom = MAX(sessions.title_custom, excluded.title_custom),
                         updated_at = excluded.updated_at,
                         project_path = excluded.project_path;";
                 cmd.Parameters.AddWithValue("$id", session.Id);
                 cmd.Parameters.AddWithValue("$title", session.Title);
-                cmd.Parameters.AddWithValue("$created", session.CreatedAt.ToString("o"));
+                cmd.Parameters.AddWithValue("$created", session.CreatedAt);
                 cmd.Parameters.AddWithValue("$updated", DateTime.Now.ToString("o"));
-                cmd.Parameters.AddWithValue("$project", session.ProjectPath ?? "");
+                cmd.Parameters.AddWithValue("$project", session.ProjectPath);
+                cmd.Parameters.AddWithValue("$projectId", session.ProjectId ?? "");
+                cmd.Parameters.AddWithValue("$custom", session.TitleCustom ? 1 : 0);
                 cmd.ExecuteNonQuery();
             }
 
@@ -178,46 +356,40 @@ public sealed class DatabaseService : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            // Batch insert messages
-            for (int i = 0; i < session.Messages.Count; i++)
+            // Batch insert messages: one prepared command, its parameters rebound per row.
+            using (var cmd = conn.CreateCommand())
             {
-                var msg = session.Messages[i];
-                // Transient UI rows are not history. A permission prompt's Allow/Deny callback can't be persisted
-                // (a reloaded one would render as a dead button; the resulting tool action, with its diff, is
-                // saved separately). Status lines ("⏵ Reading…", "✓ N tokens · …") were saved as Assistant
-                // messages, reloaded, and sent back to the model as turns it never wrote.
-                if (msg.Role is MessageRole.PermissionRequest or MessageRole.AgentStatus or MessageRole.Thinking) continue;
-                using var cmd = conn.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
                     INSERT INTO messages (id, session_id, role, content, timestamp,
                         tool_name, tool_summary, tool_output, tool_success, has_error, sort_order)
                     VALUES ($id, $sid, $role, $content, $ts,
                         $tn, $tsm, $to, $tsuc, $err, $order);";
-                cmd.Parameters.AddWithValue("$id", msg.Id);
+                var pId = cmd.Parameters.Add("$id", SqliteType.Text);
                 cmd.Parameters.AddWithValue("$sid", session.Id);
-                cmd.Parameters.AddWithValue("$role", (int)msg.Role);
-                cmd.Parameters.AddWithValue("$content", msg.Content ?? "");
-                cmd.Parameters.AddWithValue("$ts", msg.Timestamp.ToString("o"));
-                // A user message's attached images ride in its (otherwise unused) tool columns — no schema change on
-                // a file that has been damaged before.
-                // Images only keep the old "@images" list (older builds read it); with other files too, "@attach" holds both.
-                bool userFiles = msg.Role == MessageRole.User && msg.AttachedFiles.Count > 0;
-                bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0 && !userFiles;
-                // …and an agent map card its nodes, the same way, so a reopened chat shows the card again.
-                bool agentMap = msg.AgentNodes != null;
-                cmd.Parameters.AddWithValue("$tn", userFiles ? AttachmentsTag : userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tsm", agentMap ? msg.AgentMapHeader : (object?)msg.ToolSummary ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$to", userFiles
-                    ? System.Text.Json.JsonSerializer.Serialize(new AttachmentsRow { Images = msg.AttachedImages, Files = msg.AttachedFiles })
-                    : userImages
-                    ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
-                    : agentMap ? System.Text.Json.JsonSerializer.Serialize(msg.AgentNodes!.Select(AgentNodeRow.From).ToList())
-                    : (object?)msg.ToolOutput ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tsuc", msg.ToolSuccess ? 1 : 0);
-                cmd.Parameters.AddWithValue("$err", msg.HasError ? 1 : 0);
-                cmd.Parameters.AddWithValue("$order", i);
-                cmd.ExecuteNonQuery();
+                var pRole = cmd.Parameters.Add("$role", SqliteType.Integer);
+                var pContent = cmd.Parameters.Add("$content", SqliteType.Text);
+                var pTs = cmd.Parameters.Add("$ts", SqliteType.Text);
+                var pTn = cmd.Parameters.Add("$tn", SqliteType.Text);
+                var pTsm = cmd.Parameters.Add("$tsm", SqliteType.Text);
+                var pTo = cmd.Parameters.Add("$to", SqliteType.Text);
+                var pTsuc = cmd.Parameters.Add("$tsuc", SqliteType.Integer);
+                var pErr = cmd.Parameters.Add("$err", SqliteType.Integer);
+                var pOrder = cmd.Parameters.Add("$order", SqliteType.Integer);
+                foreach (var m in session.Messages)
+                {
+                    pId.Value = m.Id;
+                    pRole.Value = m.Role;
+                    pContent.Value = m.Content;
+                    pTs.Value = m.Timestamp;
+                    pTn.Value = m.ToolName;
+                    pTsm.Value = m.ToolSummary;
+                    pTo.Value = m.ToolOutput;
+                    pTsuc.Value = m.ToolSuccess;
+                    pErr.Value = m.HasError;
+                    pOrder.Value = m.SortOrder;
+                    cmd.ExecuteNonQuery();
+                }
             }
 
             tx.Commit();
@@ -229,6 +401,15 @@ public sealed class DatabaseService : IDisposable
         }
     }
 
+    /// <summary>Housekeeping: let SQLite refresh its query statistics and fold the write-ahead log back into the
+    /// database file, truncating it (the -wal file otherwise stays as large as its biggest burst).</summary>
+    public void Maintain()
+    {
+        using var conn = Open();
+        Execute(conn, "PRAGMA optimize;");
+        Execute(conn, "PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+
     /// <summary>Load session list (metadata only, no messages) ordered by last updated.</summary>
     public List<ChatSession> LoadSessionList()
     {
@@ -236,7 +417,7 @@ public sealed class DatabaseService : IDisposable
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT id, title, created_at, updated_at, project_path
+            SELECT id, title, created_at, updated_at, project_path, project_id, title_custom
             FROM sessions ORDER BY updated_at DESC;";
 
         using var reader = cmd.ExecuteReader();
@@ -249,6 +430,8 @@ public sealed class DatabaseService : IDisposable
                 CreatedAt = DateTime.Parse(reader.GetString(2)),
                 UpdatedAt = DateTime.Parse(reader.GetString(3)),
                 ProjectPath = reader.IsDBNull(4) ? "" : reader.GetString(4),
+                ProjectId = reader.IsDBNull(5) ? "" : reader.GetString(5),
+                TitleIsCustom = !reader.IsDBNull(6) && reader.GetInt32(6) == 1,
             });
         }
         return sessions;
@@ -263,7 +446,7 @@ public sealed class DatabaseService : IDisposable
         ChatSession? session = null;
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = "SELECT id, title, created_at, updated_at, project_path FROM sessions WHERE id = $id;";
+            cmd.CommandText = "SELECT id, title, created_at, updated_at, project_path, project_id, title_custom FROM sessions WHERE id = $id;";
             cmd.Parameters.AddWithValue("$id", sessionId);
             using var reader = cmd.ExecuteReader();
             if (reader.Read())
@@ -275,6 +458,8 @@ public sealed class DatabaseService : IDisposable
                     CreatedAt = DateTime.Parse(reader.GetString(2)),
                     UpdatedAt = DateTime.Parse(reader.GetString(3)),
                     ProjectPath = reader.IsDBNull(4) ? "" : reader.GetString(4),
+                    ProjectId = reader.IsDBNull(5) ? "" : reader.GetString(5),
+                    TitleIsCustom = !reader.IsDBNull(6) && reader.GetInt32(6) == 1,
                 };
             }
         }
@@ -455,6 +640,90 @@ public sealed class DatabaseService : IDisposable
         cmd.CommandText = "DELETE FROM sessions WHERE id = $id;";
         cmd.Parameters.AddWithValue("$id", sessionId);
         cmd.ExecuteNonQuery();
+    }
+
+    // ──────────────────────────── Metadata only (never the messages) ────────────────────────────
+    // A rename or a move must never go through WriteSession: it deletes and rewrites every message row from the chat
+    // object, and a chat that is not open holds none (LoadSessionAsync gives its rows back), so a full save would wipe it.
+
+    /// <summary>The owner names a chat: its title, marked as theirs. Its time and messages stay. Returns whether a
+    /// stored chat had that id (false = not saved yet; its first save stores the name).</summary>
+    public bool RenameSession(string sessionId, string title)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE sessions SET title = $title, title_custom = 1 WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$id", sessionId);
+        cmd.Parameters.AddWithValue("$title", title);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>Puts a chat in a project ("" = none). Only the group: its folder, time and messages stay.</summary>
+    public bool SetSessionProject(string sessionId, string projectId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE sessions SET project_id = $pid WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$id", sessionId);
+        cmd.Parameters.AddWithValue("$pid", projectId ?? "");
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    // ──────────────────────────── Projects ────────────────────────────
+
+    /// <summary>Every project, oldest first.</summary>
+    public List<ChatProject> LoadProjects()
+    {
+        var list = new List<ChatProject>();
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, name, folder, created_at FROM projects ORDER BY created_at, name;";
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            DateTime.TryParse(r.GetString(3), out var at);
+            list.Add(new ChatProject { Id = r.GetString(0), Name = r.GetString(1), Folder = r.GetString(2), CreatedAt = at });
+        }
+        return list;
+    }
+
+    /// <summary>Stores a project, or its new name and folder.</summary>
+    public void SaveProject(ChatProject project)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO projects (id, name, folder, created_at) VALUES ($id, $name, $folder, $at)
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name, folder = excluded.folder;";
+        cmd.Parameters.AddWithValue("$id", project.Id);
+        cmd.Parameters.AddWithValue("$name", project.Name);
+        cmd.Parameters.AddWithValue("$folder", project.Folder ?? "");
+        cmd.Parameters.AddWithValue("$at", project.CreatedAt.ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Deletes a project. Its chats are kept: they leave the group. Returns how many left it.</summary>
+    public int DeleteProject(string projectId)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+        int freed;
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "UPDATE sessions SET project_id = '' WHERE project_id = $id;";
+            cmd.Parameters.AddWithValue("$id", projectId);
+            freed = cmd.ExecuteNonQuery();
+        }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "DELETE FROM projects WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$id", projectId);
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return freed;
     }
 
     /// <summary>Get the ID of the most recently updated session.</summary>

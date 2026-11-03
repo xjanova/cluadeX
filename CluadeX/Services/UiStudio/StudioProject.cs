@@ -98,6 +98,44 @@ public static class StudioProject
         return new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Unsupported, Framework = "", UnsupportedReason = "studio.unsupported.none" };
     }
 
+    /// <summary>Files <see cref="Detect"/> decides by. A changed file elsewhere can't turn an "Unsupported" folder into
+    /// a project, so a look is wasted on it.</summary>
+    private static readonly HashSet<string> KindMarkers = new(StringComparer.OrdinalIgnoreCase)
+        { "package.json", "pubspec.yaml", "artisan", "composer.json" };
+
+    /// <summary>Can a change to <paramref name="path"/> change what <see cref="Detect"/> says about <paramref name="root"/>?
+    /// The root's markers and pages, an index.html one folder down, and a .csproj or .sln anywhere (a WPF project one
+    /// folder down, or wherever a solution points). Projects written over several bursts count too: any .dart under
+    /// lib/ once a pubspec.yaml is there (Flutter wants lib/, and the AI may never write lib/main.dart), and
+    /// routes/web.php or a root .php once a composer.json is there (Laravel). Decided from the path, except for that
+    /// one look for pubspec.yaml / composer.json, which only a lib/ .dart or a .php path pays for.</summary>
+    public static bool MayChangeKind(string root, string path)
+    {
+        if (string.IsNullOrEmpty(root) || string.IsNullOrEmpty(path)) return false;
+        string prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        var segs = path[prefix.Length..].Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+        if (segs.Length == 0) return false;
+        string name = segs[^1], ext = Path.GetExtension(name);
+        if (ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase) || ext.Equals(".sln", StringComparison.OrdinalIgnoreCase)) return true;
+        if (segs.Length == 1)
+        {
+            if (KindMarkers.Contains(name) || ext.Equals(".html", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("vite.config.", StringComparison.OrdinalIgnoreCase)) return true;
+            return ext.Equals(".php", StringComparison.OrdinalIgnoreCase) && HasFile(prefix, "composer.json");
+        }
+        if (segs.Length == 2 && name.Equals("index.html", StringComparison.OrdinalIgnoreCase)) return true;
+        if (segs.Length == 2 && segs[0].Equals("routes", StringComparison.OrdinalIgnoreCase) && name.Equals("web.php", StringComparison.OrdinalIgnoreCase))
+            return HasFile(prefix, "composer.json");
+        return segs[0].Equals("lib", StringComparison.OrdinalIgnoreCase) && ext.Equals(".dart", StringComparison.OrdinalIgnoreCase)
+               && HasFile(prefix, "pubspec.yaml");
+    }
+
+    private static bool HasFile(string rootPrefix, string name)
+    {
+        try { return File.Exists(rootPrefix + name); } catch { return false; }
+    }
+
     private static string? FindEntryHtml(string root)
     {
         foreach (var candidate in new[] { "index.html", "public/index.html", "src/index.html", "docs/index.html", "dist/index.html" })

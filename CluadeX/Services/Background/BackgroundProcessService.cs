@@ -152,8 +152,14 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
     /// <summary>Raised (on any thread) when a process starts, becomes ready or ends.</summary>
     public event Action? Changed;
 
+    /// <summary>Raised once (on any thread) when a process ends, with the chat whose agent run started it (null = the
+    /// user or the Task Manager page) — the chat's "background command finished" notice.</summary>
+    public event Action<BgSnapshot, string?>? Ended;
+
     public BackgroundProcessService(SettingsService? settings = null, FileSystemService? fileSystem = null, string? logDirectory = null)
     {
+        // The plan's "N running" line asks here how many commands a chat has running (it never keeps its own copy).
+        Agents.RunActivity.BackgroundCount = RunningFor;
         _settings = settings;
         _fileSystem = fileSystem;
         // DataRootg in the app (portable-aware). Constructed bare (a harness, a tool) there are no log files — the
@@ -792,6 +798,17 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
         UpdateItem(e);
         TrimFinished();
         RaiseChanged();
+        string? owner;
+        lock (_lock) owner = _owners.TryGetValue(e.Id, out var k) ? k : null;
+        try { Ended?.Invoke(e.Snapshot(), owner); } catch { }
+        Agents.RunActivity.BackgroundChanged(owner);
+    }
+
+    /// <summary>Processes an agent run of chat <paramref name="sessionKey"/> started that are still running.</summary>
+    public int RunningFor(string sessionKey)
+    {
+        lock (_lock)
+            return _entries.Count(e => e.IsRunning && _owners.TryGetValue(e.Id, out var k) && k == sessionKey);
     }
 
     /// <summary>Read a process's output. <paramref name="fromStart"/>: the newest <paramref name="maxLines"/> of
@@ -878,7 +895,11 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
 
     private void NoteOwner(int id)
     {
-        if (AgentRunScope.Current?.SessionKey is { Length: > 0 } key) _owners[id] = key;
+        if (AgentRunScope.Current?.SessionKey is { Length: > 0 } key)
+        {
+            _owners[id] = key;
+            Agents.RunActivity.BackgroundChanged(key);
+        }
     }
 
     /// <summary>Stop every running process an agent run of chat <paramref name="sessionKey"/> started (the chat was
@@ -966,8 +987,10 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
             OnUi(() =>
             {
                 lock (_pendingLock) _pendingUi.Remove(info);
-                if (info.Output.Length > FinishedKeepChars)
-                    info.Output = "[…]" + Environment.NewLine + info.Output[^FinishedKeepChars..];
+                string old = info.Output;
+                if (old.Length > FinishedKeepChars)
+                    info.ReplaceOutput(TrimMarker + old[^FinishedKeepChars..],
+                                       old.Length - FinishedKeepChars - TrimMarker.Length);
             });
         }
     }
@@ -1005,6 +1028,25 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
     private readonly Dictionary<TaskInfo, StringBuilder> _pendingUi = new();
     private readonly object _pendingLock = new();
     private bool _flushScheduled;
+    private long _flushDueAt;   // Environment.TickCount64 when the scheduled flush runs
+    private long _flushGen;     // the newest scheduled flush; only that one schedules the next, so timers never pile up
+
+    /// <summary>
+    /// A row's output past this is pushed twice a second instead of ten times (owner 2026-11-02: a chatty dev server
+    /// rebuilt a 256K-char string ten times a second, kept the garbage collector busy and re-laid out the output pane
+    /// each time). Decided per row: a short build next to it still updates every 100 ms.
+    /// </summary>
+    private const int LargeOutputChars = 64 * 1024;
+    private const int FlushMs = 100, LargeFlushMs = 500;
+
+    /// <summary>The large rows and when each was last pushed (TickCount64). Only touched under _pendingLock.</summary>
+    private readonly Dictionary<TaskInfo, long> _lastLargeFlush = new();
+
+    /// <summary>What a row past <see cref="MaxOutputChars"/> is cut down to: 64K below the cap, so the trim (a whole-text
+    /// replace in the output pane) happens once per 64K of new output, not on every push.</summary>
+    private const int TrimKeepChars = MaxOutputChars - 64 * 1024;
+
+    private static readonly string TrimMarker = "[…]" + Environment.NewLine;
 
     private static void OnUi(Action action, bool synchronous = false)
     {
@@ -1023,7 +1065,12 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
     private void RemoveItem(Entry e)
     {
         lock (_pendingLock) _pendingUi.Remove(e.Info);
-        OnUi(() => { lock (_itemsLock) Items.Remove(e.Info); });
+        // On the UI thread, where the flush runs too, so a flush already under way cannot add the row back afterwards.
+        OnUi(() =>
+        {
+            lock (_pendingLock) _lastLargeFlush.Remove(e.Info);
+            lock (_itemsLock) Items.Remove(e.Info);
+        });
     }
 
     private static void UpdateItem(Entry e)
@@ -1038,36 +1085,104 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
         i.Status = s.Status;
     }
 
-    /// <summary>Queue text for a row's output pane; pushed to the UI about ten times a second, never per line.</summary>
+    /// <summary>Queue text for a row's output pane; pushed to the UI about ten times a second, never per line. A row whose
+    /// output is large (see <see cref="LargeOutputChars"/>) is pushed at most twice a second; the other rows keep 100 ms.</summary>
     internal void AppendUi(TaskInfo task, string text)
     {
+        long wait, gen;
         lock (_pendingLock)
         {
             if (!_pendingUi.TryGetValue(task, out var sb)) _pendingUi[task] = sb = new StringBuilder();
             sb.Append(text);
             if (sb.Length > MaxOutputChars) sb.Remove(0, sb.Length - MaxOutputChars);
-            if (_flushScheduled) return;
+            long now = Environment.TickCount64;
+            wait = Math.Max(FlushMs, WaitLocked(task, now));
+            // A flush that runs soon enough is already on its way. Otherwise this row needs an earlier one, for
+            // example a small row while only a large row's slower flush is scheduled.
+            if (_flushScheduled && _flushDueAt <= now + wait) return;
             _flushScheduled = true;
+            _flushDueAt = now + wait;
+            gen = ++_flushGen;
         }
-        _ = Task.Delay(100).ContinueWith(_ => OnUi(FlushPendingOutput), TaskScheduler.Default);
+        ScheduleFlush(wait, gen);
     }
 
-    /// <summary>Move queued output into the rows, keeping the newest <see cref="MaxOutputChars"/> of each.</summary>
-    public void FlushPendingOutput()
+    /// <summary>How long a row must still wait before its next push: 0 unless it was large and pushed under 500 ms ago.</summary>
+    private long WaitLocked(TaskInfo task, long now)
+        => _lastLargeFlush.TryGetValue(task, out long at) ? Math.Max(0, LargeFlushMs - (now - at)) : 0;
+
+    private void ScheduleFlush(long delayMs, long gen)
+        => _ = Task.Delay(TimeSpan.FromMilliseconds(delayMs))
+                   .ContinueWith(_ => OnUi(() => FlushOutput(force: false, gen)), TaskScheduler.Default);
+
+    /// <summary>Move all queued output into the rows now, keeping the newest <see cref="MaxOutputChars"/> of each.
+    /// On the UI thread, like the timer's flush: the rows' change events reach the page's output pane, which may only be
+    /// touched there (WatchService calls this from a pool thread when a test run ends).</summary>
+    public void FlushPendingOutput() => OnUi(() => FlushOutput(force: true, 0), synchronous: true);
+
+    /// <summary>
+    /// Move queued output into the rows. The timer's flush (<paramref name="force"/> false) leaves a large row that was
+    /// pushed under 500 ms ago queued, and the newest scheduled flush (<paramref name="gen"/>) schedules another for it;
+    /// an older timer that an earlier flush overtook only pushes what is due. New text is appended to the row
+    /// (<see cref="TaskInfo.AppendOutput"/>), so the page adds only that; only a trim replaces the whole text.
+    /// </summary>
+    private void FlushOutput(bool force, long gen)
     {
-        List<(TaskInfo Task, string Text)> batch;
+        var batch = new List<(TaskInfo Task, string Text)>();
         lock (_pendingLock)
         {
-            batch = _pendingUi.Select(kv => (kv.Key, kv.Value.ToString())).ToList();
-            _pendingUi.Clear();
-            _flushScheduled = false;
+            long now = Environment.TickCount64;
+            long nextWait = long.MaxValue;
+            foreach (var (task, sb) in _pendingUi)
+            {
+                // 20 ms of slack: a timer that fires a little early still pushes the row it was scheduled for.
+                long wait = force ? 0 : WaitLocked(task, now);
+                if (wait > 20) { nextWait = Math.Min(nextWait, wait); continue; }
+                batch.Add((task, sb.ToString()));
+            }
+            foreach (var (task, _) in batch) _pendingUi.Remove(task);
+            if (force || gen == _flushGen)
+            {
+                _flushScheduled = _pendingUi.Count > 0;
+                if (_flushScheduled)
+                {
+                    nextWait = Math.Max(20, nextWait == long.MaxValue ? FlushMs : nextWait);
+                    _flushDueAt = now + nextWait;
+                    ScheduleFlush(nextWait, ++_flushGen);
+                }
+            }
         }
+        if (batch.Count == 0) return;
+
+        var flushed = new List<(TaskInfo Task, bool Large)>(batch.Count);
         foreach (var (task, text) in batch)
         {
-            string combined = task.Output + text;
-            if (combined.Length > MaxOutputChars)
-                combined = "[…]" + Environment.NewLine + combined[^MaxOutputChars..];
-            task.Output = combined;
+            string old = task.Output;
+            if (old.Length + text.Length <= MaxOutputChars)
+                task.AppendOutput(text);
+            else
+            {
+                // Cut down to TrimKeepChars, not to MaxOutputChars: the next 64K then go through AppendOutput, so a
+                // chatty row replaces its whole text about once per 64K instead of on every push past 256K.
+                // Built as one string — not old + text and then a slice of it, which made two more large-heap strings.
+                int fromOld = Math.Max(0, TrimKeepChars - text.Length);
+                // The kept tail of old moves from old.Length - fromOld to just after the marker; the page uses that
+                // shift to keep a reader's place (a repeated log block would otherwise be found at its first copy).
+                task.ReplaceOutput(string.Concat(TrimMarker.AsSpan(), old.AsSpan(old.Length - fromOld),
+                                                 text.AsSpan(text.Length - (TrimKeepChars - fromOld))),
+                                   old.Length - fromOld - TrimMarker.Length);
+            }
+            bool large = task.Output.Length > LargeOutputChars;
+            // a row already taken off the page is not remembered again
+            if (large) lock (_itemsLock) large = Items.Contains(task);
+            flushed.Add((task, large));
+        }
+        lock (_pendingLock)
+        {
+            long at = Environment.TickCount64;
+            foreach (var (task, large) in flushed)
+                if (large) _lastLargeFlush[task] = at;
+                else _lastLargeFlush.Remove(task);
         }
     }
 

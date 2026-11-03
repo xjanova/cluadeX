@@ -123,6 +123,40 @@ public sealed class CheckpointService
             .OrderByDescending(p => p.TimeUtc).ToList();
     }
 
+    /// <summary>What a file was just before the AI's latest turn that changed it.</summary>
+    /// <param name="Turn">That turn (a restore point's id without its step).</param>
+    /// <param name="Text">Its content then, or null when it did not exist yet.</param>
+    public sealed record Baseline(string Turn, DateTime TimeUtc, bool Existed, string? Text);
+
+    /// <summary>
+    /// <paramref name="fullPath"/> as it was before the latest agent turn that changed it — the earliest capture of that
+    /// turn (each step captures before it writes, so a file edited at steps 2 and 5 is compared with how it was before
+    /// step 2). Null when no turn changed it, or its copy is gone (pruned, over the size cap).
+    /// </summary>
+    public Baseline? BeforeLatestTurn(string project, string fullPath)
+    {
+        try
+        {
+            string want = Path.GetFullPath(fullPath);
+            var mine = ReadIndex(IndexPath(project)).Where(e => string.Equals(e.File, fullPath, StringComparison.OrdinalIgnoreCase)
+                                                             || string.Equals(Path.GetFullPath(e.File), want, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (mine.Count == 0) return null;
+            static string TurnOf(string id) { int dash = id.LastIndexOf('-'); return dash > 0 ? id[..dash] : id; }
+            string turn = TurnOf(mine[^1].Id);
+            var first = mine.First(e => TurnOf(e.Id) == turn);
+            if (!first.Existed) return new Baseline(turn, first.TimeUtc, false, null);
+            string blob = BlobPath(first.Blob ?? "");
+            if (first.Blob == null || !File.Exists(blob)) return null;
+            using var reader = new StreamReader(blob, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: true);
+            return new Baseline(turn, first.TimeUtc, true, reader.ReadToEnd());
+        }
+        catch (Exception ex)
+        {
+            _log?.Warn("Checkpoint", $"could not read the last turn's copy of {fullPath}", ex);
+            return null;
+        }
+    }
+
     /// <summary>The restore points one chat made, oldest first (the plan window lists them by step).</summary>
     public List<Point> PointsForSession(string project, string session) =>
         Points(project).Where(p => p.Session == session).OrderBy(p => p.TimeUtc).ToList();
@@ -136,11 +170,8 @@ public sealed class CheckpointService
     {
         try
         {
-            var entries = ReadIndex(IndexPath(project));
-            var target = entries.FirstOrDefault(e => e.Id == pointId);
-            if (target == null) return (false, 0, "restore point not found");
-            var after = entries.Where(e => e.TimeUtc >= target.TimeUtc).OrderBy(e => e.TimeUtc).ToList();
-            var earliestPerFile = after.GroupBy(e => e.File.ToLowerInvariant()).Select(g => g.First()).ToList();
+            var earliestPerFile = RestorePlan(project, pointId);
+            if (earliestPerFile == null) return (false, 0, "restore point not found");
 
             // Undo point: the files as they are now.
             string undoId = "restore-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss");
@@ -177,6 +208,26 @@ public sealed class CheckpointService
             _log?.Warn("Checkpoint", $"restore to {pointId} failed", ex);
             return (false, 0, ex.Message);
         }
+    }
+
+    /// <summary>What <see cref="RestoreTo"/> would put back for <paramref name="pointId"/>: per file that point or a later
+    /// one touched, its earliest captured state from then on (<see cref="Entry.Existed"/> false = the file is removed).
+    /// Null when the point is not in the project's index.</summary>
+    public List<Entry>? RestorePlan(string project, string pointId)
+    {
+        var entries = ReadIndex(IndexPath(project));
+        var target = entries.FirstOrDefault(e => e.Id == pointId);
+        if (target == null) return null;
+        return entries.Where(e => e.TimeUtc >= target.TimeUtc).OrderBy(e => e.TimeUtc)
+            .GroupBy(e => e.File.ToLowerInvariant()).Select(g => g.First()).ToList();
+    }
+
+    /// <summary>The kept content of <paramref name="e"/> (null when the file did not exist then, or the copy is gone).</summary>
+    public byte[]? ReadKept(Entry e)
+    {
+        if (!e.Existed || string.IsNullOrEmpty(e.Blob) || e.Blob.Length < 3 || !e.Blob.All(Uri.IsHexDigit)) return null;
+        try { string bp = BlobPath(e.Blob); return File.Exists(bp) ? File.ReadAllBytes(bp) : null; }
+        catch { return null; }
     }
 
     /// <summary>

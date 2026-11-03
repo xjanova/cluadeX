@@ -104,7 +104,10 @@ internal static class SidebarChecks
         check("SB searching hides the list and the line", Rows(sidebar).Count == 0 && !ShowsText(sidebar, chat.SidebarFilterText), Join(Rows(sidebar)));
         chat.ClearSearchCommand.Execute(null);
         await Settle();
-        check("SB clearing the search brings the list back", Rows(sidebar).SetEquals(["beta yesterday", "beta last month"]), Join(Rows(sidebar)));
+        // Today's chat of another project stays in view too (owner 2026-11-02: today's work came and went), and the line says so.
+        check("SB clearing the search brings the list back, today's chat of another project with it",
+            Rows(sidebar).SetEquals(["beta yesterday", "beta last month", "alpha today"]) && chat.SidebarFilterText.Contains("+1"),
+            Join(Rows(sidebar)) + " · " + chat.SidebarFilterText);
 
         // A long history: only what is in view gets built, the wheel still walks it, the last chat can be reached.
         for (int i = 0; i < 195; i++)

@@ -34,6 +34,13 @@ public class DebugLogService
     private DateTime _currentLogDate = DateTime.MinValue;
     private LogLevel _minLevel = LogLevel.Debug;
 
+    // Lines on their way to the file. Every entry opened, appended to and closed the log file on the thread that
+    // logged — often the UI thread, dozens of times a second during an agent run. Now they gather here and go out
+    // together every half second; a warning or worse goes out at once, so a crash still leaves its last lines.
+    private readonly System.Text.StringBuilder _unwritten = new();
+    private readonly object _fileLock = new();
+    private Timer? _flushTimer;
+
     /// <summary>Total counts since process start, kept for the status-bar badge.</summary>
     public int WarningCount { get; private set; }
     public int ErrorCount { get; private set; }
@@ -131,20 +138,39 @@ public class DebugLogService
             if (level == LogLevel.Error)    ErrorCount++;
             if (level == LogLevel.Critical) CriticalCount++;
 
-            // Best-effort file append (don't crash the app if the disk is full).
-            // Inside the lock so the daily rotation + AppendAllText is atomic.
-            try
-            {
-                RotateFileIfNeeded();
-                File.AppendAllText(_currentLogPath, entry.ToFlatString() + Environment.NewLine);
-            }
-            catch { /* in-memory ring is still the source of truth */ }
+            _unwritten.Append(entry.ToFlatString()).Append(Environment.NewLine);
+            _flushTimer ??= new Timer(_ => Flush(), null, 500, 500);
         }
+        if (level >= LogLevel.Warning) Flush();
 
         // Fire OnEntry OUTSIDE the lock so a slow subscriber can't stall
         // other threads' Write calls. Subscribers MUST be thread-safe and
         // are expected to marshal to the UI dispatcher themselves.
         try { OnEntry?.Invoke(entry); } catch { }
+    }
+
+    /// <summary>Write the lines gathered so far to today's file. Any thread; also at exit.</summary>
+    public void Flush()
+    {
+        // Its own lock, so a slow disk never holds up the threads that log; the text is taken inside it, so two
+        // flushes cannot write their lines out of order.
+        lock (_fileLock)
+        {
+            string text;
+            lock (_lock)
+            {
+                if (_unwritten.Length == 0) return;
+                text = _unwritten.ToString();
+                _unwritten.Clear();
+            }
+            // Best-effort file append (don't crash the app if the disk is full): the in-memory ring is the source of truth.
+            try
+            {
+                RotateFileIfNeeded();
+                File.AppendAllText(_currentLogPath, text);
+            }
+            catch { }
+        }
     }
 
     private void RotateFileIfNeeded()

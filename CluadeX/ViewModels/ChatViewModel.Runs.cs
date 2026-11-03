@@ -21,7 +21,19 @@ public partial class ChatViewModel
         public required ObservableCollection<ChatMessage> Messages { get; init; }
         public AgentRunScope Scope { get; set; } = null!;
         public TaskCompletionSource Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public CancellationTokenSource? Cts;
+        /// <summary>The turn's Stop. Its cancel is remembered in <see cref="Stopped"/>: the source is disposed before the turn
+        /// ends, and the end needs to know (no next-step box after a Stop).</summary>
+        public CancellationTokenSource? Cts
+        {
+            get => _cts;
+            set
+            {
+                _cts = value;
+                try { value?.Token.Register(() => Stopped = true); } catch (ObjectDisposedException) { }
+            }
+        }
+        private CancellationTokenSource? _cts;
+        public volatile bool Stopped;
         public ChatMessage? ActiveStatus;
         /// <summary>The running balloon: the background-work row the current calls fold into (IsLive while they run).</summary>
         public ChatMessage? LiveRow;
@@ -30,6 +42,8 @@ public partial class ChatViewModel
         public ChatMessage? TodoMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
+        /// <summary>This command's split-chat chips (made with its first new_chat).</summary>
+        public ChatMessage? SplitsMsg;
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
@@ -41,7 +55,25 @@ public partial class ChatViewModel
         public int? MaxSteps;
         /// <summary>The agent loop's result when this turn ran it (null = it answered another way).</summary>
         public AgentLoopResult? LoopResult;
+        /// <summary>Send now on a run that cannot stop one reply (a CLI agent, the [ACTION:] loop): it was stopped, and
+        /// what was typed goes out as the next turn instead of back into the box.</summary>
+        public bool SendNotesAfterStop;
+
+        /// <summary>Who started the turn, for a supervisor: "pipe" (a program over the pipe), "split_parent" (new_chat from
+        /// another chat's agent) or "user". The pipe flag is read live: it is set right after the run begins.</summary>
+        public string StartedBy => Scope?.FromPipe == true ? "pipe" : StartedBySplit ? "split_parent" : "user";
+        public bool StartedBySplit;
+        /// <summary>The last tool it started (its name only — never its arguments).</summary>
+        public volatile string? LastTool;
+        private long _lastProgressTicks = DateTime.UtcNow.Ticks;
+        /// <summary>The last sign of work: a token, a tool starting or ending (UTC).</summary>
+        public DateTime LastProgressUtc => new(Interlocked.Read(ref _lastProgressTicks), DateTimeKind.Utc);
+        public void Touch() => Interlocked.Exchange(ref _lastProgressTicks, DateTime.UtcNow.Ticks);
     }
+
+    /// <summary>new_chat's first turn is about to begin in this chat (UI thread): its run is marked as started by the
+    /// asking chat's agent.</summary>
+    private string? _splitTurnPending;
 
     /// <summary>Runs in progress (UI thread only).</summary>
     private readonly List<ChatRun> _runs = new();
@@ -214,7 +246,8 @@ public partial class ChatViewModel
             bool mayMoveMain = newChat || string.IsNullOrWhiteSpace(main);
             if (mayMoveMain && !named.Any(n => PathEquals(n, main)))
             {
-                ApplyWorkingDirectory(named[0], announce: false, showEditor: false);
+                // (the brain was asked first: the user may be in another chat by now, and that chat keeps its folder)
+                if (ReferenceEquals(session, CurrentSession)) ApplyWorkingDirectory(named[0], announce: false, showEditor: false);
                 ProjectRegistryService.Current?.Record(named[0]);
                 session.ProjectPath = named[0];
                 session.ExtraFolders.Clear();
@@ -375,10 +408,12 @@ public partial class ChatViewModel
     private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
     {
         var run = new ChatRun { Session = session, Messages = messages };
+        if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
         run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
+        run.Scope.UserNotesTaken += tags => OnUserNotesTaken(run, tags);
         // The chat's first request in full — the model's view may hold only a compaction summary of it (AgentHandoff).
         run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;
         foreach (var extra in session.ExtraFolders.ToList())
@@ -397,8 +432,10 @@ public partial class ChatViewModel
         List<(string Text, object? Tag)>? leftover = null;
         if (run != null)
         {
+            Services.Agents.RunActivity.ClearRun(run.Session.Id);
             PostRunCostSummary(run);
             RememberRunStats(run);
+            AddNextStepBox(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
                 open.CloseQuestion(Loc("chat.ask.cancelled"));
@@ -415,7 +452,7 @@ public partial class ChatViewModel
         }
         done.TrySetResult();
         RaiseRunStateChanged();
-        if (run != null) TellParentSplitFinished(run.Session);
+        if (run != null) TellParentSplitFinished(run.Session, run.Messages);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
     }
@@ -423,27 +460,25 @@ public partial class ChatViewModel
     /// <summary>
     /// A split chat finished its turn: the chat that opened it hears so (a side note in its live list, when it is
     /// running or on screen) and the sidebar's tree updates its count — so the asking chat, or the owner, can put the
-    /// finished one away (close_chat / the sidebar's box button).
+    /// finished one away (close_chat / the sidebar's box button). It is a notice with the gist of what the split
+    /// answered, so the parent's agent reads it too — at its next step while it runs, else on its next turn.
     /// </summary>
-    private void TellParentSplitFinished(ChatSession child)
+    private void TellParentSplitFinished(ChatSession child, IEnumerable<ChatMessage>? childMessages = null)
     {
         if (child.ParentId is not { } pid) return;
-        var parent = Sessions.FirstOrDefault(s => s.Id == pid);
-        if (parent != null)
+        if (Sessions.Any(s => s.Id == pid))
         {
-            var list = RunOf(parent)?.Messages ?? (ReferenceEquals(parent, CurrentSession) ? Messages : null);
-            list?.Add(new ChatMessage
-            {
-                Role = MessageRole.System,
-                IsSideNote = true,
-                Content = "✅ " + LocF("chat.split.finishedNote", child.Title),
-            });
+            string gist = GistOf(childMessages);
+            AddNotice(pid,
+                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)),
+                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : ""));
         }
         RebuildVisibleSessions();
     }
 
     private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)
     {
+        if (e.WorkflowId != null) return;   // a workflow's agents are on its card
         var list = run?.Messages ?? Messages;
         var map = run?.AgentMapMsg;
         if (map == null || !list.Contains(map))
@@ -507,15 +542,19 @@ public partial class ChatViewModel
     }
 
     /// <summary>Store a run's chat from its live list (it may not be the one on screen).</summary>
-    private void SaveRunChat(ChatRun run)
+    private void SaveRunChat(ChatRun run, bool background = false)
     {
         try
         {
+            // Moves up the history only with new rows: this runs on every autosave tick (as AutoSave does).
+            bool changed = run.Session.Messages.Count != run.Messages.Count
+                           || !ReferenceEquals(run.Session.Messages.LastOrDefault(), run.Messages.LastOrDefault());
             run.Session.Messages = run.Messages.ToList();
-            if (run.Session.Title == "New Chat" && run.Session.Messages.Count > 0)
+            if (run.Session.Title == "New Chat" && !run.Session.TitleIsCustom && run.Session.Messages.Count > 0)
                 run.Session.Title = ChatPersistenceService.GenerateTitle(run.Session.Messages);
-            run.Session.UpdatedAt = DateTime.Now;
-            _persistenceService.SaveSession(run.Session);
+            if (changed) TouchSession(run.Session);
+            if (background) _persistenceService.SaveSessionInBackground(run.Session);
+            else _persistenceService.SaveSession(run.Session);
         }
         catch (Exception ex)
         {
@@ -524,14 +563,29 @@ public partial class ChatViewModel
     }
 
     /// <summary>Every run whose chat is not on screen, stored (autosave tick, app closing).</summary>
-    private void SaveBackgroundRuns()
+    private void SaveBackgroundRuns(bool background = false)
     {
-        // Only chats that gained rows since the last tick: each save rewrites the whole chat on the UI thread.
+        // Only chats that gained rows since the last tick: each save rewrites the whole chat.
         foreach (var run in _runs.Where(r => !ReferenceEquals(r.Session, CurrentSession) && r.Messages.Count != r.SavedCount).ToList())
         {
-            SaveRunChat(run);
+            SaveRunChat(run, background);
             run.SavedCount = run.Messages.Count;
         }
+    }
+
+    /// <summary>Ctrl+Alt+End (MainWindow.Hotkey): cancel every chat's run at once, without asking — the way out when an
+    /// agent is driving the user's mouse and keyboard. Returns how many runs were told to stop.</summary>
+    public int StopAllRuns()
+    {
+        int n = 0;
+        foreach (var run in _runs.ToList())
+        {
+            try { if (run.Cts is { } cts) { cts.Cancel(); n++; } }
+            catch (ObjectDisposedException) { }
+        }
+        if (n > 0) StatusText = Loc("desktop.hotkeyStopped");
+        _debugLog?.Info("Chat", $"Ctrl+Alt+End stopped {n} run(s)");
+        return n;
     }
 
     /// <summary>Stop the run of <paramref name="sessionId"/> (asks first) and wait for it to unwind. True when

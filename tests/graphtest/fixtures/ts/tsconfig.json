@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    /* our aliases */
+    "paths": {
+      "@ui/*": ["src/components/*"],
+      "@lib": ["src/lib/index.ts"],
+    },
+  },
+}

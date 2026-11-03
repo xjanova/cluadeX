@@ -1598,6 +1598,12 @@ internal static partial class Program
 
             Console.WriteLine("\n── restore points (Time Machine / plan window) ──");
             await Checkpoints();
+
+            Console.WriteLine("\n── calls phrased by other models · desktop tools for CLI agents ──");
+            await ForeignCalls();
+
+            Console.WriteLine("\n── engineering tools: verify_change, locked builds, references/rename/impact, checkpoints, gh/git, debug ──");
+            await EngineeringTools(provider, settings);
         }
         finally
         {

@@ -143,6 +143,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         set
         {
             if (!SetProperty(ref _isTerminalOpen, value)) return;
+            // Nothing reaches the box while it is closed (see CreateTerminalFlushTimer): hand it the whole buffer once.
+            if (value) TerminalTextAppended?.Invoke(_terminalText.ToString(), true);
             if (value && !_terminal.IsRunning && _workspace.HasWorkingDirectory)
             {
                 AppendTerminal($"— PowerShell · {_workspace.WorkingDirectory} —");
@@ -151,8 +153,14 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private string _terminalOutput = "";
-    public string TerminalOutput { get => _terminalOutput; private set => SetProperty(ref _terminalOutput, value); }
+    /// <summary>The whole terminal transcript, read once when the view binds. Never raised: new output reaches the
+    /// view as <see cref="TerminalTextAppended"/> chunks instead of a fresh 200 K string 20 times a second.</summary>
+    public string TerminalOutput => _terminalText.ToString();
+
+    /// <summary>Terminal output for the view: (text, replace). replace = false appends the text to the box; true
+    /// replaces the box's whole text (the terminal opened, or the oldest output was trimmed). Raised only while
+    /// the terminal is open.</summary>
+    public event Action<string, bool>? TerminalTextAppended;
 
     private string _terminalInput = "";
     public string TerminalInput { get => _terminalInput; set => SetProperty(ref _terminalInput, value); }
@@ -178,6 +186,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         string cmd = TerminalInput?.Trim() ?? "";
         if (cmd.Length == 0) return;
         AppendTerminal($"> {cmd}");
+        NoteTerminalCommand(cmd);
         _terminal.Send(cmd);
         TerminalInput = "";
     }
@@ -214,22 +223,27 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         {
             timer.Stop();
             Volatile.Write(ref _terminalFlushScheduled, 0);
-            bool any = false;
+            int start = _terminalText.Length;
             while (_terminalQueue.TryDequeue(out var l))
             {
                 if (_terminalText.Length > 0) _terminalText.Append('\n');
                 _terminalText.Append(l);
-                any = true;
             }
-            if (!any) return;
+            if (_terminalText.Length == start) return;
+            // Setting the box's whole text (200 K, a fresh Large Object Heap string) on every batch rebuilt the
+            // TextBox 20 times a second under a noisy build, even with the terminal closed (2026-11-02). Now only
+            // the new lines are appended, and the oldest text is trimmed in big steps so a full replace is rare.
+            bool replace = false;
             if (_terminalText.Length > TerminalMaxChars)
             {
                 // Drop the oldest text on a line boundary so the top line isn't cut mid-word.
-                int cut = _terminalText.Length - TerminalMaxChars;
+                int cut = _terminalText.Length - TerminalMaxChars * 3 / 4;
                 while (cut < _terminalText.Length && _terminalText[cut] != '\n') cut++;
                 _terminalText.Remove(0, Math.Min(cut + 1, _terminalText.Length));
+                replace = true;
             }
-            TerminalOutput = _terminalText.ToString();
+            if (_isTerminalOpen)
+                TerminalTextAppended?.Invoke(replace ? _terminalText.ToString() : _terminalText.ToString(start, _terminalText.Length - start), replace);
             // Anything enqueued while we drained (before the flag reset) gets its own flush.
             if (!_terminalQueue.IsEmpty && Interlocked.Exchange(ref _terminalFlushScheduled, 1) == 0)
                 timer.Start();
@@ -239,8 +253,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
     public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm,
         SettingsService settings, GitService git, CodeIntelligenceService intel, RepoMapService repoMap,
-        DebugAdapterService debug, LocalizationService loc, DebugLogService? log = null)
+        DebugAdapterService debug, LocalizationService loc, DebugLogService? log = null, AiProviderManager? providers = null)
     {
+        _providers = providers;
         _workspace = workspace;
         _fs = fs;
         _settings = settings;
@@ -261,6 +276,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             OnPropertyChanged(nameof(ProjectFileCount));
             OnPropertyChanged(nameof(GitChangeCount));
             RaiseAiComment();
+            RaiseAutoComment();
         };
 
         RefreshTreeCommand = new AsyncRelayCommand(RefreshTreeAsync);
@@ -318,6 +334,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         try { _terminal.Dispose(); } catch { /* shutting down */ }
         try { _terminalFlush?.Stop(); } catch { }
         try { _typeTimer?.Stop(); } catch { }
+        try { SaveZoomNow(); } catch { /* a zoom picked in the last half second */ }
         try { _diskDebounce?.Stop(); StopWatchingProjectFiles(); } catch { }
         try { _gitRefreshDebounce?.Stop(); } catch { }
         try { _conflictDebounce?.Stop(); } catch { }
@@ -610,6 +627,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
             OnUi(() =>
             {
+                if (HasAutoCommentPreview) EndAutoCommentPreview();   // another diff replaces a pending preview
                 DiffRows = diff.Rows;
                 DiffTitle = item.Path;
                 DiffSummary = diff.HasChanges
@@ -636,6 +654,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         var diff = await Task.Run(() => DiffService.BuildSideBySide(disk, mine));
         OnUi(() =>
         {
+            if (HasAutoCommentPreview) EndAutoCommentPreview();
             DiffRows = diff.Rows;
             DiffTitle = tab.FileName;
             DiffSummary = T("ide.diffDiskVsEditor", diff.Added.ToString("N0"), diff.Removed.ToString("N0"));
@@ -663,6 +682,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
     public ICommand CloseDiffCommand => _closeDiffCommand ??= new RelayCommand(() =>
     {
+        if (HasAutoCommentPreview) { DiscardAutoComment(); return; }   // closing an auto-comment preview = Discard
         IsDiffViewActive = false;
         DiffRows = new List<DiffRow>();   // thousands of rows shouldn't sit in memory once dismissed
         DiffTitle = "";
@@ -779,6 +799,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         {
             // Resolve by INDEX against a fresh scan of the current buffer — the block we were handed
             // may have been captured before another conflict was resolved or the file hand-edited.
+            tab.FlushPendingEdits();   // typing in a file over 32 K chars reaches Content only after a pause
             string updated = DiffService.ResolveConflict(tab.Content, block.Index, choice);
             if (string.Equals(updated, tab.Content, StringComparison.Ordinal))
             {
@@ -819,6 +840,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
         try
         {
+            tab.FlushPendingEdits();
             tab.Content = DiffService.ResolveAll(tab.Content, choice);
             ScanConflictsNow();
             StatusMessage = T("ide.resolveAllDone", count, side);
@@ -941,6 +963,11 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     /// <summary>Raised when a live-typing reveal finishes: the View flash-selects (charStart, charLength)
     /// so the freshly typed region glows for a moment.</summary>
     public event Action<int, int>? AgentEditFlashRequested;
+
+    /// <summary>A live-typing reveal frame: (tab, at, insert, pos) — the editor showing <c>tab</c> should now hold
+    /// <c>insert[..pos]</c> at offset <c>at</c>. Until the last frame the tab's Content stays the text with the new
+    /// region removed, so a view that missed frames (it bound the tab mid-reveal) inserts what it has not shown yet.</summary>
+    public event Action<OpenFileTab, int, string, int>? AgentTypingFrame;
 
     /// <summary>The editor view is on screen (set by the view). Unknown (no view yet, a harness) counts as on screen.</summary>
     public bool EditorOnScreen { get; set; } = true;
@@ -1137,8 +1164,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     /// <summary>
     /// Live-typing reveal: instantly remove the OLD changed region, then "type" the new region so the agent's edit
     /// unfolds in the editor like someone typing — about 900 characters a second, at least 0.6 s and at most 2.5 s
-    /// whatever the size — with the view following the insertion point. Implemented as successive MarkOpened
-    /// states — binding-friendly and never marks the tab dirty. Returns false when the change doesn't animate well
+    /// whatever the size — with the view following the insertion point. Implemented as one MarkOpened without the
+    /// new region, <see cref="AgentTypingFrame"/> inserts into the editor, and a MarkOpened of the final text — never
+    /// marks the tab dirty. Returns false when the change doesn't animate well
     /// (identical text, pure deletion, or a huge rewrite) — caller falls back to instant refresh.
     /// </summary>
     private bool TryStartTypingReveal(OpenFileTab tab, string oldText, string newText)
@@ -1173,6 +1201,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         double seconds = Math.Clamp(insertLen / 900.0, 0.6, 2.5);
         int frames = Math.Max(1, (int)(seconds * 1000 / 16));
         int chunk = Math.Max(1, (int)Math.Ceiling(insertLen / (double)frames));
+        // The typing point's line, kept up to date chunk by chunk instead of recounting the file from the top.
+        int line = 1;
+        for (int i = 0; i < prefix; i++) if (newText[i] == '\n') line++;
 
         _typeTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
         {
@@ -1180,17 +1211,20 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         };
         _typeTimer.Tick += (_, _) =>
         {
+            int from = pos;
             pos = Math.Min(insertLen, pos + chunk);
-            tab.MarkOpened(head + insert[..pos] + tail); // phase 2: type the new region chunk by chunk
+            for (int i = from; i < pos; i++) if (insert[i] == '\n') line++;
+
+            // Phase 2: type the new region chunk by chunk. Each frame used to MarkOpened the whole file (a full-size
+            // string, then the view diffed old against new) every 16 ms for up to 2.5 s; on a big file the window
+            // hitched through every agent edit (2026-11-02). The frames now go straight into the editor's document
+            // as small inserts, and Content gets the final text once, on the last frame.
+            if (pos < insertLen) AgentTypingFrame?.Invoke(tab, prefix, insert, pos);
+            else tab.MarkOpened(newText);
 
             // Follow the typing point every few frames (only while this tab is in front)
             if ((++tick % 4 == 0 || pos >= insertLen) && ReferenceEquals(ActiveTab, tab))
-            {
-                int line = 1;
-                int upto = Math.Min(prefix + pos, tab.Content.Length);
-                for (int i = 0; i < upto; i++) if (tab.Content[i] == '\n') line++;
                 ScrollToLineRequested?.Invoke(line);
-            }
 
             if (pos >= insertLen)
             {
@@ -1225,8 +1259,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
     /// <summary>
     /// The user pressed a key in a tab the reveal is animating: jump to the final text NOW, before
-    /// the keystroke lands. Each reveal frame is a MarkOpened of the whole buffer every 16 ms, so a
-    /// keystroke typed mid-animation was overwritten by the next frame (and the tab marked clean).
+    /// the keystroke lands. The reveal ends with a MarkOpened of the final text, so a keystroke typed
+    /// mid-animation would be overwritten by it (and the tab marked clean).
     /// </summary>
     public void FinishAgentTyping() => FinishTypingInstantly();
 
@@ -2143,6 +2177,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     /// so the editor never talks to a service directly.</summary>
     public Task<List<CompletionItem>> GetCompletionsAsync(string? filePath, string documentText, int caretOffset)
         => _intel.GetCompletionsAsync(filePath, documentText, caretOffset);
+
+    /// <summary>A language server answers by time and context, so an empty answer does not hold for the next letter.</summary>
+    public bool IsLspConnected => _intel.IsLspConnected;
 
     // ═══════════════ Debugger ═══════════════
 

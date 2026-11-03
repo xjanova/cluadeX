@@ -67,6 +67,9 @@ internal static class ChatKeys
         ["chat.err.agentLoop"] = new() { ["en"] = "The agent stopped with an error — details are in the Debug Log.", ["th"] = "เอเจนต์หยุดทำงานเพราะเกิดข้อผิดพลาด — ดูรายละเอียดที่หน้า Debug Log" },
         ["chat.err.emptyReply"] = new() { ["en"] = "(The model didn't produce a reply. Try again, reload the model, or pick another one.)", ["th"] = "(โมเดลไม่ได้ตอบกลับ ลองส่งใหม่ โหลดโมเดลใหม่ หรือเลือกโมเดลอื่น)" },
         ["chat.err.noModel"] = new() { ["en"] = "⚠ **No model loaded.** Load a GGUF model in the **Models** tab, or pick one in the box at the bottom of the chat.", ["th"] = "⚠ **ยังไม่ได้โหลดโมเดล** โหลดโมเดล GGUF ได้ที่แท็บ **โมเดล** หรือเลือกในช่องด้านล่างของแชท" },
+        ["chat.err.notReady.cli"] = new() { ["en"] = "⚠ **{0} isn't ready.** {1}\nIt needs its CLI installed and signed in: open **Setup** and pick {0}.", ["th"] = "⚠ **{0} ยังไม่พร้อม** {1}\nต้องติดตั้ง CLI และล็อกอินก่อน เปิดหน้า **ตัวช่วยติดตั้ง** แล้วเลือก {0}" },
+        ["chat.err.notReady.ollama"] = new() { ["en"] = "⚠ **{0} isn't ready.** {1}\nOllama isn't answering: open **Setup** to start it or download a model.", ["th"] = "⚠ **{0} ยังไม่พร้อม** {1}\nOllama ไม่ตอบ เปิดหน้า **ตัวช่วยติดตั้ง** เพื่อเปิดโปรแกรมหรือโหลดโมเดล" },
+        ["chat.err.notReady.brainx"] = new() { ["en"] = "⚠ **{0} isn't ready.** {1}\nThe BrainX room needs BrainX connected: open **Setup** and pick {0}.", ["th"] = "⚠ **{0} ยังไม่พร้อม** {1}\nห้อง BrainX ต้องเชื่อมต่อ BrainX ก่อน เปิดหน้า **ตัวช่วยติดตั้ง** แล้วเลือก {0}" },
         ["chat.err.providerNotReady"] = new() { ["en"] = "⚠ **{0} isn't ready.** {1}\nCheck the API key in **Settings ▸ AI Provider**.", ["th"] = "⚠ **{0} ยังไม่พร้อม** {1}\nตรวจสอบ API key ที่ **ตั้งค่า ▸ ผู้ให้บริการ AI**" },
         ["chat.retry.countdown"] = new() { ["en"] = "Retrying in {0}s… (attempt {1}/{2})", ["th"] = "จะลองใหม่ใน {0} วิ… (ครั้งที่ {1}/{2})" },
         ["chat.retry.retrying"] = new() { ["en"] = "*Retrying…*", ["th"] = "*กำลังลองใหม่…*" },
@@ -362,6 +365,13 @@ internal static class ChatKeys
         {
             ["en"] = "The program that sent task \"{0}\" over CluadeX's pipe asks to let the AI create and change files in\n{1}\nWITHOUT asking you. If you allow it, every task sent over the pipe for this folder may do the same until CluadeX restarts.\n\nCommands, MCP tools, files outside the folder and files that run code later still ask.\n\nAllow it?",
             ["th"] = "โปรแกรมที่ส่งงาน \"{0}\" มาทาง pipe ของ CluadeX ขอให้ AI สร้างและแก้ไขไฟล์ใน\n{1}\nโดยไม่ถามคุณ ถ้าอนุญาต งานทุกงานที่ส่งมาทาง pipe สำหรับโฟลเดอร์นี้จะทำแบบเดียวกันได้จนกว่าจะเปิด CluadeX ใหม่\n\nการรันคำสั่ง เครื่องมือ MCP ไฟล์นอกโฟลเดอร์ และไฟล์ที่จะรันโค้ดภายหลังยังถามเหมือนเดิม\n\nอนุญาตหรือไม่?",
+        },
+        // The same question when the owner's own Allow rule already lets commands run unasked (Settings ▸ Permissions):
+        // "Commands still ask" was untrue then — flutter ran with no permission row (TPIX run, 2026-11-01).
+        ["chat.acceptEdits.pipeConfirmRuns"] = new()
+        {
+            ["en"] = "The program that sent task \"{0}\" over CluadeX's pipe asks to let the AI create and change files in\n{1}\nWITHOUT asking you. If you allow it, every task sent over the pipe for this folder may do the same until CluadeX restarts.\n\nCommands already run WITHOUT asking here, because of your own Allow rule for commands (Settings ▸ Permissions) — this answer does not change that. MCP tools, files outside the folder and files that run code later still ask.\n\nAllow it?",
+            ["th"] = "โปรแกรมที่ส่งงาน \"{0}\" มาทาง pipe ของ CluadeX ขอให้ AI สร้างและแก้ไขไฟล์ใน\n{1}\nโดยไม่ถามคุณ ถ้าอนุญาต งานทุกงานที่ส่งมาทาง pipe สำหรับโฟลเดอร์นี้จะทำแบบเดียวกันได้จนกว่าจะเปิด CluadeX ใหม่\n\nการรันคำสั่งที่นี่ไม่ถามอยู่แล้ว เพราะคุณตั้งกฎอนุญาตการรันคำสั่งไว้เอง (การตั้งค่า ▸ สิทธิ์) คำตอบนี้ไม่เปลี่ยนเรื่องนั้น ส่วนเครื่องมือ MCP ไฟล์นอกโฟลเดอร์ และไฟล์ที่จะรันโค้ดภายหลังยังถามเหมือนเดิม\n\nอนุญาตหรือไม่?",
         },
         ["chat.acceptEdits.pipeOn"] = new()
         {

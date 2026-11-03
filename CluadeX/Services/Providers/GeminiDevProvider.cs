@@ -466,6 +466,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         try
         {
             proc = Process.Start(psi);
+            Background.AppChildren.Adopt(proc);
             if (proc == null)
             {
                 OnError?.Invoke("Failed to start the Gemini CLI");

@@ -15,7 +15,7 @@ namespace CluadeX.ViewModels;
 /// </summary>
 public sealed partial class UiStudioViewModel
 {
-    private FileSystemWatcher? _libWatcher;
+    private readonly List<FileSystemWatcher> _libWatchers = new();
     /// <summary>The app's gen-l10n setup: its .arb files are sources, the Dart gen-l10n makes from them is not.</summary>
     private FlutterL10n? _l10n;
     private DispatcherTimer? _renderDebounce;
@@ -374,31 +374,322 @@ public sealed partial class UiStudioViewModel
         if (_catalog?.Flutter == null) return;
         try { _l10n = FlutterL10n.Load(_studio.Root); }
         catch (Exception ex) { _log?.Warn("UiStudio", "reading l10n.yaml failed", ex); }
+        StartAppSourceWatchers();
+    }
+
+    /// <summary>Only the folders the screens are drawn from: lib/, assets/, the .arb folder, and the root's own files
+    /// (pubspec.yaml, l10n.yaml) without its subfolders. One watcher on the whole root also queued everything under
+    /// build/ and .dart_tool/ — which the Studio's own flutter test, pub get and a git checkout fill by the thousand —
+    /// into an 8 KB buffer; it overflowed, and the lib/ saves in that burst were lost without a trace: the screens
+    /// were not drawn again and a review round never saw the file change (2026-11-02).</summary>
+    private void StartAppSourceWatchers()
+    {
+        DisposeAppSourceWatchers();
+        string root = _studio.Root;
+        if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return;
+        // the root alone: its files, and lib/ or assets/ made after the watch started (DirectoryName)
+        AddAppSourceWatcher(root, recursive: false);
+        var dirs = new List<string>();
+        foreach (var d in new[] { Path.Combine(root, "lib"), Path.Combine(root, "assets") })
+            if (Directory.Exists(d)) { AddAppSourceWatcher(d, recursive: true); dirs.Add(Path.GetFullPath(d) + Path.DirectorySeparatorChar); }
+        // an arb-dir outside lib/ and assets/ (IsArb wants that folder itself, so its subfolders are not needed)
+        string? arb = _l10n?.ArbDir;
+        if (arb is not { Length: > 0 } || SamePath(arb, root)) return;
+        string arbSlash = arb.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (dirs.Any(d => arbSlash.StartsWith(d, StringComparison.OrdinalIgnoreCase))) return;
+        if (Directory.Exists(arb)) { AddAppSourceWatcher(arb, recursive: false); return; }
+        // Not there yet (l10n.yaml written before the .arb folder, or a git checkout took it away): watch the nearest
+        // folder above it that is there, so the folder is seen when it appears (OnAppSourceEvent). The root watcher
+        // already covers an arb-dir straight under the root.
+        string rootSlash = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!arbSlash.StartsWith(rootSlash, StringComparison.OrdinalIgnoreCase)) return;
+        string? up = Path.GetDirectoryName(arb.TrimEnd(Path.DirectorySeparatorChar));
+        while (up != null && !SamePath(up, root) && !Directory.Exists(up)) up = Path.GetDirectoryName(up);
+        if (up == null || SamePath(up, root)) return;
+        string upSlash = up + Path.DirectorySeparatorChar;
+        if (upSlash.StartsWith(rootSlash, StringComparison.OrdinalIgnoreCase) && !dirs.Any(d => upSlash.StartsWith(d, StringComparison.OrdinalIgnoreCase)))
+            AddAppSourceWatcher(up, recursive: false);
+    }
+
+    private void AddAppSourceWatcher(string dir, bool recursive)
+    {
         try
         {
-            var w = new FileSystemWatcher(_studio.Root)
+            var w = new FileSystemWatcher(dir)
             {
-                IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                IncludeSubdirectories = recursive,
+                // DirectoryName on every watcher: a folder renamed, moved in or out inside lib/ is one event for the
+                // folder and none for its files (OnAppSourceEvent)
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.DirectoryName,
+                InternalBufferSize = 64 * 1024,   // the AI, a formatter or a git checkout writing many files at once
             };
-            FileSystemEventHandler on = (_, e) => OnAppSourceChanged(e.FullPath);
+            FileSystemEventHandler on = (_, e) => OnAppSourceEvent(w, e.FullPath, e.ChangeType, recursive, null);
             w.Changed += on;
             w.Created += on;
             w.Deleted += on;
-            w.Renamed += (_, e) => OnAppSourceChanged(e.FullPath);
+            w.Renamed += (_, e) => OnAppSourceEvent(w, e.FullPath, e.ChangeType, recursive, e.OldFullPath);
+            // (can be raised inside EnableRaisingEvents below, before the Add: the handler runs later, on the dispatcher)
+            w.Error += (_, e) =>
+            {
+                var ex = e.GetException();
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() => OnAppSourceWatcherError(w, dir, ex));
+            };
             w.EnableRaisingEvents = true;
-            _libWatcher = w;
+            _libWatchers.Add(w);
         }
         catch (Exception ex) { _log?.Warn("UiStudio", "source watcher failed", ex); }
     }
 
-    private void StopWatchingAppSources()
+    /// <summary>A watcher failed (on the UI thread): it has stopped, and the changes it lost can't be named. Every error
+    /// watches again and draws everything again — an overflow, a watched folder that went away (a git checkout), and a
+    /// network share whose own notify buffer overflowed (Win32 error 1022, not an InternalBufferOverflowException).
+    /// A folder whose watch keeps failing (\\wsl$, a share without change notifications) is stopped by
+    /// <see cref="MaxAppResyncFailures"/>: after that it is left alone. A local overflow is not a failure: it proves the
+    /// watcher works (it keeps running), and a build_runner burst of *.g.dart writes — which never reset the count —
+    /// must not use up the cap and drop the resync for a lib/ save lost in the next burst (<see cref="AppResyncGap"/>
+    /// already limits how often it runs).</summary>
+    private void OnAppSourceWatcherError(FileSystemWatcher w, string dir, Exception? ex)
     {
-        if (_libWatcher != null) { _libWatcher.EnableRaisingEvents = false; _libWatcher.Dispose(); _libWatcher = null; }
-        _renderDebounce?.Stop();
+        if (!_libWatchers.Contains(w)) return;   // replaced or stopped since
+        bool overflow = ex is InternalBufferOverflowException;
+        if (overflow) _log?.Warn("UiStudio", "source watcher overflow: drawing the screens again", ex);
+        else if (!_appWatchErrorLogged)
+        {
+            _log?.Warn("UiStudio", $"source watcher on {dir} failed: watching again", ex);
+            _appWatchErrorLogged = true;
+        }
+        RequestAppResync(w, failure: !overflow);
     }
 
-    private void OnAppSourceChanged(string path)
+    /// <summary>A watcher's event (its thread). A folder that appears where the screens are drawn from (lib/ or
+    /// assets/ at the root, the .arb folder or a folder above it: made, put back by a git checkout, or renamed in) and
+    /// a watched folder renamed away both watch again: a watcher follows its folder, not its name.</summary>
+    private void OnAppSourceEvent(FileSystemWatcher w, string path, WatcherChangeTypes change, bool recursive, string? oldPath)
+    {
+        if (!recursive && Directory.Exists(path))
+        {
+            // only a folder that appears: lib/ itself changes (its LastWrite) with every file made in it
+            if (change is WatcherChangeTypes.Created or WatcherChangeTypes.Renamed)
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    if (IsAppSourceFolder(path) || oldPath != null && IsAppSourceFolder(oldPath)) RequestAppResync(w, failure: false);
+                });
+            return;
+        }
+        // a folder inside lib/ or assets/ renamed (git mv lib/screens lib/pages), moved in, moved out or deleted: one
+        // event for the folder, none for the files in it. A deleted path can't be told from a file: both go on below too.
+        if (recursive && change != WatcherChangeTypes.Changed)
+        {
+            bool folder = change != WatcherChangeTypes.Deleted && Directory.Exists(path);
+            if (folder || change == WatcherChangeTypes.Deleted)
+            {
+                string? gone = change == WatcherChangeTypes.Deleted ? path : change == WatcherChangeTypes.Renamed ? oldPath : null;
+                string? came = folder ? path : null;
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() => _ = OnAppFolderEventAsync(w, gone, came));
+                if (folder) return;
+            }
+        }
+        // a file renamed (git mv, a shell mv): its old name is gone (undo all puts it back), its new one is new
+        bool renamed = oldPath != null && !Directory.Exists(path);
+        if (renamed) OnAppSourceChanged(oldPath!);
+        OnAppSourceChanged(path, renamedIn: renamed);
+    }
+
+    /// <summary>A folder in lib/ or assets/ renamed, moved in or out, or deleted (UI thread): its files raised no events
+    /// of their own. In a review round every snapshot file under the old name counts as changed (undo all puts it back),
+    /// and a file under the new name whose old name the snapshot holds is new (undo all deletes it — it keeps the old
+    /// file's creation time, so <see cref="NoteSourceChanged"/> would not take it for new). A folder moved in from
+    /// outside the watched folder goes through NoteSourceChanged's own rule: undo all could not put its files back where
+    /// they came from, so they are never deleted. <paramref name="gone"/> may be a deleted file: that one is noted by
+    /// <see cref="OnAppSourceChanged"/>.</summary>
+    private async Task OnAppFolderEventAsync(FileSystemWatcher w, string? gone, string? came)
+    {
+        if (!_libWatchers.Contains(w)) return;   // replaced or stopped since
+        string root = _studio.Root;
+        string rootSlash = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var l10n = _l10n;
+        // what the watcher skips (generated code, hidden folders) is not counted here either
+        bool Source(string p) => p.StartsWith(rootSlash, StringComparison.OrdinalIgnoreCase)
+                                 && !IsNotSource(p, p[rootSlash.Length..].Replace('\\', '/'), l10n);
+        string? goneSlash = gone == null ? null : gone.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        bool noted = false;
+        if (gone != null && _session is { } s0 && !s0.Before.ContainsKey(gone))   // (in the snapshot: a file)
+        {
+            foreach (var p in s0.Before.Keys.Where(k => k.StartsWith(goneSlash!, StringComparison.OrdinalIgnoreCase) && Source(k)).ToList())
+            {
+                NoteSourceChanged(p);
+                noted = true;
+            }
+        }
+        if (came != null)
+        {
+            List<string> files;
+            try { files = await Task.Run(() => Directory.EnumerateFiles(came, "*.*", SearchOption.AllDirectories).ToList()); }
+            catch (Exception ex) { _log?.Warn("UiStudio", $"reading the folder {came} failed", ex); files = new List<string>(); }
+            if (!_libWatchers.Contains(w) || !SamePath(_studio.Root, root)) return;   // another project, or stopped since
+            string cameSlash = came.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            foreach (var f in files)
+            {
+                if (!Source(f)) continue;
+                if (gone != null && _session is { FullSnapshot: true } s && !s.Before.ContainsKey(f) && !s.Unread.Contains(f)
+                    && IsSnapshotKind(f) && f.StartsWith(cameSlash, StringComparison.OrdinalIgnoreCase)
+                    && s.Before.ContainsKey(goneSlash + f[cameSlash.Length..]))
+                    s.Before[f] = null;
+                NoteSourceChanged(f);
+                noted = true;
+            }
+        }
+        // a file deleted (OnAppSourceChanged has it), or a folder the round never read and nothing in it
+        if (!noted && came == null) return;
+        _appResyncFailures = 0;   // a file event came through: the watchers work
+        _appResyncGaveUp = false;
+        _sourcesChanged = true;
+        _renderDebounce ??= NewRenderDebounce();
+        _renderDebounce.Stop();
+        _renderDebounce.Start();
+    }
+
+    /// <summary>Is <paramref name="dir"/> a folder the watchers are placed by: lib/ or assets/ at the root, the
+    /// arb-dir, or a folder the arb-dir lies in (UI thread).</summary>
+    private bool IsAppSourceFolder(string dir)
+    {
+        string root = _studio.Root;
+        if (string.IsNullOrEmpty(root)) return false;
+        string d = dir.TrimEnd(Path.DirectorySeparatorChar);
+        string name = Path.GetFileName(d);
+        if ((name.Equals("lib", StringComparison.OrdinalIgnoreCase) || name.Equals("assets", StringComparison.OrdinalIgnoreCase))
+            && Path.GetDirectoryName(d) is { } parent && SamePath(parent, root)) return true;
+        return _l10n?.ArbDir is { Length: > 0 } arb
+               && (SamePath(arb, d) || arb.StartsWith(d + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Watchers are re-created at most once every <see cref="AppResyncGap"/> (a later ask waits out the gap, so
+    /// none is lost), and only <see cref="MaxAppResyncFailures"/> times in a row for failures with no file event seen in
+    /// between: a folder whose watch keeps failing must not rebuild watchers, fill the log and hold off the redraw for good.</summary>
+    private static readonly TimeSpan AppResyncGap = TimeSpan.FromSeconds(2);
+    private const int MaxAppResyncFailures = 3;
+    private DateTime _lastAppResync = DateTime.MinValue;
+    private DispatcherTimer? _appResyncTimer;
+    private int _appResyncFailures;
+    private bool _appWatchErrorLogged, _appResyncGaveUp;
+
+    private void RequestAppResync(FileSystemWatcher from, bool failure)
+    {
+        if (!_libWatchers.Contains(from) || _catalog?.Flutter == null) return;   // another project, or stopped since
+        // one is already waiting: it covers this one too (the root, lib/ and assets/ watchers failing together are one
+        // failure, not three toward the cap)
+        if (_appResyncTimer?.IsEnabled == true) return;
+        if (failure && ++_appResyncFailures > MaxAppResyncFailures)
+        {
+            if (!_appResyncGaveUp) _log?.Warn("UiStudio", "source watchers keep failing: not re-created again until a file change comes through");
+            _appResyncGaveUp = true;
+            return;
+        }
+        var wait = _lastAppResync + AppResyncGap - DateTime.UtcNow;
+        if (wait <= TimeSpan.Zero) { ResyncAppSources(); return; }
+        if (_appResyncTimer == null)
+        {
+            var t = new DispatcherTimer();
+            t.Tick += (_, _) =>
+            {
+                t.Stop();
+                if (_libWatchers.Count > 0 && _catalog?.Flutter != null) ResyncAppSources();
+            };
+            _appResyncTimer = t;
+        }
+        _appResyncTimer.Interval = wait;
+        _appResyncTimer.Start();
+    }
+
+    /// <summary>Watch the app's folders again and count everything as changed (what was missed can't be named). In a
+    /// review round the files are also compared with the round's snapshot, so the ones whose events were lost still
+    /// count as changed: Undo all must take back every one of them.</summary>
+    private void ResyncAppSources()
+    {
+        _appResyncTimer?.Stop();
+        _lastAppResync = DateTime.UtcNow;
+        StartAppSourceWatchers();
+        _sourcesChanged = true;
+        _renderDebounce ??= NewRenderDebounce();
+        _renderDebounce.Stop();
+        _renderDebounce.Start();
+        if (_session is { FullSnapshot: true } s) _ = ReconcileSessionAsync(s);
+    }
+
+    /// <summary>After lost watcher events: every snapshot file now changed or gone, and every app file the snapshot did
+    /// not have, goes through <see cref="NoteSourceChanged"/> (which applies its own rules for new files). The files are
+    /// read off the UI thread; the round is checked again before anything is noted.</summary>
+    private async Task ReconcileSessionAsync(ChangeSession s)
+    {
+        string root = _studio.Root;
+        var before = s.Before.ToList();
+        var skip = new HashSet<string>(s.Unread, StringComparer.OrdinalIgnoreCase);
+        var l10n = _l10n;
+        string? arbDir = l10n?.ArbDir;
+        string rootSlash = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        // what the watcher skips (generated code, hidden folders) is not counted here either
+        bool NotSource(string p) => p.StartsWith(rootSlash, StringComparison.OrdinalIgnoreCase)
+                                    && IsNotSource(p, p[rootSlash.Length..].Replace('\\', '/'), l10n);
+        List<string> touched;
+        try
+        {
+            touched = await Task.Run(() =>
+            {
+                var list = new List<string>();
+                foreach (var (path, text) in before)
+                {
+                    if (NotSource(path)) continue;
+                    bool exists = File.Exists(path);
+                    if (text == null) { if (exists) list.Add(path); continue; }   // made this round, still there
+                    if (!exists) { list.Add(path); continue; }
+                    string now;
+                    try { now = CluadeX.Helpers.TextFileCodec.Read(path).Text; } catch { continue; }
+                    if (!string.Equals(now, text, StringComparison.Ordinal)) list.Add(path);
+                }
+                var known = new HashSet<string>(before.Select(b => b.Key), StringComparer.OrdinalIgnoreCase);
+                var files = new List<string>();
+                try { files.AddRange(AppFiles(root)); } catch { /* lib/ going away mid-scan: what was read is enough */ }
+                try
+                {
+                    if (arbDir is { Length: > 0 } && Directory.Exists(arbDir)) files.AddRange(Directory.EnumerateFiles(arbDir, "*.arb"));
+                }
+                catch { /* the same */ }
+                foreach (var f in files.Distinct(StringComparer.OrdinalIgnoreCase))
+                    if (!known.Contains(f) && !skip.Contains(f) && !NotSource(f)) list.Add(f);
+                return list;
+            });
+        }
+        catch (Exception ex) { _log?.Warn("UiStudio", "comparing the review round with its snapshot failed", ex); return; }
+        if (!ReferenceEquals(_session, s) || !SamePath(_studio.Root, root)) return;   // the round ended, or another project
+        foreach (var p in touched)
+            if (!s.Changed.Contains(p)) NoteSourceChanged(p);
+    }
+
+    private void DisposeAppSourceWatchers()
+    {
+        foreach (var w in _libWatchers) { w.EnableRaisingEvents = false; w.Dispose(); }
+        _libWatchers.Clear();
+    }
+
+    private void StopWatchingAppSources()
+    {
+        DisposeAppSourceWatchers();
+        _renderDebounce?.Stop();
+        _appResyncTimer?.Stop();
+        _lastAppResync = DateTime.MinValue;
+        _appResyncFailures = 0;
+        _appWatchErrorLogged = _appResyncGaveUp = false;
+    }
+
+    /// <summary>A file under the watched folders that is not a source the round follows (any thread): generated code
+    /// (*.g.dart from build_runner, what gen-l10n writes while a screen is drawn — the .arb files were the change, this
+    /// is only its result) and anything in a hidden folder. The watcher and <see cref="ReconcileSessionAsync"/> both
+    /// skip these, so a resync never counts them as changed.</summary>
+    private static bool IsNotSource(string path, string rel, FlutterL10n? l10n)
+        => rel.EndsWith(".g.dart", StringComparison.OrdinalIgnoreCase) || rel.Contains("/.", StringComparison.Ordinal)
+           || l10n?.IsGenerated(path) == true;
+
+    private void OnAppSourceChanged(string path, bool renamedIn = false)
     {
         string root = _studio.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return;
@@ -406,15 +697,24 @@ public sealed partial class UiStudioViewModel
         var l10n = _l10n;
         bool translations = rel == "l10n.yaml" || l10n?.IsArb(path) == true;
         if (!(translations || rel.StartsWith("lib/", StringComparison.OrdinalIgnoreCase) || rel.StartsWith("assets/", StringComparison.OrdinalIgnoreCase) || rel == "pubspec.yaml")) return;
-        if (rel.EndsWith(".g.dart", StringComparison.OrdinalIgnoreCase) || rel.Contains("/.", StringComparison.Ordinal)) return;
-        // what gen-l10n writes while a screen is drawn: the .arb files were the change, this is only its result
-        if (l10n?.IsGenerated(path) == true) return;
+        if (IsNotSource(path, rel, l10n)) return;
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
+            if (!path.StartsWith(_studio.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return;   // another project since
+            // renamed in during the round and not in the snapshot: a new file (undo all deletes it) — it keeps the old
+            // file's creation time, so NoteSourceChanged would not take it for new
+            if (renamedIn && _session is { FullSnapshot: true } s && !s.Before.ContainsKey(path) && !s.Unread.Contains(path)
+                && IsSnapshotKind(path) && File.Exists(path))
+                s.Before[path] = null;
             if (rel == "l10n.yaml")
             {
+                string? arbDir = _l10n?.ArbDir;
                 try { _l10n = FlutterL10n.Load(_studio.Root); } catch { _l10n = null; }
+                // the .arb files moved to another folder: watch that one
+                if (!string.Equals(arbDir, _l10n?.ArbDir, StringComparison.OrdinalIgnoreCase) && _libWatchers.Count > 0) StartAppSourceWatchers();
             }
+            _appResyncFailures = 0;   // a file event came through: the watchers work
+            _appResyncGaveUp = false;
             NoteSourceChanged(path);
             _sourcesChanged = true;
             _renderDebounce ??= NewRenderDebounce();

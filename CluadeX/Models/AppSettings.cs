@@ -113,6 +113,11 @@ public class AppSettings
     public bool EnforceReadBeforeEdit { get; set; } = true;
     /// <summary>When the agent edits a file, auto-open/refresh it in the Code Editor and scroll to the change.</summary>
     public bool LiveEditFollow { get; set; } = true;
+    /// <summary>Follow mode took the window to the Code page for the agent's edits: go back to the Chat page once no
+    /// file has been edited for <see cref="FollowReturnSeconds"/> (owner 2026-11-02). Never while the user works there.</summary>
+    public bool FollowReturnToChat { get; set; } = true;
+    /// <summary>Seconds after the last edit before follow mode goes back to Chat (10–600).</summary>
+    public int FollowReturnSeconds { get; set; } = 10;
 
     /// <summary>When the API's credit/quota runs out mid-task, carry the same turn on with Claude Dev (the user's
     /// Claude login) and a handoff brief instead of stopping on a billing error.</summary>
@@ -127,6 +132,14 @@ public class AppSettings
     /// <summary>The desktop_* tools: see and drive other programs on this PC (testing a desktop app, a game window,
     /// an installer). On by default — every app still asks once per run (or "Allow in this chat").</summary>
     public bool DesktopControlEnabled { get; set; } = true;
+
+    /// <summary>Apps the desktop tools never touch, whatever the permission rules say — process names, '*' wildcards
+    /// ("KeePass*"). Password managers by default: their windows hold every secret the user has.</summary>
+    public List<string> DesktopBlockedApps { get; set; } = new()
+    {
+        "1Password", "KeePass", "KeePassXC", "Bitwarden", "LastPass", "Dashlane", "Keeper*", "NordPass", "Enpass", "RoboForm*",
+        "ProtonPass", "PasswordSafe", "pwsafe",
+    };
     /// <summary>Sub-agents, workers and fixers one run may have going at the same time.</summary>
     public int MaxParallelAgents { get; set; } = 3;
     /// <summary>Race 2–3 fixers in their own worktrees on a red build the main loop could not fix.</summary>
@@ -165,6 +178,11 @@ public class AppSettings
     public string CodeCommentLevel { get; set; } = "none";
     public string CodeCommentLanguage { get; set; } = "match";
     public Dictionary<string, CodeCommentSetting> CodeCommentProjects { get; set; } = new();
+    /// <summary>Code Editor ▸ Auto-comment (comment code that already exists): the last scope ("functions" | "changed" |
+    /// "key" | "file" | "selection"), comment language ("th" | "en" | "match") and model ("" = the provider's own).</summary>
+    public string AutoCommentScope { get; set; } = "functions";
+    public string AutoCommentLanguage { get; set; } = "match";
+    public string AutoCommentModel { get; set; } = "";
 
     /// <summary>
     /// Local native tool-calling. When ON, llama-server / Ollama use OpenAI-style function-calling
@@ -369,6 +387,12 @@ public class AppSettings
 
     // Sidebar system menu — collapsed by default to give chat history maximum real estate.
     public bool SidebarNavExpanded { get; set; } = false;
+
+    /// <summary>The sidebar's project list is open (owner 2026-11-01: projects that group chats).</summary>
+    public bool SidebarProjectsExpanded { get; set; } = true;
+
+    /// <summary>Chats pinned to the top of the sidebar, in the order they were pinned (owner 2026-11-02).</summary>
+    public List<string> PinnedChatIds { get; set; } = new();
 
     // UI settings
     public double FontSize { get; set; } = 14;

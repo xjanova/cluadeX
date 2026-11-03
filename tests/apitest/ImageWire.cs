@@ -772,6 +772,7 @@ internal static class ImageWire
             hookCache == null ? "HookService._cachedHooks not found" : "");
         string probeLine = "imagewire-quiet-log-" + Guid.NewGuid().ToString("N");
         sp.GetRequiredService<DebugLogService>().Info("ImageWire", probeLine);
+        sp.GetRequiredService<DebugLogService>().Flush();   // Info lines reach the file within 500 ms, not at once
         bool logOk = ReferenceEquals(sp.GetRequiredService<DebugLogService>(), quietLog) && Directory.Exists(logDir)
                      && Directory.GetFiles(logDir, "cluadex-*.log").Any(f => File.ReadAllText(f).Contains(probeLine));
         Check("home", "the app's debug log writes into the harness folder, not ~/.cluadex/logs (probe line found there)", logOk, logDir);
@@ -1246,8 +1247,15 @@ internal static class ImageWire
             long bSecond = calls.Where(c => c.Id == "B" && c.Msgs > 1).Select(c => c.Ms).DefaultIfEmpty(long.MaxValue).Min();
             long aFirst = calls.Where(c => c.Id == "A" && c.Msgs == 1).Select(c => c.Ms).DefaultIfEmpty(long.MaxValue).Min();
             long bFirst = calls.Where(c => c.Id == "B" && c.Msgs == 1).Select(c => c.Ms).DefaultIfEmpty(long.MaxValue).Min();
-            Check("subagent", "the two sub-agents ran at the same time (each started before the other's second step)",
-                aFirst < bSecond && bFirst < aSecond, $"A first {aFirst} ms / second {aSecond} ms · B first {bFirst} ms / second {bSecond} ms");
+            // The machine's limit follows free memory (AgentLoad.Cap): with room for one, the second waits for the first.
+            int machineCap = CluadeX.Services.Agents.AgentLoad.CurrentCap();
+            string timing = $"A first {aFirst} ms / second {aSecond} ms · B first {bFirst} ms / second {bSecond} ms · machine cap {machineCap}";
+            if (machineCap >= 2)
+                Check("subagent", "the two sub-agents ran at the same time (each started before the other's second step)",
+                    aFirst < bSecond && bFirst < aSecond, timing);
+            else
+                Check("subagent", "a machine with room for one sub-agent runs the two one after the other, both finishing",
+                    aSecond != long.MaxValue && bSecond != long.MaxValue && (bFirst > aSecond || aFirst > bSecond), timing);
 
             // ── continue_agent: the same sub-agent takes a second message, with what it read still in its conversation ──
             var keepResponder = anth.Responder;

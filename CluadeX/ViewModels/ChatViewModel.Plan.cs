@@ -146,6 +146,7 @@ public partial class ChatViewModel
                 _ => "pending",
             })).ToList();
             int done = items.Count(p => p.IsDone);
+            if (items.FirstOrDefault(p => p.IsActive) is { } activeStep) activeStep.Running = RunningLineFor(session.Id);
             StickyPlanItems = items;
             // The plan's identity: its chat and its items' words (a status change keeps it; a new plan has new words).
             _stickyPlanSignature = session.Id + "|" + string.Join("|", items.Select(p => p.Text));

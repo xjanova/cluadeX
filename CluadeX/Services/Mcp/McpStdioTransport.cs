@@ -105,6 +105,7 @@ public sealed class McpStdioTransport : IMcpTransport
         try
         {
             _process.Start();
+            Background.AppChildren.Adopt(_process);
         }
         catch (Exception ex)
         {

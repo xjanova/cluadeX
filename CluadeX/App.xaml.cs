@@ -89,9 +89,22 @@ public partial class App : Application
 
         // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
+        // The editor view finds it through EditorLanguageService.Current. Starts nothing until a file is shown.
+        _ = _serviceProvider.GetRequiredService<Services.Lsp.EditorLanguageService>();
+        // Reads every build / test / command the agent runs from now on — so it must exist before the first run.
+        _ = _serviceProvider.GetRequiredService<Services.Problems.BuildProblemsService>();
         // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
         var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
         _ = Task.Run(checkpoints.Prune);
+        // Old crash logs, compaction snapshots, the chat database's write-ahead log: a minute after start, off the UI.
+        var housekeepingRoot = _serviceProvider.GetRequiredService<SettingsService>().DataRoot;
+        var housekeepingDb = _serviceProvider.GetService<DatabaseService>();
+        var housekeepingLog = _serviceProvider.GetService<DebugLogService>();
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMinutes(1));
+            Housekeeping.Run(housekeepingRoot, CrashLogDir, housekeepingDb, housekeepingLog);
+        });
         // The Watch page for the phone comes back on if it was on when the app closed.
         try { var watchWeb = _serviceProvider.GetRequiredService<WatchWebServer>(); if (watchWeb.Settings.Enabled) watchWeb.Start(); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine("watch web: " + ex.Message); }
@@ -197,6 +210,8 @@ public partial class App : Application
                     // said "Not interested" before, or mcp_servers.json can't be read (registering means writing it).
                     // Not installed: invite, once.
                     var auto = await mcpManager.AutoConnectInstalledBrainAsync();
+                    // From here the page's status, the brain's version and a BrainX update are watched, not looked up once.
+                    mcpManager.StartLiveMonitor();
                     // Connections CluadeX kept in its own list move into BrainX once it is installed (BrainX first, never both).
                     try { await _serviceProvider.GetRequiredService<Services.Connections.ConnectionService>().ReconcileAsync(); }
                     catch (Exception ex) { dbg?.Warn("Connections", "moving connections to BrainX failed", ex); }
@@ -345,7 +360,11 @@ public partial class App : Application
         {
             // Every call in the debug log (not its spec — that can hold anything): when a chat starts or the model changes
             // with nobody at the keyboard, the log says whether a pipe caller did it (owner 2026-10-17: "แชทถูกปลุกกลับมา").
-            if (invocation.ToolName != "cluadex.get_active_model")
+            // A status poll that comes too fast is refused before it touches the UI thread or the database.
+            if (invocation.ToolName is "cluadex.task_status" or "cluadex.list_chats" && PipePolls.Take(invocation.ToolName) is { } retry)
+                return ErrorResult($"{invocation.ToolName} is called too often — try again in {Math.Ceiling(retry.TotalMilliseconds)} ms "
+                    + $"(at most {PipePolls.Burst} at once, then {PipePolls.PerSecond:0.#} a second).");
+            if (invocation.ToolName is not ("cluadex.get_active_model" or "cluadex.task_status"))
             {
                 string Arg(string n) => invocation.Arguments.ValueKind == System.Text.Json.JsonValueKind.Object
                     && invocation.Arguments.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
@@ -408,9 +427,67 @@ public partial class App : Application
         if (!TryReadMaxSteps(args, out int? maxSteps, out string? stepsError))
             return ErrorResult(stepsError!);
         bool? acceptEdits = ReadBool(args, "acceptEdits");
+        if (ReadBool(args, "wait") == false)
+            return await StartDetachedWriteCodeAsync(chatVm, taskId, spec, lessons, contextFiles, cwd, maxSteps, acceptEdits);
 
         var outcome = await chatVm.RunMcpTaskAsync(taskId, spec, lessons, contextFiles, cwd, ct, maxSteps, acceptEdits);
         return ToMcpResult(outcome);
+    }
+
+    /// <summary>The pipe's status calls: a supervisor polls them, a runaway loop must not.</summary>
+    internal static readonly PollLimiter PipePolls = new();
+
+    /// <summary>write_code tasks started with wait:false that are still going (by taskId).</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task<ViewModels.McpTaskOutcome>> _detachedTasks = new(StringComparer.Ordinal);
+
+    /// <summary>At most this many wait:false tasks at once: each is a whole agent run nobody's connection holds.</summary>
+    public const int MaxDetachedTasks = 4;
+
+    /// <summary>How long write_code with wait:false waits for the task's first moments (its chat, its dialog, a refusal).</summary>
+    private static readonly TimeSpan DetachedStartWait = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// write_code with wait:false: the run starts and the call answers at once with a handle — { taskId, chatId, status,
+    /// poll } — instead of holding the connection for the whole run (a 47-minute run, 2026-11-01: the supervisor saw nothing
+    /// until it ended, and a dropped connection would have stopped it). The run is not tied to the caller: only Stop in
+    /// CluadeX ends it. cluadex.task_status with the taskId shows its progress and, once it ends, callResult / callFailed.
+    /// A refusal that comes at once (no such folder) is the answer itself.
+    /// </summary>
+    private async Task<McpToolResult> StartDetachedWriteCodeAsync(ViewModels.ChatViewModel chatVm, string taskId, string spec,
+        IReadOnlyList<string>? lessons, IReadOnlyList<string>? contextFiles, string? cwd, int? maxSteps, bool? acceptEdits)
+    {
+        Task<ViewModels.McpTaskOutcome> run;
+        lock (_detachedTasks)
+        {
+            foreach (var done in _detachedTasks.Where(t => t.Value.IsCompleted).Select(t => t.Key).ToList())
+                _detachedTasks.TryRemove(done, out _);
+            if (_detachedTasks.ContainsKey(taskId) || chatVm.PipeTaskActive(taskId))
+                return ErrorResult($"Task '{taskId}' is still going — cluadex.task_status shows it. Give a new task another taskId.");
+            if (_detachedTasks.Count >= MaxDetachedTasks)
+                return ErrorResult($"{MaxDetachedTasks} tasks started with wait:false are still running — wait for one to end "
+                    + "(cluadex.task_status), or call with wait:true.");
+            run = Task.Run(() => chatVm.RunMcpTaskAsync(taskId, spec, lessons, contextFiles, cwd, CancellationToken.None, maxSteps, acceptEdits));
+            _detachedTasks[taskId] = run;
+        }
+        _ = run.ContinueWith(t => TryLogToDebugService(CluadeX.Models.LogLevel.Error, "MCP", $"write_code {taskId} (wait:false) failed", t.Exception),
+            TaskContinuationOptions.OnlyOnFaulted);
+        var until = DateTime.UtcNow + DetachedStartWait;
+        (string? ChatId, bool AtDialog) place = (null, false);
+        while (DateTime.UtcNow < until && !run.IsCompleted)
+        {
+            place = chatVm.PipeTaskPlace(taskId);
+            if (place.ChatId != null || place.AtDialog) break;
+            await Task.Delay(100);
+        }
+        if (run.IsCompleted) return run.IsFaulted ? ErrorResult($"write_code '{taskId}' failed — details are in CluadeX's Debug Log.") : ToMcpResult(run.Result);
+        return TextResult(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            taskId,
+            chatId = place.ChatId,
+            status = place.AtDialog ? "waiting_consent" : "running",
+            poll = "cluadex.task_status with this taskId: activity, progress, and callResult / callFailed once the run ends. "
+                 + "The run goes on if this connection closes; Stop in CluadeX ends it.",
+        }));
     }
 
     /// <summary>A run that failed, hit its step limit, was stopped in CluadeX or lost its caller is an error result —
@@ -824,6 +901,12 @@ public partial class App : Application
             activity = c.Activity,
             waitingFor = c.WaitingFor,
             doing = c.Doing,
+            startedBy = c.Progress?.StartedBy,
+            lastTool = c.Progress?.LastTool,
+            step = c.Progress?.Step,
+            elapsedSeconds = c.Progress?.ElapsedSeconds(DateTime.Now),
+            sinceProgressSeconds = c.Progress?.SinceProgressSeconds(DateTime.UtcNow),
+            subAgentsRunning = c.Progress?.SubAgentsRunning,
         })));
     }
 
@@ -857,6 +940,10 @@ public partial class App : Application
             cacheWriteTokens = s.Stats?.CacheWriteTokens,
             costUsd = s.Stats?.CostUsd,
             subAgents = s.SubAgents.Select(a => new { a.Label, a.Kind, a.Task, a.State, a.Action, a.Model, a.ToolCalls, a.CostUsd }),
+            lastTool = s.Progress?.LastTool,
+            elapsedSeconds = s.Progress?.ElapsedSeconds(DateTime.Now),
+            sinceProgressSeconds = s.Progress?.SinceProgressSeconds(DateTime.UtcNow),
+            plan = s.Progress is { PlanTotal: > 0 } p ? new { done = p.PlanDone, total = p.PlanTotal, current = p.PlanCurrent } : null,
             lastReply = s.LastReply,
             callResult = s.Outcome?.Text,
             callFailed = s.Outcome?.IsError,
@@ -1017,6 +1104,15 @@ public partial class App : Application
         // debugger. Adapters are not bundled: it probes for netcoredbg / debugpy and reports
         // exactly what is installed rather than offering a Start button that does nothing.
         services.AddSingleton<DebugAdapterService>();
+        // EditorLanguageService — the Code Editor's live errors (squiggles + Problems) and hover from a real language
+        // server (csharp-ls / typescript-language-server / pyright / dart), started per project when installed; the
+        // editor shows the install command when not. Servers stop with the project and on exit.
+        services.AddSingleton(sp => new Services.Lsp.EditorLanguageService(sp.GetService<FileSystemService>()));
+        services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<Services.Lsp.EditorLanguageService>());
+        // BuildProblemsService — the same squiggles and Problems from the output of builds, tests and checks the app
+        // already runs (the agent's tools, the editor's terminal, the Problems panel's Check button): no install needed.
+        services.AddSingleton(sp => new Services.Problems.BuildProblemsService(sp.GetService<CodeAgentService>(), sp.GetService<FileSystemService>()));
+        services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<Services.Problems.BuildProblemsService>());
         // SubAgentService — Sprint 1 #1: registry of specialised subagents
         // (code-reviewer, security-reviewer, architect, ...). Built-in 10
         // plus discovery of ~/.cluadex/agents/*.md and project agents.
@@ -1067,6 +1163,17 @@ public partial class App : Application
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.ProjectToolModule(sp.GetService<SettingsService>(), sp.GetService<ProjectRegistryService>()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AppRestartToolModule());
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AttachmentToolModule(sp.GetService<SettingsService>()));
+        // verify_change, find_references / rename_symbol / impact_of, checkpoint_*, gh_* / git_blame / git_show, debug.
+        // AgentToolService is resolved at call time: it takes the modules, so it cannot be a constructor argument.
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.EngineeringToolModule(
+            () => sp.GetService<AgentToolService>(), sp.GetService<CodeIntelligenceService>(), sp.GetService<CheckpointService>(),
+            sp.GetService<DebugAdapterService>(), sp.GetService<SettingsService>(), sp.GetService<ActivationService>(),
+            sp.GetService<RepoMapService>()));
+        // add_code_comments: the open editor tabs are read at call time (the editor view model is built after the tools).
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.AutoComment.AutoCommentToolModule(
+            sp.GetService<SettingsService>(), sp.GetService<AiProviderManager>(), sp.GetService<GitService>(),
+            () => sp.GetService<CodeEditorViewModel>()?.OpenFilesForTools()));
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.OrchestrationToolModule());
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 
@@ -1079,6 +1186,7 @@ public partial class App : Application
         services.AddSingleton<PermissionsViewModel>();
         services.AddSingleton<TaskManagerViewModel>();
         services.AddSingleton<WatchViewModel>();
+        services.AddSingleton<BillingViewModel>();
         services.AddSingleton<FeaturesViewModel>();
         services.AddSingleton<McpServersViewModel>();
         services.AddSingleton<Services.Connections.ConnectionService>();
@@ -1108,6 +1216,9 @@ public partial class App : Application
 
             var chatVm = _serviceProvider?.GetService<ChatViewModel>();
             chatVm?.SaveNow();
+            // The autosave tick writes in the background: what it queued reaches the disk before the process ends.
+            _serviceProvider?.GetService<ChatPersistenceService>()?.Flush(TimeSpan.FromSeconds(5));
+            _serviceProvider?.GetService<DebugLogService>()?.Flush();   // the log gathers lines for half a second
 
             _serviceProvider?.GetService<CostTrackingService>()?.FlushLedger();   // today's spend survives the restart
         }

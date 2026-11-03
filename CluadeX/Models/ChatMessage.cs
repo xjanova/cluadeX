@@ -113,6 +113,17 @@ public class ChatMessage : INotifyPropertyChanged
         set { if (_isInterrupted != value) { _isInterrupted = value; OnPropertyChanged(); } }
     }
 
+    private bool _isQueuedNote;
+    /// <summary>Typed while the agent was running and not read by it yet: the bubble offers "Send now". Not saved.</summary>
+    public bool IsQueuedNote
+    {
+        get => _isQueuedNote;
+        set { if (_isQueuedNote != value) { _isQueuedNote = value; OnPropertyChanged(); } }
+    }
+
+    /// <summary>The system row under a queued bubble that says where it stands (queued, sending now, read).</summary>
+    public ChatMessage? QueueRow { get; set; }
+
     // ─── Thinking Block ───
     /// <summary>Extended thinking content (collapsible).</summary>
     public string ThinkingContent
@@ -169,6 +180,15 @@ public class ChatMessage : INotifyPropertyChanged
     public string? ToolName { get; set; }
     public string? ToolSummary { get; set; }
     public string? ToolOutput { get; set; }
+
+    /// <summary>ContextMemoryService's token estimate of this row, with the Content and ToolOutput strings it was
+    /// counted from. Every recount re-read every character of every row (owner 2026-11-02: the chat hitched every 5 s);
+    /// a finished row never changes, so its count is kept until either string is replaced. One object, swapped whole,
+    /// so a reader never pairs a new string with an old count.</summary>
+    internal ContextTokenCount? ContextTokens;
+
+    internal sealed record ContextTokenCount(string Content, string? Output, int Tokens);
+
     public bool ToolSuccess { get; set; }
     public string? ToolArguments { get; set; }
     public string? ToolInputSummary { get; set; }
@@ -296,6 +316,44 @@ public class ChatMessage : INotifyPropertyChanged
 
     /// <summary>A help line dropped in beside the tool rows (ChromeHelp): tool rows on either side of it still fold together.</summary>
     public bool IsSideNote { get; set; }
+
+    // ─── Orchestration rows (docs/agent-orchestration.md): System rows tagged in ToolName, their data in ToolOutput — the
+    //     columns every row already has, so a reloaded chat draws them again with no schema change. The view each one
+    //     shows is built on first use by the chat page (it holds the services), from the row's own data. ───
+
+    public const string WorkflowTag = "cx:workflow", SplitsTag = "cx:splits", NextStepTag = "cx:nextstep", NoticeTag = "cx:notice";
+
+    /// <summary>Builds a row's view (set by the chat page). Null result = the row shows its text.</summary>
+    public static Func<ChatMessage, ViewModels.WorkflowCard?>? WorkflowCardFor;
+    public static Func<ChatMessage, System.Collections.ObjectModel.ObservableCollection<ChatSession>?>? SplitChipsFor;
+    public static Func<ChatMessage, ViewModels.NextStepView?>? NextStepFor;
+
+    private ViewModels.WorkflowCard? _workflow;
+    /// <summary>A workflow card (ToolOutput = the workflow's id).</summary>
+    public ViewModels.WorkflowCard? Workflow => _workflow ??= ToolName == WorkflowTag ? WorkflowCardFor?.Invoke(this) : null;
+    public bool IsWorkflow => ToolName == WorkflowTag;
+
+    private System.Collections.ObjectModel.ObservableCollection<ChatSession>? _splitChips;
+    /// <summary>The split chats this command opened (ToolOutput = their ids, one per line) — the sidebar's own session
+    /// objects, so each chip's state is the sidebar's RunStatus.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<ChatSession>? SplitChips =>
+        _splitChips ??= ToolName == SplitsTag ? SplitChipsFor?.Invoke(this) : null;
+    public bool IsSplitChips => ToolName == SplitsTag;
+
+    private ViewModels.NextStepView? _nextStep;
+    /// <summary>The next-step box (ToolOutput = the wrap_up's JSON, with "picked" once answered).</summary>
+    public ViewModels.NextStepView? NextStep => _nextStep ??= ToolName == NextStepTag ? NextStepFor?.Invoke(this) : null;
+    public bool IsNextStep => ToolName == NextStepTag;
+
+    /// <summary>A notice the model also sees on its next turn (a background command or a split chat finished).</summary>
+    public bool IsNotice => ToolName == NoticeTag;
+
+    /// <summary>The card can be drawn (a workflow whose state file is gone, or an unreadable box, shows its text instead).</summary>
+    public bool ShowsWorkflowCard => IsWorkflow && Workflow != null;
+    public bool ShowsNextStep => IsNextStep && NextStep != null;
+
+    /// <summary>A row with its own card instead of the chat bubble.</summary>
+    public bool IsOrchestrationCard => ShowsWorkflowCard || IsSplitChips || ShowsNextStep;
     /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:
     /// a reloaded group shows its merged output instead).</summary>
     public System.Collections.ObjectModel.ObservableCollection<ToolStepView> GroupSteps { get; } = new();
@@ -545,13 +603,47 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     }
 
     public string Id { get; set; } = Guid.NewGuid().ToString();
-    public string Title { get; set; } = "New Chat";
+    private string _title = "New Chat";
+    /// <summary>Raises its change: opening a chat copies the stored title onto the sidebar's own row (the row is no longer
+    /// swapped for a new object, which is what redrew it before).</summary>
+    public string Title
+    {
+        get => _title;
+        set { if (_title != value) { _title = value; Raise(nameof(Title)); } }
+    }
+
+    /// <summary>The owner named this chat (Rename): an automatic title never replaces it, and a save never writes
+    /// over the stored name (DatabaseService.WriteSession).</summary>
+    public bool TitleIsCustom { get; set; }
+
+    private string _projectId = "";
+    /// <summary>The project (a named group of chats, <see cref="ChatProject"/>) this chat is in; "" = none. Only the
+    /// group: the chat's folder (<see cref="ProjectPath"/>) never changes with it — rewind points and memory key off that.</summary>
+    public string ProjectId
+    {
+        get => _projectId;
+        set { if (_projectId != value) { _projectId = value ?? ""; Raise(nameof(ProjectId)); } }
+    }
     public DateTime CreatedAt { get; set; } = DateTime.Now;
-    public DateTime UpdatedAt { get; set; } = DateTime.Now;
+    private DateTime _updatedAt = DateTime.Now;
+    public DateTime UpdatedAt
+    {
+        get => _updatedAt;
+        set { if (_updatedAt != value) { _updatedAt = value; RaiseTimeLabels(); } }
+    }
+
+    /// <summary>The row's time and day group are drawn again (UpdatedAt changed, or midnight passed).</summary>
+    public void RaiseTimeLabels() { Raise(nameof(UpdatedAt)); Raise(nameof(ListTimeLabel)); Raise(nameof(DateGroupLabel)); }
+
     public List<ChatMessage> Messages { get; set; } = new();
 
     /// <summary>Absolute path of the project folder this session was created in (empty = no project).</summary>
-    public string ProjectPath { get; set; } = "";
+    public string ProjectPath
+    {
+        get => _projectPath;
+        set { if (_projectPath != value) { _projectPath = value; Raise(nameof(ProjectPath)); Raise(nameof(ProjectName)); Raise(nameof(ShowProjectLine)); } }
+    }
+    private string _projectPath = "";
 
     /// <summary>Related folders open beside <see cref="ProjectPath"/> for this chat (kept while the app runs).</summary>
     public List<string> ExtraFolders { get; } = new();
@@ -580,11 +672,31 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     public int SplitDepth
     {
         get => _splitDepth;
-        set { if (_splitDepth != value) { _splitDepth = value; Raise(nameof(SplitDepth)); Raise(nameof(SplitIndent)); } }
+        set { if (_splitDepth != value) { _splitDepth = value; Raise(nameof(SplitDepth)); Raise(nameof(SplitIndent)); Raise(nameof(IsTreeChild)); } }
     }
 
     /// <summary>The row's left indent for <see cref="SplitDepth"/>.</summary>
     public System.Windows.Thickness SplitIndent => new(Math.Min(_splitDepth, 4) * 14, 0, 0, 0);
+
+    /// <summary>It sits under another chat in the tree, so its row draws the line up to it. A split chat at the top (its
+    /// parent not in the list, or pinned on its own) has no line to draw.</summary>
+    public bool IsTreeChild => _splitDepth > 0;
+
+    private bool _isPinned;
+    /// <summary>Pinned to the top of the sidebar by the owner (kept in settings, not in the chat database).</summary>
+    public bool IsPinned
+    {
+        get => _isPinned;
+        set { if (_isPinned != value) { _isPinned = value; Raise(nameof(IsPinned)); Raise(nameof(DateGroupLabel)); } }
+    }
+
+    private bool _hasWorkingSplits;
+    /// <summary>One of its split chats is working now: the branch badge twinkles (they work together).</summary>
+    public bool HasWorkingSplits
+    {
+        get => _hasWorkingSplits;
+        set { if (_hasWorkingSplits != value) { _hasWorkingSplits = value; Raise(nameof(HasWorkingSplits)); } }
+    }
 
     private string _splitSummary = "";
     /// <summary>On a chat that split work off: "↳ 3 split chats · 2 done · 1 put away". "" when none.</summary>
@@ -645,12 +757,13 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
         Raise(nameof(ParentId)); Raise(nameof(SplitTask)); Raise(nameof(IsSplit)); Raise(nameof(IsArchived));
     }
 
-    /// <summary>Display-only: the sidebar's group — today, yesterday, this week, earlier (in the UI language).</summary>
+    /// <summary>Display-only: the sidebar's group — pinned, today, yesterday, this week, earlier (in the UI language).</summary>
     public string DateGroupLabel
     {
         get
         {
             if (_groupOverride != null) return _groupOverride;
+            if (_isPinned) return CluadeX.Services.LocalizedResources.Instance["sidebar.group.pinned"];
             var day = UpdatedAt.Date;
             var today = DateTime.Today;
             string key = day >= today ? "sidebar.group.today"

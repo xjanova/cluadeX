@@ -20,7 +20,7 @@ namespace DesktopTest;
 /// pid or handle; key input is only sent once the fixture is verified to be in front). Data root isolated next to
 /// this exe (portable.txt). The permission cases go through AgentToolService's real gate.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail, Gaps;
     static readonly List<string> Problems = new();
@@ -197,6 +197,11 @@ internal static class Program
         await Case("C1", ScreenshotCases);
         Console.WriteLine("\n── wait, launch, Stop ──");
         await Case("L1", WaitLaunchCases);
+        Console.WriteLine("\n── mouse, window, read, clipboard, terminals ──");
+        await Case("M1", MouseCases);
+        await Case("N1", WindowToolCases);
+        await Case("R1", ReadClipboardCases);
+        await Case("T1", TerminalCases);
         Console.WriteLine("\n── permission gate (AgentToolService) ──");
         await Case("P1", () => PermissionCases(provider.GetRequiredService<PermissionService>(), settings));
         Console.WriteLine("\n── log ──");
@@ -228,6 +233,10 @@ internal static class Program
         Check("S1b", "the agent's resolver routes desktop_act / desktop_click to the module",
             Svc.ResolveToolTypePublic("desktop_act") == ToolType.DesktopAct && Svc.ResolveToolTypePublic("desktop_click") == ToolType.DesktopAct
             && Svc.ToolModules.Any(m => m is DesktopToolModule));
+        Check("S1b2", "desktop_click with no action is a click (it used to fail as an unknown action); desktop_act still needs one",
+            DesktopToolModule.ActionOf("desktop_click", "") == "click" && DesktopToolModule.ActionOf("desktop_click", "Double-Click") == "double_click"
+            && DesktopToolModule.ActionOf("desktop_act", "") == "" && DesktopToolModule.ActionOf("desktop_act", "SetValue") == "set_value",
+            $"{DesktopToolModule.ActionOf("desktop_click", "")} / {DesktopToolModule.ActionOf("desktop_act", "")}");
         Check("S1c", "registered: the module and its prompt section (IPromptSectionProvider) are in App.ConfigureServices",
             sp.GetServices<IAgentToolModule>().OfType<DesktopToolModule>().Any()
             && sp.GetServices<IPromptSectionProvider>().OfType<DesktopPromptSection>().Any());

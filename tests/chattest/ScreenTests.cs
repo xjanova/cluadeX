@@ -153,5 +153,107 @@ internal static partial class Program
             Path.Combine(PipeRoot, "nobody"), File.Exists, Directory.Exists, d => Directory.GetDirectories(d));
         Check(@"S10 the CLI is found one folder deeper (2.1.299\<hash>\claude.exe), and 2.1.299 beats 2.1.99; npm's shims are skipped",
             Find("C:\\npm\\claude\nC:\\npm\\claude.cmd") == nested, Find(""));
+
+        // S11 — follow mode goes back to Chat once the edits stop (owner 2026-11-02: "เด้งกลับหน้าแชทปกติ เมื่อแก้ไฟล์เสร็จแล้ว
+        // มาไม่น้อยกว่า 10 วินาที", Settings FollowReturnToChat / FollowReturnSeconds).
+        var t0 = new DateTime(2026, 11, 2, 12, 0, 0);
+        FollowBack.Verdict Back(bool on = true, bool code = true, bool brought = true, double sinceEdit = 11, DateTime? input = null, int secs = 10) =>
+            FollowBack.Decide(on, code, brought, t0, t0.AddSeconds(30), input ?? t0.AddHours(-1), t0.AddSeconds(30 + sinceEdit), secs);
+        Check("S11 follow mode opened the Code page and no file changed for 11 s (of 10) → back to Chat", Back() == FollowBack.Verdict.Return);
+        Check("S11 9 s since the last edit → it waits", Back(sinceEdit: 9) == FollowBack.Verdict.Wait);
+        Check("S11 a setting under 10 s counts as 10 — never sooner", Back(sinceEdit: 5, secs: 3) == FollowBack.Verdict.Wait && Back(sinceEdit: 10, secs: 3) == FollowBack.Verdict.Return);
+        Check("S11 set to 60 s: 30 s waits, 61 s goes back", Back(sinceEdit: 30, secs: 60) == FollowBack.Verdict.Wait && Back(sinceEdit: 61, secs: 60) == FollowBack.Verdict.Return);
+        Check("S11 the user typed, clicked or scrolled after it opened → the page is theirs, it stays", Back(input: t0.AddSeconds(5)) == FollowBack.Verdict.GiveUp);
+        Check("S11 the user opened the Code page themself → never sent away", Back(brought: false) == FollowBack.Verdict.GiveUp);
+        Check("S11 already off the Code page, or the setting off → it stops watching", Back(code: false) == FollowBack.Verdict.GiveUp && Back(on: false) == FollowBack.Verdict.GiveUp);
+        var defaults = new AppSettings();
+        Check("S11 on by default, 10 s", defaults.FollowReturnToChat && defaults.FollowReturnSeconds == 10);
+
+        // S12 — the sidebar, newest first by when each chat last got rows; today's work of other projects stays in view.
+        var older = new ChatSession { Title = "s12 older", UpdatedAt = t0.AddDays(-3) };
+        var newest = new ChatSession { Title = "s12 newest", UpdatedAt = t0 };
+        var tieA = new ChatSession { Title = "s12 tie A", UpdatedAt = t0.AddDays(-1) };
+        var tieB = new ChatSession { Title = "s12 tie B", UpdatedAt = t0.AddDays(-1) };
+        Check("S12 newest first; chats with the same time keep their order",
+            ChatViewModel.SidebarOrder([older, tieA, newest, tieB]).Select(s => s.Title).SequenceEqual(["s12 newest", "s12 tie A", "s12 tie B", "s12 older"]));
+
+        Vm.SetWorkingDirectory(ProjA);
+        var otherToday = new ChatSession { Title = "s12 other project today", ProjectPath = ProjB, UpdatedAt = DateTime.Now.AddMinutes(-1) };
+        var otherOld = new ChatSession { Title = "s12 other project last week", ProjectPath = ProjB, UpdatedAt = DateTime.Now.AddDays(-5) };
+        var mineOld = new ChatSession { Title = "s12 this project, old, at the list's end", ProjectPath = ProjA, UpdatedAt = DateTime.Now.AddDays(-20) };
+        Vm.Sessions.Add(otherToday); Vm.Sessions.Add(otherOld); Vm.Sessions.Add(mineOld);
+        await Render();
+        bool filterIsOn = !Vm.ShowAllProjectSessions;
+        Check("S12 with the project filter on, another project's chat from today shows; its old one does not; the line says so",
+            filterIsOn && Vm.VisibleSessions.Contains(otherToday) && !Vm.VisibleSessions.Contains(otherOld) && Vm.SidebarFilterText.Contains("+"),
+            $"filter={filterIsOn} · {Vm.SidebarFilterText}");
+
+        // A chat low in the list gets new rows: it moves up into today's group at once, ahead of older chats.
+        typeof(ChatViewModel).GetMethod("TouchSession", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(Vm, [mineOld]);
+        await Render();
+        int at = Vm.VisibleSessions.IndexOf(mineOld);
+        bool aheadOfOlder = at >= 0 && Vm.VisibleSessions.Take(at).All(s => s.UpdatedAt >= mineOld.UpdatedAt || s.RunStatus is "working" or "waiting" or "done" || s.ParentId != null);
+        Check("S12 a chat that just got rows moves up to today at once (its group, its time, its place)",
+            aheadOfOlder && mineOld.DateGroupLabel == L("sidebar.group.today") && mineOld.ListTimeLabel.Contains(':'),
+            $"at={at} group={mineOld.DateGroupLabel} time={mineOld.ListTimeLabel}");
+        Vm.Sessions.Remove(otherToday); Vm.Sessions.Remove(otherOld); Vm.Sessions.Remove(mineOld);
+
+        // S13 — the day groups in day order. Unsorted, a group stands where its first row is: the working chats come first,
+        // so one working since yesterday put "Yesterday" above "Today".
+        List<string> GroupsOf(bool sorted)
+        {
+            var rows = new System.Collections.ObjectModel.ObservableCollection<ChatSession>();
+            var view = System.Windows.Data.CollectionViewSource.GetDefaultView(rows);
+            var by = new System.Windows.Data.PropertyGroupDescription(nameof(ChatSession.DateGroupLabel));
+            if (sorted) by.CustomSort = new ChatViewModel.DayGroupOrder();
+            view.GroupDescriptions.Add(by);
+            rows.Add(new ChatSession { Title = "working since yesterday", UpdatedAt = DateTime.Now.AddDays(-1) });
+            rows.Add(new ChatSession { Title = "today", UpdatedAt = DateTime.Now });
+            rows.Add(new ChatSession { Title = "last month", UpdatedAt = DateTime.Now.AddDays(-30) });
+            return view.Groups.Cast<System.Windows.Data.CollectionViewGroup>().Select(g => (string)g.Name).ToList();
+        }
+        var unsorted = GroupsOf(false);
+        string[] dayNames = [L("sidebar.group.today"), L("sidebar.group.yesterday"), L("sidebar.group.earlier")];
+        Check("S13 (the case) unsorted, the working chat from yesterday puts 'Yesterday' above 'Today'",
+            !unsorted.SequenceEqual(dayNames), string.Join(", ", unsorted));
+        var dayOrder = GroupsOf(true);
+        Check("S13 with the group order: today, yesterday, earlier, whichever row came first",
+            dayOrder.SequenceEqual(dayNames), string.Join(", ", dayOrder));
+
+        // S14 — pinned chats (owner 2026-11-02: "เพิ่มการปักหมุดแชทที่ต้องการไว้"): their own group at the top, in pin order,
+        // whatever the project filter; kept in settings; a deleted or vanished chat's pin is forgotten.
+        Vm.SetWorkingDirectory(ProjA);
+        var pinOld = new ChatSession { Title = "s14 other project, last month", ProjectPath = ProjB, UpdatedAt = DateTime.Now.AddDays(-30) };
+        var pinNew = new ChatSession { Title = "s14 this project, today", ProjectPath = ProjA, UpdatedAt = DateTime.Now };
+        var pinSecond = new ChatSession { Title = "s14 pinned second", ProjectPath = ProjA, UpdatedAt = DateTime.Now.AddDays(-2) };
+        Vm.Sessions.Add(pinOld); Vm.Sessions.Add(pinNew); Vm.Sessions.Add(pinSecond);
+        await Render();
+        Check("S14 (before) an old chat of another project is not in the filtered list", !Vm.VisibleSessions.Contains(pinOld));
+        Vm.TogglePinCommand.Execute(pinOld.Id);
+        Vm.TogglePinCommand.Execute(pinSecond.Id);
+        await Render();
+        var pins = Sp.GetRequiredService<SettingsService>().Settings.PinnedChatIds;
+        Check("S14 pinned: first in the list, in pin order, in the pinned group, past the project filter, saved in settings",
+            Vm.VisibleSessions.IndexOf(pinOld) == 0 && Vm.VisibleSessions.IndexOf(pinSecond) == 1
+            && pinOld.DateGroupLabel == L("sidebar.group.pinned") && pins.SequenceEqual([pinOld.Id, pinSecond.Id]),
+            $"at={Vm.VisibleSessions.IndexOf(pinOld)},{Vm.VisibleSessions.IndexOf(pinSecond)} group={pinOld.DateGroupLabel} pins={pins.Count}");
+        var pinGroups = new System.Windows.Data.ListCollectionView(new List<ChatSession> { pinNew, pinOld });
+        var pinBy = new System.Windows.Data.PropertyGroupDescription(nameof(ChatSession.DateGroupLabel)) { CustomSort = new ChatViewModel.DayGroupOrder() };
+        pinGroups.GroupDescriptions.Add(pinBy);
+        Check("S14 the pinned group sorts above today",
+            pinGroups.Groups.Cast<System.Windows.Data.CollectionViewGroup>().First().Name as string == L("sidebar.group.pinned"));
+        Vm.TogglePinCommand.Execute(pinOld.Id);
+        await Render();
+        Check("S14 unpinned: back to its day group, and the filter hides it again; the other pin stays",
+            pinOld.DateGroupLabel != L("sidebar.group.pinned") && !Vm.VisibleSessions.Contains(pinOld)
+            && Sp.GetRequiredService<SettingsService>().Settings.PinnedChatIds.SequenceEqual([pinSecond.Id]));
+        Sp.GetRequiredService<SettingsService>().UpdateSettings(st => st.PinnedChatIds = [pinSecond.Id, "gone-chat-id"]);
+        typeof(ChatViewModel).GetMethod("ApplyPins", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(Vm, null);
+        Check("S14 on load: the pins of chats that are gone are forgotten, the rest marked",
+            pinSecond.IsPinned && Sp.GetRequiredService<SettingsService>().Settings.PinnedChatIds.SequenceEqual([pinSecond.Id]));
+        Vm.TogglePinCommand.Execute(pinSecond.Id);
+        Vm.Sessions.Remove(pinOld); Vm.Sessions.Remove(pinNew); Vm.Sessions.Remove(pinSecond);
+        await Render();
     }
 }

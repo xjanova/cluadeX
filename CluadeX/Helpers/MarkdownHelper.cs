@@ -65,6 +65,11 @@ public static class MarkdownHelper
         @"```(\w*)\s*\r?\n([\s\S]*?)```",
         RegexOptions.Compiled);
 
+    /// <summary>The opening of a fence — the same opening <see cref="CodeBlockRegex"/> needs, without the close.</summary>
+    private static readonly Regex OpenFenceRegex = new(
+        @"```(\w*)\s*\r?\n",
+        RegexOptions.Compiled);
+
     private static readonly Regex InlineRegex = new(
         @"\*\*\*(.+?)\*\*\*|" +           // ***bold italic*** (group 1)
         @"\*\*(.+?)\*\*|" +               // **bold** (group 2)
@@ -160,12 +165,24 @@ public static class MarkdownHelper
         // The stable prefix is only this message's prefix when the new text grows the one rendered: a recycled row
         // that now shows ANOTHER message kept the previous message's first blocks.
         string? rendered = (string?)panel.GetValue(RenderedTextProperty);
-        int stableCount = rendered != null && text.StartsWith(rendered, StringComparison.Ordinal)
-            ? (int)panel.GetValue(StableCountProperty) : 0;
+        bool grows = rendered != null && text.StartsWith(rendered, StringComparison.Ordinal);
+        int stableCount = grows ? (int)panel.GetValue(StableCountProperty) : 0;
         panel.SetValue(RenderedTextProperty, text);
 
+        // A code block still streaming (no closing fence yet) grows in place: only its last lines are set again,
+        // instead of the whole code so far being rebuilt on every token (owner 2026-11-02: long code made the chat choppy).
+        if (grows
+            && segments.Count > 0 && segments[^1].Open
+            && stableCount == segments.Count - 1
+            && panel.Children.Count == segments.Count
+            && panel.Children[^1] is FrameworkElement { Tag: OpenCode shown }
+            && shown.Language == segments[^1].Language
+            && shown.Grow(segments[^1].Code))
+        {
+            // the blocks before it are unchanged: the text only grew inside the open fence
+        }
         // Incremental: if we have stable children, only re-render from stable boundary
-        if (stableCount > 0
+        else if (stableCount > 0
             && stableCount < segments.Count
             && panel.Children.Count >= stableCount)
         {
@@ -206,7 +223,22 @@ public static class MarkdownHelper
         }
 
         if (pos < text.Length)
-            AddTextSegments(segments, text[pos..]);
+        {
+            // A fence that has not closed yet (the reply is still writing its code): everything after it is that code,
+            // not paragraphs to run the inline formatting over again on every streamed token.
+            var open = OpenFenceRegex.Match(text, pos);
+            if (open.Success)
+            {
+                if (open.Index > pos)
+                    AddTextSegments(segments, text[pos..open.Index]);
+                segments.Add(new MarkdownSegment
+                {
+                    Type = SegmentType.CodeBlock, Open = true,
+                    Code = text[(open.Index + open.Length)..].TrimEnd(), Language = open.Groups[1].Value,
+                });
+            }
+            else AddTextSegments(segments, text[pos..]);
+        }
 
         return segments;
     }
@@ -350,6 +382,7 @@ public static class MarkdownHelper
     {
         return seg.Type switch
         {
+            SegmentType.CodeBlock when seg.Open => OpenCode.Create(seg.Code, seg.Language),
             SegmentType.CodeBlock => CreateCodeBlock(seg.Code, seg.Language),
             SegmentType.Header => CreateHeader(seg.Text, seg.HeaderLevel),
             SegmentType.HorizontalRule => CreateHorizontalRule(),
@@ -632,6 +665,96 @@ public static class MarkdownHelper
         return outerBorder;
     }
 
+    /// <summary>
+    /// A code block whose closing fence has not arrived — still being streamed, or a reply that ended without one (Stop,
+    /// max tokens, a model that forgot it). Plain monospace text, no syntax colours and no inline pass, held in chunks of
+    /// lines so a new token sets only the last chunk again; the full lines above stay as they are. The chunks can be
+    /// selected and the header copies the code shown so far, so a reply that never closes its fence is still usable.
+    /// When the fence closes the block is rendered whole by <see cref="CreateCodeBlock"/>.
+    /// </summary>
+    private sealed class OpenCode
+    {
+        private const int ChunkLines = 40;
+
+        private readonly StackPanel _chunks = new() { Margin = new Thickness(14, 10, 14, 12) };
+        private string _shown = "";
+        private int _sealedChars;   // code[.._sealedChars] is in full chunks that never change again
+
+        public string Language { get; }
+        public Border Element { get; }
+
+        private OpenCode(string language)
+        {
+            Language = language;
+            Element = new Border
+            {
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0, 6, 0, 6),
+                Tag = this,
+            };
+            Tok(Element, Border.BackgroundProperty, CodeBlockBgKey);
+            Tok(Element, Border.BorderBrushProperty, BorderKey);
+
+            // The same header as the finished block, so nothing jumps when the fence closes. Its copy button copies the
+            // code shown at the moment it is clicked.
+            var header = Tok(new Grid(), Panel.BackgroundProperty, CodeBgKey);
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            header.Children.Add(Fg(Font(new TextBlock
+            {
+                Text = string.IsNullOrEmpty(language) ? "code" : language,
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 6, 0, 6),
+            }, mono: true), MutedKey));
+            var copyBtn = CreateCopyButton(() => _shown);
+            Grid.SetColumn(copyBtn, 1);
+            header.Children.Add(copyBtn);
+
+            var mainStack = new StackPanel();
+            mainStack.Children.Add(header);
+            mainStack.Children.Add(_chunks);
+            Element.Child = mainStack;
+            _chunks.Children.Add(NewChunk());
+        }
+
+        public static UIElement Create(string code, string language)
+        {
+            var open = new OpenCode(language);
+            open.Grow(code);
+            return open.Element;
+        }
+
+        /// <summary>Show <paramref name="code"/>; false when it does not continue what is shown (the caller rebuilds).</summary>
+        public bool Grow(string code)
+        {
+            if (!code.StartsWith(_shown, StringComparison.Ordinal)) return false;
+            _shown = code;
+            var last = (TextBlock)_chunks.Children[^1];
+            while (true)
+            {
+                int end = _sealedChars - 1;
+                for (int n = 0; n < ChunkLines && (end = code.IndexOf('\n', end + 1)) >= 0; n++) { }
+                if (end < 0) break;
+                // a CRLF line's '\r' would end the chunk with an extra blank line
+                last.Text = code[_sealedChars..(end > _sealedChars && code[end - 1] == '\r' ? end - 1 : end)];
+                _sealedChars = end + 1;
+                last = NewChunk();
+                _chunks.Children.Add(last);
+            }
+            last.Text = code[_sealedChars..];
+            return true;
+        }
+
+        private static TextBlock NewChunk() => Fg(Font(new SelectableTextBlock
+        {
+            FontSize = 12.5,
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 20,
+        }, mono: true), "Markdown.Syntax.Text");
+    }
+
     // ─── Diff ───
 
     private static UIElement CreateDiffContent(string code)
@@ -664,7 +787,10 @@ public static class MarkdownHelper
 
     // ─── Clipboard Copy Button ───
 
-    internal static Button CreateCopyButton(string textToCopy)
+    internal static Button CreateCopyButton(string textToCopy) => CreateCopyButton(() => textToCopy);
+
+    /// <summary>A copy button whose text is read when it is clicked (a block that is still growing).</summary>
+    internal static Button CreateCopyButton(Func<string> textToCopy)
     {
         var copyBtn = new Button
         {
@@ -679,7 +805,9 @@ public static class MarkdownHelper
 
         copyBtn.Click += (_, _) =>
         {
-            try { Clipboard.SetText(textToCopy); }
+            string text = textToCopy();
+            if (string.IsNullOrEmpty(text)) return;
+            try { Clipboard.SetText(text); }
             catch { return; }
             CopyButtonFeedback(copyBtn, "\u2713 Copied!", "\U0001F4CB Copy");
         };
@@ -1073,6 +1201,8 @@ public static class MarkdownHelper
         public string Text { get; init; } = "";
         public string Code { get; init; } = "";
         public string Language { get; init; } = "";
+        /// <summary>A code block whose closing fence has not arrived yet (see <see cref="OpenCode"/>).</summary>
+        public bool Open { get; init; }
         public int HeaderLevel { get; init; }
         public List<string> ListItems { get; init; } = new();
         public List<string[]> TableRows { get; init; } = new();

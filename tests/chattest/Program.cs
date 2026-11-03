@@ -270,12 +270,57 @@ internal static partial class Program
         Fake = new FakeProvider();
         SetField(Providers, "_activeProvider", Fake);
 
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "U11")
+        {
+            await TestLiveEffort();
+            Log($"\n## Result (CHATTEST_ONLY=U11): {Pass} pass / {Fail} FAIL");
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=CP: just the UI Studio / Node Graph following the chat on screen.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "CP")
+        {
+            await TestProjectPagesFollowChat();
+            Log($"\n## Result (CHATTEST_ONLY=CP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=SUP: just the pipe supervision checks (late sub-agent results, consent wait, progress, poll limit).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SUP")
+        {
+            await TestSupervision();
+            Log($"\n## Result (CHATTEST_ONLY=SUP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=ORCH: just the orchestration views (docs/agent-orchestration.md), and the narrow composer the
+        // Ultra switch joined.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "ORCH")
+        {
+            await TestOrchestrationViews();
+            await TestNarrowComposer();
+            Log($"\n## Result (CHATTEST_ONLY=ORCH): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PP: just the plain-language permission prompt and the live model chip (quick renders to look at).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") is "PP" or "PB")
         {
             if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PB") await TestPersonaBoxes();
             await TestPlainPermission();
             Log($"\n## Result (CHATTEST_ONLY=PP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=PROJ: just renaming chats and the projects that group them.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PROJ")
+        {
+            await TestRenameAndProjects();
+            Log($"\n## Result (CHATTEST_ONLY=PROJ): {Pass} pass / {Fail} FAIL");
             foreach (var f in Failures) Log("  - " + f);
             return Fail == 0 ? 0 : 1;
         }
@@ -302,6 +347,7 @@ internal static partial class Program
         TestPureHelpers();                    // L3 classifier, L8 dedupe, U9 redaction, U2 palette
         await TestPipeRuns();                 // T5: pipe runs watched live, isError, project restored
         await TestPipeChats();                // T6: list_chats / continue_chat over the pipe
+        await TestSupervision();              // SUP: late sub-agent results, consent wait, progress, who started, poll limit
         await TestAcceptEdits();              // T5: Accept edits switch
         await TestAutonomousBuildGate();      // T5: the Autonomous loop's build/test after unseen edits
         await TestThumbnail();                // T5: tool-row image thumbnail
@@ -313,13 +359,18 @@ internal static partial class Program
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
+        await TestOrchestrationViews();       // OR: workflow card, split chips, notices, next-step box, Ultra
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
+        await TestConnectWizardJump();        // CW: a model that is not connected opens its wizard
         await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
+        await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
+        await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
+        await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
@@ -815,6 +866,113 @@ internal static partial class Program
         Check("W3 a reply that ended before reading it: the message moves after its answer and goes as the next turn",
             sent && answer >= 0 && more > answer && reply > more && order.Count(c => c == "[W2-more] also add tests") == 1,
             string.Join(" | ", order));
+
+        // W4 — Send now (owner 2026-11-02: "ปุ่มงับแชทใหม่มาคิดทันที เหมือน send now"): the model's reply in flight stops so
+        // the note is read first; the run goes on.
+        var now = new AgentRunScope("w-now", null);
+        Check("W4 Send now with nothing typed does nothing", !now.InterruptStep() && !now.InterruptPending);
+        var bubbleTag = new object();
+        var taken = new List<object>();
+        now.UserNotesTaken += tags => taken.AddRange(tags);
+        now.AddUserNote("stop, use SQLite instead", bubbleTag);
+        using (var call = new CancellationTokenSource())
+        {
+            now.BeginCall(call);
+            bool stopped = now.InterruptStep();
+            Check("W4 Send now stops the reply the run waits on, and knows it was Send now",
+                stopped && call.IsCancellationRequested && now.WasInterrupted(call) && now.InterruptPending);
+            now.EndCall(call);
+        }
+        string urgent = now.TakeUserNotes();
+        Check("W4 the note reads as Send now and asks for it in the plan; its bubble goes back to the chat; nothing stays pending",
+            urgent != null && urgent.StartsWith("[The user pressed \"Send now\"") && urgent.Contains("todo_write") && urgent.EndsWith("stop, use SQLite instead")
+            && taken.Count == 1 && ReferenceEquals(taken[0], bubbleTag) && !now.InterruptPending, urgent ?? "null");
+        using (var timedOut = new CancellationTokenSource())
+        {
+            timedOut.Cancel();
+            Check("W4 a reply stopped by its idle timeout is not taken for Send now", !now.WasInterrupted(timedOut));
+        }
+        now.AddUserNote("one more thing");
+        Check("W4 pressed between two steps: no reply to stop yet, the note waits as Send now", !now.InterruptStep() && now.InterruptPending);
+        using (var next = new CancellationTokenSource())
+        {
+            now.BeginCall(next);
+            Check("W4 …so the next reply is stopped the moment it starts", next.IsCancellationRequested && now.WasInterrupted(next));
+            now.EndCall(next);
+        }
+        Check("W4 …that note reads as Send now too, then the queue is empty", now.TakeUserNotes()!.StartsWith("[The user pressed") && now.TakeUserNotes() == null);
+        now.AddUserNote("later note");
+        Check("W4 Send now is used up once read: the next note, typed with Enter, has the ordinary wording",
+            now.TakeUserNotes()!.StartsWith("[The user sent this while you were working"));
+
+        // W5 — Send now on a provider that answers in one call (no step to stop): the reply stops and the message goes out
+        // at once as the next turn — not back into the box, as after the user's own Stop.
+        await FreshChat();
+        var gate5 = new SemaphoreSlim(0);
+        Fake.ScriptFor["[W5]"] = new Queue<FakeStep>([FakeStep.Gated(["W5 working"], gate5, [" — W5 done."])]);
+        Fake.ScriptFor["[W5-now]"] = new Queue<FakeStep>([FakeStep.Reply("Switched", " to SQLite.")]);
+        await Send("[W5] build the store");
+        await WaitUntil(() => Vm.IsGenerating && Vm.Messages.Any(m => m.Content.StartsWith("W5 working")));
+        Vm.UserInput = "[W5-now] use SQLite";
+        Vm.SendMessageCommand.Execute(null);
+        await Task.Delay(100); await Render();
+        var queued = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.User && m.Content == "[W5-now] use SQLite");
+        Check("W5 a message typed during the run waits with Send now and a row saying it is queued",
+            queued is { IsQueuedNote: true } && queued.QueueRow != null && Vm.Messages.Contains(queued.QueueRow), $"queued={queued?.IsQueuedNote}");
+        Vm.SendNowCommand.Execute(queued);
+        bool w5sent = await WaitUntil(() => Fake.Calls.Any(c => c.Input.Contains("[W5-now] use SQLite")), 15000);
+        bool w5done = await WaitUntil(() => !Vm.IsGenerating && Vm.Messages.Any(m => m.Content.Contains("Switched to SQLite.")), 15000);
+        var w5order = Vm.Messages.Where(m => m.Role is MessageRole.User or MessageRole.Assistant).Select(m => m.Content).ToList();
+        Check("W5 Send now there: the reply stops (never finishes) and the message goes at once as the next turn, the box stays empty",
+            w5sent && w5done && Vm.UserInput == "" && !w5order.Any(c => c.Contains("W5 done")) && w5order.Count(c => c == "[W5-now] use SQLite") == 1,
+            string.Join(" | ", w5order));
+        gate5.Release();
+
+        Vm.UserInput = "";
+        Check("W6 Ctrl+Enter with no reply running is an ordinary send (Send now declines)", !Vm.SendNowFromBox());
+
+        // W7 — typed during a run, then another chat opened before it ended. Nothing typed may vanish: it used to be taken
+        // off the chat and dropped when the run ended without reading it (only the debug log knew).
+        async Task<ChatSession?> TypedThenLeft(string tag)
+        {
+            await FreshChat();
+            var chat = Vm.CurrentSession!;
+            var gate7 = new SemaphoreSlim(0);
+            Fake.ScriptFor[$"[{tag}]"] = new Queue<FakeStep>([FakeStep.Gated([$"{tag} working"], gate7, [$" — {tag} done."])]);
+            await Send($"[{tag}] slow job");
+            await WaitUntil(() => Vm.IsGenerating && Vm.Messages.Any(m => m.Content.StartsWith($"{tag} working")));
+            Vm.UserInput = $"{tag} keep me";
+            Vm.SendMessageCommand.Execute(null);
+            await Task.Delay(100); await Render();
+            await FreshChat();   // another chat on screen; that run carries on in the background
+            gate7.Release();
+            await WaitUntil(() => Vm.Sessions.FirstOrDefault(s => s.Id == chat.Id)?.RunStatus == "done", 15000);
+            await Task.Delay(200); await Render();
+            return Persist.LoadSession(chat.Id);
+        }
+        string Rows7(ChatSession? s) => string.Join(" | ", s?.Messages.Select(m => $"{m.Role}:{m.Content}") ?? []);
+
+        // W7a — with a project the agent loop reads it before ending its turn, and answers it in the same run.
+        Directory.CreateDirectory(ProjA);
+        Vm.SetWorkingDirectory(ProjA);
+        var a7 = await TypedThenLeft("W7a");
+        int typedA = a7?.Messages.FindIndex(m => m.Role == MessageRole.User && m.Content == "W7a keep me") ?? -1;
+        Check("W7a a project chat left mid-run: its agent reads what was typed and answers it in the same run",
+            typedA >= 0 && a7!.Messages.Skip(typedA + 1).Any(m => m.Role == MessageRole.Assistant)
+            && a7.Messages.Any(m => m.Content == L("chat.steer.taken")), Rows7(a7));
+
+        // W7b — a run that ends without reading it (here its step limit; a CLI agent never reads it): the message stays in
+        // that chat, saying it was not sent.
+        Vm.SetWorkingDirectory("");
+        var stepSettings = Sp.GetRequiredService<SettingsService>();
+        int stepsBefore = stepSettings.Settings.MaxAgentIterations;
+        stepSettings.UpdateSettings(s => s.MaxAgentIterations = 1);
+        ChatSession? b7;
+        try { b7 = await TypedThenLeft("W7b"); }
+        finally { stepSettings.UpdateSettings(s => s.MaxAgentIterations = stepsBefore); }
+        Check("W7b a run that ended without reading it, its chat left: the message stays in that chat, saying it was not sent",
+            b7 != null && b7.Messages.Count(m => m.Role == MessageRole.User && m.Content == "W7b keep me") == 1
+            && b7.Messages.Any(m => m.Content == L("chat.steer.notSent")), Rows7(b7));
     }
 
     /// <summary>
@@ -1573,8 +1731,11 @@ internal static partial class Program
             var scope = new AgentRunScope("sc", null, null);
             scope.AddUserNote("also make a landing page for the other project");
             string note = scope.TakeUserNotes() ?? "";
-            Check("SC a request typed mid-task: stand-alone → its own chat with new_chat (parallel); corrections stay; close_chat after",
-                note.Contains("new_chat") && note.Contains("parallel") && note.Contains("close_chat") && note.Contains("QUEUED"), note);
+            // A follow-up was QUEUED after the whole plan; owner 2026-11-02: it goes into the plan where it fits
+            // ("มีการเพิ่มเข้าแผนกลางทางพิจารณาได้ว่าจะเพิ่มอย่างไร").
+            Check("SC a request typed mid-task: stand-alone → its own chat with new_chat (parallel); a follow-up into the plan where it fits; close_chat after",
+                note.Contains("new_chat") && note.Contains("parallel") && note.Contains("close_chat")
+                && note.Contains("todo_write") && note.Contains("where it belongs"), note);
         }
 
         Log("\n## L6 — the context meter uses the answering model's real window");
@@ -2580,7 +2741,8 @@ internal static partial class Program
         await Render();
         var effortBox = Find<ComboBox>(Win).First(c => c.Name == "EffortBox");
         string shown = string.Join(" ", Find<TextBlock>(effortBox).Where(t => t.IsVisible).Select(t => t.Text));
-        Check("U11 the effort box reads auto → high while the run uses high", shown.Contains("auto") && shown.Contains("high"), shown);
+        Check("U11 the effort box reads auto → high while the run uses high", shown.Contains("auto") && shown.Contains("high"),
+            $"'{shown}' visible={effortBox.IsVisible} w={effortBox.ActualWidth:F0} sel={effortBox.SelectedItem} tag={effortBox.Tag} effortVisible={Vm.EffortVisible} generating={Vm.IsGenerating}");
         Check("U11 the model box carries the live effort too", Vm.LiveEffortSuffix.Contains("auto → high"), Vm.LiveEffortSuffix);
         scope.LiveEffort = "medium";
         await Render();
@@ -2609,10 +2771,12 @@ internal static partial class Program
             Check("U10 narrow: the mic / send / stop buttons move to a row of their own and the options span the width",
                 Grid.GetRow(buttons) == 1 && Grid.GetColumnSpan(options) == 2 && effortLabel.Visibility == Visibility.Collapsed,
                 $"row={Grid.GetRow(buttons)} span={Grid.GetColumnSpan(options)} composer={((FrameworkElement)View.FindName("ComposerStrip")).ActualWidth:F0}");
-            // Every option row is one height, so a wrapped strip reads as rows, not a staircase.
+            // Every option row is one height, so a wrapped strip reads as rows, not a staircase. Items of different
+            // heights sit centred in their ItemHeight slot, so a row is the slot an item's middle falls in, not its top.
             var tops = new List<double>();
+            double slot = ((WrapPanel)options).ItemHeight;
             foreach (FrameworkElement c in ((Panel)options).Children)
-                if (c.IsVisible) tops.Add(Math.Round(c.TranslatePoint(new Point(0, 0), options).Y));
+                if (c.IsVisible) tops.Add(Math.Floor((c.TranslatePoint(new Point(0, 0), options).Y + c.ActualHeight / 2) / slot));
             int rows = tops.Distinct().Count();
             Check("U10 narrow: the options take at most four rows at 440 px (it was one per option)", rows is > 0 and <= 4, $"rows={rows} of {tops.Count} options");
             // The compaction toast in the same narrow chat (owner's screenshot): its actions sit under the text now.
@@ -2849,8 +3013,22 @@ internal static partial class Program
         Check("T1 an image whose file is gone gets no thumbnail (no broken picture)", rows.Count == 2 && rows[1].ThumbnailPath == null);
         Check("T1 with Steps off the image row stays on screen (like a diff: something to verify), the plain row collapses",
             !Vm.ShowAgentInternals && row != null && Container(row)?.Visibility == Visibility.Visible && Container(rows[1])?.Visibility == Visibility.Collapsed);
-        var img = row == null || Container(row) == null ? null : Find<Image>(Container(row)).FirstOrDefault(i => i.IsVisible && i.Source != null);
-        Check("T1 the thumbnail is rendered on the row", img?.Source is System.Windows.Media.Imaging.BitmapSource bs && bs.PixelHeight > 0);
+        // The decode runs off the UI thread (2026-11-02): a first sight is an empty picture that fills in when the
+        // decode is done, so wait for the picture and for the row's Image to take its size.
+        Image img = null;
+        static int ThumbPixels(ImageSource src) => src switch
+        {
+            System.Windows.Media.Imaging.BitmapSource b => b.PixelHeight,
+            DrawingImage { Drawing: ImageDrawing { ImageSource: System.Windows.Media.Imaging.BitmapSource b } } => b.PixelHeight,
+            _ => 0,
+        };
+        await WaitUntil(() =>
+        {
+            img = row == null || Container(row) == null ? null : Find<Image>(Container(row)).FirstOrDefault(i => i.IsVisible && i.Source != null);
+            return img != null && ThumbPixels(img.Source) > 0 && img.ActualHeight > 0;
+        }, 5000);
+        Check("T1 the thumbnail is rendered on the row", img != null && ThumbPixels(img.Source) > 0 && img.ActualHeight > 0,
+            img == null ? "no Image" : $"{img.Source?.GetType().Name} {ThumbPixels(img.Source)}px, shown {img.ActualHeight:0}px");
         var open = row == null || Container(row) == null ? null : Find<Button>(Container(row)).FirstOrDefault(b => Equals(b.Tag, jpg));
         Check("T1 the thumbnail is a button carrying the file to open full size; only an existing local image is ever opened",
             open is { IsVisible: true } && ChatViewModel.IsOpenableImage(jpg) && !ChatViewModel.IsOpenableImage("https://example.com/a.jpg")
@@ -2883,7 +3061,7 @@ internal sealed class FakeStep
 internal sealed record FakeCall(List<(MessageRole Role, string Content)> History, string Input);
 
 /// <summary>An offline provider: replays a script of steps and records what it was sent.</summary>
-internal sealed class FakeProvider : IAiProvider
+internal class FakeProvider : IAiProvider
 {
     public readonly Queue<FakeStep> Script = new();
     /// <summary>Scripts keyed by a marker in the conversation ("[A1]"): with several chats running at once, each
@@ -2912,7 +3090,10 @@ internal sealed class FakeProvider : IAiProvider
             var key = ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k))
                 ?? history.AsEnumerable().Reverse().SelectMany(h => ScriptFor.Keys.Where(k => h.Content?.Contains(k) == true))
                           .FirstOrDefault(k => ScriptFor[k].Count > 0);
-            step = key != null && ScriptFor[key].Count > 0 ? ScriptFor[key].Dequeue()
+            // The memory/instinct extraction a finished chat starts in the background never takes a scripted step: it
+            // races the next test's first send, and when it won it ate that test's step (L10's error came back as "ok").
+            step = userMessage.Contains("TRANSCRIPT:\n---") ? FakeStep.Reply("[]")
+                 : key != null && ScriptFor[key].Count > 0 ? ScriptFor[key].Dequeue()
                  : Script.Count > 0 ? Script.Dequeue() : FakeStep.Reply("ok");
         }
         await Task.Delay(30, ct);

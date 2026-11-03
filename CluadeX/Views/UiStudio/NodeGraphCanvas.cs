@@ -26,6 +26,20 @@ public sealed class NodeGraphCanvas : FrameworkElement
     public event Action<GraphNode>? NodeActivated;
     public event Action<GraphNode>? NodeMoved;
     public event Action<GraphNode, Point>? NodeContextMenu;
+    /// <summary>A wire was clicked (null: clicked off every wire).</summary>
+    public event Action<GraphEdge?>? EdgeSelected;
+    /// <summary>A wire was double-clicked: open the line that made it.</summary>
+    public event Action<GraphEdge>? EdgeActivated;
+
+    /// <summary>Kinds of connection the user switched off in the filter.</summary>
+    public ISet<GraphEdgeKind> HiddenKinds { get; set; } = new HashSet<GraphEdgeKind>();
+    /// <summary>Draw the inferred (matched by name, dashed) wires too.</summary>
+    public bool ShowInferred { get; set; } = true;
+    /// <summary>Draw a frame behind the nodes of each folder.</summary>
+    public bool GroupByFolder { get; set; }
+    public GraphEdge? SelectedEdge { get; set; }
+    // the wires as last drawn (screen space), for clicking on one
+    private readonly List<(GraphEdge Edge, Geometry Geo)> _wires = new();
 
     private Vector _pan = new(40, 40);
     private double _zoom = 1;
@@ -126,6 +140,81 @@ public sealed class NodeGraphCanvas : FrameworkElement
         return Visible.LastOrDefault(n => w.X >= n.X && w.X <= n.X + n.Width && w.Y >= n.Y && w.Y <= n.Y + n.Height);
     }
 
+    private GraphEdge? HitEdge(Point screen)
+    {
+        var pen = new Pen(Brushes.Black, 9);
+        // last drawn is on top; the bounding box first (thousands of wires: the exact stroke test only where it can hit)
+        for (int i = _wires.Count - 1; i >= 0; i--)
+        {
+            var box = _wires[i].Geo.Bounds;
+            box.Inflate(5, 5);
+            if (box.Contains(screen) && _wires[i].Geo.StrokeContains(pen, screen)) return _wires[i].Edge;
+        }
+        return null;
+    }
+
+    /// <summary>The wires the filters let through, between two visible nodes.</summary>
+    private IEnumerable<GraphEdge> VisibleEdges()
+    {
+        if (Graph == null) yield break;
+        foreach (var e in Graph.Edges)
+        {
+            if (HiddenKinds.Contains(e.Kind) || e.Inferred && !ShowInferred) continue;
+            if (!Graph.ById.TryGetValue(e.From, out var a) || !Graph.ById.TryGetValue(e.To, out var b) || a.Hidden || b.Hidden) continue;
+            yield return e;
+        }
+    }
+
+    /// <summary>
+    /// Where each wire leaves and enters its nodes (0..1 along the side): the wires of one node are spread over its
+    /// side in the order of the nodes at their other end, so they leave side by side instead of piling into one point,
+    /// and two kinds between the same pair run as parallel wires.
+    /// </summary>
+    private Dictionary<GraphEdge, (double From, double To)> Ports(List<GraphEdge> edges)
+    {
+        var result = new Dictionary<GraphEdge, (double, double)>(edges.Count);
+        var outs = new Dictionary<string, List<GraphEdge>>();
+        var ins = new Dictionary<string, List<GraphEdge>>();
+        foreach (var e in edges)
+        {
+            (outs.TryGetValue(e.From, out var o) ? o : outs[e.From] = new()).Add(e);
+            (ins.TryGetValue(e.To, out var i) ? i : ins[e.To] = new()).Add(e);
+            result[e] = (0.5, 0.5);
+        }
+        foreach (var list in outs.Values.Where(l => l.Count > 1))
+        {
+            var sorted = list.OrderBy(e => Graph!.ById[e.To].Y).ThenBy(e => e.To).ThenBy(e => e.Kind).ToList();
+            for (int k = 0; k < sorted.Count; k++) result[sorted[k]] = ((k + 1.0) / (sorted.Count + 1), result[sorted[k]].Item2);
+        }
+        foreach (var list in ins.Values.Where(l => l.Count > 1))
+        {
+            var sorted = list.OrderBy(e => Graph!.ById[e.From].Y).ThenBy(e => e.From).ThenBy(e => e.Kind).ToList();
+            for (int k = 0; k < sorted.Count; k++) result[sorted[k]] = (result[sorted[k]].Item1, (k + 1.0) / (sorted.Count + 1));
+        }
+        return result;
+    }
+
+    /// <summary>A soft frame around the nodes of each folder, the folder's name on top.</summary>
+    private void DrawGroups(DrawingContext dc, Brush muted, Brush border, double dpi)
+    {
+        var fill = Res("Surface.Inset", Brushes.Transparent);
+        var pen = new Pen(border, 1) { DashStyle = DashStyles.Dash };
+        pen.Freeze();
+        foreach (var group in Visible.Where(n => n.Kind != GraphNodeKind.Package).GroupBy(n => n.Folder))
+        {
+            var nodes = group.ToList();
+            double l = nodes.Min(n => n.X) - 14, t = nodes.Min(n => n.Y) - 30, r = nodes.Max(n => n.X + n.Width) + 14, b = nodes.Max(n => n.Y + n.Height) + 14;
+            var rect = new Rect(ToScreen(l, t), new Size((r - l) * _zoom, (b - t) * _zoom));
+            if (rect.Right < 0 || rect.Bottom < 0 || rect.Left > ActualWidth || rect.Top > ActualHeight) continue;
+            dc.DrawRoundedRectangle(fill, pen, rect, 10 * _zoom, 10 * _zoom);
+            if (_zoom < 0.25) continue;
+            var ft = new FormattedText(group.Key.Length == 0 ? "/" : group.Key + "/", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                new Typeface(new FontFamily("Segoe UI, Leelawadee UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal), 11 * _zoom, muted, dpi)
+            { MaxLineCount = 1, Trimming = TextTrimming.CharacterEllipsis, MaxTextWidth = Math.Max(10, rect.Width - 16 * _zoom) };
+            dc.DrawText(ft, new Point(rect.X + 10 * _zoom, rect.Y + 7 * _zoom));
+        }
+    }
+
     private Rect MiniRect => new(ActualWidth - MiniW - 12, ActualHeight - MiniH - 12, MiniW, MiniH);
 
     // ───────────────────────────── input ─────────────────────────────
@@ -159,6 +248,12 @@ public sealed class NodeGraphCanvas : FrameworkElement
         if (e.ChangedButton == MouseButton.Left && e.ClickCount == 2 && hit != null)
         {
             NodeActivated?.Invoke(hit);
+            e.Handled = true;
+            return;
+        }
+        if (e.ChangedButton == MouseButton.Left && e.ClickCount == 2 && HitEdge(p) is { } wire)
+        {
+            EdgeActivated?.Invoke(wire);
             e.Handled = true;
             return;
         }
@@ -220,7 +315,15 @@ public sealed class NodeGraphCanvas : FrameworkElement
     protected override void OnMouseUp(MouseButtonEventArgs e)
     {
         if (_dragNode != null && _moved) NodeMoved?.Invoke(_dragNode);
-        if (_panning && !_moved && e.ChangedButton == MouseButton.Left) Select(null);   // click on empty space
+        if (_panning && !_moved && e.ChangedButton == MouseButton.Left)
+        {
+            // a click (no drag) off the nodes: on a wire selects the wire, on empty space clears the selection
+            var wire = HitEdge(e.GetPosition(this));
+            Select(null);
+            SelectedEdge = wire;
+            EdgeSelected?.Invoke(wire);
+            InvalidateVisual();
+        }
         _dragNode = null;
         _panning = false;
         Cursor = _hover != null ? Cursors.Hand : null;
@@ -265,6 +368,7 @@ public sealed class NodeGraphCanvas : FrameworkElement
         [GraphNodeKind.Asset] = Color.FromRgb(0x94, 0xA3, 0xB8),
         [GraphNodeKind.Package] = Color.FromRgb(0x64, 0x74, 0x8B),
         [GraphNodeKind.Element] = Color.FromRgb(0x34, 0xD3, 0x99),
+        [GraphNodeKind.Code] = Color.FromRgb(0x60, 0xA5, 0xFA),
     };
 
     /// <summary>One colour per kind of connection — the wire keeps it whatever happens (selected, dragged, dimmed),
@@ -276,6 +380,14 @@ public sealed class NodeGraphCanvas : FrameworkElement
         [GraphEdgeKind.Loads] = Color.FromRgb(0xFB, 0xBF, 0x24),      // amber
         [GraphEdgeKind.Links] = Color.FromRgb(0xA3, 0xE6, 0x35),      // lime
         [GraphEdgeKind.Contains] = Color.FromRgb(0x2D, 0xD4, 0xBF),   // teal
+        [GraphEdgeKind.Calls] = Color.FromRgb(0xFB, 0x92, 0x3C),      // orange
+        [GraphEdgeKind.Inherits] = Color.FromRgb(0xF4, 0x3F, 0x5E),   // rose
+        [GraphEdgeKind.Implements] = Color.FromRgb(0xE8, 0x79, 0xF9), // fuchsia
+        [GraphEdgeKind.Routes] = Color.FromRgb(0x22, 0xC5, 0x5E),     // green
+        [GraphEdgeKind.Registers] = Color.FromRgb(0xFD, 0xE0, 0x47),  // yellow
+        [GraphEdgeKind.Binds] = Color.FromRgb(0x81, 0x8C, 0xF8),      // indigo
+        [GraphEdgeKind.CodeBehind] = Color.FromRgb(0xE2, 0xE8, 0xF0), // pale slate
+        [GraphEdgeKind.References] = Color.FromRgb(0x94, 0xA3, 0xB8), // slate
     };
 
     public static Color EdgeColor(GraphEdgeKind kind) => EdgeColors.TryGetValue(kind, out var c) ? c : Colors.Gray;
@@ -307,13 +419,16 @@ public sealed class NodeGraphCanvas : FrameworkElement
         bool showText = _zoom >= 0.32;
         string? sel = Selected?.Id;
 
-        // ── wires: coloured by the kind of connection ──
-        // Wires of the selected (or dragged) node come forward — brighter, thicker, with a soft glow under them — in
-        // their own colour; the rest fade back but keep theirs.
-        var pens = new Dictionary<(GraphEdgeKind, int), Pen>();
-        Pen PenFor(GraphEdgeKind kind, int state)   // 0 normal · 1 faded · 2 hot · 3 glow under hot
+        // ── folder groups: a frame behind the nodes of each folder ──
+        if (GroupByFolder) DrawGroups(dc, muted, border, dpi);
+
+        // ── wires: coloured by the kind of connection, dashed when inferred ──
+        // Wires of the selected (or dragged) node, or the selected wire, come forward — brighter, thicker, with a soft
+        // glow under them — in their own colour; the rest fade back but keep theirs.
+        var pens = new Dictionary<(GraphEdgeKind, int, bool), Pen>();
+        Pen PenFor(GraphEdgeKind kind, int state, bool dashed)   // 0 normal · 1 faded · 2 hot · 3 glow under hot
         {
-            if (pens.TryGetValue((kind, state), out var p)) return p;
+            if (pens.TryGetValue((kind, state, dashed), out var p)) return p;
             var c = EdgeColor(kind);
             p = state switch
             {
@@ -323,36 +438,44 @@ public sealed class NodeGraphCanvas : FrameworkElement
                 _ => new Pen(Solid(c, 165), Math.Max(1, 1.3 * _zoom)),
             };
             p.StartLineCap = p.EndLineCap = PenLineCap.Round;
+            if (dashed && state != 3) p.DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0);
             p.Freeze();
-            pens[(kind, state)] = p;
+            pens[(kind, state, dashed)] = p;
             return p;
         }
+        var edges = VisibleEdges().ToList();
+        var ports = Ports(edges);
+        _wires.Clear();
+        GraphEdge? selEdge = SelectedEdge;
+        bool Hot(GraphEdge e) => ReferenceEquals(e, selEdge) || sel != null && (e.From == sel || e.To == sel);
+        bool anyFocus = sel != null || selEdge != null;
         // the hot wires last, so they are drawn on top of the faded ones
-        IEnumerable<GraphEdge> ordered = sel == null ? Graph.Edges : Graph.Edges.OrderBy(e => e.From == sel || e.To == sel);
-        foreach (var e in ordered)
+        foreach (var e in anyFocus ? edges.OrderBy(Hot) : (IEnumerable<GraphEdge>)edges)
         {
-            if (!Graph.ById.TryGetValue(e.From, out var a) || !Graph.ById.TryGetValue(e.To, out var b) || a.Hidden || b.Hidden) continue;
+            var a = Graph.ById[e.From];
+            var b = Graph.ById[e.To];
             var box = Rect.Union(new Rect(a.X, a.Y, a.Width, a.Height), new Rect(b.X, b.Y, b.Width, b.Height));
             if (!box.IntersectsWith(view)) continue;
-            bool touches = sel != null && (e.From == sel || e.To == sel);
-            var pen = PenFor(e.Kind, touches ? 2 : sel != null ? 1 : 0);
+            bool touches = Hot(e);
+            var pen = PenFor(e.Kind, touches ? 2 : anyFocus ? 1 : 0, e.Inferred);
 
-            var p0 = ToScreen(a.X + a.Width, a.Y + a.Height / 2);
-            var p3 = ToScreen(b.X, b.Y + b.Height / 2);
-            if (b.X < a.X + a.Width) { p0 = ToScreen(a.X + a.Width / 2, a.Y + a.Height); p3 = ToScreen(b.X + b.Width / 2, b.Y); }
+            var (fromPort, toPort) = ports[e];
+            bool vertical = b.X < a.X + a.Width;
+            var p0 = vertical ? ToScreen(a.X + a.Width * fromPort, a.Y + a.Height) : ToScreen(a.X + a.Width, a.Y + a.Height * fromPort);
+            var p3 = vertical ? ToScreen(b.X + b.Width * toPort, b.Y) : ToScreen(b.X, b.Y + b.Height * toPort);
             double dx = Math.Max(30 * _zoom, Math.Abs(p3.X - p0.X) * 0.5);
             var geo = new StreamGeometry();
             using (var ctx = geo.Open())
             {
                 ctx.BeginFigure(p0, false, false);
-                bool vertical = Math.Abs(p3.X - p0.X) < 1 || b.X < a.X + a.Width;
                 if (vertical)
                     ctx.BezierTo(new Point(p0.X, p0.Y + dx), new Point(p3.X, p3.Y - dx), p3, true, false);
                 else
                     ctx.BezierTo(new Point(p0.X + dx, p0.Y), new Point(p3.X - dx, p3.Y), p3, true, false);
             }
             geo.Freeze();
-            if (touches) dc.DrawGeometry(null, PenFor(e.Kind, 3), geo);
+            _wires.Add((e, geo));
+            if (touches) dc.DrawGeometry(null, PenFor(e.Kind, 3, false), geo);
             dc.DrawGeometry(null, pen, geo);
             // arrow head
             if (_zoom > 0.25)
@@ -361,16 +484,14 @@ public sealed class NodeGraphCanvas : FrameworkElement
                 var head = new StreamGeometry();
                 using (var ctx = head.Open())
                 {
-                    bool vertical = b.X < a.X + a.Width;
+                    ctx.BeginFigure(p3, true, true);
                     if (vertical)
                     {
-                        ctx.BeginFigure(p3, true, true);
                         ctx.LineTo(new Point(p3.X - s, p3.Y - s * 1.6), false, false);
                         ctx.LineTo(new Point(p3.X + s, p3.Y - s * 1.6), false, false);
                     }
                     else
                     {
-                        ctx.BeginFigure(p3, true, true);
                         ctx.LineTo(new Point(p3.X - s * 1.6, p3.Y - s), false, false);
                         ctx.LineTo(new Point(p3.X - s * 1.6, p3.Y + s), false, false);
                     }

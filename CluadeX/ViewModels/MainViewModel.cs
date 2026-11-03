@@ -223,6 +223,8 @@ public class MainViewModel : ViewModelBase
     public PermissionsViewModel PermissionsVM { get; }
     public TaskManagerViewModel TaskManagerVM { get; }
     public WatchViewModel? WatchVM { get; }
+    /// <summary>The Billing &amp; cost page; null only in harnesses that build the window without it.</summary>
+    public BillingViewModel? BillingVM { get; }
     public FeaturesViewModel FeaturesVM { get; }
     public McpServersViewModel McpServersVM { get; }
     /// <summary>The setup page ("ตัวช่วยติดตั้ง"); null only in harnesses that build the window without it.</summary>
@@ -260,6 +262,7 @@ public class MainViewModel : ViewModelBase
             ("Models", "Models", ""), ("TimeMachine", "Time Machine", ""),
             ("HexEditor", "Hex Editor", ""), ("Plugins", "Plugins", ""),
             ("McpServers", "MCP Servers", ""), ("Setup", "Setup · ตัวช่วยติดตั้ง", ""), ("Tasks", "Tasks", ""), ("Watch", "Watch", ""),
+            ("Billing", "Billing & cost · บิลและค่าใช้จ่าย", ""),
             ("UiStudio", "UI Studio", ""), ("NodeGraph", "Node Graph", ""),
             ("Permissions", "Permissions", ""), ("Features", "Features", ""),
             ("SubAgents", "Subagents", ""), ("Skills", "Skills", ""),
@@ -382,7 +385,8 @@ public class MainViewModel : ViewModelBase
         WatchViewModel? watchVM = null,
         UiStudioViewModel? uiStudioVM = null,
         NodeGraphViewModel? nodeGraphVM = null,
-        SetupViewModel? setupVM = null)
+        SetupViewModel? setupVM = null,
+        BillingViewModel? billingVM = null)
     {
         _autoUpdate = autoUpdate;
         _activation = activation;
@@ -410,6 +414,7 @@ public class MainViewModel : ViewModelBase
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
         SetupVM = setupVM;
+        BillingVM = billingVM;
         // A setup row opens another page: Settings at the provider's key, the MCP page, the license window.
         if (setupVM != null) setupVM.NavigateRequested += (target, provider) =>
         {
@@ -421,6 +426,30 @@ public class MainViewModel : ViewModelBase
             }
             NavigateTo(target);
         };
+        // A model that is not connected yet: the wizard, and back to the chat when it is (the typed message stayed in its box).
+        if (setupVM != null)
+        {
+            chatVM.ConnectionRequested += (provider, model) =>
+            {
+                // An OpenAI-compatible provider has no wizard (ProviderConnections only knows the built-in ones): its key
+                // and "get a key" link are on Settings ▸ AI Provider.
+                if (Services.Providers.CompatiblePresets.IsCompatible(provider))
+                {
+                    settingsVM.SelectedCategory = "provider";
+                    settingsVM.SelectedProvider = provider;
+                    NavigateTo("Settings");
+                    return;
+                }
+                setupVM.OpenWizard(provider, model, fromChat: true);
+                NavigateTo("Setup");
+            };
+            setupVM.ConnectCancelled += () => NavigateTo("Chat");
+            setupVM.ConnectFinished += async (provider, model) =>
+            {
+                NavigateTo("Chat");
+                await chatVM.ConnectionReadyAsync(provider, model);
+            };
+        }
         TimeMachineVM = timeMachineVM;
         HexEditorVM = hexEditorVM;
         CodeEditorVM = codeEditorVM;
@@ -463,7 +492,8 @@ public class MainViewModel : ViewModelBase
         // after FileMutatedByAgent has opened the file. Not gated on the current page: from
         // Home, Tasks or Settings the edit should come forward just the same. Settings'
         // AutoOpenEditorOnAgentEdit is the tick's default for chats nobody ticked.
-        chatVM.ShowEditorRequested += () => NavigateTo("Code");
+        chatVM.ShowEditorRequested += FollowEditToCode;
+        _followBackTimer.Tick += (_, _) => FollowBackTick();
 
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
 
@@ -597,7 +627,8 @@ public class MainViewModel : ViewModelBase
                 GpuLiveStats? stats;
                 try { stats = _gpuDetectionService.GetLiveStats(); }
                 finally { Interlocked.Exchange(ref _gpuPollBusy, 0); }
-                App.Current?.Dispatcher.Invoke(() =>
+                // BeginInvoke: the pool thread has no reason to wait for the UI to draw the chart.
+                App.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     if (stats == null)
                     {
@@ -802,6 +833,50 @@ public class MainViewModel : ViewModelBase
         win.Activate();
     }
 
+    // ─── Follow mode goes back to Chat once the agent's edits stop (FollowBack) ───
+    private readonly DispatcherTimer _followBackTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private bool _followBrought, _followNavigating;
+    private DateTime _followStart, _lastFollowEdit, _lastUserInput = DateTime.MinValue;
+
+    /// <summary>The chat's follow tick and an agent edit: bring the Code page forward (the editor docks the same chat on
+    /// the right). From any page — Home, Tasks or Settings too. Each edit starts the wait for going back again.</summary>
+    private void FollowEditToCode()
+    {
+        var now = DateTime.Now;
+        if (SelectedNavItem != "Code")
+        {
+            _followNavigating = true;
+            try { NavigateTo("Code"); }
+            finally { _followNavigating = false; }
+            if (SelectedNavItem == "Code") { _followBrought = true; _followStart = now; }
+        }
+        _lastFollowEdit = now;
+        if (_followBrought && _settingsService.Settings.FollowReturnToChat) { _followBackTimer.Stop(); _followBackTimer.Start(); }
+    }
+
+    /// <summary>A key, click or wheel anywhere in the window (MainWindow): the user is working on the page they are on.</summary>
+    public void NoteUserInput() => _lastUserInput = DateTime.Now;
+
+    private void FollowBackTick()
+    {
+        var s = _settingsService.Settings;
+        switch (FollowBack.Decide(s.FollowReturnToChat, SelectedNavItem == "Code", _followBrought, _followStart, _lastFollowEdit,
+                    _lastUserInput, DateTime.Now, s.FollowReturnSeconds))
+        {
+            case FollowBack.Verdict.Wait:
+                return;
+            case FollowBack.Verdict.Return:
+                _followBackTimer.Stop();
+                _followBrought = false;
+                NavigateTo("Chat");
+                return;
+            default:
+                _followBackTimer.Stop();
+                _followBrought = false;
+                return;
+        }
+    }
+
     private void NavigateTo(string? target)
     {
         if (target == null) return;
@@ -814,6 +889,7 @@ public class MainViewModel : ViewModelBase
             "Permissions" => PermissionsVM,
             "Tasks" => TaskManagerVM,
             "Watch" => (ViewModelBase?)WatchVM ?? ChatVM,
+            "Billing" => (ViewModelBase?)BillingVM ?? ChatVM,
             "UiStudio" => (ViewModelBase?)UiStudioVM ?? ChatVM,
             "NodeGraph" => (ViewModelBase?)NodeGraphVM ?? ChatVM,
             "Features" => FeaturesVM,
@@ -832,6 +908,7 @@ public class MainViewModel : ViewModelBase
         };
         // Already there: every chat opened from the sidebar asks for the page it is on, and "opening" it again is not free.
         if (target == SelectedNavItem && ReferenceEquals(view, CurrentView)) return;
+        if (!_followNavigating) _followBrought = false;   // the user (or anything else) chose the page: it is theirs
 
         CluadeX.Helpers.UiStallWatchdog.Note("opening page " + target);
         var navWatch = System.Diagnostics.Stopwatch.StartNew();

@@ -176,10 +176,11 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        // ReadLineAsync, not the synchronous EndOfStream, so a silent stream never blocks a thread (see LlamaServerProvider).
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
 
             var data = line["data: ".Length..];
@@ -203,8 +204,10 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                     int outTok = usage.TryGetProperty("completion_tokens", out var ot) && ot.TryGetInt32(out var b) ? b : 0;
                     int cached = usage.TryGetProperty("prompt_tokens_details", out var pd)
                                  && pd.TryGetProperty("cached_tokens", out var cd) && cd.TryGetInt32(out var cc) ? cc : 0;
+                    int reasoning = usage.TryGetProperty("completion_tokens_details", out var cdt)
+                                    && cdt.TryGetProperty("reasoning_tokens", out var rt) && rt.TryGetInt32(out var rv) ? rv : 0;
                     if (inTok > 0 || outTok > 0)
-                        _costTracker.RecordUsage(model, inTok - cached, outTok, cached, 0);
+                        _costTracker.RecordUsage(model, inTok - cached, outTok, cached, 0, thinkingTokens: reasoning);
                 }
             }
             catch (OperationCanceledException) { throw; }
@@ -300,7 +303,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                             {
                                 ["type"] = "function_call",
                                 ["call_id"] = b.Id ?? "",
-                                ["name"] = b.Name ?? "",
+                                ["name"] = WireToolName(b.Name),
                                 ["arguments"] = b.Input?.GetRawText() ?? "{}",
                             });
                             break;
@@ -402,7 +405,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
             req["tools"] = tools.Select(t => (object)new Dictionary<string, object>
             {
                 ["type"] = "function",
-                ["name"] = t.Name,
+                ["name"] = WireToolName(t.Name),
                 ["description"] = t.Description,
                 ["parameters"] = t.InputSchema.ValueKind == JsonValueKind.Object
                     ? t.InputSchema
@@ -414,7 +417,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                 null or "" or "auto" => "auto",
                 "none" => "none",
                 "required" or "any" => "required",
-                _ => new Dictionary<string, object> { ["type"] = "function", ["name"] = toolChoice! },
+                _ => new Dictionary<string, object> { ["type"] = "function", ["name"] = WireToolName(toolChoice) },
             };
         }
         if (reasoning)
@@ -445,6 +448,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
     {
         var config = GetConfig();
         string model = ModelOf(config);
+        tools = UsableTools(tools);
 
         // Tool images: the documented output array first; if the API refuses it, the same images in a following
         // user message (remembered for the session); if it refuses images altogether, text only — the model is
@@ -493,6 +497,8 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                 continue;
             }
             string explained = DescribeHttpError("OpenAI", status, error, config.ApiKey, model, KeysUrl, BillingUrl);
+            if (RetryWithoutMcpTools(status, explained, tools))
+                return await ChatWithToolsAsync(messages, systemPrompt, UsableTools(tools), onTextDelta, ct, toolChoice);
             if (DisableNativeToolsIfRejected(status, explained) is { } fallback) return fallback;
             throw new HttpRequestException(explained, null, (System.Net.HttpStatusCode)status);
         }
@@ -502,7 +508,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         // Cached input is billed at the cached rate (and counts toward GPT-6's 272K long-context line) — it was dropped
         // here, so a cache-heavy agent step read as nearly free.
         if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0 || result.CacheReadTokens > 0))
-            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, 0);
+            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, 0, thinkingTokens: result.ThinkingTokens);
         ConfirmNativeTools();
         if (refusedWhy != null)
         {
@@ -525,10 +531,11 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         var summary = new StringBuilder();
         string? stop = null;
 
-        while (!reader.EndOfStream)
+        // ReadLineAsync, not the synchronous EndOfStream, so a silent stream never blocks a thread (see LlamaServerProvider).
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line)) continue;
             onTextDelta?.Invoke(string.Empty);   // keep-alive for the loop's idle timeout (see IAiProvider)
             if (!line.StartsWith("data: ")) continue;
@@ -568,6 +575,8 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                                 result.InputTokens = (u.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var iv) ? iv : 0) - cached;
                                 result.CacheReadTokens = cached;
                                 result.OutputTokens = u.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var ov) ? ov : 0;
+                                result.ThinkingTokens = u.TryGetProperty("output_tokens_details", out var otd)
+                                    && otd.TryGetProperty("reasoning_tokens", out var rtk) && rtk.TryGetInt32(out var rv) ? rv : 0;
                             }
                             if (type == "response.incomplete")
                                 stop = resp.TryGetProperty("incomplete_details", out var det) && det.TryGetProperty("reason", out var why)
@@ -606,10 +615,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                     string callId = item.TryGetProperty("call_id", out var cid) ? cid.GetString() ?? "" : "";
                     string name = item.TryGetProperty("name", out var nm) ? nm.GetString() ?? "" : "";
                     string args = item.TryGetProperty("arguments", out var ar) ? ar.GetString() ?? "" : "";
-                    JsonElement input;
-                    try { input = string.IsNullOrWhiteSpace(args) ? EmptyObjectElement() : JsonDocument.Parse(args).RootElement.Clone(); }
-                    catch (JsonException) { input = EmptyObjectElement(); }
-                    if (input.ValueKind != JsonValueKind.Object) input = EmptyObjectElement();
+                    JsonElement input = ParseArgumentsText(args);
                     result.ToolCalls.Add(new NativeToolCall { Id = callId, Name = name, Input = input });
                     result.Blocks.Add(new ContentBlock { Type = "tool_use", Id = callId, Name = name, Input = input });
                     break;

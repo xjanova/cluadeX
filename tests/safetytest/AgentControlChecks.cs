@@ -201,7 +201,8 @@ internal static class AgentControlChecks
     {
         Free();
         var decision = Writers;
-        var gate = new CliAgentGate(AiProviderType.ClaudeDev, () => decision);
+        // The machine's limit is fixed here: the live one follows free memory (6.8 GB free made it 1 and failed this).
+        var gate = new CliAgentGate(AiProviderType.ClaudeDev, () => decision, machineCap: () => DispatchPolicy.MaxParallelCap);
         check("first spawn in", gate.Ask(new CliSpawn("Explore", "a")).Allow, "");
         check("second spawn in", gate.Ask(new CliSpawn("Explore", "b")).Allow, "");
         check("the machine count follows the turn", AgentLoad.Running == 2, AgentLoad.Running.ToString());

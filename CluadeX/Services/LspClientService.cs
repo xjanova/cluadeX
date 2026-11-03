@@ -75,6 +75,7 @@ public sealed class LspClientService : IDisposable
             };
 
             _serverProcess = Process.Start(psi);
+            Background.AppChildren.Adopt(_serverProcess);
             if (_serverProcess == null) return false;
 
             _writer = _serverProcess.StandardInput;
@@ -243,8 +244,10 @@ public sealed class LspClientService : IDisposable
                 // Try graceful shutdown
                 try
                 {
-                    SendNotificationAsync("shutdown", new { }, CancellationToken.None).Wait(2000);
-                    SendNotificationAsync("exit", new { }, CancellationToken.None).Wait(1000);
+                    // Off the caller's thread: from the UI thread the awaits inside could not resume, so the waits
+                    // only ever timed out.
+                    Task.Run(() => SendNotificationAsync("shutdown", new { }, CancellationToken.None)).Wait(2000);
+                    Task.Run(() => SendNotificationAsync("exit", new { }, CancellationToken.None)).Wait(1000);
                 }
                 catch { }
 

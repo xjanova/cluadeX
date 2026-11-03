@@ -122,13 +122,17 @@ public sealed class CliAgentGate
     private readonly Func<DispatchDecision> _decision;
     private readonly IReadOnlyDictionary<string, string>? _overrides;
     private readonly Action<string>? _log;
+    /// <summary>The machine's limit, read at every spawn (free memory changes): <see cref="AgentLoad.CurrentCap"/>.</summary>
+    private readonly Func<int> _machineCap;
 
-    public CliAgentGate(AiProviderType cli, Func<DispatchDecision> decision, IReadOnlyDictionary<string, string>? overrides = null, Action<string>? log = null)
+    public CliAgentGate(AiProviderType cli, Func<DispatchDecision> decision, IReadOnlyDictionary<string, string>? overrides = null,
+                        Action<string>? log = null, Func<int>? machineCap = null)
     {
         _cli = cli;
         _decision = decision;
         _overrides = overrides;
         _log = log;
+        _machineCap = machineCap ?? AgentLoad.CurrentCap;
     }
 
     public int Running { get { lock (_lock) return _running.Count + _unnamed; } }
@@ -154,7 +158,7 @@ public sealed class CliAgentGate
         lock (_lock)
         {
             verdict = CliAgentPolicy.Decide(decision, _cli, spawn.Type, _running.Count + _unnamed, _overrides);
-            if (verdict.Allow && !decision.Legacy && !AgentLoad.TryEnter(AgentLoad.CurrentCap()))
+            if (verdict.Allow && !decision.Legacy && !AgentLoad.TryEnter(_machineCap()))
                 verdict = new CliSpawnVerdict(false, "This machine is running as many sub-agents as it can hold. Wait for one to finish, or do this part yourself.");
             else if (verdict.Allow && !decision.Legacy)
             {

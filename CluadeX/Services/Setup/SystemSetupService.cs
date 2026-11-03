@@ -12,7 +12,7 @@ namespace CluadeX.Services.Setup;
 public enum SetupState { Ready, Missing, NeedsKey, NeedsSignIn, NotRunning, NoModel }
 
 /// <summary>What a row's button does.</summary>
-public enum SetupActionKind { Install, SignIn, OpenUrl, OpenSettings, OpenPage, StartOllama, Run, Connect, Guide, Disconnect, InstallBrainX }
+public enum SetupActionKind { Install, SignIn, OpenUrl, OpenSettings, OpenPage, StartOllama, Run, Connect, Guide, Disconnect, InstallBrainX, EnterKey }
 
 /// <summary>One button on a row. <paramref name="Commands"/>: the lines an Install/Run runs, shown to the user before
 /// they agree; <paramref name="Target"/>: a URL, a page, or the provider for OpenSettings.</summary>
@@ -47,10 +47,16 @@ public sealed record SetupFacts
     public bool OllamaRunning { get; init; }
     public int OllamaModels { get; init; }
     public string? LlamaServer { get; init; }
+    /// <summary>The GGUF picked on the Models page (a name, shown on the row).</summary>
+    public string? LocalModel { get; init; }
+    /// <summary>A GGUF is loaded and answering. Only the Models page loads one: nothing here ever does.</summary>
+    public bool LocalLoaded { get; init; }
     public string? ClaudeCli { get; init; }
     public bool ClaudeSignedIn { get; init; }
     public string? GeminiCli { get; init; }
     public bool GeminiSignedIn { get; init; }
+    public string? AgyCli { get; init; }
+    public bool AgySignedIn { get; init; }
     public string? CodexCli { get; init; }
     public bool CodexSignedIn { get; init; }
     public bool AnthropicKey { get; init; }
@@ -104,6 +110,9 @@ public sealed class SystemSetupService
     /// <summary>winget install of one package, as the console runs it.</summary>
     public static string WingetInstall(string id) => string.Format(Winget, id);
 
+    /// <summary>Google's installer for agy, as the console runs it (cmd keeps the | inside the quotes for PowerShell).</summary>
+    public static readonly string AgyInstall = $"powershell -NoProfile -ExecutionPolicy Bypass -Command \"{Providers.AntigravityDevProvider.InstallCommand}\"";
+
     public static readonly string NpmExe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "npm.cmd");
 
     // ═══════════════════════════════════════════════════════════════════
@@ -152,6 +161,17 @@ public sealed class SystemSetupService
         else
             items.Add(new SetupItem("geminicli", GroupChat, SetupState.Ready, f.GeminiCli, true));
 
+        // Antigravity Dev: Google's agy on the Google sign-in, where personal accounts (Google AI Pro included) went when the
+        // Gemini CLI stopped serving them. Its installer is Google's own script, shown before it runs like every command here.
+        if (f.AgyCli == null)
+            items.Add(new SetupItem("agycli", GroupChat, SetupState.Missing, "", true,
+                new SetupAction(SetupActionKind.Install, "setup.act.install", new[] { AgyInstall }, SizeHint: "~100 MB")));
+        else if (!f.AgySignedIn)
+            items.Add(new SetupItem("agycli", GroupChat, SetupState.NeedsSignIn, f.AgyCli, true,
+                new SetupAction(SetupActionKind.SignIn, "setup.act.signin", Target: "agy")));
+        else
+            items.Add(new SetupItem("agycli", GroupChat, SetupState.Ready, f.AgyCli, true));
+
         // OpenAI Dev: the Codex CLI on the ChatGPT sign-in (npm @openai/codex ships a native codex.exe; the Codex desktop
         // app's own copy counts too).
         if (f.CodexCli == null)
@@ -186,6 +206,12 @@ public sealed class SystemSetupService
             ? new SetupItem("llamaserver", GroupLocal, SetupState.Ready, f.LlamaServer, true)
             : new SetupItem("llamaserver", GroupLocal, SetupState.Missing, "", true,
                 new SetupAction(SetupActionKind.Install, "setup.act.install", new[] { WingetInstall("ggml.llamacpp") }, SizeHint: "~300 MB")));
+
+        // A GGUF on this PC. Loading one takes the GPU, so it is the Models page's job and the owner's click.
+        items.Add(f.LocalLoaded
+            ? new SetupItem("localgguf", GroupLocal, SetupState.Ready, f.LocalModel ?? "", true)
+            : new SetupItem("localgguf", GroupLocal, SetupState.NoModel, f.LocalModel ?? "", true,
+                new SetupAction(SetupActionKind.OpenPage, "setup.act.modelsPage", Target: "Models")));
 
         // ── Coding tools ──
         items.Add(Tool("git", GroupDev, f.Git, f.GitVersion, "Git.Git", "~350 MB", optional: false));
@@ -262,7 +288,7 @@ public sealed class SystemSetupService
     /// <summary>Can the chat be answered by anything at all right now? (The page says so at the top when not.)</summary>
     public static bool AnyChatModelReady(SetupFacts f) =>
         (f.Licensed && (f.AnthropicKey || f.OpenAiKey || f.GeminiKey || f.ClaudeCli != null && f.ClaudeSignedIn || f.GeminiCli != null && f.GeminiSignedIn
-                         || f.CodexCli != null && f.CodexSignedIn))
+                         || f.AgyCli != null && f.AgySignedIn || f.CodexCli != null && f.CodexSignedIn))
         || f.OllamaRunning && f.OllamaModels > 0;
 
     // ═══════════════════════════════════════════════════════════════════
@@ -353,6 +379,8 @@ public sealed class SystemSetupService
             path.Split(';').SelectMany(d => new[] { SafeCombine(d, "codex.exe"), SafeCombine(d, "codex.cmd") }).Where(File.Exists),
             appData, local, File.Exists, NewestFirst);
 
+        string? agy = Providers.AntigravityDevProvider.FindCli(path.Split(';').Select(d => SafeCombine(d, "agy.exe")).Where(File.Exists), local, File.Exists);
+
         var nodeV = node != null ? RunAsync(node, "--version", ct) : Task.FromResult<RunResult?>(null);
         var gitV = git != null ? RunAsync(git, "--version", ct) : Task.FromResult<RunResult?>(null);
         var sdks = dotnet != null ? RunAsync(dotnet, "--list-sdks", ct) : Task.FromResult<RunResult?>(null);
@@ -361,7 +389,10 @@ public sealed class SystemSetupService
         var auth = claude != null ? RunAsync(claude, "auth status", ct, TimeSpan.FromSeconds(15)) : Task.FromResult<RunResult?>(null);
         Task<List<string>?> ollamaModels = _providers?.GetProvider(AiProviderType.Ollama) is Providers.OllamaProvider op
             ? op.ProbeModelsAsync(ct) : Task.FromResult<List<string>?>(null);
-        await Task.WhenAll(nodeV, gitV, sdks, pyV, dbg, auth, ollamaModels);
+        // agy keeps its token in Windows Credential Manager: only agy itself can say (~6 s, remembered for a minute).
+        Task<bool> agySignedIn = agy != null && _providers?.GetProvider(AiProviderType.AntigravityDev) is Providers.AntigravityDevProvider ap
+            ? ap.IsLoggedInAsync(ct) : Task.FromResult(false);
+        await Task.WhenAll(nodeV, gitV, sdks, pyV, dbg, auth, ollamaModels, agySignedIn);
 
         var cfgs = _settings.Settings.ProviderConfigs;
         bool HasKey(AiProviderType t) => cfgs.TryGetValue(t.ToString(), out var c) && !string.IsNullOrWhiteSpace(c.ApiKey);
@@ -385,8 +416,11 @@ public sealed class SystemSetupService
             WebView2 = !string.IsNullOrWhiteSpace(webVersion), WebView2Version = webVersion,
             Ollama = ollama, OllamaRunning = ollamaModels.Result != null, OllamaModels = ollamaModels.Result?.Count ?? 0,
             LlamaServer = llama,
+            LocalModel = string.IsNullOrWhiteSpace(_settings.Settings.SelectedModelName) ? null : _settings.Settings.SelectedModelName,
+            LocalLoaded = _providers?.GetProvider(AiProviderType.Local).IsReady == true || _providers?.GetProvider(AiProviderType.LlamaServer).IsReady == true,
             ClaudeCli = claude, ClaudeSignedIn = auth.Result?.Out.Contains("\"loggedIn\": true", StringComparison.OrdinalIgnoreCase) == true,
             GeminiCli = gemini?.Script, GeminiSignedIn = Providers.GeminiDevProvider.SignedIn(),
+            AgyCli = agy, AgySignedIn = agySignedIn.Result,
             CodexCli = codex, CodexSignedIn = Providers.OpenAIDevProvider.SignedIn(),
             AnthropicKey = HasKey(AiProviderType.Anthropic), OpenAiKey = HasKey(AiProviderType.OpenAI), GeminiKey = HasKey(AiProviderType.Gemini),
             BrainConnected = BrainSyncService.Current?.IsBrainAvailable == true,
@@ -506,7 +540,39 @@ public sealed class SystemSetupService
             return gd.OpenLoginTerminal();
         if (which == "codex" && _providers?.GetProvider(AiProviderType.OpenAIDev) is Providers.OpenAIDevProvider od)
             return od.OpenLoginTerminal();
+        if (which == "agy" && _providers?.GetProvider(AiProviderType.AntigravityDev) is Providers.AntigravityDevProvider ag)
+            return ag.OpenLoginTerminal();
         return false;
+    }
+
+    /// <summary>A provider's name as the chat's model box shows it.</summary>
+    public string ProviderName(AiProviderType type) => _providers?.GetProvider(type).DisplayName ?? type.ToString();
+
+    /// <summary>Save an API key the way Settings does (the store encrypts it). False when the settings could not be written.</summary>
+    public bool SaveApiKey(AiProviderType type, string key) => _settings.UpdateSettings(s =>
+    {
+        string id = type.ToString();
+        if (!s.ProviderConfigs.TryGetValue(id, out var cfg)) s.ProviderConfigs[id] = cfg = new ProviderConfig();
+        cfg.ApiKey = key;
+    });
+
+    /// <summary>Does this provider really answer? Its own connection test; a provider that is answering the chat takes
+    /// the new key or sign-in from the next message. Never loads a model.</summary>
+    public async Task<(bool Ok, string Message)> TestProviderAsync(AiProviderType type, CancellationToken ct)
+    {
+        if (_providers == null) return (false, "");
+        try
+        {
+            var (ok, message) = await _providers.GetProvider(type).TestConnectionAsync(ct);
+            if (ok && _providers.ActiveProviderType == type) await _providers.ReinitializeActiveAsync();
+            return (ok, message);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log?.Warn("Setup", $"testing {type} failed", ex);
+            return (false, "");
+        }
     }
 
     /// <summary>Start Ollama: its tray app when installed with one (it serves in the background), else `ollama serve` in

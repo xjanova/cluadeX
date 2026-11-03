@@ -26,15 +26,27 @@ public partial class CodeEditorView : UserControl
     private CodeEditorViewModel? _vm;
     private OpenFileTab? _boundTab;
     private string _lastSynced = "";
+    /// <summary>The agent's typing reveal inserted into the editor since <see cref="_lastSynced"/> was taken: the
+    /// editor's own text is the truth until the next Content change.</summary>
+    private bool _lastSyncedStale;
+    /// <summary>The reveal whose frames are in the editor (its insert text), and how much of it is shown.</summary>
+    private string? _revealInsert;
+    private int _revealShown;
     private bool _suppressSync;
 
     /// <summary>
-    /// Large files, Notepad++ style: above this many characters a keystroke no longer copies the whole buffer into
-    /// the tab (two full-size strings per key — a 50 MB file stuttered on every letter). Typing marks the tab dirty
-    /// at once and the text is copied after a short pause, before a save, and when the tab is left. Autocomplete
-    /// stops opening by itself (Ctrl+Space still works).
+    /// Large files, Notepad++ style: above this many characters autocomplete stops opening by itself (Ctrl+Space
+    /// still works) and folding and the live word count switch off.
     /// </summary>
     private const int LargeBufferChars = 2_000_000;
+    /// <summary>
+    /// Above this many characters a keystroke no longer copies the whole buffer into the tab: typing marks the tab
+    /// dirty at once and the text is copied after a short pause, before a save, and when the tab is left. The copy
+    /// per key used to start only at 2 M chars (a 50 MB file stuttered on every letter); any file past about 42 K
+    /// chars made a Large Object Heap string per key, half a megabyte per letter in a file like ChatViewModel.cs,
+    /// and regular gen-2 collections while typing (2026-11-02).
+    /// </summary>
+    private const int DeferredSyncChars = 32_000;
     /// <summary>Beyond this the file opens without syntax colours, as Notepad++ does: colouring is lazy, but the
     /// first jump to the end would have to colour everything before it.</summary>
     private const int NoHighlightChars = 24_000_000;
@@ -43,6 +55,15 @@ public partial class CodeEditorView : UserControl
     private bool _hooked;
     private CompletionWindow? _completionWindow;
     private int _completionRequest;
+    /// <summary>How far back from the caret the completion prefix is read. No real identifier is longer.</summary>
+    private const int MaxPrefixChars = 256;
+    /// <summary>The word (and where it starts) whose automatic completion found nothing in a file past
+    /// <see cref="DeferredSyncChars"/>: more letters on it are not asked again, since each ask copies the file.</summary>
+    private string? _noMatchStem;
+    private int _noMatchStart = -1;
+    /// <summary>The document version the stem was read from: the skip holds only while every edit since then
+    /// appended to that word, so a paste elsewhere that brings a match into the buffer asks again.</summary>
+    private ICSharpCode.AvalonEdit.Document.ITextSourceVersion? _noMatchVersion;
     private readonly BreakpointMargin _breakpointMargin = new();
     private readonly ExecutionLineRenderer _executionLine = new();
 
@@ -50,8 +71,8 @@ public partial class CodeEditorView : UserControl
     {
         InitializeComponent();
         Unloaded += OnUnloaded;
-        // The view model plays the agent's "typing" reveal only while someone can see it (a 60 fps rewrite of the whole
-        // buffer is pure cost on a hidden page).
+        // The view model plays the agent's "typing" reveal only while someone can see it (60 fps of editor inserts
+        // are pure cost on a hidden page).
         IsVisibleChanged += (_, e) => { if (_vm != null) _vm.EditorOnScreen = e.NewValue is true; };
         // Preview, so Ctrl+S reaches us even when the focused control (editor, terminal box) would
         // otherwise swallow the key.
@@ -184,6 +205,11 @@ public partial class CodeEditorView : UserControl
         CluadeX.Services.Pet.PetZones.Register(Editor);   // the desktop pet keeps off the code being typed
         vm.ScrollToLineRequested += OnScrollToLine;
         vm.AgentEditFlashRequested += OnAgentEditFlash;
+        vm.AgentTypingFrame += OnAgentTypingFrame;
+        // The terminal box has no Text binding: it is fed chunk by chunk from here (see OnTerminalText).
+        TerminalOut.IsUndoEnabled = false;   // each AppendText would otherwise keep an undo record forever
+        TerminalOut.Text = vm.IsTerminalOpen ? vm.TerminalOutput : "";
+        vm.TerminalTextAppended += OnTerminalText;
         vm.SelectRangeRequested += OnSelectRange;
         vm.SearchFocusRequested += OnSearchFocusRequested;
         vm.RenameFocusRequested += OnRenameFocusRequested;
@@ -211,6 +237,8 @@ public partial class CodeEditorView : UserControl
         {
             vm.ScrollToLineRequested -= OnScrollToLine;
             vm.AgentEditFlashRequested -= OnAgentEditFlash;
+            vm.AgentTypingFrame -= OnAgentTypingFrame;
+            vm.TerminalTextAppended -= OnTerminalText;
             vm.SelectRangeRequested -= OnSelectRange;
             vm.SearchFocusRequested -= OnSearchFocusRequested;
             vm.RenameFocusRequested -= OnRenameFocusRequested;
@@ -222,6 +250,7 @@ public partial class CodeEditorView : UserControl
         _themes = null;
         // The tab objects belong to the VM too — let go of the one we listen to. The editor is
         // emptied so a re-attach starts from the VM's state, not from this view's leftovers.
+        FlushDeferredSync();   // typing still waiting to be copied would be emptied with the editor
         if (_boundTab != null) _boundTab.PropertyChanged -= OnTabContentChanged;
         _boundTab = null;
         _suppressSync = true;
@@ -322,8 +351,8 @@ public partial class CodeEditorView : UserControl
 
     /// <summary>
     /// The user is about to change the buffer while the agent's typing reveal is animating it: jump
-    /// the reveal to its final text first. Each reveal frame replaces the whole buffer every 16 ms,
-    /// so a keystroke typed mid-animation was overwritten by the next frame.
+    /// the reveal to its final text first. The reveal ends by setting the whole final text, so a
+    /// keystroke typed mid-animation would be overwritten by it.
     /// </summary>
     private void SettleAgentTyping()
     {
@@ -359,6 +388,12 @@ public partial class CodeEditorView : UserControl
             if (_boundTab.PendingEdits == FlushDeferredSync) _boundTab.PendingEdits = null;
         }
         _boundTab = tab;
+        // The editor is reloaded from the tab below: a reveal still running starts over from what Content holds.
+        _lastSyncedStale = false;
+        _revealInsert = null;
+        _revealShown = 0;
+        _noMatchStem = null;   // a word with no completions belongs to the file we are leaving
+        _noMatchVersion = null;   // a held version keeps every later change (and its text) alive
         _glow.Clear();
         Minimap.ClearChangeMarkers();   // markers belong to the file we're leaving
 
@@ -394,7 +429,8 @@ public partial class CodeEditorView : UserControl
     }
 
     // ── VM → editor ──
-    // Agent edits and the typewriter-reveal frames arrive here as Content changes. Applied as an
+    // Agent edits and the typewriter reveal's first and last states arrive here as Content changes (the frames
+    // between come through OnAgentTypingFrame). Applied as an
     // INCREMENTAL Document.Replace (prefix/suffix diff) so highlighting stays cheap, scroll state
     // survives, and the caret rides the insertion point — which is what makes the reveal look typed.
     private void OnTabContentChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -402,8 +438,18 @@ public partial class CodeEditorView : UserControl
         if (e.PropertyName != nameof(OpenFileTab.Content) || _suppressSync || _boundTab == null) return;
 
         string newText = _boundTab.Content;
-        string oldText = _lastSynced;
-        if (string.Equals(oldText, newText, StringComparison.Ordinal)) return;
+        // After reveal frames, or while typing waits for the deferred copy, the editor holds more than _lastSynced:
+        // diff against what it really shows (one copy per reveal, on its last frame). The pending copy is dropped:
+        // the incoming Content replaces exactly what the editor shows, and the timer must not later write a buffer
+        // that mixes the two back into the tab.
+        bool typingPending = _deferredSync is { IsEnabled: true };
+        _deferredSync?.Stop();
+        string oldText = _lastSyncedStale || typingPending ? Editor.Text : _lastSynced;
+        _lastSyncedStale = false;
+        _revealShown = int.MaxValue;   // later frames of the reveal now shown (if any) no longer apply
+        if (string.Equals(oldText, newText, StringComparison.Ordinal)) { _lastSynced = newText; return; }
+        _noMatchStem = null;   // the text shifts under the stored offset
+        _noMatchVersion = null;
 
         int limit = Math.Min(oldText.Length, newText.Length);
         int prefix = 0;
@@ -444,11 +490,47 @@ public partial class CodeEditorView : UserControl
         finally { _suppressSync = false; }
     }
 
+    /// <summary>
+    /// One frame of the agent's typing reveal: insert the part of <paramref name="insert"/> this editor has not shown
+    /// yet at its offset, as a small Document.Insert — no full-file string and no diff per frame. Caret and glow follow
+    /// the typing point as they do for a Content change.
+    /// </summary>
+    private void OnAgentTypingFrame(OpenFileTab tab, int at, string insert, int pos)
+    {
+        if (!ReferenceEquals(tab, _boundTab)) return;
+        if (!ReferenceEquals(insert, _revealInsert)) { _revealInsert = insert; _revealShown = 0; }
+        if (pos <= _revealShown) return;
+
+        int from = _revealShown;
+        _revealShown = pos;
+        _lastSyncedStale = true;
+        _suppressSync = true;
+        try
+        {
+            int offset = at + from;
+            Editor.Document.Insert(offset, insert.Substring(from, pos - from));
+            if (!Editor.TextArea.IsKeyboardFocusWithin)
+            {
+                Editor.TextArea.Caret.Offset = Math.Min(at + pos, Editor.Document.TextLength);
+                Editor.TextArea.Caret.BringCaretToView();
+                _glow.ShowFlash(offset, pos - from);
+                EnsureGlowTimer();
+            }
+        }
+        catch
+        {
+            // The buffer moved under the reveal (an edit typed mid-animation): skip the rest of its frames; the
+            // final text arrives as a Content change and resyncs the editor.
+            _revealShown = int.MaxValue;
+        }
+        finally { _suppressSync = false; }
+    }
+
     // ── editor → VM ── (the human typing in the editor; preserves IsDirty tracking + Save commands)
     private void OnEditorTextChanged(object? sender, EventArgs e)
     {
         if (_suppressSync || _boundTab == null) return;
-        if (_largeBuffer)
+        if (_largeBuffer || Editor.Document.TextLength >= DeferredSyncChars)
         {
             _boundTab.IsDirty = true;
             _deferredSync ??= NewDeferredSyncTimer();
@@ -638,6 +720,15 @@ public partial class CodeEditorView : UserControl
         TerminalOut.ScrollToEnd();
     }
 
+    /// <summary>New terminal output from the view model: appended to the box, or the whole text after the terminal
+    /// opened or its oldest output was trimmed. Binding the 200 K transcript instead rebuilt the box 20 times a
+    /// second under a noisy command, open or closed (2026-11-02).</summary>
+    private void OnTerminalText(string text, bool replace)
+    {
+        if (replace) TerminalOut.Text = text;
+        else TerminalOut.AppendText(text);
+    }
+
     // ── Debug console ──
 
     private void OnDebugOutputChanged(object sender, TextChangedEventArgs e) => DebugOut.ScrollToEnd();
@@ -780,29 +871,81 @@ public partial class CodeEditorView : UserControl
         }
     }
 
+    /// <summary>True when every edit between the stored no-match version and <paramref name="current"/> is an
+    /// insertion at the end of the stem's word, running from <paramref name="stemEnd"/> up to the caret — the user
+    /// only kept typing that word. Any other edit (a paste, a deletion, typing elsewhere) may have added a match.
+    /// The change log walk is cheap: it lists the edits, it does not copy the text.</summary>
+    private bool OnlyGrewStem(ICSharpCode.AvalonEdit.Document.ITextSourceVersion? current, int stemEnd, int caret)
+    {
+        var stored = _noMatchVersion;
+        if (stored == null || current == null || !stored.BelongsToSameDocumentAs(current)) return false;
+        if (stored.CompareAge(current) > 0) return false;
+        int end = stemEnd;
+        foreach (var change in stored.GetChangesTo(current))
+        {
+            if (change.RemovalLength != 0 || change.Offset != end) return false;
+            end += change.InsertionLength;
+        }
+        return end == caret;
+    }
+
     private async Task ShowCompletionAsync(bool explicitRequest)
     {
         if (DataContext is not CodeEditorViewModel vm || _boundTab == null) return;
         if (_largeBuffer && !explicitRequest) return;   // each try would copy and scan the whole file
 
-        string text = Editor.Text;
+        // The prefix is read char by char back from the caret, capped at MaxPrefixChars (no real identifier is
+        // longer): an automatic try that stops here copies neither the file nor the line, so a one-line minified
+        // .js or JSON costs no Large Object Heap string per letter.
         int caret = Editor.CaretOffset;
-        string prefix = CluadeX.Services.CodeIntelligenceService.PrefixAt(text, caret);
-        if (!explicitRequest && prefix.Length < 2) return;
+        var doc = Editor.Document;
+        int wordStart = caret;
+        int floor = Math.Max(0, caret - MaxPrefixChars);
+        while (wordStart > floor && IsWordChar(doc.GetCharAt(wordStart - 1))) wordStart--;
+        string prefix = doc.GetText(wordStart, caret - wordStart);
+        if (!explicitRequest)
+        {
+            if (prefix.Length < 2) return;
+            // More letters on a word that already found nothing find nothing either (every candidate starts with,
+            // or hump-matches, what was typed), so a new name, a comment or Thai text costs one copy per word.
+            if (_noMatchStem != null && wordStart == _noMatchStart && !vm.IsLspConnected
+                && prefix.StartsWith(_noMatchStem, StringComparison.Ordinal)
+                && OnlyGrewStem(doc.Version, wordStart + _noMatchStem.Length, caret)) return;
+        }
+        _noMatchStem = null;
+        _noMatchVersion = null;
+
+        // Copied only now that a request is really sent.
+        string text = Editor.Text;
+        var version = Editor.Document.Version;
+        var tab = _boundTab;
 
         // Only the newest request may open a window — the user keeps typing while the scan runs.
         int request = ++_completionRequest;
 
-        var items = await vm.GetCompletionsAsync(_boundTab.FullPath, text, caret);
+        var items = await vm.GetCompletionsAsync(tab.FullPath, text, caret);
 
         if (request != _completionRequest) return;             // superseded by a later keystroke
+        if (items.Count == 0)
+        {
+            // Only the buffer, keyword and symbol-index sources stay the same while the word grows; a language
+            // server still loading the project (or a call that failed) can answer nothing now and something later.
+            if (!explicitRequest && text.Length >= DeferredSyncChars && ReferenceEquals(tab, _boundTab)
+                && !vm.IsLspConnected)
+            {
+                _noMatchStem = prefix;
+                _noMatchStart = wordStart;
+                _noMatchVersion = version;   // the version the prefix and the copied text were read from
+            }
+            return;
+        }
         if (_completionWindow != null) return;                 // one opened in the meantime
-        if (items.Count == 0) return;
 
-        // The caret moved (arrow keys, a click, the agent edited) — the candidates are for a
-        // position that no longer exists, so showing them would insert text in the wrong place.
-        if (Editor.CaretOffset != caret) return;
-        if (!ReferenceEquals(Editor.Text, text) && Editor.Text != text) return;
+        // The caret moved (arrow keys, a click, the agent edited) or the text changed — the candidates are for a
+        // position that no longer exists, so showing them would insert text in the wrong place. The document's
+        // version object changes with every edit, so this needs no second copy of the file.
+        if (!ReferenceEquals(tab, _boundTab) || Editor.CaretOffset != caret) return;
+        if (!ReferenceEquals(Editor.Document.Version, version)) return;
 
         var window = new CompletionWindow(Editor.TextArea)
         {

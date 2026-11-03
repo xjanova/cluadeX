@@ -70,6 +70,7 @@ public partial class ChatView : UserControl
         };
         // The panel's own show/hide (the toggle): the height grip follows it, or a hidden panel leaves a 6 px strip.
         SidePanel.IsVisibleChanged += (_, _) => UpdateSidePanelRoom();
+        NewChatPage.SizeChanged += (_, e) => FitNewChatPage(e.NewSize.Width);
 
         InputBox.PreviewKeyDown += (_, e) =>
         {
@@ -82,6 +83,12 @@ public partial class ChatView : UserControl
             }
             if (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
             {
+                // Ctrl+Enter while the reply runs: "Send now" — the agent reads it at once instead of at its next step.
+                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && DataContext is ChatViewModel nowVm && nowVm.SendNowFromBox())
+                {
+                    e.Handled = true;
+                    return;
+                }
                 if (DataContext is ChatViewModel vm && vm.SendMessageCommand.CanExecute(null))
                 {
                     vm.SendMessageCommand.Execute(null);
@@ -103,6 +110,11 @@ public partial class ChatView : UserControl
                             System.Windows.Threading.DispatcherPriority.Input);
                     e.Handled = true;
                 }
+            }
+            else if (e.Key == Key.Escape && DataContext is ChatViewModel starterVm && starterVm.IsChoosingStarterProject)
+            {
+                starterVm.CancelStarterCommand.Execute(null);
+                e.Handled = true;
             }
             else if (e.Key == Key.Escape && DataContext is ChatViewModel vm2 && vm2.IsChatSearchVisible)
             {
@@ -232,6 +244,8 @@ public partial class ChatView : UserControl
             vm.PropertyChanged += OnVmPropertyChanged;
             vm.DictationApplied -= OnDictationApplied;
             vm.DictationApplied += OnDictationApplied;
+            vm.StarterApplied -= OnStarterApplied;
+            vm.StarterApplied += OnStarterApplied;
         }
     }
 
@@ -275,6 +289,7 @@ public partial class ChatView : UserControl
                 _scrollHandler = null;
             }
             vm.PropertyChanged -= OnVmPropertyChanged;
+            vm.StarterApplied -= OnStarterApplied;
             if (_collectionHandler != null)
             {
                 if (_watched != null) _watched.CollectionChanged -= _collectionHandler;
@@ -628,14 +643,48 @@ public partial class ChatView : UserControl
 
     // ─── Suggested prompts ───
 
-    private void SuggestedPrompt_Click(object sender, RoutedEventArgs e)
+    /// <summary>Below this width the new chat page goes compact: smaller starters three across and a smaller title.
+    /// Docked beside the editor (~390 px) the full-size tiles stood two across and the page scrolled for screens.</summary>
+    public const double CompactStarterWidth = 640;
+    private bool? _compactStarters;
+
+    private void FitNewChatPage(double width)
     {
-        if (sender is Button btn && btn.Tag is string prompt && DataContext is ChatViewModel vm)
+        bool compact = width > 0 && width < CompactStarterWidth;
+        if (compact == _compactStarters) return;
+        _compactStarters = compact;
+        var r = NewChatPage.Resources;
+        if (compact)
         {
-            vm.UserInput = prompt;
-            if (vm.SendMessageCommand.CanExecute(null))
-                vm.SendMessageCommand.Execute(null);
+            r["Starter.Tile.Width"] = 104.0;
+            r["Starter.Tile.Height"] = 90.0;
+            r["Starter.Title.Size"] = 22.0;
         }
+        else
+            foreach (var key in new[] { "Starter.Tile.Width", "Starter.Tile.Height", "Starter.Title.Size" }) r.Remove(key);
+    }
+
+    /// <summary>A starter was filled in (ChatViewModel.Starters): into the box, with its [bracketed] part selected so
+    /// the first thing typed replaces it. Nothing is sent — Enter is still the user's.</summary>
+    private void OnStarterApplied()
+    {
+        if (!IsVisible) return;   // the chat page and the one docked in the editor share the VM: the one on screen acts
+        Dispatcher.InvokeAsync(() =>
+        {
+            InputBox.Focus();
+            var (start, length) = StarterPlaceholder(InputBox.Text);
+            if (length > 0) InputBox.Select(start, length);
+            else InputBox.CaretIndex = InputBox.Text.Length;
+        }, System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    /// <summary>The first [bracketed] part of a starter's prompt, brackets included; (end, 0) when there is none.</summary>
+    public static (int Start, int Length) StarterPlaceholder(string? text)
+    {
+        text ??= "";
+        int open = text.IndexOf('[');
+        int close = open < 0 ? -1 : text.IndexOf(']', open + 1);
+        return close > open ? (open, close - open + 1) : (text.Length, 0);
     }
 }
 
@@ -674,20 +723,68 @@ public sealed class FileGlyphConverter : System.Windows.Data.IValueConverter
 /// A tool-row thumbnail from an image file path: decoded small (≈240 px tall), read fully into memory and the file
 /// closed at once — so a thumbnail never holds a lock on a screenshot the store later prunes — and nothing (no
 /// image) when the file is gone or unreadable.
+/// The decode runs off the UI thread and is kept by file + time written (owner 2026-11-02: a chat of screenshots
+/// stuttered on every thumbnail, because each row re-read and re-decoded its PNG on the UI thread every time it
+/// scrolled back into view). A thumbnail not decoded yet is an empty picture that fills in when it is.
 /// </summary>
 public sealed class ThumbnailSourceConverter : System.Windows.Data.IValueConverter
 {
+    private const int ThumbHeight = 240;
+
+    /// <summary>Thumbnails by path + time written; a long chat of screenshots drops the lot rather than grow.</summary>
+    private static readonly Dictionary<string, Task<System.Windows.Media.Imaging.BitmapSource?>> Thumbs =
+        new(StringComparer.OrdinalIgnoreCase);
+
     public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
     {
         if (value is not string path || !ChatViewModel.IsOpenableImage(path)) return null;
+        string key;
+        try { key = path + "|" + System.IO.File.GetLastWriteTimeUtc(path).Ticks; }
+        catch { return null; }
+
+        Task<System.Windows.Media.Imaging.BitmapSource?> decode;
+        lock (Thumbs)
+        {
+            if (!Thumbs.TryGetValue(key, out decode!))
+            {
+                if (Thumbs.Count >= 48) Thumbs.Clear();
+                decode = Task.Run(() => Decode(path));
+                Thumbs[key] = decode;
+            }
+        }
+        if (decode.IsCompletedSuccessfully)
+        {
+            if (decode.Result != null) return decode.Result;
+            lock (Thumbs) Thumbs.Remove(key);   // unreadable just now (still being written?): try again next time
+            return null;
+        }
+
+        var pending = new DrawingImage();
+        decode.ContinueWith(t =>
+        {
+            var bmp = t.Result;   // never throws: an unreadable picture is null
+            if (bmp == null) { lock (Thumbs) Thumbs.Remove(key); return; }
+            pending.Dispatcher.BeginInvoke(() =>
+                pending.Drawing = new ImageDrawing(bmp, new Rect(0, 0, bmp.Width, bmp.Height)));
+        }, TaskScheduler.Default);
+        return pending;
+    }
+
+    private static System.Windows.Media.Imaging.BitmapSource? Decode(string path)
+    {
         try
         {
+            using var stream = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+                System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete);
+            int height = System.Windows.Media.Imaging.BitmapFrame.Create(stream,
+                System.Windows.Media.Imaging.BitmapCreateOptions.DelayCreation,
+                System.Windows.Media.Imaging.BitmapCacheOption.None).PixelHeight;
+            stream.Position = 0;
             var bmp = new System.Windows.Media.Imaging.BitmapImage();
             bmp.BeginInit();
-            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-            bmp.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
-            bmp.DecodePixelHeight = 240;
-            bmp.UriSource = new Uri(path, UriKind.Absolute);
+            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;   // read now: the file is not held open
+            bmp.DecodePixelHeight = Math.Clamp(height, 1, ThumbHeight);
+            bmp.StreamSource = stream;
             bmp.EndInit();
             bmp.Freeze();
             return bmp;

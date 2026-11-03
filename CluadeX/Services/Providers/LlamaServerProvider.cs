@@ -252,6 +252,11 @@ public class LlamaServerProvider : ApiProviderBase
                 RaiseError("llama-server stopped (crashed or was killed). Reload the model from the Models page.");
             };
             _serverProcess.Start();
+            Background.AppChildren.Adopt(_serverProcess);
+            // stdout is redirected (no console window) but nothing read it: once its pipe buffer filled, the server's
+            // next write blocked and every request hung. Drained and dropped — the useful lines are on stderr.
+            _serverProcess.OutputDataReceived += (_, _) => { };
+            _serverProcess.BeginOutputReadLine();
             _loadedModelPath = modelPath;
 
             // Read stderr in background for diagnostics + load-progress forwarding.
@@ -267,7 +272,9 @@ public class LlamaServerProvider : ApiProviderBase
                     string? line;
                     // ReadLineAsync returns null at EOF (the server closed stderr) — that IS the exit signal.
                     // The old code did `continue` on null, which busy-spun the CPU until HasExited flipped.
-                    while ((line = await stderr.ReadLineAsync(ct)) != null)
+                    // Not bound to the load's token: the server logs every request here for as long as it runs, and a
+                    // reader that stopped with the load would leave the pipe to fill and block the server.
+                    while ((line = await stderr.ReadLineAsync()) != null)
                     {
                         System.Diagnostics.Debug.WriteLine($"[llama-server] {line}");
                         _lastStderr.Enqueue(line);

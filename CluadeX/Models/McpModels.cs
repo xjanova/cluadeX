@@ -417,7 +417,7 @@ public class McpServerDisplayItem : System.ComponentModel.INotifyPropertyChanged
         set { if (_enabled != value) { _enabled = value; OnPropertyChanged(nameof(Enabled)); } }
     }
 
-    /// <summary>Raw state key used by the badge colour triggers: running / starting / reconnecting / stopped / error.</summary>
+    /// <summary>Raw state key used by the badge colour triggers: running / unresponsive / starting / reconnecting / stopped / error.</summary>
     public string Status
     {
         get => _status;
@@ -453,6 +453,23 @@ public class McpServerDisplayItem : System.ComponentModel.INotifyPropertyChanged
         set { if (_versionText != value) { _versionText = value; OnPropertyChanged(nameof(VersionText)); OnPropertyChanged(nameof(HasVersion)); } }
     }
     public bool HasVersion => _versionText.Length > 0;
+
+    private string _connectionText = "";
+    /// <summary>The connection in words, as of now: "connected for 12 min · last answer 8 s ago", or why it isn't.</summary>
+    public string ConnectionText
+    {
+        get => _connectionText;
+        set { if (_connectionText != value) { _connectionText = value; OnPropertyChanged(nameof(ConnectionText)); } }
+    }
+
+    private string _updateText = "";
+    /// <summary>A newer build on its way, or one that would not start; "" when there is nothing to say.</summary>
+    public string UpdateText
+    {
+        get => _updateText;
+        set { if (_updateText != value) { _updateText = value; OnPropertyChanged(nameof(UpdateText)); OnPropertyChanged(nameof(HasUpdateText)); } }
+    }
+    public bool HasUpdateText => _updateText.Length > 0;
 
     /// <summary>Localized enabled/disabled badge text (set by the view-model).</summary>
     public string EnabledLabel

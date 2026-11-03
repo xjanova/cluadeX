@@ -158,6 +158,8 @@ public partial class ChatViewModel
         session.Messages.AddRange(replies);
         session.UpdatedAt = DateTime.Now;
         _persistenceService.SaveSession(session);
+        // The sidebar holds its own copy of the chat: that one moves up to today.
+        if (Sessions.FirstOrDefault(s => s.Id == job.SessionId) is { } row) TouchSession(row);
         StatusText = LocF("chat.batch.arrivedOther", session.Title);
         return true;
     }

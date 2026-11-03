@@ -43,6 +43,10 @@ public partial class MainWindow : Window
         AddHandler(System.Windows.Controls.Primitives.ToggleButton.CheckedEvent, new RoutedEventHandler(OnActivityChecked));
         StateChanged += OnStateChanged;
         Closing += OnClosing;
+        // The user's own key, click or wheel: follow mode must not take the page from under them (FollowBack).
+        PreviewKeyDown += (_, _) => _viewModel.NoteUserInput();
+        PreviewMouseDown += (_, _) => _viewModel.NoteUserInput();
+        PreviewMouseWheel += (_, _) => _viewModel.NoteUserInput();
         // The pet is its own top-level window (not owned, so it stays out when CluadeX is minimized): it must go
         // with the main window, or the app would keep running with only the pet on screen.
         Closed += (_, _) => _viewModel.Pet.Shutdown();
@@ -169,6 +173,42 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    // ─── the sidebar's chat and project rows: right-click menus, drag a chat onto a project (Views/SidebarMenus) ───
+
+    private void ChatRow_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement row && row.DataContext is Models.ChatSession chat)
+        {
+            Views.SidebarMenus.Open(Views.SidebarMenus.ForChat(_viewModel.ChatVM, chat), row);
+            e.Handled = true;
+        }
+    }
+
+    private void ChatRow_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement row) Views.SidebarMenus.ChatRowPressed(row, e);
+    }
+
+    private void ChatRow_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (sender is FrameworkElement row) Views.SidebarMenus.ChatRowMoved(row, e);
+    }
+
+    private void ProjectRow_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement row && row.DataContext is Models.ChatProject project)
+        {
+            Views.SidebarMenus.Open(Views.SidebarMenus.ForProject(_viewModel.ChatVM, project), row);
+            e.Handled = true;
+        }
+    }
+
+    private void ProjectRow_DragOver(object sender, DragEventArgs e) => Views.SidebarMenus.ProjectRowDragOver(e);
+
+    /// <summary>A chat dropped on a project row — or on the "No project" row (no project behind it: out of any).</summary>
+    private void ProjectRow_Drop(object sender, DragEventArgs e) =>
+        Views.SidebarMenus.ProjectRowDrop(_viewModel.ChatVM, ((sender as FrameworkElement)?.DataContext as Models.ChatProject)?.Id ?? "", e);
+
     /// <summary>The "today" chip: pick the daily budget (a paid run asks before going on past it), or open the billing
     /// page — the only place the account's remaining credit is shown.</summary>
     private void TodayChip_Click(object sender, RoutedEventArgs e)
@@ -281,7 +321,17 @@ public partial class MainWindow : Window
             RootBorder.Padding = new Thickness(0);
 
         BtnMaximize.Content = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+
+        // Minimised: no decorative animation asks for frames; restored: each resumes by its own rule.
+        bool minimized = WindowState == WindowState.Minimized;
+        if (minimized != _animationsPausedForMinimize)
+        {
+            _animationsPausedForMinimize = minimized;
+            Views.AmbientAnimation.SetMinimized(this, minimized);
+        }
     }
+
+    private bool _animationsPausedForMinimize;
 
     private void ApplyTitleBarRoom()
     {

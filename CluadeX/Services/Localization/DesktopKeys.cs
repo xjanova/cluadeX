@@ -38,5 +38,29 @@ internal static class DesktopKeys
             ["th"] = "เอเจนต์ขอดูและควบคุมโปรแกรม \"{0}\" ({1})",
         },
         ["desktop.perm.launch"] = new() { ["en"] = "Start a program:", ["th"] = "เปิดโปรแกรม:" },
+        ["desktop.perm.clipboardGet"] = new()
+        {
+            ["en"] = "The agent wants to read the text on the clipboard (it may hold something you copied elsewhere).",
+            ["th"] = "เอเจนต์ขออ่านข้อความในคลิปบอร์ด (อาจมีสิ่งที่คุณคัดลอกไว้จากที่อื่น)",
+        },
+        ["desktop.perm.clipboardSet"] = new()
+        {
+            ["en"] = "The agent wants to put text on the clipboard (replacing what is there).",
+            ["th"] = "เอเจนต์ขอวางข้อความลงคลิปบอร์ด (แทนที่ของเดิม)",
+        },
+
+        // ── Settings ▸ Agent: blocked apps, the stop hotkey ──
+        ["settings.desktopBlocked"] = new() { ["en"] = "Apps the agent never touches", ["th"] = "โปรแกรมที่เอเจนต์ห้ามแตะ" },
+        ["settings.desktopBlockedDesc"] = new()
+        {
+            ["en"] = "Process names, comma-separated; * matches anything (KeePass*). Password managers are listed by default.",
+            ["th"] = "ชื่อโปรเซส คั่นด้วยจุลภาค ใช้ * แทนอะไรก็ได้ (KeePass*) — ใส่โปรแกรมจัดการรหัสผ่านไว้ให้แล้วตั้งแต่แรก",
+        },
+        ["settings.desktopHotkey"] = new()
+        {
+            ["en"] = "Ctrl+Alt+End stops every running chat at once, from any app — use it when the agent is moving your mouse.",
+            ["th"] = "กด Ctrl+Alt+End เพื่อหยุดทุกแชทที่กำลังทำงานทันที จากโปรแกรมไหนก็ได้ — ใช้ตอนเอเจนต์กำลังขยับเมาส์ของคุณ",
+        },
+        ["desktop.hotkeyStopped"] = new() { ["en"] = "⏹ Stopped by Ctrl+Alt+End", ["th"] = "⏹ หยุดแล้วด้วย Ctrl+Alt+End" },
     };
 }

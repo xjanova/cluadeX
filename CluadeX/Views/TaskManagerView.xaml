@@ -312,22 +312,28 @@
                     </TextBlock>
                 </Border>
 
-                <!-- Output content -->
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Auto"
-                              Style="{StaticResource SlimScrollViewer}">
-                    <TextBox Text="{Binding SelectedTask.Output, Mode=OneWay, FallbackValue=''}"
-                             IsReadOnly="True"
-                             Background="Transparent"
-                             Foreground="{DynamicResource Text.Primary}"
-                             FontFamily="{DynamicResource Font.Mono.Display}"
-                             FontSize="12"
-                             BorderThickness="0"
-                             TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Disabled"
-                             Padding="12,8"
-                             CaretBrush="{DynamicResource Text.Primary}"/>
-                </ScrollViewer>
+                <!-- Output content. The text is filled from code-behind (TaskManagerView.xaml.cs): the selected task's
+                     whole output once, then only the new text of each push, so a 256K log is not laid out again ten
+                     times a second. The box scrolls itself (an outer ScrollViewer would lay out every line). -->
+                <TextBox x:Name="OutputBox" Grid.Row="1"
+                         IsReadOnly="True"
+                         IsUndoEnabled="False"
+                         UndoLimit="0"
+                         Background="Transparent"
+                         Foreground="{DynamicResource Text.Primary}"
+                         FontFamily="{DynamicResource Font.Mono.Display}"
+                         FontSize="12"
+                         BorderThickness="0"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Disabled"
+                         Padding="12,8"
+                         CaretBrush="{DynamicResource Text.Primary}">
+                    <TextBox.Resources>
+                        <!-- the box's own scroller gets the same slim bar the pane had -->
+                        <Style TargetType="ScrollViewer" BasedOn="{StaticResource SlimScrollViewer}"/>
+                    </TextBox.Resources>
+                </TextBox>
             </Grid>
         </Border>
     </Grid>

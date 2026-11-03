@@ -166,6 +166,18 @@ public sealed class ClaudeDevStreamTurn
     /// <summary>Sub-agents started in the background: their Agent call has returned, they run until task_notification.</summary>
     private readonly HashSet<string> _background = new();
     private int _subAgentSeq;
+    private readonly List<LateAgentReport> _late = new();
+
+    /// <summary>A background sub-agent that ended after the main agent's last step: its result never reached the model.</summary>
+    public sealed record LateAgentReport(string Agent, string Status, string Summary, string? OutputFile);
+
+    /// <summary>
+    /// Background sub-agents whose end came after the main agent last spoke. The CLI holds its result until they end and
+    /// then exits without a turn on their output, so the reply was written while they still ran — "waiting for the
+    /// sub-agent, I will commit when it is done" — and that was the whole report (TPIX run, 2026-11-01: the explorer badge
+    /// was left uncommitted, write_code said success). A main step after a notice means the model saw it: the list clears.
+    /// </summary>
+    public IReadOnlyList<LateAgentReport> LateReports => _late;
 
     public ClaudeDevStreamTurn(string? runFolder) => _runFolder = runFolder;
 
@@ -267,6 +279,7 @@ public sealed class ClaudeDevStreamTurn
         _lastWasUser = false;
         if (key != _messageKey || _step == null)
         {
+            _late.Clear();   // a new main step: the notices before it reached the model
             _messageKey = key;
             _step = new AgentStep { StepNumber = Steps.Count + 1 };
             Steps.Add(_step);
@@ -397,6 +410,8 @@ public sealed class ClaudeDevStreamTurn
         _background.Remove(id);
         _subAgents.Remove(id);
         string status = Str(root, "status");
+        _late.Add(new LateAgentReport(string.IsNullOrWhiteSpace(sub.Task) ? sub.Label : sub.Task, status is { Length: > 0 } ? status : "completed",
+            Str(root, "summary"), Str(root, "output_file") is { Length: > 0 } file ? file : null));
         SubAgent?.Invoke(sub with
         {
             Phase = status == "completed" ? "done" : status == "stopped" ? "stopped" : "failed",

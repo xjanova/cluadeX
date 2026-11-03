@@ -278,10 +278,11 @@ public class OllamaProvider : ApiProviderBase
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        // ReadLineAsync, not the synchronous EndOfStream, so a silent stream never blocks a thread (see LlamaServerProvider).
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
         {
             ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             string? content = null;
@@ -344,7 +345,12 @@ public class OllamaProvider : ApiProviderBase
     }
 
     // ─── Native tool use (OpenAI-style function calling via Ollama /api/chat) ───
-    public override bool SupportsNativeToolUse => _settingsService.Settings.LocalNativeToolUseEnabled;
+    public override bool SupportsNativeToolUse =>
+        _settingsService.Settings.LocalNativeToolUseEnabled && !_noToolModels.ContainsKey(CurrentModel(null));
+
+    /// <summary>Models Ollama said take no tools ("does not support tools"): they get the [ACTION:] text protocol for
+    /// the rest of the session instead of an error read as their answer every turn.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _noToolModels = new(StringComparer.OrdinalIgnoreCase);
 
     // ─── Tool images: only for a model whose /api/show lists the "vision" capability ───
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _visionByModel = new(StringComparer.OrdinalIgnoreCase);
@@ -456,10 +462,14 @@ public class OllamaProvider : ApiProviderBase
             if (!response.IsSuccessStatusCode)
             {
                 var error = await response.Content.ReadAsStringAsync(ct);
+                // An error, not an answer: "end_turn" made the agent loop take Ollama's message as the model's reply.
+                if (error.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
+                    _noToolModels[model] = true;
                 return new NativeToolResponse
                 {
-                    TextContent = $"Ollama tool call failed ({(int)response.StatusCode}): {TruncateError(error)}",
-                    StopReason = "end_turn",
+                    TextContent = $"Ollama tool call failed ({(int)response.StatusCode}): {TruncateError(error)}"
+                                  + (_noToolModels.ContainsKey(model) ? $" — {model} takes no tools; the next message uses the text tool protocol." : ""),
+                    StopReason = "error",
                 };
             }
             var responseText = await response.Content.ReadAsStringAsync(ct);

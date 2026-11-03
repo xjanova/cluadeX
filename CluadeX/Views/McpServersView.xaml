@@ -19,6 +19,11 @@
             <TextBlock Text="{Binding PageSubtitle}" FontSize="12"
                        Foreground="{DynamicResource Text.Muted}"
                        FontFamily="{DynamicResource Font.Ui.Display}" Margin="0,4,0,0"/>
+            <!-- BrainX as it is right now: connected or why not, and the version running vs installed -->
+            <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="6" Padding="10,6" Margin="0,10,0,0">
+                <TextBlock Text="{Binding BrainLine}" FontSize="12" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Text.Secondary}"/>
+            </Border>
         </StackPanel>
 
         <!-- ═══════ MASTER-DETAIL ═══════ -->
@@ -83,6 +88,13 @@
                                     <TextBlock FontSize="10" Foreground="{DynamicResource Text.Muted}"
                                                Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
                                                Text="{Binding CommandLineDisplay, Mode=OneWay}"/>
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
+                                               Text="{Binding ConnectionText}"/>
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Status.Warning}"
+                                               Margin="0,2,0,0" TextWrapping="Wrap"
+                                               Text="{Binding UpdateText}"
+                                               Visibility="{Binding HasUpdateText, Converter={StaticResource BoolVis}}"/>
                                     <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
                                         <TextBlock Text="{Binding ToolCountText}"
                                                    FontSize="10" Foreground="{DynamicResource Text.Secondary}"/>
@@ -127,6 +139,9 @@
                                                 <DataTrigger Binding="{Binding Status}" Value="stopped">
                                                     <Setter Property="Background" Value="{DynamicResource Status.Warning}"/>
                                                 </DataTrigger>
+                                                <DataTrigger Binding="{Binding Status}" Value="unresponsive">
+                                                    <Setter Property="Background" Value="{DynamicResource Status.Danger}"/>
+                                                </DataTrigger>
                                                 <DataTrigger Binding="{Binding Status}" Value="error">
                                                     <Setter Property="Background" Value="{DynamicResource Status.Danger}"/>
                                                 </DataTrigger>
@@ -168,6 +183,11 @@
                                                FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Bg.Window}"/>
                                 </Border>
                             </StackPanel>
+                            <TextBlock Text="{Binding SelectedServer.ConnectionText}" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Secondary}" Margin="0,-6,0,6"/>
+                            <TextBlock Text="{Binding SelectedServer.UpdateText}" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Status.Warning}" Margin="0,0,0,10"
+                                       Visibility="{Binding SelectedServer.HasUpdateText, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
 
                             <!-- View Mode -->
                             <StackPanel Visibility="{Binding IsEditing, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">

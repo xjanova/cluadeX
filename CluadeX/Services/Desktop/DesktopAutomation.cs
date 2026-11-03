@@ -281,6 +281,9 @@ public sealed class DesktopAutomation
                 return ClickCentre(r, false, false, ct) + " (no Invoke pattern)";
             case "select":
                 if (TrySelect(e)) return "selected";
+                // The fallbacks below invoke it, which opens an Explorer item: a program or script is not started that way.
+                if (DesktopSafety.OpensFileRefusal(e, DesktopSafety.OpenKind.Item) is { } run)
+                    throw new InvalidOperationException(run + " (Select did not take, and the fallback would have opened it.)");
                 if (ChildWith(e, InvokePattern.Pattern) is { } c2 && TryPattern<InvokePattern>(c2, InvokePattern.Pattern, p => p.Invoke()))
                     return $"invoked its child {Short(c2)} (Select did not take)";
                 if (TryPattern<InvokePattern>(e, InvokePattern.Pattern, p => p.Invoke())) return "invoked (Select did not take)";
@@ -393,8 +396,9 @@ public sealed class DesktopAutomation
         return null;
     }
 
-    /// <summary>A real mouse click at the element's centre (clickable point when it has one). Refused when the
-    /// point is covered by CluadeX's approval UI or a credential window.</summary>
+    /// <summary>A real mouse click at the element's centre (clickable point when it has one). Refused when its window
+    /// cannot be brought forward and something else lies under the point, and when the point is covered by CluadeX's
+    /// approval UI, a credential window, a terminal or a Run box (<see cref="DesktopSafety.PointRefusal"/>).</summary>
     public static string ClickCentre(DesktopRef r, bool right, bool dbl, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -410,11 +414,19 @@ public sealed class DesktopAutomation
             }
         }
         catch (ElementNotAvailableException) { throw new InvalidOperationException("stale"); }
-        DesktopWindows.Activate(r.Window);
+        // Some windows never become the foreground one — a popup menu (#32768), a WPF ContextMenu or ComboBox dropdown,
+        // a flyout — yet clicking them is how they are used. When activation fails the click still goes ahead if the
+        // element's own window (or one it owns) is what lies under the point; PointRefusal below judges what is there.
+        bool front = r.Window == IntPtr.Zero || DesktopWindows.Activate(r.Window);
         int x = (int)Math.Round(pt.X), y = (int)Math.Round(pt.Y);
+        if (!front && !PointIsIn(x, y, r))
+            throw new InvalidOperationException("Could not bring its window to the front, and another window covers the element, so nothing was clicked (Windows refuses focus changes while the user is typing elsewhere). Try again.");
         AutomationElement? hit = null;
         try { hit = AutomationElement.FromPoint(pt); } catch { }
         if (DesktopSafety.GuardRefusal(hit) is { } g) throw new InvalidOperationException(g);
+        // Judged by what is really under the point: an always-on-top or overlapping terminal would take the click, and a
+        // right-click there pastes the clipboard into it (desktop_act checked only the ref's own window).
+        if (DesktopSafety.PointRefusal(x, y, hit, right ? "right" : "left", opens: dbl) is { } cs) throw new InvalidOperationException(cs);
         if (hit != null)
         {
             try
@@ -426,6 +438,26 @@ public sealed class DesktopAutomation
         }
         DesktopInput.Click(x, y, right, dbl);
         return $"{(right ? "right-" : dbl ? "double-" : "")}clicked at screen ({x},{y})";
+    }
+
+    private const int GWL_STYLE = -16;
+    private const int WS_POPUP = unchecked((int)0x80000000);
+
+    /// <summary>Whether the window under a point belongs to the ref: its own window, a window it owns, or a popup of the
+    /// same app (a popup menu, or a WPF popup, which has no owner).</summary>
+    private static bool PointIsIn(int x, int y, DesktopRef r)
+    {
+        var h = DesktopNative.WindowFromPoint(new DesktopNative.POINT { X = x, Y = y });
+        if (h == IntPtr.Zero) return false;
+        var root = DesktopNative.GetAncestor(h, DesktopNative.GA_ROOT);
+        if (root == IntPtr.Zero) root = h;
+        if (root == r.Window) return true;
+        var owner = DesktopNative.GetWindow(root, DesktopNative.GW_OWNER);
+        for (int i = 0; owner != IntPtr.Zero && i < 16; i++, owner = DesktopNative.GetWindow(owner, DesktopNative.GW_OWNER))
+            if (owner == r.Window) return true;
+        DesktopNative.GetWindowThreadProcessId(root, out uint pid);
+        if (pid != (uint)r.ProcessId) return false;
+        return DesktopNative.ClassName(root) == "#32768" || (DesktopNative.GetWindowLongW(root, GWL_STYLE) & WS_POPUP) != 0;
     }
 
     /// <summary>The top-level window handle that contains <paramref name="e"/>.</summary>

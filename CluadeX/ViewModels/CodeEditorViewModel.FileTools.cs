@@ -122,10 +122,38 @@ public partial class CodeEditorViewModel
         get => _settings.Settings.EditorShowWhitespace;
         set => _settings.UpdateSettings(s => s.EditorShowWhitespace = value);
     }
+    // Ctrl+wheel / Ctrl+Plus fire once per notch (about 30 a second on key repeat), and each settings save is a
+    // full write plus every SettingsChanged listener on the UI thread, so the zoom stuttered notch by notch
+    // (2026-11-02). The font size changes at once in the view; the value is written once the zooming stops.
+    private double? _pendingZoom;
+    private System.Windows.Threading.DispatcherTimer? _zoomSave;
+
     public double EditorZoom
     {
-        get => Math.Clamp(_settings.Settings.EditorZoom is > 0 ? _settings.Settings.EditorZoom : 1.0, 0.5, 3.0);
-        set => _settings.UpdateSettings(s => s.EditorZoom = Math.Clamp(value, 0.5, 3.0));
+        get => _pendingZoom ?? Math.Clamp(_settings.Settings.EditorZoom is > 0 ? _settings.Settings.EditorZoom : 1.0, 0.5, 3.0);
+        set
+        {
+            double zoom = Math.Clamp(value, 0.5, 3.0);
+            if (Math.Abs(zoom - EditorZoom) < 1e-6) return;   // wheeling past 50% / 300% changes nothing
+            _pendingZoom = zoom;
+            if (_zoomSave == null)
+            {
+                _zoomSave = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+                _zoomSave.Tick += (_, _) => SaveZoomNow();
+            }
+            _zoomSave.Stop();   // restart: save once the notches stop
+            _zoomSave.Start();
+        }
+    }
+
+    /// <summary>Write a zoom still waiting for its debounce (the timer, and app exit via Dispose).</summary>
+    private void SaveZoomNow()
+    {
+        _zoomSave?.Stop();
+        if (_pendingZoom is not { } zoom) return;
+        _pendingZoom = null;
+        if (Math.Abs(zoom - _settings.Settings.EditorZoom) < 1e-6) return;
+        _settings.UpdateSettings(s => s.EditorZoom = zoom);
     }
 
     /// <summary>The file's encoding cannot hold what was typed: convert it to UTF-8? (true = converted)</summary>
