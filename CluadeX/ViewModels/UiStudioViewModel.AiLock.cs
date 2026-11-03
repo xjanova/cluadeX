@@ -57,6 +57,9 @@ public sealed partial class UiStudioViewModel
                 or nameof(ChatViewModel.WorkingDirectory) or nameof(ChatViewModel.ChatProject))
                 RefreshAiLock();
         };
+        // a running chat opened a folder (open_project, with add or without): no run starts or ends, but the folders it
+        // works in changed — it may be working in the Studio's project now
+        _chat.RunScopeChanged += RefreshAiLock;
         _studio.ProjectChanged += RefreshAiLock;
         RefreshAiLock();
     }
@@ -71,6 +74,18 @@ public sealed partial class UiStudioViewModel
             _lockWaiting = waiting;
             OnPropertyChanged(nameof(AiLockWaiting));
             OnPropertyChanged(nameof(AiLockText));
+        }
+        if (now && _lockedByAi && _studio.HasProject && !SamePath(_lockRoot, _studio.Root))
+        {
+            // Still locked, but on another project: the Studio moved from one project a run edits to another one a run
+            // edits (the owner switched chats). The lock is this project's now — its run's end is what unlocks and
+            // catches up (the reload, the dev server that waited, the new look) — and nothing left for the old one
+            // happens here.
+            _log?.Info("UiStudio", $"the lock moves from {_lockRoot} to {_studio.Root} (a run edits it too)");
+            _lockRoot = _studio.Root;
+            _reloadAfterLock = false;
+            OnLocked();
+            return;
         }
         if (now == _lockedByAi) return;
         string lockedRoot = _lockRoot;

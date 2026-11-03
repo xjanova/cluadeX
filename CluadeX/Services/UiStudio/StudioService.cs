@@ -106,7 +106,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
             if (_keepAwake == value) return;
             _keepAwake = value;
             if (!value) return;
-            WakeRequested?.Invoke();
+            RaiseToView(WakeRequested, "wake");
             FlushPendingReload();
         }
     }
@@ -116,7 +116,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     {
         if (!(_pageVisible || _keepAwake) || _pendingReload is not { } cssOnly) return;
         _pendingReload = null;
-        if (IsServing) ReloadRequested?.Invoke(cssOnly);
+        if (IsServing) RaiseToView(ReloadRequested, cssOnly, "reload");
     }
 
     /// <summary>The last page the Studio asked its browser to show — for a browser that is created after the ask
@@ -127,7 +127,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     {
         LastRequestedUrl = url;
         PageGeneration++;
-        NavigateRequested?.Invoke(url);
+        RaiseToView(NavigateRequested, url, "navigate");
     }
 
     /// <summary>Show this page of the project (the address bar, a gallery card, a new base address): it becomes the
@@ -154,7 +154,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     /// shows a blank page or the browser's error page, opens the wanted page again. (Not <see cref="ReloadRequested"/>:
     /// that one is the file watcher's, and waits while the page is hidden.)</summary>
     public event Action<bool>? PageReloadRequested;
-    public void ReloadPage(bool hard) => PageReloadRequested?.Invoke(hard);
+    public void ReloadPage(bool hard) => RaiseToView(PageReloadRequested, hard, "page reload");
 
     /// <summary>What the browser is sent to when its project is gone: no page shows under another project's name.</summary>
     public const string BlankPage = "about:blank";
@@ -190,7 +190,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         _undo.Clear();
         PageGeneration++;
         SetPageLoad(PageLoadInfo.Idle);
-        NavigateRequested?.Invoke(BlankPage);
+        RaiseToView(NavigateRequested, BlankPage, "navigate");
     }
 
     public int UndoCount => _undo.Count;
@@ -226,8 +226,10 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         TreeChanged?.Invoke();
     }
 
-    /// <summary>Start the right server for the project and navigate to it. Returns an error key or null.</summary>
-    public async Task<string?> StartAsync()
+    /// <summary>Start the right server for the project and navigate to it. Returns an error key or null.
+    /// <paramref name="mayInstall"/> false: a dev server whose packages are missing is not started (no install beside an
+    /// AI run in the same folder) — "studio.lock.devWaits" is returned and nothing runs.</summary>
+    public async Task<string?> StartAsync(bool mayInstall = true)
     {
         if (!HasProject) return "studio.err.noProject";
         if (IsServing || IsStarting) { if (PageUrl != null) RequestNavigate(PageUrl); return null; }
@@ -275,12 +277,13 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                     });
                     _dev = dev;
                     _startCts = new CancellationTokenSource();
-                    var (ok, error) = await dev.StartAsync(Project.DevScript ?? "dev", _startCts.Token);
+                    var (ok, error) = await dev.StartAsync(Project.DevScript ?? "dev", _startCts.Token, mayInstall);
                     if (!ok)
                     {
                         if (ReferenceEquals(_dev, dev)) _dev = null;
                         dev.Dispose();
                         if (error == "cancelled") return null;
+                        if (error == "wait") return "studio.lock.devWaits";
                         _log?.Warn("UiStudio", "dev server failed: " + error);
                         return error == "unsafe" ? "studio.err.unsafe"
                             : error != null && error.StartsWith("noNode", StringComparison.Ordinal) ? "studio.err.noNode" : "studio.err.install";
@@ -368,7 +371,31 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     }
 
     /// <summary>Run overlay JS in the page (the view executes it).</summary>
-    public void RunScript(string js) => ScriptRequested?.Invoke(js);
+    public void RunScript(string js) => RaiseToView(ScriptRequested, js, "script");
+
+    /// <summary>Raise one of the events the view carries out in its browser (a script, a navigation, a reload, a wake),
+    /// each listener on its own: a listener that throws (a browser whose process died throws from everything) is logged
+    /// and never reaches the caller — the AI lock runs a script from inside the chat's run start and end, and a throw
+    /// there skipped the rest of the run's ending (its left-over notes were lost).</summary>
+    private void RaiseToView<T>(Action<T>? handlers, T arg, string what)
+    {
+        if (handlers == null) return;
+        foreach (var d in handlers.GetInvocationList())
+        {
+            try { ((Action<T>)d)(arg); }
+            catch (Exception ex) { _log?.Warn("UiStudio", $"the page's {what} listener failed", ex); }
+        }
+    }
+
+    private void RaiseToView(Action? handlers, string what)
+    {
+        if (handlers == null) return;
+        foreach (var d in handlers.GetInvocationList())
+        {
+            try { ((Action)d)(); }
+            catch (Exception ex) { _log?.Warn("UiStudio", $"the page's {what} listener failed", ex); }
+        }
+    }
 
     /// <summary>Run JS and get its JSON result (set by the view while it has a page; null otherwise).</summary>
     public Func<string, Task<string?>>? Evaluate { get; set; }
@@ -497,7 +524,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                 catch (Exception ex) { _log?.Warn("UiStudio", "a files-changed listener failed", ex); }
             }
             if (!reload || !IsServing || Project.Kind == StudioProjectKind.Server && !PageIsLocal) return;
-            if (PageVisible || KeepPageAwake) ReloadRequested?.Invoke(cssOnly);
+            if (PageVisible || KeepPageAwake) RaiseToView(ReloadRequested, cssOnly, "reload");
             else _pendingReload = (_pendingReload ?? true) && cssOnly;   // waits for the page to be shown; a full reload wins
         };
         return t;

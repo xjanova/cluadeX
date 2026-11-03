@@ -331,23 +331,27 @@ public sealed partial class UiStudioViewModel : ViewModelBase
     private async Task StartAsync()
     {
         string root = _studio.Root;
-        if (_studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther && AiWorkingHere())
+        bool node = _studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther;
+        // An install beside an AI run in the same folder: two installs fight over node_modules. A project whose packages
+        // are already there starts now (a design turn shows its page while the AI works); one that needs an install
+        // waits for the run's end (OnUnlocked → CatchUpOnShow). The service refuses the install too, should node_modules
+        // go while its safety check runs.
+        bool mayInstall = !(node && AiWorkingHere());
+        if (!mayInstall && DevServerRunner.NeedsInstall(root))
         {
-            // `npm install` / `npm run dev` beside an AI run in the same folder: two installs fight over node_modules, and
-            // the AI may be starting its own dev server. It starts when the run ends (OnUnlocked → CatchUpOnShow).
-            _startOnShow = true;
-            Status(T("studio.lock.devWaits"));
+            WaitForRunToStart();
             return;
         }
-        if (_studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther)
+        if (node)
         {
             ShowLog = true;
-            Status(Directory.Exists(Path.Combine(_studio.Root, "node_modules")) ? T("studio.startingDev") : T("studio.installing"));
+            Status(DevServerRunner.NeedsInstall(root) ? T("studio.installing") : T("studio.startingDev"));
         }
-        string? err = await _studio.StartAsync();
+        string? err = await _studio.StartAsync(mayInstall);
         // the chat moved on while this one started: what it says and what it earned (the go-ahead for a dev server)
         // were this project's, never the next one's
         if (!SamePath(root, _studio.Root)) return;
+        if (err == "studio.lock.devWaits") { WaitForRunToStart(); return; }
         if (err != null) Status(T(err), error: true);
         else if (_studio.Project.Kind == StudioProjectKind.Static) Status(T("studio.started"));
         if (err == null && _studio.IsServing && _studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther && _studio.HasProject)
@@ -356,6 +360,13 @@ public sealed partial class UiStudioViewModel : ViewModelBase
             _store ??= new PageShotStore(_studio.DataRoot, _studio.Root);
             if (!_store.State.DevServerApproved) { _store.State.DevServerApproved = true; _store.SaveState(); }
         }
+    }
+
+    /// <summary>The dev server needs an install and an AI run works here: it starts when the run ends.</summary>
+    private void WaitForRunToStart()
+    {
+        _startOnShow = true;
+        Status(T("studio.lock.devWaits"));
     }
 
     private void OnProjectChanged()

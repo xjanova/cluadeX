@@ -54,5 +54,53 @@ internal static partial class Program
         bool back = await WaitUntil(() => studio.PageLoadState == PageLoadState.Loaded && vm.Url == page, 30000) && await HasOverlay(studio);
         Check("engine: Try again starts it and opens the page asked for, verified, with the overlay",
             back && engineError.Visibility != Visibility.Visible && GetField(view, "_engineGaveUp") is false, $"{studio.PageLoadState} url={vm.Url} card={engineError.Visibility}");
+        if (back) await BrowserProcessDies(vm, view, studio, page);
+    }
+
+    /// <summary>(3) The browser process itself dies (a runtime update, a GPU or driver crash, a kill): the control marks
+    /// itself crashed and its CoreWebView2 getter throws from then on. The Studio must still replace it and bring the page
+    /// back — and nothing the service raises meanwhile (the AI lock's script runs from the chat's run start and end) may
+    /// throw into its caller or onto the dispatcher.</summary>
+    static async Task BrowserProcessDies(UiStudioViewModel vm, UiStudioView view, StudioService studio, string page)
+    {
+        object? web = GetField(view, "Web");
+        int pid = 0;
+        try
+        {
+            object? core = web?.GetType().GetProperty("CoreWebView2")!.GetValue(web);
+            pid = Convert.ToInt32(core?.GetType().GetProperty("BrowserProcessId")!.GetValue(core));
+        }
+        catch { }
+        Check("engine: (control) the Studio's browser process is known", pid > 0, pid.ToString());
+        if (pid <= 0) return;
+        (GetField(view, "_rebuilds") as List<DateTime>)?.Clear();
+        int onDispatcher = 0, toCaller = 0;
+        string? first = null;
+        System.Windows.Threading.DispatcherUnhandledExceptionEventHandler onError = (_, e) =>
+        {
+            onDispatcher++;
+            first ??= e.Exception.GetType().Name + ": " + e.Exception.Message;
+            e.Handled = true;   // (counted as a failure here; the app would show an error box)
+        };
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        dispatcher.UnhandledException += onError;
+        bool rebuilt;
+        try
+        {
+            using (var browser = System.Diagnostics.Process.GetProcessById(pid)) browser.Kill();
+            rebuilt = await WaitUntil(() =>
+            {
+                // what an AI run starting or ending in this project does to the Studio, every 60 ms while it recovers
+                try { studio.RunScript("void 0"); }
+                catch (Exception ex) { toCaller++; first ??= "RunScript: " + ex.GetType().Name + ": " + ex.Message; }
+                return !ReferenceEquals(GetField(view, "Web"), web) && studio.PageLoadState == PageLoadState.Loaded && vm.Url == page;
+            }, 30000) && await HasOverlay(studio);
+            await Idle(300);
+        }
+        finally { dispatcher.UnhandledException -= onError; }
+        Check("engine: the browser process killed → the crashed control is replaced and the page comes back, verified, with the overlay",
+            rebuilt, $"replaced={!ReferenceEquals(GetField(view, "Web"), web)} {studio.PageLoadState} url={vm.Url} first={first}");
+        Check("engine: …and nothing threw meanwhile — not onto the dispatcher (an error box), not into RunScript's caller (the chat's run start/end)",
+            onDispatcher == 0 && toCaller == 0, $"dispatcher={onDispatcher} caller={toCaller} first={first}");
     }
 }

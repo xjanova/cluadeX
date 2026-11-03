@@ -385,10 +385,11 @@ internal static partial class Program
         onLine.Invoke(runner, new object?[] { $"npm http fetch GET 200 http://localhost:{port}/react 12ms (registry)", false });
         bool installIgnored = !gotIt.Wait(600);
         onLine.Invoke(runner, new object?[] { $"  ➜  Local:   http://localhost:{port}/", true });
-        Check("dev port: an install's output is never taken as the page; the dev process's address is, once its port answers",
+        Check("dev port: a line read without URL matching is never the page; the dev process's address is, once its port answers",
             installIgnored && gotIt.Wait(5000) && found == $"http://localhost:{port}/" && runner.Url == found, found ?? "nothing");
         runner.Dispose();
         late?.Stop();
+        DevServerInstallForReal();
 
         int dead = FreeTcpPort();
         sw.Restart();
@@ -401,6 +402,80 @@ internal static partial class Program
         catch (OperationCanceledException) { cancelled = true; }
         Check("dev port: cancellable (stopping the server stops the wait)", cancelled && sw.Elapsed.TotalSeconds < 3, $"{cancelled} {sw.Elapsed.TotalSeconds:0.00}s");
         Check("dev port: only this machine is dialled", !DevServerRunner.WaitForPortAsync(new Uri("http://example.invalid:80/"), TimeSpan.FromSeconds(5), CancellationToken.None).GetAwaiter().GetResult());
+    }
+
+    /// <summary>The runner's real install path, with a fake package manager first on PATH (a .cmd — no Node, no network):
+    /// its "install" prints a local address (a local registry, a proxy) that answers, and "run dev" prints the page's. Only
+    /// the dev process's address may be announced. Dry-run is off for this one start only; the fake prints and waits.</summary>
+    static void DevServerInstallForReal()
+    {
+        string proj = Path.Combine(Path.GetTempPath(), "cx-devinstall-" + Guid.NewGuid().ToString("N")[..8]);
+        string bin = Path.Combine(proj + "-bin");
+        Directory.CreateDirectory(proj);
+        Directory.CreateDirectory(bin);
+        int installPort = FreeTcpPort(), devPort = FreeTcpPort();
+        var registry = new TcpListener(IPAddress.Loopback, installPort);
+        var page = new TcpListener(IPAddress.Loopback, devPort);
+        registry.Start();
+        page.Start();
+        File.WriteAllText(Path.Combine(proj, "package.json"), "{\"scripts\":{\"dev\":\"vite\"}}");
+        File.WriteAllText(Path.Combine(bin, "npm.cmd"),
+            "@echo off\r\n"
+            + $"if \"%1\"==\"install\" (\r\n  echo npm http fetch GET 200 http://localhost:{installPort}/react 12ms\r\n  echo added 1 package\r\n  exit /b 0\r\n)\r\n"
+            + $"echo   Local:   http://localhost:{devPort}/\r\n"
+            + "ping -n 60 127.0.0.1 >nul\r\n");
+        string? oldPath = Environment.GetEnvironmentVariable("PATH");
+        bool oldDry = CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun;
+        var runner = new DevServerRunner(proj);
+        var urls = new List<string>();
+        var lines = new List<string>();
+        using var gotUrl = new ManualResetEventSlim();
+        runner.UrlFound += u => { lock (urls) urls.Add(u); gotUrl.Set(); };
+        runner.Output += l => { lock (lines) lines.Add(l); };
+        try
+        {
+            CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = false;
+            Environment.SetEnvironmentVariable("PATH", bin + ";" + oldPath);
+            var (ok, error) = runner.StartAsync("dev", CancellationToken.None).GetAwaiter().GetResult();
+            Environment.SetEnvironmentVariable("PATH", oldPath);
+            bool announced = ok && gotUrl.Wait(10000);
+            Thread.Sleep(700);   // (a second announcement would land here)
+            List<string> seen;
+            lock (urls) seen = urls.ToList();
+            bool installRan;
+            lock (lines) installRan = lines.Any(l => l.Contains($"localhost:{installPort}/react"));
+            Check("dev port: an install's output is never taken as the page — the real install (a fake npm that prints an answering local address while installing), then only the dev address",
+                announced && installRan && seen.Count == 1 && seen[0] == $"http://localhost:{devPort}/" && runner.Url == seen[0],
+                $"ok={ok} error={error} installRan={installRan} urls=[{string.Join(", ", seen)}]");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", oldPath);
+            CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = oldDry;
+            runner.Dispose();
+            registry.Stop();
+            page.Stop();
+            try { Directory.Delete(proj, true); } catch { }
+            try { Directory.Delete(bin, true); } catch { }
+        }
+
+        // an AI run works in the folder: no install at all, and nothing is checked or run
+        string noPkgs = Path.Combine(Path.GetTempPath(), "cx-devwait-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(noPkgs);
+        File.WriteAllText(Path.Combine(noPkgs, "package.json"), "{\"scripts\":{\"dev\":\"vite\"}}");
+        var waiting = new DevServerRunner(noPkgs);
+        int said = 0;
+        waiting.Output += _ => said++;
+        try
+        {
+            var (ok, error) = waiting.StartAsync("dev", CancellationToken.None, mayInstall: false).GetAwaiter().GetResult();
+            Check("dev server: mayInstall=false and no node_modules → 'wait', nothing checked or run", !ok && error == "wait" && said == 0 && !waiting.IsRunning, $"{ok} {error} lines={said}");
+        }
+        finally
+        {
+            waiting.Dispose();
+            try { Directory.Delete(noPkgs, true); } catch { }
+        }
     }
 
     static int FreeTcpPort()
@@ -446,6 +521,29 @@ internal static partial class Program
             svc.ReloadRequested += _ => watcherReloads++;
             svc.ReloadPage(hard: true);
             Check("gen: ReloadPage raises its own event (not the file watcher's)", hard == true && watcherReloads == 0);
+            // a view whose browser died throws from its handlers: that never reaches the caller (the AI lock runs a script
+            // from inside the chat's run start and end), and the other listeners still hear it
+            Action<string> deadScript = _ => throw new InvalidOperationException("The WebView control is no longer valid because the browser process crashed.");
+            Action<bool> deadReload = _ => throw new InvalidOperationException("crashed");
+            Action<string> deadNav = _ => throw new InvalidOperationException("crashed");
+            var heard = new List<string>();
+            svc.ScriptRequested += deadScript;
+            svc.ScriptRequested += js => heard.Add("script:" + js);
+            svc.PageReloadRequested += deadReload;
+            svc.NavigateRequested += deadNav;
+            Exception? leaked = null;
+            try
+            {
+                svc.RunScript("window.__cx && __cx.setLocked(true)");
+                svc.ReloadPage(hard: false);
+                svc.NavigatePage(svc.CurrentBaseUrl + "index.html");
+            }
+            catch (Exception ex) { leaked = ex; }
+            Check("view raise: a listener that throws (a dead browser) never reaches RunScript / ReloadPage / NavigatePage's caller, and the next listener still runs",
+                leaked == null && heard.Contains("script:window.__cx && __cx.setLocked(true)") && hard == false, leaked?.GetType().Name ?? $"heard {heard.Count}");
+            svc.ScriptRequested -= deadScript;
+            svc.PageReloadRequested -= deadReload;
+            svc.NavigateRequested -= deadNav;
             int g = svc.PageGeneration;
             svc.CloseProject();
             Check("gen: closing the project moves the generation and resets the load state", svc.PageGeneration == g + 1 && svc.PageLoadState == PageLoadState.Idle
