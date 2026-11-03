@@ -366,6 +366,7 @@ public partial class ChatViewModel
     {
         if (ChatProjects.FirstOrDefault(p => p.Id == projectId) is not { } project) return false;
         project.RefreshFolderState();
+        CancelPendingChatLoad();
         NewSession(keepProject: false);
         if (CurrentSession is not { } chat) return false;
         chat.ProjectId = project.Id;

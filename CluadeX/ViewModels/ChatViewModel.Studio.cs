@@ -50,7 +50,7 @@ public partial class ChatViewModel
     {
         if (PathEquals(ChatProject, path) && PathEquals(WorkingDirectory, path)) return;
         bool holdsOtherProject = Messages.Count > 0 && ChatProject.Length > 0 && !PathEquals(ChatProject, path);
-        if (IsGenerating || holdsOtherProject) NewSession();
+        if (IsGenerating || holdsOtherProject) { CancelPendingChatLoad(); NewSession(); }
         ApplyWorkingDirectory(path, announce: true, showEditor: false);
         if (CurrentSession is { } chat && !PathEquals(chat.ProjectPath ?? "", path))
         {
