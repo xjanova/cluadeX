@@ -29,7 +29,7 @@ namespace BillingTest;
 ///     page opened from the real MainWindow's activity bar.
 /// No network, no model, no ~/.cluadex (portable.txt → &lt;exe&gt;\Data, wiped every run).
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly List<string> Failures = new();
@@ -185,6 +185,8 @@ internal static class Program
         await Renders(settings);
         StaticXaml(loc);
         await Navigation();
+        await SavingsSection(settings);   // SavingsChecks.cs: the old spend window, merged into this page
+        SavingsStatic(loc);
 
         Log($"\n## Result: {Pass} pass / {Fail} FAIL");
         foreach (var f in Failures) Log("  - " + f);
@@ -537,8 +539,9 @@ internal static class Program
         Check("E2 empty state: the page says so (and has only the All tab)", empty.IsEmpty && emptyCard != null && empty.Tabs.Count == 1, $"{ec} colours");
         // The card sits at the top at its own height, not stretched down the whole page.
         var cardBorder = emptyCard == null ? null : Ancestor<Border>(emptyCard);
-        Check("E3 …in a compact card, not one stretched to the page height", cardBorder != null && cardBorder.ActualHeight < 300,
-            $"{cardBorder?.ActualHeight:0} px");
+        // (It also holds the credit / plan editor now, so its height is the content's, not a fixed number.)
+        Check("E3 …in a compact card, not one stretched to the page height", cardBorder != null && cardBorder.VerticalAlignment == VerticalAlignment.Top
+            && cardBorder.ActualHeight < view.ActualHeight / 2, $"{cardBorder?.ActualHeight:0} of {view.ActualHeight:0} px");
         themes.Apply(ThemeIds.Lavender, persist: false);
         await Idle(150);
         SavePng(view, "lavender/billing-empty.png");
@@ -623,6 +626,7 @@ internal static class Program
         {
             await WaitUntil(() => main.BillingVM!.Snapshot != null, 10000);
             Check("N4 opened with no usage: the empty state", main.BillingVM!.IsEmpty);
+            await EmptyStateEditor(view, main);   // SavingsChecks.cs
             var cost = Sp.GetRequiredService<CostTrackingService>();
             cost.RecordUsage("claude-opus-5-5", 1200, 300);
             await WaitUntil(() => main.BillingVM!.Snapshot?.IsEmpty == false, 10000);
@@ -633,6 +637,7 @@ internal static class Program
             cost.FlushLedger();
             string file = Path.Combine(Sp.GetRequiredService<SettingsService>().DataRoot, "usage-log.jsonl");
             Check("N6 the app's log file is in its data folder after a flush", File.Exists(file) && File.ReadAllText(file).Contains("claude-opus-5-5"), file);
+            await SavingsMenu(win, main);
         }
         win.Close();
     }

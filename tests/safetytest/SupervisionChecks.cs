@@ -88,8 +88,11 @@ internal static class SupervisionChecks
             ps != null && ps.Contains("PowerShell command") && !ps.Contains("not open in this turn"), ps ?? "");
         string? bash = ChatToolBridge.RefusalFor("Bash", true);
         check("Bash gets the same answer as PowerShell", bash != null && bash.Contains("Bash command"), bash ?? "");
-        string? web = ChatToolBridge.RefusalFor("WebFetch", true);
-        check("a CLI tool the turn was not given still says so", web != null && web.Contains("not open in this turn"), web ?? "");
+        check("the CLI's WebSearch and WebFetch go to the approver (GigLive: refused outright before)",
+            ChatToolBridge.RefusalFor("WebSearch", true) == null && ChatToolBridge.RefusalFor("WebFetch", true) == null, "");
+        check("...but not in a turn with no approver", ChatToolBridge.RefusalFor("WebSearch", false) != null, "");
+        string? other = ChatToolBridge.RefusalFor("KillShell", true);
+        check("a CLI tool the turn was not given still says so", other != null && other.Contains("not open in this turn"), other ?? "");
         check("an outside MCP tool is put to the user", ChatToolBridge.RefusalFor("mcp__brainx-brain__ssh_run", true) == null, "");
         string? nl = ChatToolBridge.RefusalFor("Write", true, "a\nb");
         check("a path with a line break stays on one line in the refusal", nl != null && !nl.Contains('\n'), nl ?? "");

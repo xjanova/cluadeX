@@ -77,6 +77,8 @@
                 </Grid.ColumnDefinitions>
                 <ProgressBar x:Name="OverallBar" Height="4" Minimum="0" Maximum="100" VerticalAlignment="Center"
                              Foreground="#E879F9" Background="#33204F" BorderThickness="0"/>
+                <!-- "Enter" — or, while the startup update downloads / installs, "Skip" with what skipping means
+                     (the download goes on in the background and installs when the app closes). -->
                 <Button x:Name="EnterButton" Grid.Column="1" Margin="14,0,0,0" Padding="16,6" Visibility="Collapsed"
                         Foreground="White" Background="#8B5CF6" BorderThickness="0" Cursor="Hand" Click="Enter_Click">
                     <Button.Template>
@@ -86,6 +88,11 @@
                             </Border>
                         </ControlTemplate>
                     </Button.Template>
+                    <StackPanel>
+                        <TextBlock x:Name="EnterTitle" HorizontalAlignment="Center" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="EnterSub" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                                   MaxWidth="250" FontSize="10.5" Foreground="#E9DDFF" Visibility="Collapsed"/>
+                    </StackPanel>
                 </Button>
             </Grid>
         </Grid>

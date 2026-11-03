@@ -354,12 +354,13 @@
                          VirtualizingStackPanel.ScrollUnit="Pixel"
                          SelectionMode="Single"
                          HorizontalContentAlignment="Stretch">
-                    <!-- Room above the first message for the pinned plan bar, when it shows -->
+                    <!-- Room above the first message for the branch chips, which always show. The plan card floats over the
+                         chat and comes and goes, so it keeps no room (a padding that followed it would jolt the list each time). -->
                     <ListBox.Style>
                         <Style TargetType="ListBox">
                             <Setter Property="Padding" Value="0,12"/>
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding HasStickyBar}" Value="True">
+                                <DataTrigger Binding="{Binding HasStickyBranches}" Value="True">
                                     <Setter Property="Padding" Value="0,64,0,12"/>
                                 </DataTrigger>
                             </Style.Triggers>
@@ -1268,68 +1269,59 @@
                                 </Border>
 
                                 <!-- ═══ The agent's plan (todo_write): a checklist card that updates in place ═══ -->
-                                <Border Grid.Row="1" Margin="20,6,0,4" Padding="14,10" CornerRadius="8" BorderThickness="1"
+                                <!-- As wide as a reply at most (a wide window does not stretch five short steps across it); the
+                                     steps wrap inside it, so a narrow window still reads every word. -->
+                                <Border Grid.Row="1" Margin="20,6,0,4" Padding="14,10,14,8" CornerRadius="8" BorderThickness="1"
+                                        MaxWidth="780" HorizontalAlignment="Left" MinWidth="260"
                                         Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}"
                                         Visibility="{Binding IsPlan, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                     <StackPanel>
-                                        <Grid Margin="0,0,0,6">
-                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Status.Success}"
-                                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                <TextBlock Text="{Binding PlanHeader}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
-                                                           VerticalAlignment="Center"/>
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="{Binding PlanElapsed}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
-                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Status.Success}"
+                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding PlanHeader}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding PlanElapsed}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
+                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         </Grid>
-                                        <ItemsControl ItemsSource="{Binding PlanItems}" Margin="2,0,0,0">
+                                        <!-- how far the plan is: the same gliding line as the floating card (Views/Motion.Fraction) -->
+                                        <Grid Height="3" Margin="0,8,0,6">
+                                            <Border CornerRadius="1.5" Background="{DynamicResource State.Fill.Faint}"/>
+                                            <Border CornerRadius="1.5" views:Motion.Fraction="{Binding PlanProgress, Mode=OneWay}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="{DynamicResource Accent.Gradient}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PlanProgress}" Value="1">
+                                                                <Setter Property="Background" Value="{DynamicResource Status.Success}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                            </Border>
+                                        </Grid>
+                                        <!-- each step plays its state (Resources/Theme.xaml, PLAN STEPS): the ring turns on the one at work, a check pops when one finishes -->
+                                        <ItemsControl ItemsSource="{Binding PlanItems}" Margin="-6,0,0,0" views:Motion.Accent="{DynamicResource Accent.1}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <StackPanel>
-                                                    <StackPanel Orientation="Horizontal" Margin="0,2">
-                                                        <Grid Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,10,0">
-                                                            <Ellipse StrokeThickness="1.4">
-                                                                <Ellipse.Style>
-                                                                    <Style TargetType="Ellipse">
-                                                                        <Setter Property="Stroke" Value="{DynamicResource Text.Muted}"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding IsDone}" Value="True">
-                                                                                <Setter Property="Stroke" Value="{DynamicResource Status.Success}"/>
-                                                                            </DataTrigger>
-                                                                            <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                                                <Setter Property="Stroke" Value="{DynamicResource Accent.1}"/>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Ellipse.Style>
-                                                            </Ellipse>
-                                                            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="9" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                                       Foreground="{DynamicResource Status.Success}"
-                                                                       Visibility="{Binding IsDone, Converter={StaticResource BoolVis}}"/>
-                                                            <Ellipse Width="6" Height="6" Fill="{DynamicResource Accent.1}"
-                                                                     Visibility="{Binding IsActive, Converter={StaticResource BoolVis}}"/>
-                                                        </Grid>
-                                                        <TextBlock FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="700">
-                                                            <Run Text="{Binding Number, Mode=OneWay}"/><Run Text=". "/><Run Text="{Binding Text, Mode=OneWay}"/>
-                                                            <TextBlock.Style>
-                                                                <Style TargetType="TextBlock">
-                                                                    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
-                                                                    <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                                            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
-                                                                            <Setter Property="FontWeight" Value="SemiBold"/>
-                                                                        </DataTrigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </TextBlock.Style>
-                                                        </TextBlock>
-                                                    </StackPanel>
-                                                    <!-- under the active step: what runs now (sub-agents, workflows, background commands) -->
-                                                    <TextBlock Text="{Binding Running}" Margin="26,0,0,2" FontSize="11"
-                                                               Foreground="{DynamicResource Accent.1}"
-                                                               Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
-                                                    </StackPanel>
+                                                    <ContentControl Style="{StaticResource PlanStepRow}" Margin="0,1">
+                                                        <StackPanel>
+                                                            <!-- a grid, not a horizontal stack: the words wrap to the room the card has -->
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                                <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlanStepMark}" Focusable="False"
+                                                                                VerticalAlignment="Top" Margin="0,0,9,0"/>
+                                                                <TextBlock Grid.Column="1" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" Style="{StaticResource PlanStepText}">
+                                                                    <Run Text="{Binding Number, Mode=OneWay}"/><Run Text=". "/><Run Text="{Binding Text, Mode=OneWay}"/>
+                                                                </TextBlock>
+                                                            </Grid>
+                                                            <!-- under the active step: what runs now (sub-agents, workflows, background commands) -->
+                                                            <TextBlock Text="{Binding Running}" Margin="27,1,0,1" FontSize="11"
+                                                                       Foreground="{DynamicResource Accent.1}"
+                                                                       Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
+                                                        </StackPanel>
+                                                    </ContentControl>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
@@ -1447,6 +1439,12 @@
                                 </Border>
 
                                 <!-- ═══ Agent map: the sub-agents this command started, as a live tree (open by default, folds) ═══ -->
+                                <!-- Alive only while a sub-agent works (owner 2026-11-03: "อยากให้ปรับปรุงการแจงเอเจนให้สวย มีอนิเมชั่นกว่านี้"):
+                                     the root breathes and its line flows while any runs; a running node's ring turns, its line
+                                     flows, its rim glows and a light runs along its foot. Every endless storyboard here is
+                                     a MultiDataTrigger on IsRunning AND IsVisible, so it stops when the node ends, the card folds
+                                     or the row scrolls away — a Loaded trigger once kept every finished node animating, hidden,
+                                     forever. An end plays once (JustDone: the badge pops, JustFailed: the card shakes). -->
                                 <Border Grid.Row="1" Margin="20,6,0,4" Padding="14,10" CornerRadius="10" BorderThickness="1"
                                         Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Accent.1.Border.Soft}"
                                         Visibility="{Binding IsAgentMap, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
@@ -1479,93 +1477,447 @@
                                                 </ToggleButton.Template>
                                             </ToggleButton>
                                         </Grid>
+                                        <!-- how many came back (done, failed or stopped): glides to each new count; green once all are
+                                             home, amber when one of them failed -->
+                                        <Grid Height="3" Margin="0,8,0,0">
+                                            <Border CornerRadius="1.5" Background="{DynamicResource State.Fill.Faint}"/>
+                                            <Border CornerRadius="1.5" views:Motion.Fraction="{Binding AgentMapProgress, Mode=OneWay}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="{DynamicResource Accent.Gradient}"/>
+                                                        <Style.Triggers>
+                                                            <MultiDataTrigger>
+                                                                <MultiDataTrigger.Conditions>
+                                                                    <Condition Binding="{Binding AgentMapRunning}" Value="False"/>
+                                                                    <Condition Binding="{Binding AgentMapHasFailures}" Value="False"/>
+                                                                </MultiDataTrigger.Conditions>
+                                                                <Setter Property="Background" Value="{DynamicResource Status.Success}"/>
+                                                            </MultiDataTrigger>
+                                                            <MultiDataTrigger>
+                                                                <MultiDataTrigger.Conditions>
+                                                                    <Condition Binding="{Binding AgentMapRunning}" Value="False"/>
+                                                                    <Condition Binding="{Binding AgentMapHasFailures}" Value="True"/>
+                                                                </MultiDataTrigger.Conditions>
+                                                                <Setter Property="Background" Value="{DynamicResource Status.Warning}"/>
+                                                            </MultiDataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                            </Border>
+                                        </Grid>
 
                                         <StackPanel Margin="0,12,0,2" Visibility="{Binding IsAgentMapOpen, Converter={StaticResource BoolVis}}">
-                                            <!-- root: the main agent -->
-                                            <Border HorizontalAlignment="Center" CornerRadius="14" Padding="14,6" BorderThickness="1.5"
-                                                    Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1}">
-                                                <Border.Effect>
-                                                    <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.5" Color="#4CDFFF"/>
-                                                </Border.Effect>
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Accent.1}"
-                                                               VerticalAlignment="Center" Margin="0,0,7,0"/>
-                                                    <TextBlock Text="{services:Loc agentmap.main}" FontSize="12" FontWeight="SemiBold"
-                                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
-                                                </StackPanel>
-                                            </Border>
-                                            <Border Width="2" Height="14" HorizontalAlignment="Center" Background="{DynamicResource Accent.1.Border.Soft}"/>
+                                            <!-- root: the main agent; a halo breathes round it while any sub-agent works (two soft rims,
+                                                 no blur effect: the theme's own glow colour, so it is right in every theme) -->
+                                            <Grid HorizontalAlignment="Center">
+                                                <Grid IsHitTestVisible="False">
+                                                    <Border CornerRadius="22" Margin="-9" Background="{DynamicResource Accent.1.Glow}" Opacity="0.35"/>
+                                                    <Border CornerRadius="18" Margin="-4" Background="{DynamicResource Accent.1.Glow}" Opacity="0.6"/>
+                                                    <Grid.Style>
+                                                        <Style TargetType="Grid">
+                                                            <!-- RootBreathe: begun once by Motion while LoopOn and on screen, removed when either ends -->
+                                                            <Setter Property="views:Motion.Loop">
+                                                                <Setter.Value>
+                                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="24">
+                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.15" To="0.55" Duration="0:0:1.4" AutoReverse="True">
+                                                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                                        </DoubleAnimation>
+                                                                    </Storyboard>
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Setter Property="Opacity" Value="0.3"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding AgentMapRunning}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding AgentMapRunning}" Value="True">
+                                                                    <Setter Property="views:Motion.LoopOn" Value="True"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Grid.Style>
+                                                </Grid>
+                                                <Border CornerRadius="14" Background="{DynamicResource Surface.Card.Flat}">
+                                                    <Border CornerRadius="14" Padding="14,6" BorderThickness="1.5"
+                                                            Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Accent.1}"
+                                                                       VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                                            <TextBlock Text="{services:Loc agentmap.main}" FontSize="12" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </Border>
+                                            </Grid>
+                                            <!-- the main agent's line down to its sub-agents: dashes flow down it while any of them works -->
+                                            <Line X1="1" Y1="0" X2="1" Y2="14" Width="2" Height="14" HorizontalAlignment="Center" StrokeThickness="2">
+                                                <Line.Style>
+                                                    <Style TargetType="Line">
+                                                        <!-- RootFlow: begun once by Motion while LoopOn and on screen, removed when either ends -->
+                                                        <Setter Property="views:Motion.Loop">
+                                                            <Setter.Value>
+                                                                <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="24">
+                                                                    <DoubleAnimation Storyboard.TargetProperty="StrokeDashOffset" From="3" To="0" Duration="0:0:0.45"/>
+                                                                </Storyboard>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                        <Setter Property="Stroke" Value="{DynamicResource Accent.1.Border.Soft}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding AgentMapRunning}" Value="True">
+                                                                <Setter Property="Stroke" Value="{DynamicResource Accent.1}"/>
+                                                                <Setter Property="StrokeDashArray" Value="1.5 1.5"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding AgentMapRunning}" Value="True">
+                                                                <Setter Property="views:Motion.LoopOn" Value="True"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Line.Style>
+                                            </Line>
 
-                                            <!-- children: a bus line across the top of each, a stub down, the node -->
+                                            <!-- children: a bus line across the top of each, its own line down, the node -->
                                             <ItemsControl ItemsSource="{Binding AgentNodes}">
                                                 <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Rows="1"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate>
                                                         <StackPanel MinWidth="150" MaxWidth="260">
                                                             <Border Height="2" Background="{DynamicResource Accent.1.Border.Soft}"/>
-                                                            <Border Width="2" Height="12" HorizontalAlignment="Center" Background="{DynamicResource Accent.1.Border.Soft}"/>
-                                                            <Border Margin="5,0" CornerRadius="9" Padding="10,8" BorderThickness="1.5"
-                                                                    Background="{DynamicResource Surface.Card.Flat}" ToolTip="{Binding Task}">
-                                                                <Border.Style>
-                                                                    <Style TargetType="Border">
-                                                                        <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                            <!-- its line: dashes flowing down while it works, solid green once done, red when it failed -->
+                                                            <Line X1="1" Y1="0" X2="1" Y2="14" Width="2" Height="14" HorizontalAlignment="Center" StrokeThickness="2">
+                                                                <Line.Style>
+                                                                    <Style TargetType="Line">
+                                                                        <!-- NodeFlow: begun once by Motion while LoopOn and on screen, removed when either ends -->
+                                                                        <Setter Property="views:Motion.Loop">
+                                                                            <Setter.Value>
+                                                                                <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="24">
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="StrokeDashOffset" From="3" To="0" Duration="0:0:0.45"/>
+                                                                                </Storyboard>
+                                                                            </Setter.Value>
+                                                                        </Setter>
+                                                                        <Setter Property="Stroke" Value="{DynamicResource Accent.1}"/>
+                                                                        <Setter Property="StrokeDashArray" Value="1.5 1.5"/>
                                                                         <Style.Triggers>
                                                                             <DataTrigger Binding="{Binding IsDone}" Value="True">
-                                                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Success}"/>
+                                                                                <Setter Property="Stroke" Value="{DynamicResource Status.Success}"/>
+                                                                                <Setter Property="StrokeDashArray" Value="{x:Null}"/>
                                                                             </DataTrigger>
                                                                             <DataTrigger Binding="{Binding IsFailed}" Value="True">
-                                                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger.Soft}"/>
+                                                                                <Setter Property="Stroke" Value="{DynamicResource Status.Danger}"/>
+                                                                                <Setter Property="StrokeDashArray" Value="{x:Null}"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                                <Setter Property="views:Motion.LoopOn" Value="True"/>
                                                                             </DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>
-                                                                </Border.Style>
-                                                                <StackPanel>
+                                                                </Line.Style>
+                                                            </Line>
+                                                            <!-- the node: slides in once when it starts, shakes once if it fails -->
+                                                            <Grid Margin="5,0">
+                                                                <Grid.Style>
+                                                                    <Style TargetType="Grid">
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsNew}" Value="True">
+                                                                                <DataTrigger.EnterActions>
+                                                                                    <BeginStoryboard x:Name="NodeArrive">
+                                                                                        <Storyboard FillBehavior="Stop">
+                                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.35"/>
+                                                                                            <DoubleAnimation Storyboard.TargetProperty="(views:Motion.ShiftY)" From="-10" To="0" Duration="0:0:0.45">
+                                                                                                <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.4"/></DoubleAnimation.EasingFunction>
+                                                                                            </DoubleAnimation>
+                                                                                        </Storyboard>
+                                                                                    </BeginStoryboard>
+                                                                                </DataTrigger.EnterActions>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding JustFailed}" Value="True">
+                                                                                <DataTrigger.EnterActions>
+                                                                                    <BeginStoryboard x:Name="NodeShake">
+                                                                                        <Storyboard FillBehavior="Stop">
+                                                                                            <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty="(views:Motion.ShiftX)">
+                                                                                                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0"/>
+                                                                                                <LinearDoubleKeyFrame KeyTime="0:0:0.06" Value="-6"/>
+                                                                                                <LinearDoubleKeyFrame KeyTime="0:0:0.14" Value="5"/>
+                                                                                                <LinearDoubleKeyFrame KeyTime="0:0:0.22" Value="-3"/>
+                                                                                                <LinearDoubleKeyFrame KeyTime="0:0:0.30" Value="2"/>
+                                                                                                <LinearDoubleKeyFrame KeyTime="0:0:0.38" Value="0"/>
+                                                                                            </DoubleAnimationUsingKeyFrames>
+                                                                                        </Storyboard>
+                                                                                    </BeginStoryboard>
+                                                                                </DataTrigger.EnterActions>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Grid.Style>
+                                                                <!-- working: its rim glows in the theme's gradient, breathing -->
+                                                                <Border CornerRadius="11" Margin="-2.5" BorderThickness="2" IsHitTestVisible="False"
+                                                                        BorderBrush="{DynamicResource Accent.Gradient}">
+                                                                    <Border.Style>
+                                                                        <Style TargetType="Border">
+                                                                            <!-- NodeGlow: begun once by Motion while LoopOn and on screen, removed when either ends -->
+                                                                            <Setter Property="views:Motion.Loop">
+                                                                                <Setter.Value>
+                                                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="24">
+                                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="0.9" Duration="0:0:1.2" AutoReverse="True">
+                                                                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                                                        </DoubleAnimation>
+                                                                                    </Storyboard>
+                                                                                </Setter.Value>
+                                                                            </Setter>
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            <Setter Property="Opacity" Value="0.5"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                                    <Setter Property="views:Motion.LoopOn" Value="True"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </Border.Style>
+                                                                </Border>
+                                                                <Border CornerRadius="9" Padding="10,8" BorderThickness="1.5" ToolTip="{Binding Task}">
+                                                                    <Border.Style>
+                                                                        <Style TargetType="Border">
+                                                                            <Setter Property="Background" Value="{DynamicResource Surface.Card.Flat}"/>
+                                                                            <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                                                    <Setter Property="BorderBrush" Value="{DynamicResource Status.Success.Border}"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                                                                                    <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger.Border}"/>
+                                                                                    <Setter Property="Background" Value="{DynamicResource Status.Danger.Tint}"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </Border.Style>
+                                                                    <Grid>
+                                                                    <!-- finished on screen: a green wash that comes and goes, once -->
+                                                                    <Border Margin="-10,-8" CornerRadius="8" Background="{DynamicResource Status.Success.Tint}" Opacity="0"
+                                                                            IsHitTestVisible="False">
+                                                                        <Border.Style>
+                                                                            <Style TargetType="Border">
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding JustDone}" Value="True">
+                                                                                        <DataTrigger.EnterActions>
+                                                                                            <BeginStoryboard x:Name="NodeWash">
+                                                                                                <Storyboard FillBehavior="Stop">
+                                                                                                    <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty="Opacity">
+                                                                                                        <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0"/>
+                                                                                                        <EasingDoubleKeyFrame KeyTime="0:0:0.15" Value="1"/>
+                                                                                                        <EasingDoubleKeyFrame KeyTime="0:0:1.2" Value="0"/>
+                                                                                                    </DoubleAnimationUsingKeyFrames>
+                                                                                                </Storyboard>
+                                                                                            </BeginStoryboard>
+                                                                                        </DataTrigger.EnterActions>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </Border.Style>
+                                                                    </Border>
+                                                                    <StackPanel>
                                                                     <Grid>
                                                                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                                                        <Grid Width="10" Height="10" VerticalAlignment="Center" Margin="0,0,7,0">
-                                                                            <!-- Pulses only while the node runs: a Loaded trigger kept every
-                                                                                 finished node animating, hidden, forever. -->
-                                                                            <Ellipse Fill="{DynamicResource Accent.1}" Visibility="{Binding IsRunning, Converter={StaticResource BoolVis}}">
+                                                                        <!-- avatar: what kind of agent (explore = magnifier, general = wrench, a specialist = star)
+                                                                             on its colour; a ring arc turns round it while it works; the end as a badge -->
+                                                                        <Grid Width="26" Height="26" VerticalAlignment="Center" Margin="0,0,8,0">
+                                                                            <Ellipse>
                                                                                 <Ellipse.Style>
                                                                                     <Style TargetType="Ellipse">
+                                                                                        <Setter Property="Fill" Value="{DynamicResource Accent.1.Tint}"/>
                                                                                         <Style.Triggers>
-                                                                                            <DataTrigger Binding="{Binding IsRunning}" Value="True">
-                                                                                                <DataTrigger.EnterActions>
-                                                                                                    <BeginStoryboard x:Name="NodePulse">
-                                                                                                        <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="20">
-                                                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1" Duration="0:0:0.6" AutoReverse="True"/>
-                                                                                                        </Storyboard>
-                                                                                                    </BeginStoryboard>
-                                                                                                </DataTrigger.EnterActions>
-                                                                                                <DataTrigger.ExitActions>
-                                                                                                    <StopStoryboard BeginStoryboardName="NodePulse"/>
-                                                                                                </DataTrigger.ExitActions>
+                                                                                            <DataTrigger Binding="{Binding KindClass}" Value="explore">
+                                                                                                <Setter Property="Fill" Value="{DynamicResource Status.Info.Tint}"/>
+                                                                                            </DataTrigger>
+                                                                                            <DataTrigger Binding="{Binding KindClass}" Value="specialist">
+                                                                                                <Setter Property="Fill" Value="{DynamicResource Accent.3.Tint}"/>
                                                                                             </DataTrigger>
                                                                                         </Style.Triggers>
                                                                                     </Style>
                                                                                 </Ellipse.Style>
                                                                             </Ellipse>
-                                                                            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Status.Success}"
-                                                                                       Visibility="{Binding IsDone, Converter={StaticResource BoolVis}}"/>
-                                                                            <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Status.Danger.Soft}"
-                                                                                       Visibility="{Binding IsFailed, Converter={StaticResource BoolVis}}"/>
+                                                                            <TextBlock Text="{Binding KindGlyph}" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                                                                       HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                                                <TextBlock.Style>
+                                                                                    <Style TargetType="TextBlock">
+                                                                                        <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                                                        <Style.Triggers>
+                                                                                            <DataTrigger Binding="{Binding KindClass}" Value="explore">
+                                                                                                <Setter Property="Foreground" Value="{DynamicResource Status.Info}"/>
+                                                                                            </DataTrigger>
+                                                                                            <DataTrigger Binding="{Binding KindClass}" Value="specialist">
+                                                                                                <Setter Property="Foreground" Value="{DynamicResource Accent.3}"/>
+                                                                                            </DataTrigger>
+                                                                                        </Style.Triggers>
+                                                                                    </Style>
+                                                                                </TextBlock.Style>
+                                                                            </TextBlock>
+                                                                            <Ellipse Margin="-3" StrokeThickness="2" StrokeDashArray="7 100" StrokeDashCap="Round"
+                                                                                     RenderTransformOrigin="0.5,0.5" Stroke="{DynamicResource Accent.1}" IsHitTestVisible="False">
+                                                                                <Ellipse.Style>
+                                                                                    <Style TargetType="Ellipse">
+                                                                                        <!-- NodeSpin: begun once by Motion while LoopOn and on screen, removed when either ends -->
+                                                                                        <Setter Property="views:Motion.Loop">
+                                                                                            <Setter.Value>
+                                                                                                <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
+                                                                                                    <DoubleAnimation Storyboard.TargetProperty="(views:Motion.Spin)"
+                                                                                                                     From="0" To="360" Duration="0:0:1.2"/>
+                                                                                                </Storyboard>
+                                                                                            </Setter.Value>
+                                                                                        </Setter>
+                                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                        <Style.Triggers>
+                                                                                            <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                                            </DataTrigger>
+                                                                                            <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                                                <Setter Property="views:Motion.LoopOn" Value="True"/>
+                                                                                            </DataTrigger>
+                                                                                        </Style.Triggers>
+                                                                                    </Style>
+                                                                                </Ellipse.Style>
+                                                                            </Ellipse>
+                                                                            <!-- done: a green check badge that pops in when it finishes on screen -->
+                                                                            <Border Width="13" Height="13" CornerRadius="6.5" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                                                    Margin="0,0,-3,-3" Background="{DynamicResource Status.Success}" BorderThickness="1.5"
+                                                                                    BorderBrush="{DynamicResource Surface.Card.Flat}" RenderTransformOrigin="0.5,0.5">
+                                                                                <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="6.5" FontWeight="Bold"
+                                                                                           Foreground="{DynamicResource Text.OnStatus}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                                <Border.Style>
+                                                                                    <Style TargetType="Border">
+                                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                        <Style.Triggers>
+                                                                                            <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                                            </DataTrigger>
+                                                                                            <DataTrigger Binding="{Binding JustDone}" Value="True">
+                                                                                                <DataTrigger.EnterActions>
+                                                                                                    <BeginStoryboard x:Name="NodePop">
+                                                                                                        <Storyboard FillBehavior="Stop">
+                                                                                                            <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty="(views:Motion.Scale)">
+                                                                                                                <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0"/>
+                                                                                                                <EasingDoubleKeyFrame KeyTime="0:0:0.22" Value="1.45"/>
+                                                                                                                <EasingDoubleKeyFrame KeyTime="0:0:0.34" Value="0.9"/>
+                                                                                                                <EasingDoubleKeyFrame KeyTime="0:0:0.44" Value="1"/>
+                                                                                                            </DoubleAnimationUsingKeyFrames>
+                                                                                                        </Storyboard>
+                                                                                                    </BeginStoryboard>
+                                                                                                </DataTrigger.EnterActions>
+                                                                                            </DataTrigger>
+                                                                                        </Style.Triggers>
+                                                                                    </Style>
+                                                                                </Border.Style>
+                                                                            </Border>
+                                                                            <!-- failed / stopped: a red cross badge -->
+                                                                            <Border Width="13" Height="13" CornerRadius="6.5" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                                                    Margin="0,0,-3,-3" Background="{DynamicResource Status.Danger}" BorderThickness="1.5"
+                                                                                    BorderBrush="{DynamicResource Surface.Card.Flat}">
+                                                                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="6" FontWeight="Bold"
+                                                                                           Foreground="{DynamicResource Text.OnStatus}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                                <Border.Style>
+                                                                                    <Style TargetType="Border">
+                                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                        <Style.Triggers>
+                                                                                            <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                                            </DataTrigger>
+                                                                                        </Style.Triggers>
+                                                                                    </Style>
+                                                                                </Border.Style>
+                                                                            </Border>
                                                                         </Grid>
-                                                                        <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold"
+                                                                        <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
                                                                                    Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
-                                                                        <Border Grid.Column="2" CornerRadius="6" Padding="5,0" Margin="6,0,0,0"
+                                                                        <Border Grid.Column="2" CornerRadius="6" Padding="5,0" Margin="6,0,0,0" VerticalAlignment="Center"
                                                                                 Background="{DynamicResource Surface.Raised}">
                                                                             <TextBlock Text="{Binding Kind}" FontSize="9.5" FontFamily="{DynamicResource Font.Mono}"
                                                                                        Foreground="{DynamicResource Text.Muted}"/>
                                                                         </Border>
                                                                     </Grid>
-                                                                    <TextBlock Text="{Binding Task}" FontSize="11" Margin="0,5,0,0" TextWrapping="Wrap" MaxHeight="30"
+                                                                    <TextBlock Text="{Binding Task}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" MaxHeight="30"
                                                                                TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Text.Secondary}"/>
+                                                                    <!-- what it does now; how it ended — an error reads as one (danger), and wraps so it can be read -->
                                                                     <TextBlock Text="{Binding Action}" FontSize="10.5" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"
-                                                                               FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Accent.1}"/>
+                                                                               FontFamily="{DynamicResource Font.Mono}" ToolTip="{Binding Action}">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                                                        <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                                                                    </DataTrigger>
+                                                                                    <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                                                                                        <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                                                        <Setter Property="TextWrapping" Value="Wrap"/>
+                                                                                        <Setter Property="MaxHeight" Value="42"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
                                                                     <TextBlock Text="{Binding StatsText}" FontSize="9.5" Margin="0,3,0,0"
                                                                                FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"/>
-                                                                </StackPanel>
-                                                            </Border>
+                                                                    <!-- its foot: a light running along it while it works; then a line in the colour of its end -->
+                                                                    <Grid Height="2" Margin="0,7,0,0">
+                                                                        <Border CornerRadius="1" Background="{DynamicResource State.Fill.Faint}"/>
+                                                                        <Border CornerRadius="1" Opacity="0.7">
+                                                                            <Border.Style>
+                                                                                <Style TargetType="Border">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                    <Style.Triggers>
+                                                                                        <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                                            <Setter Property="Background" Value="{DynamicResource Status.Success}"/>
+                                                                                        </DataTrigger>
+                                                                                        <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                                            <Setter Property="Background" Value="{DynamicResource Status.Danger}"/>
+                                                                                        </DataTrigger>
+                                                                                    </Style.Triggers>
+                                                                                </Style>
+                                                                            </Border.Style>
+                                                                        </Border>
+                                                                        <Rectangle RadiusX="1" RadiusY="1" Fill="{DynamicResource Accent.Gradient}" IsHitTestVisible="False">
+                                                                            <Rectangle.OpacityMask>
+                                                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                                                    <LinearGradientBrush.RelativeTransform><TranslateTransform X="-1"/></LinearGradientBrush.RelativeTransform>
+                                                                                    <GradientStop Color="#00000000" Offset="0.25"/>
+                                                                                    <GradientStop Color="#FF000000" Offset="0.5"/>
+                                                                                    <GradientStop Color="#00000000" Offset="0.75"/>
+                                                                                </LinearGradientBrush>
+                                                                            </Rectangle.OpacityMask>
+                                                                            <Rectangle.Style>
+                                                                                <Style TargetType="Rectangle">
+                                                                                    <!-- NodeSweep: begun once by Motion while LoopOn and on screen, removed when either ends -->
+                                                                                    <Setter Property="views:Motion.Loop">
+                                                                                        <Setter.Value>
+                                                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
+                                                                                                <DoubleAnimation Storyboard.TargetProperty="(views:Motion.Sweep)"
+                                                                                                                 From="-0.8" To="0.8" Duration="0:0:1.4">
+                                                                                                    <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                                                                </DoubleAnimation>
+                                                                                            </Storyboard>
+                                                                                        </Setter.Value>
+                                                                                    </Setter>
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                    <Style.Triggers>
+                                                                                        <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                                        </DataTrigger>
+                                                                                        <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                                            <Setter Property="views:Motion.LoopOn" Value="True"/>
+                                                                                        </DataTrigger>
+                                                                                    </Style.Triggers>
+                                                                                </Style>
+                                                                            </Rectangle.Style>
+                                                                        </Rectangle>
+                                                                    </Grid>
+                                                                    </StackPanel>
+                                                                    </Grid>
+                                                                </Border>
+                                                            </Grid>
                                                         </StackPanel>
                                                     </DataTemplate>
                                                 </ItemsControl.ItemTemplate>
@@ -2406,16 +2758,19 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <!-- ═══ The plan, pinned to the top while the chat scrolls; branch chips jump between related chats ═══ -->
+                <!-- ═══ The plan, floating over the top of the chat; branch chips jump between related chats ═══
+                     A new plan floats in for a few seconds (longer while the mouse is on it), then the card shows only
+                     while the plan card in the chat is scrolled out of view (ChatViewModel.Plan: FloatingPlanShows).
+                     Shown and hidden from code (ChatView.xaml.cs SyncStickyBar): it slides in and fades out. -->
                 <Border x:Name="StickyPlanBar" VerticalAlignment="Top" Margin="22,8,30,0" CornerRadius="12"
                         BorderThickness="2" BorderBrush="{Binding StickyPlanCharacter.AccentBrush}"
                         Background="{DynamicResource Dialog.Background}" Effect="{DynamicResource Shadow.Dialog}"
-                        MaxWidth="900" HorizontalAlignment="Stretch"
-                        Visibility="{Binding HasStickyBar, Converter={StaticResource BoolVis}}">
+                        MaxWidth="900" HorizontalAlignment="Stretch" Visibility="Collapsed"
+                        MouseEnter="StickyPlanBar_MouseEnter" MouseLeave="StickyPlanBar_MouseLeave">
                     <!-- her colour washed over the theme's own surface, so the text stays the theme's to keep readable -->
                     <Border Padding="12,9,12,9" CornerRadius="10" Background="{Binding StickyPlanCharacter.WashBrush}">
                     <StackPanel>
-                        <Grid Visibility="{Binding HasStickyPlan, Converter={StaticResource BoolVis}}">
+                        <Grid Visibility="{Binding StickyBarShowsPlan, Converter={StaticResource BoolVis}}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
@@ -2430,11 +2785,28 @@
                             <!-- who is writing this plan: her portrait and name, the colour of the whole bar -->
                             <ContentControl Content="{Binding StickyPlanCharacter}" ContentTemplate="{StaticResource CxCharTag}" Focusable="False"
                                             VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="13">
-                                <Run Text="{Binding StickyPlanHeader, Mode=OneWay}" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
-                                <Run Text="  ·  " Foreground="{DynamicResource Text.Faint}"/>
-                                <Run Text="{Binding StickyPlanNow, Mode=OneWay}" Foreground="{DynamicResource Text.Primary}"/>
-                            </TextBlock>
+                            <DockPanel Grid.Column="1" VerticalAlignment="Center" LastChildFill="True">
+                                <!-- "แผนงาน 5/12": the count ticks (a short rise and fade-in) each time it moves on -->
+                                <TextBlock DockPanel.Dock="Left" Text="{Binding StickyPlanHeader, Mode=OneWay, NotifyOnTargetUpdated=True}"
+                                           FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center">
+                                    <TextBlock.Triggers>
+                                        <EventTrigger RoutedEvent="Binding.TargetUpdated">
+                                            <BeginStoryboard>
+                                                <Storyboard FillBehavior="Stop">
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1" Duration="0:0:0.35"/>
+                                                    <DoubleAnimation Storyboard.TargetProperty="(views:Motion.ShiftY)" From="5" To="0" Duration="0:0:0.35">
+                                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </EventTrigger>
+                                    </TextBlock.Triggers>
+                                </TextBlock>
+                                <TextBlock DockPanel.Dock="Left" Text="  ·  " FontSize="13" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding StickyPlanNow, Mode=OneWay}" FontSize="13" TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding StickyPlanNow, Mode=OneWay}"
+                                           Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                            </DockPanel>
                             <Button Grid.Column="2" Content="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="11" Padding="6,3" Margin="8,0,0,0"
                                     Style="{StaticResource IconButton}" Command="{Binding OpenPlanWindowCommand}"
                                     ToolTip="{services:Loc plan.open.tip}"/>
@@ -2461,43 +2833,42 @@
                                 </ToggleButton.Style>
                             </ToggleButton>
                         </Grid>
-                        <!-- progress line -->
-                        <Grid Height="5" Margin="0,8,0,0" Visibility="{Binding HasStickyPlan, Converter={StaticResource BoolVis}}">
+                        <!-- progress line: glides to each new value (Views/Motion.Fraction) instead of jumping -->
+                        <Grid Height="5" Margin="0,8,0,0" Visibility="{Binding StickyBarShowsPlan, Converter={StaticResource BoolVis}}">
                             <Border CornerRadius="2.5" Background="{DynamicResource State.Fill.Faint}"/>
-                            <ProgressBar Minimum="0" Maximum="1" Value="{Binding StickyPlanProgress, Mode=OneWay}" Height="5"
-                                         BorderThickness="0" Background="Transparent" Foreground="{Binding StickyPlanCharacter.AccentBrush}"/>
+                            <Border CornerRadius="2.5" Background="{Binding StickyPlanCharacter.AccentBrush}"
+                                    views:Motion.Fraction="{Binding StickyPlanProgress, Mode=OneWay}"/>
                         </Grid>
-                        <!-- the whole plan, when expanded -->
-                        <ItemsControl ItemsSource="{Binding StickyPlanItems}" Margin="2,8,0,0"
+                        <!-- the whole plan, when expanded: a long plan scrolls inside the card instead of covering the chat -->
+                        <!-- every step plays its state (Resources/Theme.xaml, PLAN STEPS), in the colour of who writes the plan -->
+                        <Border Visibility="{Binding StickyBarShowsPlan, Converter={StaticResource BoolVis}}">
+                        <ScrollViewer Style="{StaticResource SlimScrollViewer}" MaxHeight="300" Margin="-4,8,0,0"
+                                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False"
                                       Visibility="{Binding IsStickyPlanExpanded, Converter={StaticResource BoolVis}}">
+                        <ItemsControl ItemsSource="{Binding StickyPlanItems}"
+                                      views:Motion.Accent="{Binding StickyPlanCharacter.AccentBrush}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,2">
-                                        <TextBlock x:Name="M" Text="&#xE739;" FontFamily="Segoe MDL2 Assets" FontSize="11" Width="20"
-                                                   Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
-                                        <TextBlock x:Name="T" Text="{Binding Text}" FontSize="12" TextTrimming="CharacterEllipsis"
-                                                   Foreground="{DynamicResource Text.Secondary}"/>
-                                    </StackPanel>
-                                    <TextBlock Text="{Binding Running}" Margin="20,0,0,2" FontSize="11" Foreground="{DynamicResource Accent.1}"
-                                               Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
-                                    </StackPanel>
-                                    <DataTemplate.Triggers>
-                                        <DataTrigger Binding="{Binding IsDone}" Value="True">
-                                            <Setter TargetName="M" Property="Text" Value="&#xE73E;"/>
-                                            <Setter TargetName="M" Property="Foreground" Value="{DynamicResource Status.Success}"/>
-                                            <Setter TargetName="T" Property="Foreground" Value="{DynamicResource Text.Muted}"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                            <Setter TargetName="M" Property="Text" Value="&#xE768;"/>
-                                            <Setter TargetName="M" Property="Foreground" Value="{Binding DataContext.StickyPlanCharacter.AccentBrush, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
-                                            <Setter TargetName="T" Property="Foreground" Value="{DynamicResource Text.Primary}"/>
-                                            <Setter TargetName="T" Property="FontWeight" Value="SemiBold"/>
-                                        </DataTrigger>
-                                    </DataTemplate.Triggers>
+                                    <ContentControl Style="{StaticResource PlanStepRow}" Margin="0,1">
+                                        <StackPanel>
+                                            <!-- a grid, not a horizontal stack: the words get the room that is left, so a long step trims (whole text in the tip) -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <ContentControl Content="{Binding}" ContentTemplate="{StaticResource PlanStepMark}" Focusable="False"
+                                                                VerticalAlignment="Center" Margin="0,0,9,0"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding Text}" FontSize="12" TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Text}" VerticalAlignment="Center" Style="{StaticResource PlanStepText}"/>
+                                            </Grid>
+                                            <TextBlock Text="{Binding Running}" Margin="27,1,0,1" FontSize="11" TextTrimming="CharacterEllipsis"
+                                                       Foreground="{Binding (views:Motion.Accent), RelativeSource={RelativeSource Self}}"
+                                                       Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
+                                        </StackPanel>
+                                    </ContentControl>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        </ScrollViewer>
+                        </Border>
                         <!-- related chats: where this one branched from, and its branches -->
                         <ItemsControl ItemsSource="{Binding StickyBranches}" Margin="0,8,0,0"
                                       Visibility="{Binding HasStickyBranches, Converter={StaticResource BoolVis}}">
@@ -3225,6 +3596,15 @@
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE8B9;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <TextBlock Text="{services:Loc orch.ultra}" FontSize="12" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
+
+                                <!-- Design: this chat's design turns bring the UI Studio forward (off by default, per chat) -->
+                                <CheckBox x:Name="DesignToggle" IsChecked="{Binding IsDesignMode}" Foreground="{DynamicResource Accent.2}"
+                                          VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc chat.designTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{services:Loc chat.design}" FontSize="12" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </CheckBox>
 

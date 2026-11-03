@@ -69,8 +69,20 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         "mcp__brainx-brain__brain_get_note,mcp__brainx-brain__brain_expertise";
 
     /// <summary>What the CLI may do in an agent turn, decided by CluadeX from the user's own rules and Accept edits
-    /// for the run's folder (CodeAgentService.WorkerGrantFor). Null = read-only advice, as in a plain chat.</summary>
-    public sealed record WorkerGrant(bool Edit, bool Run);
+    /// for the run's folder (CodeAgentService.WorkerGrantFor). Null = read-only advice, as in a plain chat.
+    /// <paramref name="Folder"/>: the one folder the CLI must run in (a worker's or fixer's git worktree) — null = the
+    /// run's folder, as read by FileSystemService.</summary>
+    public sealed record WorkerGrant(bool Edit, bool Run, string? Folder = null);
+
+    /// <summary>The folder the CLI runs in: the grant's own folder when it names one — null when that folder is gone, so
+    /// a worktree's work never lands in the project or the profile instead — else the run's folder, else the profile.</summary>
+    public static string? TurnFolder(WorkerGrant? grant, string? runFolder, Func<string, bool> dirExists)
+    {
+        if (!string.IsNullOrWhiteSpace(grant?.Folder)) return dirExists(grant.Folder) ? grant.Folder : null;
+        return !string.IsNullOrEmpty(runFolder) && dirExists(runFolder)
+            ? runFolder
+            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    }
 
     /// <summary>The grant for the turn in flight (set by the agent loop around its one delegated call).</summary>
     public static readonly AsyncLocal<WorkerGrant?> Grant = new();
@@ -208,7 +220,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort,
         string? toolsConfig = null, IReadOnlyList<string>? addDirs = null, bool allLevels = false, string? codeComments = null,
         string? browserRefusal = null, Agents.DispatchDecision? dispatch = null, decimal? budgetUsd = null,
-        string? desktopRefusal = null)
+        string? desktopRefusal = null, string? splitGuide = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -234,6 +246,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
               "When the task has two or more independent parts (several folders or questions to investigate, bulky reading, " +
               "separate files to change), hand them to sub-agents with the Task tool — several in one response run in parallel, " +
               "and the user watches each one on the agent map. Keep a small task to yourself. ") +
+              (chatTools && splitGuide is { Length: > 0 } ? splitGuide + " " : "") +
               folders +
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               reach +
@@ -545,13 +558,18 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
             yield break;
         }
 
-        string cwd = _fileSystemService.HasWorkingDirectory
-            ? _fileSystemService.WorkingDirectory
-            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var grant = Grant.Value;
+        string? turnFolder = TurnFolder(grant, _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null, Directory.Exists);
+        if (turnFolder == null)
+        {
+            OnError?.Invoke("The worker's folder is gone: " + grant?.Folder);
+            yield return "โฟลเดอร์ของผู้ทำงาน (git worktree) ไม่มีอยู่แล้ว — ไม่รัน Claude Dev ที่โฟลเดอร์อื่นแทน";
+            yield break;
+        }
+        string cwd = turnFolder;
 
         // The CLI builds its own context (CLAUDE.md, MCP, its system prompt). CluadeX's
         // big prompt would just be noise on top — send a short wrapper instead (BuildArgs).
-        var grant = Grant.Value;
         bool worker = grant is { Edit: true } || grant is { Run: true };
         var sink = worker ? StreamSink.Value : null;
         string model = _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
@@ -567,7 +585,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         bool allLevels = CliTakesAllLevels(ReportedCliVersion);
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
             CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
-            extras?.DesktopRefusal);
+            extras?.DesktopRefusal, Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, cli: true));
         // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.
         string sentEffort = SentEffort(effort, allLevels);
         if (effortScope != null) effortScope.LiveEffort = sentEffort;

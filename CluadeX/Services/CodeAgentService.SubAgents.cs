@@ -233,7 +233,9 @@ public partial class CodeAgentService
             : SubAgentTools(catalogue, specialist ? "general" : type);
         tools = CapToolSchemas(tools, MaxApiToolSchemas, out _, ManagedMcpServers());
         bool canEdit = tools.Any(t => t.Name is "write_file" or "edit_file" or "multi_edit" or "apply_patch");
-        string system = SubAgentSystemPrompt(specialist ? (canEdit ? "general" : "explore") : type, _fileSystemService.WorkingDirectory ?? "", thai);
+        // A worker, fixer or isolated workflow agent works in its own worktree: that is its project folder, not the run's.
+        string folder = opts?.Scope?.WorkingDirectory ?? _fileSystemService.WorkingDirectory ?? "";
+        string system = SubAgentSystemPrompt(specialist ? (canEdit ? "general" : "explore") : type, folder, thai);
         if (specialist)
             system += $"\n\n## Your role: {type}\n{request.Persona!.Trim()}";
         // A sub-agent that may edit writes code too: the user's AI-comment setting (Code Editor toolbar) applies to it.

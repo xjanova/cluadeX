@@ -49,6 +49,9 @@ public partial class ChatViewModel
     public void OpenProjectQuietly(string path)
     {
         if (PathEquals(ChatProject, path) && PathEquals(WorkingDirectory, path)) return;
+        // The user's own move: a sidebar chat still loading must not land over it — when the chat on screen is reused
+        // too, or the Studio would follow the late chat's project and lose the one just opened.
+        CancelPendingChatLoad();
         bool holdsOtherProject = Messages.Count > 0 && ChatProject.Length > 0 && !PathEquals(ChatProject, path);
         if (IsGenerating || holdsOtherProject) NewSession();
         ApplyWorkingDirectory(path, announce: true, showEditor: false);
@@ -61,16 +64,23 @@ public partial class ChatViewModel
     }
 
     /// <summary>Send <paramref name="prompt"/> as the user's next message. False when a reply is already running in
-    /// the chat on screen (the Studio says so instead of queueing behind it).</summary>
+    /// the chat on screen, or a run in another chat works on this project (the Studio says so instead of queueing
+    /// behind it, or starting a second run that edits the same files).</summary>
     public bool SendFromStudio(string prompt)
     {
-        if (IsGenerating || string.IsNullOrWhiteSpace(prompt)) return false;
+        if (IsGenerating || string.IsNullOrWhiteSpace(prompt) || IsAgentWorkingIn(ChatProject)) return false;
         UserInput = prompt;
         if (!SendMessageCommand.CanExecute(null)) return false;
         _studioChat = CurrentSession;
-        SendMessageCommand.Execute(null);
+        // SendMessage reads the owner's words synchronously, before its first await: the flag covers exactly that.
+        _sendingFromStudio = true;
+        try { SendMessageCommand.Execute(null); }
+        finally { _sendingFromStudio = false; }
         return true;
     }
+
+    /// <summary>SendMessage is sending the Studio's request, not words the owner typed (see DesignGate).</summary>
+    private bool _sendingFromStudio;
 
     /// <summary>The chat the Studio's last request went to.</summary>
     private Models.ChatSession? _studioChat;

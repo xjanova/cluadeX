@@ -14,14 +14,6 @@ namespace CluadeX.ViewModels;
 /// </summary>
 public sealed class PlanWindowViewModel : ViewModelBase
 {
-    public sealed record Row(int Number, string Text, string State)
-    {
-        public bool IsDone => State == "done";
-        public bool IsActive => State == "active";
-        public bool IsPending => State == "pending";
-        public bool IsQueued => State == "queued";
-    }
-
     private readonly ChatViewModel _chat;
     private readonly CheckpointService? _checkpoints;
     private readonly DispatcherTimer _timer;
@@ -29,7 +21,9 @@ public sealed class PlanWindowViewModel : ViewModelBase
     private string _lastSignature = "";
 
     public string SessionId { get; }
-    public ObservableCollection<Row> Rows { get; } = new();
+    /// <summary>The plan's rows (states done / active / pending, and "queued" for the items typed here, not sent yet).
+    /// Kept across refreshes and changed in place, so a step finishing plays on screen.</summary>
+    public ObservableCollection<PlanItemView> Rows { get; } = new();
     public ObservableCollection<CheckpointService.Point> Steps { get; } = new();
 
     private string _title = "";
@@ -51,6 +45,13 @@ public sealed class PlanWindowViewModel : ViewModelBase
     public bool CanTravel => !_isRunning;
     public bool CanStartQueued => !_isRunning && _queued.Count > 0;
     public bool HasRows => Rows.Count > 0;
+
+    private double _progress;
+    /// <summary>0..1 of the agent's plan done (items typed here and not sent yet do not count) — the section's line.</summary>
+    public double Progress { get => _progress; private set => SetProperty(ref _progress, value); }
+    private string _progressText = "";
+    /// <summary>"2/5" beside the section's title.</summary>
+    public string ProgressText { get => _progressText; private set => SetProperty(ref _progressText, value); }
     public bool HasSteps => Steps.Count > 0;
 
     private string _newItem = "";
@@ -115,13 +116,13 @@ public sealed class PlanWindowViewModel : ViewModelBase
         Project = snap.Project;
         IsRunning = snap.Running;
 
-        var rows = snap.Items.Select((t, i) => new Row(i + 1, t.Content, t.Status?.ToLowerInvariant() switch
+        var rows = snap.Items.Select((t, i) => new PlanItemView(i + 1, t.Content, t.Status?.ToLowerInvariant() switch
         {
             "completed" or "done" => "done",
             "in_progress" or "active" => "active",
             _ => "pending",
-        })).ToList();
-        foreach (var q in _queued) rows.Add(new Row(rows.Count + 1, q, "queued"));
+        }) { IsLive = snap.Running }).ToList();
+        foreach (var q in _queued) rows.Add(new PlanItemView(rows.Count + 1, q, "queued"));
 
         var steps = _checkpoints != null && snap.Project.Length > 0
             ? _checkpoints.PointsForSession(snap.Project, SessionId) : new List<CheckpointService.Point>();
@@ -134,11 +135,21 @@ public sealed class PlanWindowViewModel : ViewModelBase
             ? string.Format(Loc("plan.status.running"), onStep, done, rows.Count(r => !r.IsQueued)) + (active != null ? " — " + active.Text : "")
             : rows.Count == 0 ? Loc("plan.status.empty") : string.Format(Loc("plan.status.idle"), done, rows.Count(r => !r.IsQueued));
 
-        string sig = string.Join("|", rows.Select(r => r.State + r.Text)) + "#" + string.Join("|", steps.Select(s => s.Id + s.Files.Count));
+        int planned = rows.Count(r => !r.IsQueued);
+        Progress = planned == 0 ? 0 : (double)done / planned;
+        ProgressText = planned == 0 ? "" : $"{done}/{planned}";
+
+        string sig = string.Join("|", rows.Select(r => r.State + r.Text)) + "#" + string.Join("|", steps.Select(s => s.Id + s.Files.Count))
+                     + "#" + snap.Running;
         if (sig == _lastSignature) return;
         _lastSignature = sig;
-        Rows.Clear();
-        foreach (var r in rows) Rows.Add(r);
+        // Same rows a step further: set in place (the row on screen plays the change). A different plan: redrawn.
+        var merged = PlanItemView.Reconcile(Rows.ToList(), rows);
+        if (merged.Count != Rows.Count || merged.Where((r, i) => !ReferenceEquals(r, Rows[i])).Any())
+        {
+            Rows.Clear();
+            foreach (var r in merged) Rows.Add(r);
+        }
         Steps.Clear();
         foreach (var s in steps.AsEnumerable().Reverse()) Steps.Add(s);
         OnPropertyChanged(nameof(HasRows));

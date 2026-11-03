@@ -129,7 +129,7 @@ public static class DispatchPolicy
         // high and up: workers and fixers edit in git worktrees — they need a repo and the right to edit.
         if (!i.IsGitRepo || !i.CanEditProject)
             return new DispatchDecision(DispatchStrategy.FanOut, true, true, false, false, false, par, 0,
-                !i.IsGitRepo ? "not a git repository — no worktrees, read-only fan-out only"
+                !i.IsGitRepo ? "not a git repository with a commit yet — no worktrees, read-only fan-out only (a first commit opens them)"
                              : "edits need asking here — read-only fan-out only");
 
         int fixers = Math.Clamp(i.SpeculativeFixCount, 2, 3);

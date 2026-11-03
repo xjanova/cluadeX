@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
@@ -333,6 +334,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         int status;
         string error;
         string? networkError = null;
+        long started = Stopwatch.GetTimestamp();
         try
         {
             (response, status, error) = await SendAsync(config, model, () => BuildRequest(model, messages, null, null, true), () => false, ct);
@@ -374,7 +376,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         }
         if (!thoughtShown && state.Reasoning.Length > 0) yield return $"<thinking>{state.Reasoning}</thinking>";
         if (state.ServedModel != null) LiveModelReport.Served(Preset.Type, state.ServedModel);
-        Record(model, state);
+        Record(model, state, Stopwatch.GetElapsedTime(started).TotalSeconds);
         if (streamError != null) RaiseError(streamError);
     }
 
@@ -413,6 +415,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         HttpResponseMessage? response;
         int status;
         string error;
+        long started = Stopwatch.GetTimestamp();
         try { (response, status, error) = await SendAsync(config, model, Build, () => echoed, ct); }
         catch (HttpRequestException ex) when (ex.StatusCode == null)
         {
@@ -447,7 +450,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         catch (HttpRequestException ex) { throw new HttpRequestException(Redact(ex.Message, config), null); }
 
         if (result.InputTokens + result.OutputTokens + result.CacheReadTokens > 0)
-            Record(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens);
+            Record(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, Stopwatch.GetElapsedTime(started).TotalSeconds);
         if (withTools) _toolsConfirmed.TryAdd(model, 0);
         return result;
     }
@@ -614,23 +617,25 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
     // Cost
     // ═══════════════════════════════════════════
 
-    private void Record(string model, StreamState st)
+    private void Record(string model, StreamState st, double seconds)
     {
-        if (st.Prompt + st.Completion > 0) Record(model, Math.Max(0, st.Prompt - st.Cached), st.Completion, st.Cached);
+        if (st.Prompt + st.Completion > 0) Record(model, Math.Max(0, st.Prompt - st.Cached), st.Completion, st.Cached, seconds);
     }
 
     /// <summary>Tokens always. Dollars at the price the service itself reported (OpenRouter, Together and Hugging Face
     /// list theirs), else the built-in table when it knows the model (an "anthropic/…" id through OpenRouter); a model
     /// neither knows is counted at $0 — the table's unknown-model fallback is Claude Sonnet's price, which made a
     /// $0.10 open model read 30x too dear. A server on this PC is $0 and goes in as local use, like Ollama. Every row
-    /// is filed under this service's own Billing tab, never under the maker its model id names.</summary>
-    private void Record(string model, int input, int output, int cached)
+    /// is filed under this service's own Billing tab, never under the maker its model id names. <paramref name="seconds"/>
+    /// is the request's wall time (send to last byte, the adapt retries included); only local use keeps it, so the
+    /// Billing page can show LM Studio's and vLLM's time like Ollama's.</summary>
+    private void Record(string model, int input, int output, int cached, double seconds)
     {
         if (_costTracker == null) return;
         string provider = Preset.Type.ToString();
         if (Preset.Local)
         {
-            _costTracker.RecordLocalUsage(provider, model, input + cached, output, 0);
+            _costTracker.RecordLocalUsage(provider, model, input + cached, output, seconds);
             return;
         }
         if (!CostTrackingService.HasRegisteredPricing(model) && !BuiltInPriced(model))

@@ -1,12 +1,16 @@
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace CluadeX.Services.Agents;
 
-/// <summary>One agent's run as the engine asks for it.</summary>
+/// <summary>One agent's run as the engine asks for it. <paramref name="WorkingDirectory"/>: its own git worktree (isolation
+/// "worktree"), where it must do all its work; null = the run folder.</summary>
 public sealed record WorkflowAgentCall(string WorkflowId, string Key, string Phase, string Label, string Prompt, string Type, int Attempt,
-    string SessionKey = "");
+    string SessionKey = "", string? WorkingDirectory = null);
 
 /// <summary>What one agent answered and what it cost.</summary>
 public sealed record WorkflowAgentResult(string Text, decimal CostUsd);
@@ -19,7 +23,8 @@ public sealed class WorkflowAgentState
     public string Label { get; set; } = "";
     /// <summary>"agent", "stage" or "refuter".</summary>
     public string Kind { get; set; } = "agent";
-    /// <summary>queued · running · done · failed · stopped · skipped (budget) · cached (from an earlier run).</summary>
+    /// <summary>queued · running · checking (its gate runs) · done · failed · stopped · skipped (budget) · cached (from an
+    /// earlier run).</summary>
     public string State { get; set; } = "queued";
     public decimal CostUsd { get; set; }
     public string Prompt { get; set; } = "";
@@ -27,6 +32,40 @@ public sealed class WorkflowAgentState
     public string? Error { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
+    /// <summary>Its worktree while it works (isolation "worktree"); null once removed.</summary>
+    public string? Worktree { get; set; }
+    /// <summary>An isolated agent: the files it changed (repository-relative).</summary>
+    public List<string>? ChangedFiles { get; set; }
+    /// <summary>An isolated agent's gate, as the engine ran it in its worktree: green · red · null (no gate, or no change).</summary>
+    public string? Gate { get; set; }
+    public string? GateOutput { get; set; }
+    /// <summary>An isolated agent's work: <c>git diff seed</c> of its worktree (the cache keeps it for Resume).</summary>
+    [JsonIgnore] public string? Patch { get; set; }
+}
+
+/// <summary>What the merge step did with one isolated agent's diff.</summary>
+public sealed class WorkflowMergeEntry
+{
+    public string Phase { get; set; } = "";
+    public string Label { get; set; } = "";
+    /// <summary>merged · conflict (no longer applies) · red-after-merge (green alone, red on the merged tree; taken back
+    /// out) · gate-red (its own gate was red) · no-change · not-run (the agent did not finish).</summary>
+    public string Outcome { get; set; } = "";
+    public string? Detail { get; set; }
+    public List<string> Files { get; set; } = new();
+    /// <summary>The diff, kept for what was left out (the report shows it so it can be done by hand).</summary>
+    public string? Patch { get; set; }
+}
+
+/// <summary>The full test command, run once on a phase's merged result.</summary>
+public sealed class WorkflowTestRun
+{
+    public string Phase { get; set; } = "";
+    public string Command { get; set; } = "";
+    /// <summary>Null = not run (nothing was merged).</summary>
+    public bool? Green { get; set; }
+    public string Output { get; set; } = "";
+    public int Merged { get; set; }
 }
 
 /// <summary>A refuted-or-kept claim of a verify step.</summary>
@@ -46,6 +85,11 @@ public sealed class WorkflowCached
 {
     public string Output { get; set; } = "";
     public decimal CostUsd { get; set; }
+    /// <summary>An isolated agent: its diff, files and gate (it is cached only once all three are known).</summary>
+    public string? Patch { get; set; }
+    public List<string>? Files { get; set; }
+    public string? Gate { get; set; }
+    public string? GateOutput { get; set; }
 }
 
 /// <summary>A workflow run: its plan, every agent, the cache Resume reads. Saved as DataRoot/workflows/&lt;id&gt;.json.</summary>
@@ -71,6 +115,13 @@ public sealed class WorkflowRunState
     /// <summary>What each phase produced (survivors of a verify), in order — the tool's result is built from it.</summary>
     public Dictionary<string, List<string>> PhaseItems { get; set; } = new();
     public string? Summary { get; set; }
+    /// <summary>The project folder the run started in: worktrees are made from it and diffs merge back into it.</summary>
+    public string? RunFolder { get; set; }
+    /// <summary>Worktrees that exist right now — written before an agent starts in one, so a crash leaves a record the
+    /// next start sweeps (<see cref="WorkflowEngine.SweepWorktreesAsync"/>).</summary>
+    public List<string> Worktrees { get; set; } = new();
+    public List<WorkflowMergeEntry> Merges { get; set; } = new();
+    public List<WorkflowTestRun> Tests { get; set; } = new();
 
     internal readonly object Gate = new();
 
@@ -83,6 +134,10 @@ public sealed class WorkflowRunState
 /// Runs a <see cref="WorkflowPlan"/> deterministically on whatever runs one agent (the app: a native sub-agent; the
 /// harness: a mock). Owns the workflow's concurrency, the machine-wide slot, the budget check before every start,
 /// Stop (one token for every agent) and the cache that lets Resume skip what already finished.
+/// An agents phase with isolation "worktree" gives each agent its own <see cref="WorktreeSandbox"/>; the engine itself
+/// (not the agent's word) runs the phase's gate in it and keeps the diff, then the worktree goes. With merge, the green
+/// diffs are applied to the run folder one by one (each checked by the gate on the merged tree; a red or conflicting one
+/// is taken out and reported), and the full test command runs once on the result.
 /// </summary>
 public sealed class WorkflowEngine
 {
@@ -98,6 +153,14 @@ public sealed class WorkflowEngine
     public Func<bool> BudgetSpent { get; init; } = () => false;
     /// <summary>Called after every finished agent (the app writes the state file).</summary>
     public Action<WorkflowRunState>? Save { get; init; }
+    /// <summary>Runs a gate or test command in a folder: green = exit 0 (the app: the shell <see cref="ShellRunner"/> uses).</summary>
+    public Func<string, string, CancellationToken, Task<(bool Green, string Output)>> RunCommand { get; init; } = DefaultRunCommandAsync;
+
+    /// <summary>A gate or test command that runs longer than this is red.</summary>
+    public const int CommandTimeoutMs = 600_000;
+
+    /// <summary>git takes one lock for worktree add / remove: one at a time, across workflows.</summary>
+    private static readonly SemaphoreSlim WorktreeLock = new(1, 1);
 
     /// <summary>A row changed (any thread). The card coalesces these.</summary>
     public event Action<WorkflowRunState, WorkflowAgentState>? RowChanged;
@@ -118,10 +181,15 @@ public sealed class WorkflowEngine
             st.Agents.Clear();
             st.Verdicts.Clear();
             st.PhaseItems.Clear();
+            st.Merges.Clear();
+            st.Tests.Clear();
         }
         using var sem = new SemaphoreSlim(plan.Concurrency);
         try
         {
+            if (plan.UsesWorktrees && !await WorktreeSandbox.IsGitRepoAsync(st.RunFolder, ct))
+                throw new InvalidOperationException((st.RunFolder is { Length: > 0 } f ? f : "The run's folder")
+                    + " is not a git repository with a commit, so its agents cannot work in worktrees.");
             foreach (var phase in plan.Phases)
             {
                 ct.ThrowIfCancellationRequested();
@@ -130,6 +198,7 @@ public sealed class WorkflowEngine
                 {
                     var jobs = agents.Select(spec => AgentThenVerifyAsync(st, phase, spec, sem, ct)).ToList();
                     items = (await WhenAllSettled(jobs)).SelectMany(x => x).ToList();
+                    if (phase.Merge != null) await MergeAsync(st, phase, ct);
                 }
                 else if (phase.Pipeline is { } pipe)
                 {
@@ -164,7 +233,7 @@ public sealed class WorkflowEngine
             st.Status = status;
             st.StopReason = reason;
             st.EndedAt = DateTime.Now;
-            touched = st.Agents.Where(a => a.State is "queued" or "running").ToList();
+            touched = st.Agents.Where(a => a.State is "queued" or "running" or "checking").ToList();
             foreach (var a in touched) { a.State = "stopped"; a.EndedAt = DateTime.Now; }
             st.Summary = Summarize(st);
         }
@@ -186,7 +255,8 @@ public sealed class WorkflowEngine
 
     private async Task<List<string>> AgentThenVerifyAsync(WorkflowRunState st, WorkflowPhase phase, WorkflowAgentSpec spec, SemaphoreSlim sem, CancellationToken ct)
     {
-        string? output = await RunOneAsync(st, phase.Title, spec.Label, "agent", spec.Prompt, spec.Type, spec.Schema, sem, ct);
+        string? output = await RunOneAsync(st, phase.Title, spec.Label, "agent", spec.Prompt, spec.Type, spec.Schema, sem, ct,
+            phase.IsIsolated(spec), phase.Gate);
         if (output == null) return new();
         if (phase.Verify is not { } v) return new() { output };
         // No barrier: this agent's claims are refuted now, while the phase's other agents still work.
@@ -241,11 +311,14 @@ public sealed class WorkflowEngine
     }
 
     /// <summary>One agent: from the cache, or under the workflow's concurrency, the machine's slot and the budget.
-    /// Null = it did not produce an answer (failed, skipped); a stop throws.</summary>
+    /// Null = it did not produce an answer (failed, skipped); a stop throws. <paramref name="isolated"/>: it works in a
+    /// worktree of its own, made once it has its slot and removed when it ends; its diff and <paramref name="gate"/>'s
+    /// verdict land on its row (and in the cache only together with its answer).</summary>
     private async Task<string?> RunOneAsync(WorkflowRunState st, string phase, string label, string kind, string prompt, string type,
-        JsonElement? schema, SemaphoreSlim sem, CancellationToken ct)
+        JsonElement? schema, SemaphoreSlim sem, CancellationToken ct, bool isolated = false, string? gate = null)
     {
-        string key = KeyOf(phase, label, prompt, schema);
+        // An isolated agent's cache entry holds its diff and gate: a plan that changes either runs it again.
+        string key = KeyOf(phase, label, isolated ? prompt + "\u001fworktree\u001f" + gate : prompt, schema);
         var row = new WorkflowAgentState { Key = key, Phase = phase, Label = label, Kind = kind, Prompt = prompt };
         WorkflowCached? cached;
         bool overLimit;
@@ -256,7 +329,11 @@ public sealed class WorkflowEngine
             overLimit = st.Agents.Count >= HardMaxAgents;
             st.Agents.Add(row);
             st.Cache.TryGetValue(key, out cached);
-            if (cached != null) { row.State = "cached"; row.Output = cached.Output; row.EndedAt = DateTime.Now; }
+            if (cached != null)
+            {
+                row.State = "cached"; row.Output = cached.Output; row.EndedAt = DateTime.Now;
+                row.Patch = cached.Patch; row.ChangedFiles = cached.Files; row.Gate = cached.Gate; row.GateOutput = cached.GateOutput;
+            }
             else if (overLimit) { row.State = "skipped"; row.Error = $"agent limit ({HardMaxAgents})"; row.EndedAt = DateTime.Now; }
         }
         Raise(st, row);
@@ -280,11 +357,18 @@ public sealed class WorkflowEngine
                 return null;
             }
             await EnterSlot(ct);
+            WorktreeSandbox? box = null;
             try
             {
                 Set(st, row, r => { r.State = "running"; r.StartedAt = DateTime.Now; });
-                string full = prompt + SchemaInstruction(schema);
-                var res = await _runner(new WorkflowAgentCall(st.Id, key, phase, label, full, type, 1, st.SessionKey), ct);
+                if (isolated)
+                {
+                    box = await CreateWorktreeAsync(st, ct);
+                    Set(st, row, r => r.Worktree = box.Root);
+                }
+                string? wd = box?.WorkingDirectory;
+                string full = prompt + SchemaInstruction(schema) + (box != null ? WorktreeInstruction(box.WorkingDirectory) : "");
+                var res = await _runner(new WorkflowAgentCall(st.Id, key, phase, label, full, type, 1, st.SessionKey, wd), ct);
                 decimal cost = res.CostUsd;
                 string? answer = res.Text;
                 string? problem = null;
@@ -293,7 +377,7 @@ public sealed class WorkflowEngine
                     // One repair turn: the agent sees what was wrong with its answer.
                     var again = await _runner(new WorkflowAgentCall(st.Id, key, phase, label,
                         full + "\n\nYour previous answer did not match the required JSON (" + problem + "). Previous answer:\n"
-                        + Clip(res.Text, 4000) + "\n\nAnswer again with ONLY the JSON object.", type, 2, st.SessionKey), ct);
+                        + Clip(res.Text, 4000) + "\n\nAnswer again with ONLY the JSON object.", type, 2, st.SessionKey, wd), ct);
                     cost += again.CostUsd;
                     if (!Conforms(again.Text, sch, out answer, out problem)) answer = null;
                 }
@@ -302,12 +386,34 @@ public sealed class WorkflowEngine
                     Set(st, row, r => { r.State = "failed"; r.CostUsd = cost; r.Error = "answer did not match the schema: " + problem; r.Output = res.Text; r.EndedAt = DateTime.Now; });
                     return null;
                 }
-                Set(st, row, r => { r.State = "done"; r.CostUsd = cost; r.Output = answer; r.EndedAt = DateTime.Now; });
-                lock (st.Gate) st.Cache[key] = new WorkflowCached { Output = answer, CostUsd = cost };
+                var entry = new WorkflowCached { Output = answer, CostUsd = cost };
+                if (box != null)
+                {
+                    // The engine looks at the worktree itself: what changed, and whether the gate passes there.
+                    entry.Patch = await box.DiffAsync(ct);
+                    entry.Files = await box.ChangedFilesAsync(ct);
+                    if (gate != null && entry.Files.Count > 0)
+                    {
+                        Set(st, row, r => { r.State = "checking"; r.CostUsd = cost; r.Output = answer; });
+                        var (green, outText) = await RunCommand(gate, box.WorkingDirectory, ct);
+                        entry.Gate = green ? "green" : "red";
+                        entry.GateOutput = SpeculativeFixer.TrimOutput(outText, 3000);
+                    }
+                }
+                Set(st, row, r =>
+                {
+                    r.State = "done"; r.CostUsd = cost; r.Output = answer; r.EndedAt = DateTime.Now;
+                    r.Patch = entry.Patch; r.ChangedFiles = entry.Files; r.Gate = entry.Gate; r.GateOutput = entry.GateOutput;
+                });
+                lock (st.Gate) st.Cache[key] = entry;
                 Save?.Invoke(st);
                 return answer;
             }
-            finally { LeaveSlot(); }
+            finally
+            {
+                LeaveSlot();
+                if (box != null) await RemoveWorktreeAsync(st, row, box);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -331,6 +437,156 @@ public sealed class WorkflowEngine
     private void Raise(WorkflowRunState st, WorkflowAgentState row)
     {
         try { RowChanged?.Invoke(st, row); } catch { /* a view must not break the run */ }
+    }
+
+    // ─── worktrees, gate, merge ───
+
+    /// <summary>The app's command runner for gates and tests: its shell, ten minutes at most.</summary>
+    public static async Task<(bool Green, string Output)> DefaultRunCommandAsync(string command, string cwd, CancellationToken ct)
+    {
+        var r = await ShellRunner.RunAsync(ShellRunner.DefaultShell, command, cwd, CommandTimeoutMs, ct);
+        if (r.Cancelled) ct.ThrowIfCancellationRequested();
+        string output = r.TimedOut ? r.Output + $"\n(timed out after {CommandTimeoutMs / 60_000} min)" : r.Output;
+        return (r.ExitCode == 0 && !r.TimedOut && !r.Cancelled, output);
+    }
+
+    /// <summary>This workflow's worktree label: its folders are <c>&lt;repo&gt;-&lt;id&gt;-&lt;n&gt;-…</c> in the worktree home.</summary>
+    private static string WorktreeLabel(WorkflowRunState st) => st.Id + "-";
+
+    private static int _worktreeCounter;
+
+    private async Task<WorktreeSandbox> CreateWorktreeAsync(WorkflowRunState st, CancellationToken ct)
+    {
+        string folder = st.RunFolder ?? throw new InvalidOperationException("this workflow has no project folder to make worktrees from");
+        await WorktreeLock.WaitAsync(ct);
+        try
+        {
+            var box = await WorktreeSandbox.CreateAsync(folder, WorktreeLabel(st) + Interlocked.Increment(ref _worktreeCounter), ct);
+            lock (st.Gate) st.Worktrees.Add(box.Root);
+            Save?.Invoke(st);
+            return box;
+        }
+        finally { WorktreeLock.Release(); }
+    }
+
+    private async Task RemoveWorktreeAsync(WorkflowRunState st, WorkflowAgentState row, WorktreeSandbox box)
+    {
+        await WorktreeLock.WaitAsync(CancellationToken.None);
+        try { await box.DisposeAsync(); }
+        finally { WorktreeLock.Release(); }
+        Set(st, row, r => r.Worktree = null);
+        lock (st.Gate) st.Worktrees.Remove(box.Root);
+        Save?.Invoke(st);
+    }
+
+    private static readonly Regex WorkflowIdRx = new("^wf-[0-9a-f]{10}$", RegexOptions.Compiled);
+
+    /// <summary>Remove every worktree this workflow left behind (an app crash, a stop inside <c>git worktree add</c>): the
+    /// ones its state names and any folder of its own name in the worktree home. Only folders named after this workflow,
+    /// directly in that home, are touched — a state file naming any other path is ignored. Returns how many it removed.</summary>
+    public static async Task<int> SweepWorktreesAsync(WorkflowRunState st)
+    {
+        List<string> listed;
+        lock (st.Gate) listed = st.Worktrees.ToList();
+        if (!WorkflowIdRx.IsMatch(st.Id ?? "")) return 0;
+        string? repo = await WorktreeSandbox.RepoRootOfAsync(st.RunFolder ?? "", CancellationToken.None);
+        if (repo == null) return 0;
+        string home = Path.GetFullPath(WorktreeSandbox.HomeFor(repo)).TrimEnd('\\', '/');
+        string prefix = Path.GetFileName(repo) + "-" + WorktreeLabel(st);
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in listed) try { candidates.Add(Path.GetFullPath(p).TrimEnd('\\', '/')); } catch { }
+        try { if (Directory.Exists(home)) foreach (var d in Directory.EnumerateDirectories(home)) candidates.Add(Path.GetFullPath(d)); } catch { }
+        int removed = 0;
+        await WorktreeLock.WaitAsync(CancellationToken.None);
+        try
+        {
+            foreach (var path in candidates)
+            {
+                if (!string.Equals(Path.GetDirectoryName(path), home, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!Path.GetFileName(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                bool there = Directory.Exists(path);
+                await WorktreeSandbox.RemoveAsync(repo, path);
+                if (there && !Directory.Exists(path)) removed++;
+            }
+        }
+        finally { WorktreeLock.Release(); }
+        lock (st.Gate) st.Worktrees.Clear();
+        return removed;
+    }
+
+    private static string WorktreeInstruction(string folder) =>
+        "\n\nYou work in your own copy of the project (a git worktree): " + folder + " — read, edit and run commands only "
+        + "there, and do not commit. Other agents work in their own copies at the same time. When you end, your change is "
+        + "checked and merged for you.";
+
+    /// <summary>The merge step of <paramref name="phase"/>: its isolated agents' diffs, in plan order, into the run folder.
+    /// Each one is applied (checked first), then the gate runs on the merged tree; a diff that no longer applies, or that
+    /// turns the merged tree red, is left out (taken back out) and reported. Then the full test runs once.</summary>
+    private async Task MergeAsync(WorkflowRunState st, WorkflowPhase phase, CancellationToken ct)
+    {
+        string folder = st.RunFolder!;
+        int merged = 0;
+        foreach (var spec in phase.Agents!.Where(phase.IsIsolated))
+        {
+            ct.ThrowIfCancellationRequested();
+            WorkflowAgentState? row;
+            lock (st.Gate) row = st.Agents.LastOrDefault(a => a.Phase == phase.Title && a.Kind == "agent" && a.Label == spec.Label);
+            var e = new WorkflowMergeEntry { Phase = phase.Title, Label = spec.Label, Files = row?.ChangedFiles?.ToList() ?? new() };
+            string patch = row?.Patch ?? "";
+            if (row == null || row.State is not ("done" or "cached"))
+            { e.Outcome = "not-run"; e.Detail = row?.Error ?? row?.State ?? "did not run"; }
+            else if (patch.Trim().Length == 0) e.Outcome = "no-change";
+            else if (row.Gate == "red")
+            { e.Outcome = "gate-red"; e.Detail = FirstLine(row.GateOutput); e.Patch = patch; }
+            else if (await WorktreeSandbox.IsAppliedAsync(folder, patch, CancellationToken.None))
+            { e.Outcome = "merged"; e.Detail = "already in the project (merged by an earlier attempt)"; merged++; }
+            else if (await WorktreeSandbox.ApplyAsync(folder, patch, CancellationToken.None) is { } conflict)
+            { e.Outcome = "conflict"; e.Detail = conflict; e.Patch = patch; }
+            else if (phase.Gate is { } check)
+            {
+                (bool Green, string Output) r;
+                try { r = await RunCommand(check, folder, ct); }
+                catch (OperationCanceledException)
+                {
+                    // Stopped before the merged tree was checked: the diff does not stay in the project unverified.
+                    await WorktreeSandbox.RevertAsync(folder, patch, CancellationToken.None);
+                    throw;
+                }
+                if (r.Green) { e.Outcome = "merged"; merged++; }
+                else
+                {
+                    string? back = await WorktreeSandbox.RevertAsync(folder, patch, CancellationToken.None);
+                    e.Outcome = "red-after-merge";
+                    e.Detail = FirstLine(r.Output) + (back != null ? " — and it could not be taken back out: " + back : "");
+                    e.Patch = patch;
+                }
+            }
+            else { e.Outcome = "merged"; merged++; }
+            lock (st.Gate) st.Merges.Add(e);
+            Save?.Invoke(st);
+        }
+        ct.ThrowIfCancellationRequested();
+        string? test = phase.Merge!.Test ?? phase.Gate;
+        if (test == null) return;
+        var run = new WorkflowTestRun { Phase = phase.Title, Command = test, Merged = merged };
+        if (merged > 0)
+        {
+            var (green, output) = await RunCommand(test, folder, ct);
+            run.Green = green;
+            run.Output = SpeculativeFixer.TrimOutput(output, 3000);
+        }
+        else run.Output = "nothing was merged, so nothing was tested";
+        lock (st.Gate) st.Tests.Add(run);
+        Save?.Invoke(st);
+    }
+
+    private static readonly Regex ErrorLine = new(@"\b(error|failed|failure|exception|assert)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static string FirstLine(string? s)
+    {
+        var lines = (s ?? "").Replace("\r", "").Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        string line = lines.FirstOrDefault(l => ErrorLine.IsMatch(l)) ?? lines.FirstOrDefault() ?? "";
+        return line.Length > 200 ? line[..200] + "…" : line;
     }
 
     // ─── items, prompts, schema ───
@@ -455,6 +711,15 @@ public sealed class WorkflowEngine
         sb.Append($" · ${st.Agents.Sum(a => a.CostUsd):0.00}");
         int killed = st.Verdicts.Count(v => v.Killed);
         if (st.Verdicts.Count > 0) sb.Append($" · verify: {st.Verdicts.Count - killed} kept, {killed} refuted");
+        if (st.Merges.Count > 0)
+            sb.Append(" · merge: " + string.Join(", ", st.Merges.GroupBy(m => m.Outcome).Select(g => $"{g.Count()} {g.Key}")));
+        foreach (var t in st.Tests)
+            sb.Append(t.Green switch
+            {
+                true => $" · tests on the merged result: green (`{t.Command}`)",
+                false => $" · tests on the merged result: RED (`{t.Command}`)",
+                _ => " · tests: not run (nothing merged)",
+            });
         return sb.ToString();
     }
 }

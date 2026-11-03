@@ -133,6 +133,7 @@ public sealed partial class UiStudioViewModel
         _followTimer?.Stop();
         ParkRound();
         _startOnShow = _pagesOnShow = false;
+        _reloadAfterLock = false;   // (the reload a run's end left for the project left, not for this one)
         ShowGallery = false;
         if (p.Length == 0)
         {
@@ -209,5 +210,7 @@ public sealed partial class UiStudioViewModel
             _renderDebounce.Stop();
             _renderDebounce.Start();
         }
+        // an AI run ended while the page was hidden: the page as it left it
+        ReloadAfterLockOnShow();
     }
 }

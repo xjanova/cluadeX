@@ -640,9 +640,9 @@ internal static class Program
 
         // ── the permission prompt's rules and verdicts (pure) ──
         Check("approve: an MCP tool goes to CluadeX's gate", CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__brainx-brain__chrome__navigate", true) == null);
-        Check("approve: the CLI's own tools are never put to the user here (the grant decides them)",
+        Check("approve: the CLI's own tools but web are never put to the user here (the grant decides them)",
             CluadeX.Services.Tools.ChatToolBridge.RefusalFor("Bash", true) != null && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("Edit", true) != null
-            && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("WebFetch", true) != null && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__", true) != null);
+            && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("KillShell", true) != null && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__", true) != null);
         Check("approve: CluadeX's own server is not asked about (approve itself included)",
             CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__cluadex__approve", true) != null && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__cluadex__new_chat", true) != null);
         Check("approve: a turn without an approver refuses everything", CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__x__y", false) != null);

@@ -22,7 +22,26 @@ public partial class UiStudioView : UserControl
     private (Point At, WidgetPaletteItem? Item)? _paletteDown;
     private StudioService? _studio;
     private Task? _init;
+    /// <summary>The browser exists AND the overlay script is registered: only then may it navigate (a page opened
+    /// before that would load without the overlay).</summary>
+    private bool _engineReady;
     private string? _pendingUrl;
+    /// <summary>The page the Studio asked for last — where a Reload on a blank or failed page goes.</summary>
+    private string? _wantedUrl;
+    /// <summary><see cref="StudioService.PageGeneration"/> when that page was asked for: documents of navigations
+    /// started under it are this project's.</summary>
+    private int _navGeneration;
+    private readonly PageLoadTracker _load = new();
+    private System.Windows.Threading.DispatcherTimer? _loadTimer;
+    /// <summary>The overlay's "ready" was handled for the document shown now.</summary>
+    private bool _readyHandled;
+    private readonly List<DateTime> _rebuilds = new();
+    /// <summary>The rebuilds were given up (a browser that keeps dying): only the error card's Try again starts it again —
+    /// not a navigation, a reload or the gallery, which would bring the loop back.</summary>
+    private bool _engineGaveUp;
+    /// <summary>The browser core whose events are hooked: a start retried on the same control must not hook them twice
+    /// (every overlay message would be handled twice — an in-place edit written twice).</summary>
+    private CoreWebView2? _hookedCore;
     private string? _reselectSrc;
     private string? _reselectSelector;
     private readonly List<(System.ComponentModel.INotifyPropertyChanged Source, System.ComponentModel.PropertyChangedEventHandler Handler)> _overlayWatch = new();
@@ -61,7 +80,7 @@ public partial class UiStudioView : UserControl
         InitializeComponent();
         DataContextChanged += (_, _) => Attach(DataContext as UiStudioViewModel);
         IsVisibleChanged += (_, e) => OnShownChanged(e.NewValue is true);
-        Loaded += (_, _) => { Attach(DataContext as UiStudioViewModel); _init ??= InitWebAsync(); if (!IsVisible) QueueSuspend(); };
+        Loaded += (_, _) => { Attach(DataContext as UiStudioViewModel); StartEngine(); if (!IsVisible) { QueueSuspend(); _load.Hidden(Now); } };
         Loaded += (_, _) => WatchOverlays();
         Unloaded += (_, _) => UnwatchOverlays();
         ((System.Collections.Specialized.INotifyCollectionChanged)LogList.Items).CollectionChanged += (_, _) =>
@@ -130,8 +149,8 @@ public partial class UiStudioView : UserControl
     /// <summary>Take a page's thumbnail with a hidden browser that shares the Studio's profile.</summary>
     private async Task<PageShot?> ShootAsync(string url, int width, int height, CancellationToken ct)
     {
-        _init ??= InitWebAsync();
-        try { await _init; } catch { }
+        var init = StartEngine();
+        try { if (init != null) await init; } catch { }
         if (_env == null) return null;
         _shooter ??= new PageShooter(_env);
         return await _shooter.ShootAsync(url, width, height, ct);
@@ -145,10 +164,12 @@ public partial class UiStudioView : UserControl
         _studio.NavigateRequested += Navigate;
         _studio.ScriptRequested += Run;
         _studio.ReloadRequested += OnReloadRequested;
-        _studio.WakeRequested += Wake;
+        _studio.PageReloadRequested += OnPageReloadRequested;
+        _studio.WakeRequested += OnWakeRequested;
         _studio.Evaluate = EvaluateAsync;
+        _load.Changed += () => _studio?.SetPageLoad(_load.Info);
+        _load.Command += OnLoadCommand;
         vm.Shooter = ShootAsync;
-        vm.NavigateTo += Navigate;
         vm.AddressFocusRequested += param =>
         {
             Address.Focus();
@@ -159,7 +180,8 @@ public partial class UiStudioView : UserControl
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is nameof(UiStudioViewModel.HasProject) or nameof(UiStudioViewModel.NoProject) or nameof(UiStudioViewModel.ShowGallery)
-                or nameof(UiStudioViewModel.ShowPages) or nameof(UiStudioViewModel.IsSimulated) or nameof(UiStudioViewModel.IsUnsupported))
+                or nameof(UiStudioViewModel.ShowPages) or nameof(UiStudioViewModel.IsSimulated) or nameof(UiStudioViewModel.IsUnsupported)
+                or nameof(UiStudioViewModel.PageLoadFailed))
                 UpdateWebVisibility();
             if (e.PropertyName is nameof(UiStudioViewModel.ShowPages) && vm.ShowPages) { UpdateColumns(); QueueVisible(); }
             if (e.PropertyName is nameof(UiStudioViewModel.CardWidth)) UpdateColumns();
@@ -184,8 +206,30 @@ public partial class UiStudioView : UserControl
             _suspendTimer?.Stop();
             Wake();
             _vm?.PageShown();
+            LoadShown();
         }
-        else QueueSuspend();
+        else
+        {
+            QueueSuspend();
+            if (_studio?.KeepPageAwake != true) { _load.Hidden(Now); ArmLoadTimer(); }   // no retry counted against an unseen page
+        }
+    }
+
+    /// <summary>The Node Graph's live view needs the page: awake, and its load followed as if it were on screen.</summary>
+    private void OnWakeRequested()
+    {
+        Wake();
+        LoadShown();
+    }
+
+    /// <summary>On screen again: the load is checked once more (a hidden page may have been suspended in the middle
+    /// of anything), and a blank or failed page goes to the wanted page.</summary>
+    private void LoadShown()
+    {
+        if (_studio == null) return;
+        // (also before the engine is up: the tracker must not stay paused; a navigation it asks for waits for the engine)
+        _load.Shown(_studio.IsServing, SafeSource(), Now);
+        ArmLoadTimer();
     }
 
     private void QueueSuspend()
@@ -201,9 +245,9 @@ public partial class UiStudioView : UserControl
         t.Tick += async (_, _) =>
         {
             t.Stop();
-            var core = Web.CoreWebView2;
-            if (core == null || IsVisible || _studio?.KeepPageAwake == true || core.IsSuspended) return;
-            try { await core.TrySuspendAsync(); }
+            var core = CurrentCore();
+            if (core == null || IsVisible || _studio?.KeepPageAwake == true) return;
+            try { if (!core.IsSuspended) await core.TrySuspendAsync(); }
             catch { /* still marked visible by the control, or the page is busy: it simply stays awake */ }
         };
         return t;
@@ -211,7 +255,7 @@ public partial class UiStudioView : UserControl
 
     private void Wake()
     {
-        try { if (Web.CoreWebView2 is { IsSuspended: true } core) core.Resume(); }
+        try { if (CurrentCore() is { IsSuspended: true } core) core.Resume(); }
         catch { }
         if (!IsVisible && IsLoaded) QueueSuspend();   // woken while hidden (a script, a reload): back to sleep later
     }
@@ -221,7 +265,8 @@ public partial class UiStudioView : UserControl
     /// <summary>The page shows only when nothing WPF draws should be on top of it.</summary>
     private void UpdateWebVisibility()
     {
-        bool show = _vm is { HasProject: true, ShowGallery: false, ShowPages: false, IsSimulated: false, IsUnsupported: false } && !_covered;
+        // (a load that failed shows its card in the page's place — the browser has to step aside for it to be seen)
+        bool show = _vm is { HasProject: true, ShowGallery: false, ShowPages: false, IsSimulated: false, IsUnsupported: false, PageLoadFailed: false } && !_covered;
         Frame.Visibility = show ? Visibility.Visible : Visibility.Hidden;   // Hidden keeps the page alive and laid out
     }
 
@@ -282,117 +327,395 @@ public partial class UiStudioView : UserControl
 
     // ───────────────────────────── engine ─────────────────────────────
 
+    /// <summary>Start the browser when it is not up (again: after a failed start, or after it was rebuilt). Returns
+    /// the start that runs now, if any.</summary>
+    private Task? StartEngine()
+    {
+        if (_studio == null || _engineGaveUp) return _init;
+        if (_init == null || _init.IsCompleted && !_engineReady) _init = InitWebAsync();
+        return _init;
+    }
+
     private async Task InitWebAsync()
     {
         if (_studio == null) return;
+        _engineReady = false;
+        EngineError.Visibility = Visibility.Collapsed;
+        var web = Web;
         try
         {
             System.IO.Directory.CreateDirectory(_studio.WebDataFolder);
-            var env = await CoreWebView2Environment.CreateAsync(null, _studio.WebDataFolder, new CoreWebView2EnvironmentOptions());
+            var env = _env ?? await CoreWebView2Environment.CreateAsync(null, _studio.WebDataFolder, new CoreWebView2EnvironmentOptions());
             _env = env;   // the page gallery's hidden browser shares it (same profile: the same logins)
-            await Web.EnsureCoreWebView2Async(env);
-            var core = Web.CoreWebView2;
+            await web.EnsureCoreWebView2Async(env);
+            if (!ReferenceEquals(web, Web)) return;   // rebuilt meanwhile: the new one starts on its own
+            var core = web.CoreWebView2;
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.AreDevToolsEnabled = true;            // F12 still works for the developer
             core.Settings.IsWebMessageEnabled = true;
+            // every handler before the next await: nothing the browser raises while the script registers is missed
+            // (once per core: a start retried after the script failed to register reuses this control and its core)
+            if (!ReferenceEquals(_hookedCore, core)) { HookCore(core); _hookedCore = core; }
             await core.AddScriptToExecuteOnDocumentCreatedAsync(StudioTemplates.ReadAsset("overlay.js"));
-            core.WebMessageReceived += OnWebMessage;
-            core.SourceChanged += (_, _) => _vm?.NotePage(core.Source);
-            core.NavigationCompleted += (_, e) =>
-            {
-                if (e.IsSuccess) _studio?.NotePageLoaded();
-                _vm?.NotePage(core.Source);
-                if (!e.IsSuccess && e.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
-                    _vm?.Status(Loc("studio.err.navigate", e.WebErrorStatus.ToString()), error: true);
-            };
-            // Links that open a new window stay in the Studio (one page, one overlay).
-            core.NewWindowRequested += (_, e) => { e.Handled = true; core.Navigate(e.Uri); };
-            core.ProcessFailed += (_, e) =>
-            {
-                Dispatcher.BeginInvoke(() =>
-                {
-                    _vm?.Status(Loc("studio.err.crashed", e.ProcessFailedKind.ToString()), error: true);
-                    if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited) { try { core.Reload(); } catch { } }
-                });
-            };
-            if (_pendingUrl != null) { core.Navigate(_pendingUrl); _pendingUrl = null; }
-            else if ((_studio.PageUrl ?? _studio.LastRequestedUrl) is { } url) core.Navigate(url);   // asked before this browser existed
+            if (!ReferenceEquals(web, Web)) return;
+            _engineReady = true;
+            if (!IsVisible && !_studio.KeepPageAwake) _load.Hidden(Now);
+            // asked before this browser could go anywhere: the latest ask wins
+            string? pending = _pendingUrl;
+            _pendingUrl = null;
+            if (pending != null) GoCore(pending);
+            else if (_studio.LastRequestedUrl is { } url) Navigate(url);   // asked before this view existed
         }
         catch (Exception ex)
         {
-            // No WebView2 runtime, or the data folder is unusable: say so where the page would be.
+            // No WebView2 runtime, or the data folder is unusable (locked by another copy, a transient error): say so
+            // where the page would be. Try again — or the next navigation — starts it again.
+            // (A start for a control since replaced says nothing: the new control's start may already have succeeded.)
+            if (!ReferenceEquals(web, Web)) return;
+            _engineReady = false;
             EngineError.Visibility = Visibility.Visible;
             EngineErrorText.Text = Loc("studio.err.engine", ex.Message);
         }
     }
 
+    private void HookCore(CoreWebView2 core)
+    {
+        core.WebMessageReceived += OnWebMessage;
+        core.SourceChanged += (_, _) => Safe(() => _vm?.NotePage(core.Source));
+        core.NavigationStarting += (_, e) =>
+        {
+            if (!ReferenceEquals(core, CurrentCore())) return;
+            Safe(() => _load.Started(e.NavigationId, e.Uri ?? "", Now));
+            ArmLoadTimer();
+        };
+        core.ContentLoading += (_, e) =>
+        {
+            if (!ReferenceEquals(core, CurrentCore())) return;
+            Safe(() =>
+            {
+                // The new document replaces the old one before any of its scripts runs: from here on its picks and its
+                // tree are this project's. (Its first tree and "ready" come at DOMContentLoaded, long before
+                // NavigationCompleted — which is when this used to happen, so they were dropped and Layers stayed empty.)
+                if (_load.ContentLoading(e.NavigationId, e.IsErrorPage, Now)) _studio?.NoteDocumentLoaded(_navGeneration);
+                _readyHandled = false;
+            });
+            ArmLoadTimer();
+        };
+        core.NavigationCompleted += (_, e) =>
+        {
+            if (!ReferenceEquals(core, CurrentCore())) return;
+            int status = 0;
+            try { status = e.HttpStatusCode; } catch { }
+            Safe(() => _vm?.NotePage(core.Source));
+            Safe(() => _load.Completed(e.NavigationId, e.IsSuccess, e.WebErrorStatus.ToString(), status, Now));
+            ArmLoadTimer();
+        };
+        // Links that open a new window stay in the Studio (one page, one overlay).
+        core.NewWindowRequested += (_, e) => { e.Handled = true; Safe(() => core.Navigate(e.Uri)); };
+        core.ProcessFailed += (_, e) =>
+        {
+            var kind = e.ProcessFailedKind;
+            Dispatcher.BeginInvoke(() =>
+            {
+                // Compared with the core this handler hooked, never by reading Web.CoreWebView2: once the browser process
+                // is gone the control's own handler (it runs first) marks it crashed, and from then on that getter
+                // throws — which used to end this handler before the rebuild, leaving the Studio dead for good.
+                if (!ReferenceEquals(core, _hookedCore)) return;   // a browser since replaced
+                CoreOf(Web, out bool dead);
+                if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited || dead)
+                {
+                    // the whole browser is gone: this control cannot be used again, only replaced
+                    _vm?.Status(Loc("studio.err.browserGone", kind.ToString()), error: true);
+                    RebuildEngine();
+                    return;
+                }
+                _vm?.Status(Loc("studio.err.crashed", kind.ToString()), error: true);
+                if (kind == CoreWebView2ProcessFailedKind.RenderProcessExited)
+                {
+                    _load.Reloading(Now);
+                    if (!Safe(core.Reload)) RebuildEngine();
+                    ArmLoadTimer();
+                }
+            });
+        };
+    }
+
+    /// <summary>A new browser in place of a dead one (its process exited): a fresh control in the frame, a fresh
+    /// environment (the old one's browser process is gone, the gallery's hidden browser with it), then the page that
+    /// was shown. A fourth rebuild within a minute stops: the error is shown with Try again instead of a loop.</summary>
+    private void RebuildEngine()
+    {
+        var now = Now;
+        _rebuilds.RemoveAll(t => now - t > TimeSpan.FromMinutes(1));
+        _rebuilds.Add(now);
+        string? url = _studio?.PageUrl ?? _wantedUrl ?? _studio?.LastRequestedUrl;
+        _engineReady = false;
+        _hookedCore = null;   // (a late failure of the old browser rebuilds nothing more)
+        var old = Web;
+        var fresh = new Microsoft.Web.WebView2.Wpf.WebView2 { DefaultBackgroundColor = System.Drawing.Color.White };
+        Frame.Child = fresh;
+        Web = fresh;
+        try { old.Dispose(); } catch { }
+        try { _shooter?.Dispose(); } catch { }
+        _shooter = null;
+        _env = null;
+        _init = null;
+        if (url != null && url != StudioService.BlankPage) { _pendingUrl = url; _load.Restart(url, now); }
+        if (_rebuilds.Count > 3)
+        {
+            // given up until Try again: nothing loads meanwhile (no progress bar left running for a page that never comes)
+            _engineGaveUp = true;
+            _load.Cancel(now);
+            EngineError.Visibility = Visibility.Visible;
+            EngineErrorText.Text = Loc("studio.err.engine", Loc("studio.err.browserGone", "×" + _rebuilds.Count));
+            return;
+        }
+        StartEngine();
+    }
+
+    private void EngineRetry_Click(object sender, RoutedEventArgs e)
+    {
+        _rebuilds.Clear();
+        _engineGaveUp = false;
+        _pendingUrl ??= _wantedUrl ?? _studio?.LastRequestedUrl;
+        if (_pendingUrl is { } url && url != StudioService.BlankPage) _load.Restart(url, Now);
+        StartEngine();
+    }
+
     private string Loc(string key, params object[] args) => _vm?.Tr(key, args) ?? key;
+
+    private static DateTime Now => DateTime.UtcNow;
+
+    /// <summary>Run a call into the browser; false when it threw. Nothing a browser call throws (a dead browser throws
+    /// from everything) may reach a caller: these are event handlers of the Studio's service.</summary>
+    private static bool Safe(Action call)
+    {
+        try { call(); return true; }
+        catch { return false; }
+    }
+
+    private string? SafeSource()
+    {
+        try { return CurrentCore()?.Source; }
+        catch { return null; }
+    }
+
+    /// <summary>The browser of the control in the frame, or null — before it started, and after its browser process
+    /// died (the control's getter throws then, until the control is replaced). Every read of the core goes through
+    /// here: the callers are the service's event handlers and timers, and a throw from them reached the chat's run
+    /// start and end (the AI lock runs a script on every run).</summary>
+    private CoreWebView2? CurrentCore() => CoreOf(Web, out _);
+
+    private static CoreWebView2? CoreOf(Microsoft.Web.WebView2.Wpf.WebView2 web, out bool dead)
+    {
+        dead = false;
+        try { return web.CoreWebView2; }
+        catch { dead = true; return null; }
+    }
+
+    // ───────────────────────────── navigation & reload ─────────────────────────────
 
     private void Navigate(string url)
     {
         if (url == StudioService.BlankPage) _reselectSrc = _reselectSelector = null;   // the project is gone: so is its picked element
-        if (Web.CoreWebView2 == null) { _pendingUrl = url; _init ??= InitWebAsync(); return; }
+        if (!Uri.TryCreate(url, UriKind.Absolute, out _)) { _vm?.Status(Loc("studio.err.badUrl"), error: true); return; }
+        _wantedUrl = url;
+        _navGeneration = _studio?.PageGeneration ?? 0;
+        _load.Want(url, Now);
+        if (!_engineReady) { Defer(url); return; }   // (the latest ask wins)
+        GoCore(url);
+    }
+
+    /// <summary>The browser cannot go anywhere yet: it goes there once it is up. Given up (Try again not pressed yet):
+    /// nothing is on its way, so nothing shows as loading.</summary>
+    private void Defer(string url)
+    {
+        _pendingUrl = url;
+        StartEngine();
+        if (_engineGaveUp) _load.Cancel(Now);
+    }
+
+    /// <summary>Send the browser there (the tracker already knows).</summary>
+    private void GoCore(string url)
+    {
+        var core = CurrentCore();
+        if (!_engineReady || core == null) { Defer(url); return; }
         Wake();
-        try { Web.CoreWebView2.Navigate(url); }
-        catch (ArgumentException) { _vm?.Status(Loc("studio.err.badUrl"), error: true); }
+        try { core.Navigate(url); }
+        catch (ArgumentException) { _vm?.Status(Loc("studio.err.badUrl"), error: true); _load.Cancel(Now); }
+        catch (Exception) { RebuildEngine(); }   // the browser is gone
+        ArmLoadTimer();
+    }
+
+    /// <summary>The user's Reload, or the failure card's Try again.</summary>
+    private void OnPageReloadRequested(bool hard)
+    {
+        if (!_engineReady) { _pendingUrl ??= _wantedUrl ?? _studio?.LastRequestedUrl; StartEngine(); return; }
+        Reload(hard, keepSelection: true);
+    }
+
+    /// <summary>A real reload — or, on a blank page or the browser's error page, the wanted page again (reloading those
+    /// only shows them again, which is what location.reload() used to do).</summary>
+    private void Reload(bool hard, bool keepSelection)
+    {
+        var core = CurrentCore();
+        if (core == null) return;
+        if (_load.ReloadTarget(SafeSource()) is { } target)
+        {
+            _load.Restart(target, Now);
+            GoCore(target);
+            return;
+        }
+        if (keepSelection)
+        {
+            _reselectSrc = _studio?.Selection?.Src;
+            _reselectSelector = _studio?.Selection?.Selector;
+        }
+        _load.Reloading(Now);
+        ReloadCore(core, hard);
+    }
+
+    private void ReloadCore(CoreWebView2 core, bool hard)
+    {
+        Wake();
+        if (hard) _ = HardReloadAsync(core);
+        else if (!Safe(core.Reload)) RebuildEngine();
+        ArmLoadTimer();
+    }
+
+    /// <summary>A reload that ignores the cache (Shift+Reload) — for a server-rendered site; the Studio's own server
+    /// sends no-store anyway.</summary>
+    private async Task HardReloadAsync(CoreWebView2 core)
+    {
+        try { await core.CallDevToolsProtocolMethodAsync("Page.reload", "{\"ignoreCache\":true}"); }
+        catch { if (!Safe(core.Reload)) RebuildEngine(); }
     }
 
     private void Run(string js)
     {
-        var core = Web.CoreWebView2;
-        if (core == null) return;
+        var core = CurrentCore();
+        if (core == null || !_engineReady) return;
         Wake();
-        _ = core.ExecuteScriptAsync(js);
+        _ = RunAsync(core, js);
+    }
+
+    private static async Task RunAsync(CoreWebView2 core, string js)
+    {
+        try { await core.ExecuteScriptAsync(js); }
+        catch { /* the page is gone or the browser with it: a script for it means nothing now */ }
     }
 
     private async Task<string?> EvaluateAsync(string js)
     {
-        var core = Web.CoreWebView2;
-        if (core == null) return null;
+        var core = CurrentCore();
+        if (core == null || !_engineReady) return null;
         Wake();
         try { return await core.ExecuteScriptAsync(js); }
         catch { return null; }
     }
 
+    /// <summary>The file watcher: a file the page shows changed on disk.</summary>
     private void OnReloadRequested(bool cssOnly)
     {
-        var core = Web.CoreWebView2;
-        if (core == null) return;
+        var core = CurrentCore();
+        if (core == null || !_engineReady) return;   // (the first navigation loads fresh files anyway)
         Wake();
         if (cssOnly) { Run("window.__cx && __cx.reloadCss(); window.__cx && setTimeout(() => __cx.refreshSelection(), 120)"); return; }
-        _reselectSrc = _studio?.Selection?.Src;
-        _reselectSelector = _studio?.Selection?.Selector;
-        core.Reload();
+        Reload(hard: false, keepSelection: true);
+    }
+
+    // ───────────────────────────── page loading ─────────────────────────────
+
+    private void OnLoadCommand(PageLoadCommand c)
+    {
+        var core = CurrentCore();
+        switch (c.Kind)
+        {
+            case PageLoadCommandKind.Navigate when c.Url != null:
+                GoCore(c.Url);
+                break;
+            case PageLoadCommandKind.Reload when core != null:
+                ReloadCore(core, hard: false);
+                break;
+            case PageLoadCommandKind.InjectOverlay:
+                Run(StudioTemplates.ReadAsset("overlay.js"));   // (it guards itself: a page that has it keeps the one it has)
+                break;
+            case PageLoadCommandKind.RequestTree:
+                // verified: the tree once more (one sent before the page counted as this project's was dropped), and
+                // the "ready" work if that message never reached us
+                if (!_readyHandled) OnOverlayReady();
+                _studio?.RequestTree();
+                break;
+            case PageLoadCommandKind.Probe:
+                _ = ProbeAsync(c.Token);
+                break;
+        }
+    }
+
+    private async Task ProbeAsync(long token)
+    {
+        var core = CurrentCore();
+        string? json = null;
+        if (core != null && _engineReady)
+        {
+            Wake();
+            try { json = await core.ExecuteScriptAsync(PageProbe.Script); }
+            catch { }
+        }
+        Safe(() => _load.Probed(token, PageProbe.Parse(json), Now));
+        ArmLoadTimer();
+    }
+
+    /// <summary>One timer for the tracker: armed for its next due time, stopped while nothing is due.</summary>
+    private void ArmLoadTimer()
+    {
+        if (_load.NextDue is not { } due) { _loadTimer?.Stop(); return; }
+        if (_loadTimer == null)
+        {
+            _loadTimer = new System.Windows.Threading.DispatcherTimer();
+            _loadTimer.Tick += (_, _) =>
+            {
+                _loadTimer!.Stop();
+                Safe(() => _load.Tick(Now));
+                ArmLoadTimer();
+            };
+        }
+        var wait = due - Now;
+        _loadTimer.Stop();
+        _loadTimer.Interval = wait > TimeSpan.FromMilliseconds(10) ? wait : TimeSpan.FromMilliseconds(10);
+        _loadTimer.Start();
     }
 
     // ───────────────────────────── overlay messages ─────────────────────────────
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        // (the last project's page, still talking while the browser leaves it: its locators mean another project's files)
-        if (_vm == null || _studio == null || _studio.PageIsOld || e.Source == StudioService.BlankPage) return;
+        if (!ReferenceEquals(sender, CurrentCore()) || e.Source == StudioService.BlankPage) return;   // (a browser since replaced)
         string json;
         try { json = e.WebMessageAsJson; }
         catch { return; }
         var msg = OverlayMessage.Parse(json);
         if (msg == null) return;
+        // the overlay of the document being loaded is up (the tracker itself knows whether it is the current document)
+        if (msg.Type == "ready") Safe(() => _load.OverlayReady(Now));
+        // (the last project's page, still talking while the browser leaves it: its locators mean another project's files)
+        if (_vm == null || _studio == null || _studio.PageIsOld) return;
 
         switch (msg.Type)
         {
             case "ready":
-                _vm.NotePage(Web.CoreWebView2?.Source);
-                if (!_vm.IsSelectMode) Run("__cx.setMode('interact')");
-                if (_reselectSrc != null || _reselectSelector != null)
-                {
-                    // the same element again after a reload: by its source location, else by its CSS path
-                    Run($"__cx.selectBySrc({JsonSerializer.Serialize(_reselectSrc ?? "")}) || __cx.selectBySelector({JsonSerializer.Serialize(_reselectSelector ?? "")})");
-                    _reselectSrc = _reselectSelector = null;
-                }
+                OnOverlayReady();
                 break;
             case "select":
             case "deselect":
             case "tree":
                 _studio.HandleOverlayMessage(msg);
+                // the page changed by itself: a build error Vite's hot update fixed is no longer reported
+                if (msg.Type == "tree") { Safe(() => _load.PageChanged(Now)); ArmLoadTimer(); }
+                break;
+            case "text" or "resize" or "command" when _vm.IsLockedByAi:
+                // (the overlay takes no edit while locked; a message already on its way when the lock came is refused here)
+                _vm.Status(Loc("studio.err.aiWorking"), error: true);
                 break;
             case "text" or "resize" or "command" when !UserJustActed:
                 _vm.Status(Loc("studio.err.noGesture"), error: true);
@@ -408,6 +731,25 @@ public partial class UiStudioView : UserControl
             case "command" when msg.Value != null:
                 _vm.Structure(msg.Value);
                 break;
+        }
+    }
+
+    /// <summary>The overlay of the page shown now is up — its "ready" message, or a verified load whose message never
+    /// reached us: the page follows the Studio's mode, and the element picked before a reload is picked again. The one
+    /// place the "ready" work is done.</summary>
+    private void OnOverlayReady()
+    {
+        _readyHandled = true;
+        if (_vm == null) return;
+        _vm.NotePage(SafeSource());
+        if (!_vm.IsSelectMode) Run("__cx.setMode('interact')");
+        // every load starts the overlay unlocked: an AI run editing the project locks the new page too
+        if (_vm.IsLockedByAi) Run("__cx.setLocked && __cx.setLocked(true)");
+        if (_reselectSrc != null || _reselectSelector != null)
+        {
+            // the same element again after a reload: by its source location, else by its CSS path
+            Run($"__cx.selectBySrc({JsonSerializer.Serialize(_reselectSrc ?? "")}) || __cx.selectBySelector({JsonSerializer.Serialize(_reselectSelector ?? "")})");
+            _reselectSrc = _reselectSelector = null;
         }
     }
 

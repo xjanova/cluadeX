@@ -1,0 +1,352 @@
+<UserControl x:Class="CluadeX.Views.Billing.SavingsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
+             xmlns:billing="clr-namespace:CluadeX.Views.Billing">
+    <!-- The Billing page's "Savings & comparison" section (DataContext: BillingSavingsViewModel). It replaced the old
+         spend window: same numbers, from the day ledger, in the page's cards. -->
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/CluadeX;component/Views/Billing/BillingStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <Style x:Key="DotPlot" TargetType="ItemsControl">
+                <Setter Property="ItemsPanel">
+                    <Setter.Value><ItemsPanelTemplate><Canvas/></ItemsPanelTemplate></Setter.Value>
+                </Setter>
+                <Setter Property="ItemContainerStyle">
+                    <Setter.Value>
+                        <Style TargetType="ContentPresenter">
+                            <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                            <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                        </Style>
+                    </Setter.Value>
+                </Setter>
+                <Setter Property="ItemTemplate">
+                    <Setter.Value>
+                        <DataTemplate>
+                            <Ellipse Width="7" Height="7" Margin="-3.5,-3.5,0,0" Fill="{Binding Color}" ToolTip="{Binding Tip}"/>
+                        </DataTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <StackPanel>
+        <!-- Section header -->
+        <DockPanel Margin="0,24,10,10">
+            <TextBlock Text="{Binding RangeLabel}" Style="{StaticResource Muted}" DockPanel.Dock="Right" VerticalAlignment="Bottom" Margin="12,0,0,2"/>
+            <StackPanel>
+                <TextBlock Text="{services:Loc billing.savings.title}" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"/>
+                <TextBlock Text="{services:Loc billing.savings.subtitle}" Style="{StaticResource Note}" Margin="0,3,0,0"/>
+            </StackPanel>
+        </DockPanel>
+
+        <!-- Dates and providers -->
+        <Border Style="{StaticResource Card}" Margin="0,0,10,0">
+            <StackPanel>
+                <WrapPanel>
+                    <ComboBox x:Name="RangePicker" ItemsSource="{Binding Ranges}" SelectedItem="{Binding SelectedRange}" DisplayMemberPath="Label"
+                              Width="180" Margin="0,0,12,8" AutomationProperties.Name="{services:Loc usage.rangeLabel}"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                        <TextBlock Text="{services:Loc usage.from}" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <DatePicker x:Name="FromPicker" SelectedDate="{Binding StartDate}" DisplayDateEnd="{Binding Today, Mode=OneWay}" Width="135"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                        <TextBlock Text="{services:Loc usage.to}" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <DatePicker x:Name="ToPicker" SelectedDate="{Binding EndDate}" DisplayDateEnd="{Binding Today, Mode=OneWay}" Width="135"/>
+                    </StackPanel>
+                    <Button x:Name="ApplyRangeButton" Content="{services:Loc usage.applyRange}" Command="{Binding ApplyDatesCommand}"
+                            Style="{StaticResource SecondaryButton}" Padding="12,5" Margin="0,0,0,8"/>
+                </WrapPanel>
+                <TextBlock Text="{Binding RangeError}" TextWrapping="Wrap" FontSize="11.5" Foreground="{DynamicResource Status.Danger}" Margin="0,0,0,6"
+                           Visibility="{Binding RangeError, Converter={StaticResource BoolVis}}"/>
+
+                <StackPanel Visibility="{Binding ShowProviderFilter, Converter={StaticResource BoolVis}}">
+                    <WrapPanel Margin="0,2,0,8">
+                        <TextBlock Text="{services:Loc usage.providerLabel}" Style="{StaticResource CardTitle}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <Button Content="{services:Loc usage.all}" Command="{Binding SelectAllCommand}" Style="{StaticResource SecondaryButton}" Padding="10,3" Margin="0,0,6,0"/>
+                        <Button Content="{services:Loc usage.none}" Command="{Binding SelectNoneCommand}" Style="{StaticResource SecondaryButton}" Padding="10,3"/>
+                        <TextBlock Text="{Binding SelectionText}" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </WrapPanel>
+                    <ItemsControl x:Name="ProviderFilters" ItemsSource="{Binding Providers}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border x:Name="B" CornerRadius="8" BorderThickness="1" Padding="8,5" Margin="0,0,8,8"
+                                        Background="{DynamicResource Surface.Chip}" BorderBrush="{DynamicResource Border.Subtle}">
+                                    <CheckBox IsChecked="{Binding IsSelected}" VerticalContentAlignment="Center" Cursor="Hand"
+                                              AutomationProperties.Name="{Binding Label}">
+                                        <StackPanel Orientation="Horizontal" Margin="2,0,0,0">
+                                            <Border Width="12" Height="3" CornerRadius="1.5" Background="{Binding Color}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource MiniLogo}" VerticalAlignment="Center"/>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Label}" FontSize="12" Foreground="{DynamicResource Text.Primary}"/>
+                                                <TextBlock Text="{Binding TotalText}" FontSize="10.5" Foreground="{DynamicResource Text.Muted}"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </CheckBox>
+                                </Border>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                        <Setter TargetName="B" Property="Background" Value="{DynamicResource State.Selected}"/>
+                                        <Setter TargetName="B" Property="BorderBrush" Value="{DynamicResource Border.Strong}"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+                <TextBlock Text="{Binding FilterNote}" Style="{StaticResource Note}" Margin="0,0,0,4"
+                           Visibility="{Binding ShowProviderFilter, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                <TextBlock Text="{Binding TokensText}" Style="{StaticResource Note}" Foreground="{DynamicResource Text.Secondary}" Margin="0,2,0,0"/>
+                <TextBlock Text="{services:Loc usage.coverageNote}" Style="{StaticResource Note}" FontSize="11" Margin="0,5,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Paid / without savings / saved -->
+        <ItemsControl ItemsSource="{Binding Summary}" Margin="0,12,0,0">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><UniformGrid Rows="1"/></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border Style="{StaticResource Card}" Margin="0,0,10,0">
+                        <StackPanel>
+                            <TextBlock Text="{Binding Title}" Style="{StaticResource Muted}"/>
+                            <TextBlock x:Name="A" Text="{Binding Amount}" FontSize="22" FontWeight="Bold" Margin="0,4,0,2"
+                                       Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding Detail}" Style="{StaticResource Muted}"/>
+                        </StackPanel>
+                    </Border>
+                    <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsSaving}" Value="True">
+                            <Setter TargetName="A" Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                        </DataTrigger>
+                    </DataTemplate.Triggers>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Comparison lines: each provider, the selected total, and the same work without savings -->
+        <Border x:Name="ComparisonCard" Style="{StaticResource Card}" Margin="0,12,10,0">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Text="{Binding LineSaved}" FontSize="12.5" FontWeight="SemiBold" DockPanel.Dock="Right" Foreground="{DynamicResource Status.Success}"/>
+                    <TextBlock Text="{services:Loc usage.providerChart}" Style="{StaticResource CardTitle}"/>
+                </DockPanel>
+                <ItemsControl ItemsSource="{Binding ProviderLines}" Margin="0,6,0,4">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,4">
+                                <Border Background="{Binding Color}" Width="14" Height="3" CornerRadius="1.5" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding Label}" Style="{StaticResource Muted}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <WrapPanel Margin="0,4,0,0">
+                    <CheckBox Content="{services:Loc usage.cumulative}" IsChecked="{Binding IsCumulative}" Margin="0,0,18,6"/>
+                    <CheckBox Content="{services:Loc usage.compareSavings}" IsChecked="{Binding ShowSavings}" Margin="0,0,18,6"/>
+                    <TextBlock Text="{Binding BucketText}" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,0,6"/>
+                </WrapPanel>
+                <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="200"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid Margin="0,0,8,0">
+                        <TextBlock Text="{Binding LineScaleTop}" Style="{StaticResource Muted}" FontSize="10.5"/>
+                        <TextBlock Text="$0" Style="{StaticResource Muted}" FontSize="10.5" VerticalAlignment="Bottom"/>
+                    </Grid>
+                    <Grid x:Name="PlotArea" Grid.Column="1" SizeChanged="Plot_SizeChanged" ClipToBounds="False">
+                        <Grid IsHitTestVisible="False">
+                            <Grid.RowDefinitions>
+                                <RowDefinition/>
+                                <RowDefinition/>
+                                <RowDefinition/>
+                                <RowDefinition/>
+                            </Grid.RowDefinitions>
+                            <Border BorderThickness="0,1,0,1" BorderBrush="{DynamicResource Border.Subtle}"/>
+                            <Border Grid.Row="1" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}"/>
+                            <Border Grid.Row="2" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}"/>
+                            <Border Grid.Row="3" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}"/>
+                        </Grid>
+                        <Grid Visibility="{Binding ShowSavings, Converter={StaticResource BoolVis}}">
+                            <Polygon Points="{Binding GapArea}" Fill="{DynamicResource Status.Success.Tint}"/>
+                            <Polyline Points="{Binding BaseLine}" Stroke="{DynamicResource Text.Muted}" StrokeThickness="2" StrokeDashArray="3,2"
+                                      ToolTip="{services:Loc usage.lineWithout}"/>
+                            <Polyline Points="{Binding PaidLine}" Stroke="{DynamicResource Chart.Line}" StrokeThickness="2"
+                                      ToolTip="{services:Loc usage.selectedTotal}"/>
+                        </Grid>
+                        <ItemsControl x:Name="SeriesChart" ItemsSource="{Binding ProviderLines}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><Grid/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Polyline Points="{Binding Points}" Stroke="{Binding Color}" StrokeThickness="2.5" StrokeLineJoin="Round" ToolTip="{Binding Label}"/>
+                                        <ItemsControl ItemsSource="{Binding Dots}" Style="{StaticResource DotPlot}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{services:Loc usage.noSelectedData}" Style="{StaticResource Muted}" TextWrapping="Wrap"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Visibility="{Binding HasUsage, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                    </Grid>
+                    <Grid Grid.Row="1" Grid.Column="1" Margin="0,7,0,0">
+                        <TextBlock Text="{Binding LineFirstDay}" Style="{StaticResource Muted}" FontSize="10.5" HorizontalAlignment="Left"/>
+                        <TextBlock Text="{Binding LineLastDay}" Style="{StaticResource Muted}" FontSize="10.5" HorizontalAlignment="Right"/>
+                    </Grid>
+                </Grid>
+                <TextBlock Text="{services:Loc usage.comparisonLegend}" Style="{StaticResource Note}" FontSize="11" Margin="0,10,0,0"
+                           Visibility="{Binding ShowSavings, Converter={StaticResource BoolVis}}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Daily: each provider's paid part, the saved part on top -->
+        <Border Style="{StaticResource Card}" Margin="0,12,10,0">
+            <StackPanel>
+                <TextBlock Text="{services:Loc usage.dailyTitle}" Style="{StaticResource CardTitle}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,6,0,8" Visibility="{Binding ShowSavings, Converter={StaticResource BoolVis}}">
+                    <Border Width="10" Height="10" CornerRadius="2" Background="#7322C55E" VerticalAlignment="Center"/>
+                    <TextBlock Text="{services:Loc usage.legendSaved}" Style="{StaticResource Muted}" Margin="6,0,14,0"/>
+                    <Border Width="14" Height="2" Background="{DynamicResource Chart.Line}" VerticalAlignment="Center"/>
+                    <TextBlock Text="{services:Loc billing.savings.paidRunning}" Style="{StaticResource Muted}" Margin="6,0,0,0"/>
+                </StackPanel>
+                <Grid>
+                    <billing:SpendChart x:Name="DailyChart" Height="190" Bars="{Binding DailyBars}" LineBrush="{DynamicResource Chart.Line}"
+                                        GridBrush="{DynamicResource Border.Subtle}" TextBrush="{DynamicResource Text.Muted}"/>
+                    <TextBlock Text="{services:Loc usage.noSelectedData}" Style="{StaticResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="{Binding HasUsage, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- Where the savings came from | dispatch strategies -->
+        <Grid Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Style="{StaticResource Card}" Margin="0,0,10,0">
+                <StackPanel>
+                    <TextBlock Text="{services:Loc usage.byRangeTitle}" Style="{StaticResource CardTitle}"/>
+                    <ItemsControl ItemsSource="{Binding Savings}" Margin="0,6,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,6,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Text="{Binding Name}" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,10,0"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Amount}" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Status.Success}"/>
+                                    <Border Grid.Row="1" Grid.ColumnSpan="2" Height="4" CornerRadius="2" Margin="0,5,0,4" Background="{DynamicResource State.Fill.Faint}">
+                                        <Border CornerRadius="2" Background="{DynamicResource Status.Success}" RenderTransformOrigin="0,0.5">
+                                            <Border.RenderTransform>
+                                                <ScaleTransform ScaleX="{Binding Fraction}"/>
+                                            </Border.RenderTransform>
+                                        </Border>
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Style="{StaticResource Card}" Margin="0,0,10,0">
+                <StackPanel>
+                    <TextBlock Text="{services:Loc billing.savings.strategyTitle}" Style="{StaticResource CardTitle}"/>
+                    <TextBlock Text="{services:Loc usage.strategyRangeDesc}" Style="{StaticResource Note}" Margin="0,4,0,0"/>
+                    <TextBlock Text="{services:Loc usage.strategyNone}" Style="{StaticResource Muted}" Margin="0,10,0,0"
+                               Visibility="{Binding HasStrategies, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                    <ItemsControl ItemsSource="{Binding Strategies}" Margin="0,4,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,6,0,2">
+                                    <DockPanel>
+                                        <TextBlock Text="{Binding Total}" FontSize="12.5" FontWeight="SemiBold" DockPanel.Dock="Right" Foreground="{DynamicResource Text.Primary}"/>
+                                        <TextBlock Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                                    </DockPanel>
+                                    <Border Height="4" CornerRadius="2" Margin="0,5,0,4" Background="{DynamicResource State.Fill.Faint}">
+                                        <Border CornerRadius="2" Background="{DynamicResource Accent.1}" RenderTransformOrigin="0,0.5">
+                                            <Border.RenderTransform>
+                                                <ScaleTransform ScaleX="{Binding Fraction}"/>
+                                            </Border.RenderTransform>
+                                        </Border>
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Note}">
+                                        <Run Text="{services:Loc usage.strategyRuns}"/><Run Text=" "/><Run Text="{Binding Runs, Mode=OneWay}"/><Run Text=" · "/><Run Text="{services:Loc usage.strategySuccess}"/><Run Text=" "/><Run Text="{Binding Success, Mode=OneWay}"/><Run Text=" · "/><Run Text="{services:Loc usage.strategyPerRun}"/><Run Text=" "/><Run Text="{Binding CostPerRun, Mode=OneWay}"/><Run Text=" · "/><Run Text="{services:Loc usage.strategyTime}"/><Run Text=" "/><Run Text="{Binding TimePerRun, Mode=OneWay}"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Monthly totals: API spend, package fees, total, and net savings against the full-price work -->
+        <Border x:Name="MonthlyTotalsCard" Style="{StaticResource Card}" Margin="0,12,10,0">
+            <StackPanel>
+                <TextBlock Text="{services:Loc usage.monthlyTitle}" Style="{StaticResource CardTitle}"/>
+                <TextBlock Text="{services:Loc usage.monthlyDesc}" Style="{StaticResource Note}" Margin="0,4,0,0"/>
+                <ItemsControl x:Name="MonthlyReport" ItemsSource="{Binding MonthlyTotals}" Margin="0,4,0,0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,0,0,1" Padding="0,10">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Label}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                                    <UniformGrid Rows="1" Margin="0,6,0,4">
+                                        <StackPanel Margin="0,0,12,0">
+                                            <TextBlock Text="{services:Loc usage.monthApi}" Style="{StaticResource Muted}"/>
+                                            <TextBlock Text="{Binding Api}" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,12,0">
+                                            <TextBlock Text="{services:Loc usage.monthPackages}" Style="{StaticResource Muted}"/>
+                                            <TextBlock Text="{Binding Packages}" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,12,0">
+                                            <TextBlock Text="{services:Loc usage.monthTotal}" Style="{StaticResource Muted}"/>
+                                            <TextBlock Text="{Binding Total}" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"/>
+                                        </StackPanel>
+                                        <StackPanel>
+                                            <TextBlock Text="{services:Loc usage.monthSaved}" Style="{StaticResource Muted}"/>
+                                            <TextBlock x:Name="S" Text="{Binding Saved}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource Status.Success}"/>
+                                        </StackPanel>
+                                    </UniformGrid>
+                                    <TextBlock Text="{Binding Note}" Style="{StaticResource Note}" FontSize="11"/>
+                                </StackPanel>
+                            </Border>
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding IsSaving}" Value="False">
+                                    <Setter TargetName="S" Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+        <TextBlock Text="{services:Loc usage.note}" Style="{StaticResource Note}" FontSize="11" Margin="2,12,10,0"/>
+    </StackPanel>
+</UserControl>

@@ -101,11 +101,22 @@ public sealed class UpdateAttemptLog
 
     /// <summary>Human-readable state for the update UI, or null when there is
     /// nothing worth saying.</summary>
-    public string? Describe() =>
+    public string? Describe() => Describe(thai: false);
+
+    /// <summary>
+    /// The same, in the UI's language. The paused text names the real manual path: a paused version is still
+    /// downloaded (only the AUTOMATIC install stops — splash and exit), so the update bar shows its Install &amp; Restart
+    /// button. It used to say "Restart &amp; apply", a button that never appeared because nothing was staged.
+    /// </summary>
+    public string? Describe(bool thai) =>
         TargetVersion == null || Failures == 0 ? null
         : Failures >= MaxConsecutiveFailures
-            ? $"v{TargetVersion} failed to apply {Failures}× — automatic install is paused. Use “Restart & apply” to try manually."
-            : $"v{TargetVersion} did not apply on the last attempt ({Failures}/{MaxConsecutiveFailures}).";
+            ? thai
+                ? $"ติดตั้ง v{TargetVersion} ไม่สำเร็จ {Failures} ครั้ง — หยุดติดตั้งอัตโนมัติไว้ก่อน กด “ติดตั้งแล้วเริ่มใหม่” บนแถบอัปเดตเพื่อลองเอง"
+                : $"v{TargetVersion} failed to apply {Failures}× — automatic install is paused. Press “Install & Restart” on the update bar to try it yourself."
+            : thai
+                ? $"ติดตั้ง v{TargetVersion} ไม่สำเร็จเมื่อครั้งก่อน ({Failures}/{MaxConsecutiveFailures}) — จะลองใหม่"
+                : $"v{TargetVersion} did not apply on the last attempt ({Failures}/{MaxConsecutiveFailures}) — it will be tried again.";
 
     // Velopack reports "3.0.52" while the assembly carries "3.0.52+fd40d8d";
     // compare on the numeric triple only.

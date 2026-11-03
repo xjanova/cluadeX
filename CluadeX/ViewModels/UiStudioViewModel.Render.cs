@@ -354,7 +354,7 @@ public sealed partial class UiStudioViewModel
         sb.AppendLine();
         sb.AppendLine("Keep the screen's design and the app's widget kit; fix the cause (an overflow means the content needs to wrap, scroll or shrink). The UI Studio draws the screen again when the files change.");
         AskAi(sb.ToString());
-    }, () => (HasStageProblems || HasCompileError) && !AiWorking);
+    }, () => (HasStageProblems || HasCompileError) && !AiWorking && !IsLockedByAi);
 
     // ───────────────────────────── following the code ─────────────────────────────
 

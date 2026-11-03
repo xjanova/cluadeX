@@ -43,9 +43,36 @@ public sealed class BillingViewModel : ViewModelBase
         _dispatcher = System.Windows.Application.Current?.Dispatcher;
         foreach (int n in new[] { 7, 30, 90 }) Ranges.Add(new RangeOption(n, LF("billing.range.days", n), this));
         _rangeDays = 30;
-        RefreshCommand = new RelayCommand(() => _ = RefreshAsync(force: true));
+        Savings = new BillingSavingsViewModel(cost, settings);
+        Account = new BillingAccountViewModel(cost, settings);
+        // A credit or plan saved on the page: the budgets read it, the comparison projects plan fees with it.
+        Account.Changed += () =>
+        {
+            if (_snapshot != null && SelectedTab != null) ShowBudgets();
+            Savings.Invalidate();
+        };
+        RefreshCommand = new RelayCommand(() => { _ = RefreshAsync(force: true); Savings.Invalidate(); Account.Refresh(); });
         SelectTabCommand = new RelayCommand<BillingTab>(t => { if (t != null) SelectedTab = t; });
         _cost.Log.Added += OnUsageAdded;
+    }
+
+    /// <summary>Savings &amp; comparison: paid vs without savings, by provider and dates, from the day ledger.</summary>
+    public BillingSavingsViewModel Savings { get; }
+    /// <summary>The credit / plan-fee editor for the account on screen.</summary>
+    public BillingAccountViewModel Account { get; }
+
+    /// <summary>The title bar's "Spend &amp; savings" asked for the page: the view brings the savings section into view.</summary>
+    public event Action? SavingsRequested;
+    private bool _savingsWanted;
+    public void ShowSavings() { _savingsWanted = true; SavingsRequested?.Invoke(); }
+    /// <summary>True once per <see cref="ShowSavings"/> (the view scrolls when it is on screen) — but not while the page's
+    /// numbers are still on their way: the cards above the section grow when they arrive and would push it off screen,
+    /// so the request waits and <see cref="SavingsRequested"/> is raised again once they are shown.</summary>
+    public bool TakeSavingsRequest()
+    {
+        if (!_savingsWanted || _snapshot == null || _running is { IsCompleted: false }) return false;
+        _savingsWanted = false;
+        return true;
     }
 
     private static string L(string key) => LocalizedResources.Instance[key];
@@ -75,6 +102,7 @@ public sealed class BillingViewModel : ViewModelBase
         {
             if (!Ranges.Any(r => r.Days == value) || !SetProperty(ref _rangeDays, value)) return;
             foreach (var r in Ranges) r.Refresh();
+            Savings.FollowRange(value);
             _ = RefreshAsync();
         }
     }
@@ -122,7 +150,10 @@ public sealed class BillingViewModel : ViewModelBase
     public void SetVisible(bool visible)
     {
         _visible = visible;
-        if (!visible) { _debounce?.Stop(); return; }
+        Savings.SetVisible(visible);
+        // Left before the page loaded: a later, ordinary visit opens at the top.
+        if (!visible) { _debounce?.Stop(); _savingsWanted = false; return; }
+        Account.Refresh();
         if (_stale || _snapshotKey?.Today != Today()) _ = RefreshAsync();
     }
 
@@ -206,6 +237,7 @@ public sealed class BillingViewModel : ViewModelBase
         SelectedTab = Tabs.FirstOrDefault(t => t.Key == keep) ?? Tabs.First();
         var start = snap.RangeStart; var end = snap.Today;
         RangeText = start.ToString("d MMM", CultureInfo.CurrentUICulture) + " – " + end.ToString("d MMM yyyy", CultureInfo.CurrentUICulture);
+        if (_savingsWanted) SavingsRequested?.Invoke();   // the numbers are in: now the section has its place
     }
 
     private void ShowTab()
@@ -274,6 +306,15 @@ public sealed class BillingViewModel : ViewModelBase
         HasChats = Chats.Count > 0;
 
         BuildBudgets(tab.Key, all, kind);
+        Savings.FollowTab(tab.Key);
+        Account.FollowTab(tab.Key);
+    }
+
+    private void ShowBudgets()
+    {
+        var key = SelectedTab!.Key;
+        bool all = key == ProviderBrand.AllKey;
+        BuildBudgets(key, all, all ? BillingKind.Api : ProviderBrand.For(key).Kind);
     }
 
     private static TokenCell Cell(string key, long value, bool reported) =>
@@ -366,12 +407,15 @@ public sealed class BillingViewModel : ViewModelBase
             }
             if (s.RunBudgetUsd > 0)
                 Budgets.Add(new BudgetLine(L("billing.budget.run"), LF("billing.budget.runAsk", Usd(s.RunBudgetUsd)), -1, false));
-            foreach (var (tabKey, ledgerKey) in new[] { ("Anthropic", "Anthropic"), ("OpenAI", "OpenAI"), ("Gemini", "Google") })
+            // Every API account with a credit entered (Credit & plan below, or the old spend window) — a ledger key, "Google" = Gemini.
+            foreach (var (ledgerKey, b) in (s.ProviderSpending ?? new()).OrderBy(kv => kv.Key, StringComparer.Ordinal))
             {
-                if (!all && key != tabKey) continue;
-                if (s.ProviderSpending?.GetValueOrDefault(ledgerKey) is not { CreditBalanceUsd: { } bal, CreditSetAt: { } at } b) continue;
+                string tabKey = ProviderBrand.FromLedgerKey(ledgerKey);
+                if ((!all && key != tabKey) || ProviderCostProjection.IsPackage(ledgerKey)) continue;
+                if (b is not { CreditBalanceUsd: { } bal, CreditSetAt: { } at }) continue;
                 decimal left = bal - _cost.SpentSince(at, b.CreditSpentOnAnchorDay, ledgerKey);
-                Budgets.Add(new BudgetLine(LF("billing.budget.credit", ProviderBrand.For(tabKey).Name),
+                string name = tabKey == "Other" && ledgerKey != "Other" ? ledgerKey : ProviderBrand.For(tabKey).Name;
+                Budgets.Add(new BudgetLine(LF("billing.budget.credit", name),
                     LF("billing.budget.creditLeft", Usd(left), Usd(bal), at.ToString("d MMM", CultureInfo.CurrentUICulture)),
                     bal > 0 ? (double)Math.Clamp((bal - left) / bal, 0, 1) : -1, left <= 0));
             }
@@ -402,7 +446,10 @@ public sealed class BillingViewModel : ViewModelBase
 
     // ── Formatting ──
 
-    public static string Usd(decimal v) => UsageViewModel.Usd(v);
+    public static string Usd(decimal v) => UsdText.Format(v);
+
+    /// <summary>"25", "$12.50", "12,50", "1,000": what the credit and plan-fee boxes accept (<see cref="UsdText.TryParse"/>).</summary>
+    public static bool TryParseUsd(string? text, out decimal usd) => UsdText.TryParse(text, out usd);
 
     /// <summary>Billed dollars as they are; an estimate with "≈"; both side by side.</summary>
     public static string Money(Spend s) =>

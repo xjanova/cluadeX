@@ -815,14 +815,7 @@ public partial class ChatViewModel : ViewModelBase
     public string RateLimitTip { get => _rateLimitTip; set => SetProperty(ref _rateLimitTip, value); }
     public string SessionCostText { get => _sessionCostText; set => SetProperty(ref _sessionCostText, value); }
     /// <summary>The provider's billing / usage page — the only place an account's credit balance is shown.</summary>
-    public string? BillingUrl => _providerManager.ActiveProviderType switch
-    {
-        AiProviderType.Anthropic => "https://platform.claude.com/settings/billing",
-        AiProviderType.OpenAI => "https://platform.openai.com/settings/organization/billing",
-        AiProviderType.Gemini => "https://aistudio.google.com/usage",
-        AiProviderType.ClaudeDev => "https://claude.ai/settings/usage",
-        _ => null,
-    };
+    public string? BillingUrl => Services.Billing.BillingSites.For(_providerManager.ActiveProviderType.ToString());
     public bool HasBillingPage => BillingUrl != null;
     public ICommand OpenBillingCommand { get; private set; } = null!;
 
@@ -1286,6 +1279,7 @@ public partial class ChatViewModel : ViewModelBase
         // Claude-Code-style orchestration views: the plan's "N running" line, workflow cards, split chips, notices,
         // the next-step box (ChatViewModel.Orchestration.cs).
         InitOrchestration();
+        InitDesign();
 
         // Agent map: every sub-agent this command started, live, as one tree card per command.
         _agentService.OnSubAgentEvent += e =>
@@ -1331,6 +1325,9 @@ public partial class ChatViewModel : ViewModelBase
                 })).ToList();
                 if (planItems.FirstOrDefault(p => p.IsActive) is { } activeStep)
                     activeStep.Running = RunningLineFor(todoRun?.Session.Id ?? CurrentSession?.Id);
+                // The same plan with a step further: its rows change state in place, so the card plays the change.
+                if (_todoListMsg != null && Messages.Contains(_todoListMsg))
+                    planItems = PlanItemView.Reconcile(_todoListMsg.PlanItems, planItems);
                 int planDone = planItems.Count(p => p.IsDone);
                 string planHeader = planDone == planItems.Count
                     ? LocF("chat.plan.done", planDone, planItems.Count)
@@ -1790,6 +1787,7 @@ public partial class ChatViewModel : ViewModelBase
         // A reply running in the chat being left keeps running there (it writes into its own chat's list).
         bool leavingRun = RunOf(CurrentSession) != null;
         var leaving = CurrentSession;
+        var clickedFrom = CurrentSession;
         int mySwitch = ++_switchSeq;
 
         // Force save current session before switching: the rows are taken now, the write happens in the background
@@ -1799,20 +1797,11 @@ public partial class ChatViewModel : ViewModelBase
             _isDirty = true;
             AutoSave(background: true);
         }
-        // Leaving an untouched chat: drop it from the sidebar (and the DB, if a cleared chat was saved
-        // empty) instead of leaving a stray "New Chat". The DB check keeps a session whose messages
-        // exist but aren't on screen.
-        else if (CurrentSession != null && !_persistenceService.SessionHasMessages(CurrentSession.Id))
-        {
-            string emptyId = CurrentSession.Id;
-            _persistenceService.DeleteEmptySessions(emptyId);
-            for (int i = Sessions.Count - 1; i >= 0; i--)
-                if (Sessions[i].Id == emptyId) Sessions.RemoveAt(i);
-        }
 
         // A chat with a run in progress: its live list IS the chat — never reload it from the database.
         if (_runs.FirstOrDefault(r => r.Session.Id == sessionId) is { } running)
         {
+            DropIfUntouched(CurrentSession);   // no await since the click: the chat on screen is still the one left
             CurrentSession = running.Session;
             Messages = running.Messages;
             _isDirty = false;
@@ -1850,6 +1839,17 @@ public partial class ChatViewModel : ViewModelBase
             await LoadSessionAsync(sessionId);
             return;
         }
+        // What the screen holds NOW is what this switch replaces — not what it held at the click: a pipe task or an
+        // agent's split may have opened a chat meanwhile, or the user pressed Send and a run started in it. Deciding on
+        // the old capture dismissed a live run's permission prompts and gave back the rows of the wrong chat.
+        leaving = CurrentSession;
+        leavingRun = RunOf(leaving) != null;
+        // A chat that came on screen (or got rows) since the click was not in the save above: saved before it goes.
+        if (leaving != null && Messages.Count > 0 && (_isDirty || !ReferenceEquals(leaving, clickedFrom)))
+        {
+            _isDirty = true;
+            AutoSave(background: true);
+        }
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
         {
             _debugLog?.Info("Perf", $"chat switch {switchWatch.ElapsedMilliseconds} ms (save {tSave} · load {tLoad} · {session?.Messages.Count ?? 0} rows · list@{tList} follow@{tFollow} ctx@{tCtx} · realized {Views.ChatView.RealizedRows()})");
@@ -1879,6 +1879,8 @@ public partial class ChatViewModel : ViewModelBase
         // The sidebar's own row becomes the chat, with the stored rows and header copied onto it.
         else session = AdoptLoadedSession(session);
 
+        // Only now, when this switch really happens: a load that is overtaken leaves its chat on screen WITH its row.
+        DropIfUntouched(leaving);
         // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
         CurrentSession = session;
 
@@ -1914,6 +1916,27 @@ public partial class ChatViewModel : ViewModelBase
 
     /// <summary>Switches in flight: a chat whose load finishes after another chat was picked is not shown.</summary>
     private int _switchSeq;
+
+    /// <summary>The user's own move away from what is on screen (New Chat, /new, /close, deleting the chat on screen, a
+    /// project opened in a chat of its own, a plan branch …): a sidebar chat still loading loses — it used to land over
+    /// the new chat and leave it behind as a stray empty "New Chat". Called before the new chat is made, so it holds
+    /// when NewSession reuses the untouched chat on screen too. Never from a pipe task, an agent's new_chat / split,
+    /// startup or BeginTurn: the chat the user just picked wins over those.</summary>
+    private void CancelPendingChatLoad() => _switchSeq++;
+
+    /// <summary>Leaving an untouched chat: drop it from the sidebar (and the DB, if a cleared chat was saved empty)
+    /// instead of leaving a stray "New Chat". <paramref name="left"/> must be the chat on screen at the moment of the
+    /// switch (its rows are <see cref="Messages"/>). The DB check keeps a session whose messages exist but aren't on
+    /// screen.</summary>
+    private void DropIfUntouched(ChatSession? left)
+    {
+        if (left == null || !ReferenceEquals(left, CurrentSession) || Messages.Count > 0 || RunOf(left) != null) return;
+        if (_persistenceService.SessionHasMessages(left.Id)) return;
+        _persistenceService.DeleteEmptySessions(left.Id);
+        for (int i = Sessions.Count - 1; i >= 0; i--)
+            if (Sessions[i].Id == left.Id) Sessions.RemoveAt(i);
+        Services.Agents.DesignGate.Forget(left.Id);
+    }
 
     /// <summary>
     /// The chat just read from the database, put onto the sidebar's own object for it: its rows and what the database
@@ -1986,6 +2009,7 @@ public partial class ChatViewModel : ViewModelBase
         // Delete from DB
         _persistenceService.DeleteSession(sessionId);
         await CleanUpSessionAsync(sessionId, deleteImages: false);   // DeleteSession already removed its screenshots
+        Services.Agents.DesignGate.Forget(sessionId);
 
         if (_settingsService.Settings.PinnedChatIds.Contains(sessionId))
         {
@@ -2005,6 +2029,7 @@ public partial class ChatViewModel : ViewModelBase
         // If we deleted the current session, create a new one
         if (CurrentSession?.Id == sessionId)
         {
+            CancelPendingChatLoad();   // a chat still loading must not land over the new one
             CurrentSession = null;
             ResolvePendingPermissionPrompts();
             Messages = new ObservableCollection<ChatMessage>();
@@ -2255,7 +2280,7 @@ public partial class ChatViewModel : ViewModelBase
     {
         // A reply running in the chat on screen keeps its own folder (its run pinned it); the new project gets
         // a new chat so the two never mix.
-        if (IsGenerating) NewSession();
+        if (IsGenerating) { CancelPendingChatLoad(); NewSession(); }
 
         // Use the owner-aware COM picker (it passes the MainWindow hwnd). A plain
         // Microsoft.Win32.OpenFolderDialog with NO owner opened its modal BEHIND our borderless
@@ -2361,7 +2386,7 @@ public partial class ChatViewModel : ViewModelBase
     private async Task CloneRepo()
     {
         // Cloning ends by switching the project: a reply running here keeps its folder; the clone gets a new chat.
-        if (IsGenerating) NewSession();
+        if (IsGenerating) { CancelPendingChatLoad(); NewSession(); }
 
         // 1) Ask for the repo URL.
         string? url = CluadeX.Services.Helpers.InputDialog.Show(
@@ -2476,7 +2501,7 @@ public partial class ChatViewModel : ViewModelBase
     private async Task CloseFolderAsync()
     {
         await Task.CompletedTask;
-        if (IsGenerating) NewSession();   // the running reply keeps its folder
+        if (IsGenerating) { CancelPendingChatLoad(); NewSession(); }   // the running reply keeps its folder
 
         // Mirror SetWorkingDirectory: the closed project's branch badge, its skills, the system prompt that
         // described it and its "Accept edits" all go with it.
@@ -2487,6 +2512,7 @@ public partial class ChatViewModel : ViewModelBase
     /// the Code page hosts this same chat docked beside the editor.</summary>
     private Task NewSessionFromUserAsync()
     {
+        CancelPendingChatLoad();
         NewSession(keepProject: false);   // a reply running in the chat on screen carries on in the background
         return Task.CompletedTask;
     }
@@ -2496,6 +2522,7 @@ public partial class ChatViewModel : ViewModelBase
     /// did nothing.</summary>
     private Task NewChatAndShowAsync()
     {
+        CancelPendingChatLoad();
         NewSession(keepProject: false);
         NavigateToChatRequested?.Invoke();
         return Task.CompletedTask;
@@ -3452,7 +3479,13 @@ public partial class ChatViewModel : ViewModelBase
     {
         string input = UserInput?.Trim() ?? "";
         // The owner's own words, for the workflow opt-in (a pipe caller's or an agent's text never counts).
-        if (CurrentSession is { } s && input.Length > 0) Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+        if (CurrentSession is { } s && input.Length > 0)
+        {
+            Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+            // The UI Studio's own request ("[UI Studio] Change one element of the UI.") is not the owner asking for a
+            // design: its words are none (the chat's Design switch still counts).
+            Services.Agents.DesignGate.NoteOwnerMessage(s.Id, _sendingFromStudio ? "" : input, append: IsGenerating);
+        }
         return SendMessageCore(input, pipe: null);
     }
 
@@ -3506,15 +3539,19 @@ public partial class ChatViewModel : ViewModelBase
         {
             // Close this chat's session: stop what its agent left running, then start a fresh chat (this one is kept).
             ClearBox();
-            if (!await EnsureIdleAsync()) return;
+            // The chat the command was typed in — read before the wait: a chat still loading landed during the "stop
+            // the reply first?" question and was the one closed (its dev servers and preview stopped).
             string? closing = CurrentSession?.Id;
-            NewSession();
+            CancelPendingChatLoad();
+            if (!await EnsureIdleAsync()) return;
+            if (CurrentSession?.Id == closing) NewSession();   // a chat the user opened during the wait stays
             await CleanUpSessionAsync(closing, deleteImages: false);
             return;
         }
         if (input.Equals("/new", StringComparison.OrdinalIgnoreCase))
         {
             ClearBox();
+            CancelPendingChatLoad();
             NewSession();
             return;
         }
@@ -3612,7 +3649,11 @@ public partial class ChatViewModel : ViewModelBase
         string modelInput = input.Length > 0 ? input
             : images > 0 && files == 0 ? "Look at the attached image(s)."
             : "Look at the attached file(s).";
-        await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride), pipe);
+        // Design mode: the owner's own Send in a chat whose switch is on or whose words ask for a design (a skill keeps its
+        // own instructions; a pipe caller's message never counts). Decided once, here: the words are used up, and the
+        // decision rides with the turn (MarkDesignTurn) for the follow tick, a Retry and a note left over after it.
+        bool design = fromBox && Services.Agents.DesignGate.TakeOwnerTurn(CurrentSession?.Id) && activeSkill == null;
+        await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride), pipe, design);
     }
 
     /// <summary>
@@ -3625,6 +3666,7 @@ public partial class ChatViewModel : ViewModelBase
         if (run?.Scope == null) return;
         if (text.StartsWith("/")) { StatusText = Loc("chat.steer.noSlash"); return; }
         var bubble = new ChatMessage { Role = MessageRole.User, Content = text, IsQueuedNote = true };
+        NoteTypedIntoRun(run, bubble);
         run.Messages.Add(bubble);
         // Said in the chat, not only the status bar: the user sees it was taken and when it will be done.
         bubble.QueueRow = new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") };
@@ -3723,7 +3765,9 @@ public partial class ChatViewModel : ViewModelBase
         }
         var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
         Messages.Add(bubble);
-        Detached(() => RunTurnAsync(bubble, text, null, false));
+        // typed into a design turn (or a chat whose Design switch is on): the next turn is one too
+        bool design = WasDesignRun(run) || Services.Agents.DesignGate.IsOn(run.Session.Id);
+        Detached(() => RunTurnAsync(bubble, text, null, false, design: design));
     }
 
     /// <summary>True when the active provider can answer. Waits for (or retries) its initialise — after a
@@ -3781,7 +3825,7 @@ public partial class ChatViewModel : ViewModelBase
     /// by substring — so "prompt is too long: 215000 tokens" matched "500" and was resent 3× with a growing
     /// prompt — and kept counting down after Stop.
     /// </summary>
-    private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill, PipeTurn? pipe = null)
+    private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill, PipeTurn? pipe = null, bool design = false)
     {
         await AutoOpenProjectsAsync(input);
         // Related folders ride along with the message so the model knows they are there (and how to reach them).
@@ -3789,6 +3833,14 @@ public partial class ChatViewModel : ViewModelBase
             input += "\n\n[Open folders — main: " + _fileSystemService.AppWorkingDirectory + "; also open: "
                 + string.Join(", ", withExtras.ExtraFolders) + ". Relative paths are in the main folder; use absolute paths for the others.]";
         var turn = BeginTurn();
+        if (design && CurrentSession is { } designChat)
+        {
+            // what the model is told rides on this turn's input (the first request reads it; the shared system prompt
+            // stays the same for every chat, so its cache holds)
+            input += "\n\n" + NoticePrefix + Services.Agents.DesignGate.Guidance;
+            MarkDesignTurn(turn, userMsg);
+            BeginDesignTurn(designChat);
+        }
         if (pipe != null && FlowRun is { } pipeRun)
         {
             // A message a pipe caller sent (cluadex.continue_chat): marked as such (the BrainX model never relays it
@@ -4005,16 +4057,18 @@ public partial class ChatViewModel : ViewModelBase
         if (!await EnsureProviderReadyAsync()) return;
 
         bool latestExchange = !Messages.Skip(idx + 1).Any(m => m.Role == MessageRole.User);
+        // asked again the way it was asked: a design turn stays one (the owner's words are long used up by now)
+        bool design = WasDesignAsk(user) || Services.Agents.DesignGate.IsOn(CurrentSession?.Id);
         if (latestExchange)
         {
             Messages.Remove(failed);
-            await RunTurnAsync(user, user.Content, activeSkill: null, isSkill: false);
+            await RunTurnAsync(user, user.Content, activeSkill: null, isSkill: false, design: design);
         }
         else
         {
             var again = new ChatMessage { Role = MessageRole.User, Content = user.Content };
             Messages.Add(again);
-            await RunTurnAsync(again, again.Content, activeSkill: null, isSkill: false);
+            await RunTurnAsync(again, again.Content, activeSkill: null, isSkill: false, design: design);
         }
     }
 
@@ -4781,8 +4835,12 @@ public partial class ChatViewModel : ViewModelBase
             {
                 string full = Path.GetFullPath(Path.Combine(runFolder ?? windowFolder, toolResult.FilePath!));
                 FileMutatedByAgent?.Invoke(full, toolResult.Diff?.FirstChangedLine ?? 1, toolResult.Diff);
-                // Only a file the editor can show (the window's project) is worth leaving the page for.
-                if (ticked && IsInsideFolder(full, windowFolder)) ShowEditorRequested?.Invoke();
+                // Only a file the editor can show (the window's project) is worth leaving the page for — and not in a design
+                // turn: the owner watches the UI Studio then, and every edit would pull them off it to the Code page.
+                // (the run captured when the tool finished: an edit landing just after its turn ended is still that turn's)
+                bool designTurn = run != null ? WasDesignRun(run) || Services.Agents.DesignGate.IsOn(run.Session.Id) : InDesignTurn(CurrentSession);
+                if (ticked && IsInsideFolder(full, windowFolder) && !designTurn)
+                    ShowEditorRequested?.Invoke();
             }
 
             // Format arguments for display

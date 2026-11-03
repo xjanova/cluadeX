@@ -26,7 +26,8 @@ public class LocalizationService
                                       Localization.StarterKeys.Keys,
                                       Localization.AutoCommentKeys.Keys,
                                       Localization.OrchestrationKeys.Keys,
-                                      Localization.BillingKeys.Keys,
+                                      Localization.DesignKeys.Keys,
+                                      Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
                                       Localization.AggregatorKeys.Keys,
                                       Localization.LspKeys.Keys })
             foreach (var (key, values) in extra)
@@ -105,6 +106,7 @@ public class LocalizationService
         ["update.devBuildNote"] = new() { ["en"] = "This is a development / portable build — updates download and install by themselves only in the installed version.", ["th"] = "ตัวนี้เป็น build สำหรับพัฒนา/แบบพกพา — การดาวน์โหลดและติดตั้งอัปเดตอัตโนมัติทำงานเฉพาะเวอร์ชันที่ติดตั้งด้วยตัวติดตั้ง" },
         ["update.staged"] = new() { ["en"] = "v{0} is downloaded — it installs by itself when you close CluadeX, or press Install to restart into it now.", ["th"] = "ดาวน์โหลด v{0} เสร็จแล้ว — จะติดตั้งให้เองตอนปิดโปรแกรม หรือกด \"ติดตั้งแล้วเริ่มใหม่\" เพื่อใช้เวอร์ชันใหม่ตอนนี้" },
         ["update.bgDownloading"] = new() { ["en"] = "Downloading v{0} in the background — {1}", ["th"] = "กำลังดาวน์โหลด v{0} เบื้องหลัง — {1}" },
+        ["update.bgPreparing"] = new() { ["en"] = "Update v{0}: {1}", ["th"] = "อัปเดต v{0}: {1}" },
         ["update.bgFailed"] = new() { ["en"] = "Couldn't download v{0} ({1}) — it tries again by itself and goes on from where it stopped.", ["th"] = "ดาวน์โหลด v{0} ไม่สำเร็จ ({1}) — จะลองใหม่เองอัตโนมัติ และโหลดต่อจากส่วนที่ได้แล้ว" },
         ["update.applying"] = new() { ["en"] = "Applying v{0} — CluadeX will restart…", ["th"] = "กำลังติดตั้ง v{0} — CluadeX จะเริ่มใหม่…" },
         ["update.applyFailed"] = new() { ["en"] = "Could not apply the update — see the log. It will be retried on the next launch.", ["th"] = "ติดตั้งอัปเดตไม่สำเร็จ — ดูรายละเอียดใน log · จะลองใหม่เมื่อเปิดโปรแกรมครั้งหน้า" },

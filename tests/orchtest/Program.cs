@@ -21,12 +21,13 @@ namespace OrchTest;
 /// No model, no network, no GPU: every sub-agent answer is scripted here. portable.txt keeps settings next to this exe.
 ///   dotnet build CluadeX/CluadeX.csproj   then   cd tests/orchtest && dotnet run
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly StringBuilder Report = new();
     static readonly List<string> Failures = new();
     static AgentToolService Svc;
+    static LocalizationService LocSvc;
     static string Root;
 
     [STAThread]
@@ -139,7 +140,7 @@ internal static class Program
         Check("setup: portable data root (never the user's ~/.cluadex)",
             settings.DataRoot.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase), settings.DataRoot);
         if (!settings.DataRoot.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase)) return 3;
-        var loc = sp.GetRequiredService<LocalizationService>();
+        var loc = LocSvc = sp.GetRequiredService<LocalizationService>();
         LocalizedResources.Instance.Initialize(loc);
         loc.SetLanguage("en");
         Svc = sp.GetRequiredService<AgentToolService>();
@@ -168,6 +169,16 @@ internal static class Program
         await Case("W11", TestDoubleResume);
         await Case("W12", TestEstimate);
         await Case("W13", TestHardCap);
+
+        Log("\n## Isolation, gate and merge (agents in their own git worktrees)");
+        await Case("I1", RealShell(TestIsolatedCleanMerge));
+        await Case("I2", TestIsolatedConflict);
+        await Case("I3", RealShell(TestIsolatedRedGate));
+        await Case("I4", TestIsolatedStop);
+        await Case("I5", TestIsolatedCrashSweep);
+        await Case("I6", TestIsolatedResume);
+        await Case("I7", TestIsolationPlanChecks);
+        await Case("I8", TestIsolationThroughTool);
 
         Log("\n## Opt-in gate and the workflow tool");
         await Case("G1", TestGate);
@@ -287,6 +298,15 @@ internal static class Program
         Check("P4d and steps it along", b.Ok && Statuses(scope.Todos) == "completed,in_progress", b.Text);
         var c = await ChatToolBridge.HandleAsync(Req("workflow", new { name = "x", phases = new object[] { new { title = "t", agents = new object[] { new { label = "l", prompt = "p" } } } } }));
         Check("P4e a CLI agent's workflow is refused while the chat has not opted in, with the reason", !c.Ok && c.Text.Contains("Ultra"), c.Text);
+        Check("P4f CLI agents are offered add_code_comments, with its schema",
+            ChatToolBridge.QualifiedToolNames.Contains("mcp__cluadex__add_code_comments")
+            && list.EnumerateArray().Any(t => t.GetProperty("name").GetString() == "add_code_comments"));
+        scope.AddUserNote("also do C");
+        var d = await ChatToolBridge.HandleAsync(Req("update_plan", new { advance = true }));
+        Check("P4g what the user typed mid-run rides on the CLI agent's next CluadeX tool reply",
+            d.Ok && d.Text.Contains("also do C") && !scope.HasUserNotes, d.Text);
+        var e = await ChatToolBridge.HandleAsync(Req("update_plan", new { advance = true }));
+        Check("P4h ...once", e.Ok && !e.Text.Contains("also do C"), e.Text);
     }
 
     static Task TestRunningLine()
@@ -583,8 +603,17 @@ internal static class Program
             && !new[] { "fix the workflow file", "what is an agent", "", null }.Any(WorkflowGate.AsksForWorkflow));
         WorkflowGate.SetUltra(chat, true);
         Check("G1f the Ultra switch opens it for the chat", WorkflowGate.Why(chat) == "ultra" && WorkflowGate.IsUltra(chat) && !WorkflowGate.IsUltra("orch-other"));
+        string? cliGuide = WorkflowGate.SplitGuideFor(chat, cli: true), nativeGuide = WorkflowGate.SplitGuideFor(chat, cli: false);
+        Check("G1i with Ultra on the model is told so, with when to do it itself, spawn, run a workflow or split off a chat",
+            cliGuide != null && cliGuide.Contains("Ultra") && cliGuide.Contains("the Agent tool") && cliGuide.Contains("mcp__cluadex__workflow")
+            && cliGuide.Contains("mcp__cluadex__new_chat") && cliGuide.Contains("same files") && !cliGuide.Contains('\n')
+            && nativeGuide != null && nativeGuide.Contains("agent_spawn") && !nativeGuide.Contains("mcp__"), cliGuide ?? "(none)");
+        string args = CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(Root, new(true, true), "default", "auto",
+            toolsConfig: Path.Combine(Root, "tools.json"), splitGuide: cliGuide);
+        Check("G1j a Claude Dev worker's wrapper carries the guide", args.Contains("take the first that fits"), "");
         WorkflowGate.SetUltra(chat, false);
         Check("G1g and off again", !WorkflowGate.Allowed(chat));
+        Check("G1k no guide while off", WorkflowGate.SplitGuideFor(chat, cli: true) == null);
         string dir = Path.Combine(Root, "gate");
         Directory.CreateDirectory(dir);
         WorkflowGate.Load(dir);

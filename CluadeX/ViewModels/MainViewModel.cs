@@ -410,6 +410,19 @@ public class MainViewModel : ViewModelBase
         NodeGraphVM = nodeGraphVM;
         // The Studio and the Graph ask for other pages (open the code at a line, the chat, each other).
         if (uiStudioVM != null) uiStudioVM.OpenPageRequested += NavigateTo;
+        // Design mode: the owner's design turn brings the UI Studio forward to watch the real screen — once it can show
+        // the chat's project (a brand-new site: when its first page is written). Not if the user went to another page
+        // since sending: that page is theirs.
+        if (uiStudioVM != null)
+        {
+            chatVM.DesignViewRequested += _ => _designFromPage = SelectedNavItem;
+            uiStudioVM.DesignViewReady += () => System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                string? from = _designFromPage;
+                _designFromPage = null;
+                if (from == null || SelectedNavItem == from) NavigateTo("UiStudio");
+            });
+        }
         if (nodeGraphVM != null) nodeGraphVM.OpenPageRequested += NavigateTo;
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
@@ -833,6 +846,9 @@ public class MainViewModel : ViewModelBase
         win.Activate();
     }
 
+    /// <summary>The page the owner was on when they sent the design turn now waiting for the UI Studio.</summary>
+    private string? _designFromPage;
+
     // ─── Follow mode goes back to Chat once the agent's edits stop (FollowBack) ───
     private readonly DispatcherTimer _followBackTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private bool _followBrought, _followNavigating;
@@ -1031,11 +1047,15 @@ public class MainViewModel : ViewModelBase
     private string? _dismissedUpdateKey;   // the state the bar was closed on: it stays closed until the state moves on
     private bool _sawDownload;             // a failure is shown for a download the bar was showing, or a manual check
     private bool _manualCheck;
-    private static string UpdateKey(UpdateProgressInfo p) => $"{p.Phase}:{p.Version}";
+    private long _updateSeq;               // the newest snapshot drawn: reports from several threads can arrive out of order
+    // Preparing is the end of the same download: a bar closed while downloading stays closed through it.
+    private static string UpdateKey(UpdateProgressInfo p) => $"{(p.Phase == UpdatePhase.Preparing ? UpdatePhase.Downloading : p.Phase)}:{p.Version}";
 
     private void RenderUpdate(UpdateProgressInfo p)
     {
         if (IsRestartingForUpdate) return;
+        if (p.Seq < _updateSeq) return;
+        _updateSeq = p.Seq;
         if (_dismissedUpdateKey == UpdateKey(p)) return;
         bool thai = _loc.CurrentLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase);
         switch (p.Phase)
@@ -1049,9 +1069,21 @@ public class MainViewModel : ViewModelBase
                 CanInstallUpdate = false;
                 ShowUpdateBar = true;
                 break;
+            case UpdatePhase.Preparing:
+                _sawDownload = true;
+                UpdateMessage = string.Format(L("update.bgPreparing"), p.Version, p.Describe(thai));
+                UpdateProgress = 100;
+                UpdateProgressText = p.Describe(thai);
+                IsUpdating = true;
+                CanInstallUpdate = false;
+                ShowUpdateBar = true;
+                break;
             case UpdatePhase.Staged when _autoUpdate.HasStagedUpdate:
                 _sawDownload = false;
-                UpdateMessage = "🔔 " + string.Format(L("update.staged"), p.Version);
+                // A version the circuit breaker paused does not install on exit: the bar says so, Install is the way.
+                UpdateMessage = !_autoUpdate.MayAutoInstall(p.Version) && _autoUpdate.PausedReason is { } paused
+                    ? "⚠ " + paused
+                    : "🔔 " + string.Format(L("update.staged"), p.Version);
                 UpdateProgress = 100;
                 IsUpdating = false;
                 CanInstallUpdate = true;

@@ -95,12 +95,152 @@ public partial class ChatViewModel
     public ICommand DismissStickyPlanCommand => _dismissStickyPlanCommand ??= new RelayCommand(() =>
     {
         _stickyPlanDismissed = _stickyPlanSignature;
-        OnPropertyChanged(nameof(HasStickyPlan));
-        OnPropertyChanged(nameof(HasStickyBar));
+        RaiseFloatingPlan();
     });
     private ICommand? _dismissStickyPlanCommand;
     public bool HasStickyBranches => _stickyBranches.Count > 0;
-    public bool HasStickyBar => HasStickyPlan || HasStickyBranches;
+    /// <summary>The bar over the chat: the floating plan card while it shows, and the branch chips (always).</summary>
+    public bool HasStickyBar => IsFloatingPlanShown || HasStickyBranches;
+
+    // ─── The floating plan card (owner 2026-11-03: "เมื่อมีการสร้างแผนงาน ให้ลอย สักครู่แล้วหายไป และถ้าแชทสกรอจนแผนงาน
+    //     ในแชทหลุดจากจอ การ์ดแผนงานลอยจะแสดงขึ้น"): a new plan floats for a few seconds, then the card shows only
+    //     while the plan card in the chat is off screen. A step moving on is not a new plan and does not bring it back. ───
+
+    /// <summary>How long a new plan floats before it goes (it stays while the mouse is over it).</summary>
+    public static readonly TimeSpan PlanIntroLength = TimeSpan.FromSeconds(4);
+    /// <summary>After the mouse leaves a card still in its intro, it goes this long later.</summary>
+    public static readonly TimeSpan PlanIntroAfterHover = TimeSpan.FromSeconds(1.5);
+
+    /// <summary>The rule, pure: no plan (none, all done, or closed) → no card; a new plan floats until its intro time is
+    /// up; after that the card shows only while the chat's own plan card is off screen.</summary>
+    public static bool FloatingPlanShows(bool hasPlan, bool inlineCardVisible, bool planIsNew, bool introElapsed)
+        => hasPlan && ((planIsNew && !introElapsed) || !inlineCardVisible);
+
+    /// <summary>Is a plan written now new, against the one this chat showed before (step texts)? A different list is;
+    /// the same list, or the same list with items added after it (the owner's additions), is not.</summary>
+    public static bool IsNewPlan(IReadOnlyList<string>? before, IReadOnlyList<string> now)
+    {
+        if (now.Count == 0) return false;
+        if (before == null || before.Count == 0 || before.Count > now.Count) return true;
+        for (int i = 0; i < before.Count; i++)
+            if (!string.Equals(before[i], now[i], StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    /// <summary>Does the chat's plan card count as on screen? <paramref name="top"/>/<paramref name="bottom"/> are its
+    /// edges in the viewport's coordinates (0..<paramref name="viewport"/>). Hysteresis: it has to show a good part of
+    /// itself to count as seen, and to be nearly gone to count as gone, so a card at the edge does not flicker.</summary>
+    public static bool InlinePlanSeen(bool wasSeen, double top, double bottom, double viewport)
+    {
+        double height = Math.Max(0, bottom - top);
+        if (height <= 0 || viewport <= 0) return false;
+        double shown = Math.Max(0, Math.Min(bottom, viewport) - Math.Max(top, 0));
+        return wasSeen ? shown >= Math.Min(20, height * 0.25) : shown >= Math.Min(56, height * 0.6);
+    }
+
+    /// <summary>The plan words each chat last showed (session id → step texts): a chat switched back to does not replay
+    /// the intro of a plan already seen there.</summary>
+    private readonly Dictionary<string, List<string>> _planIntroduced = new();
+    private string _floatSession = "";
+    private bool _planIsNew, _planIntroElapsed = true;
+    private System.Windows.Threading.DispatcherTimer? _planIntroTimer;
+
+    private bool _isInlinePlanVisible;
+    /// <summary>Set by the chat view: the chat's own plan card is on screen (ChatView.xaml.cs, throttled, with hysteresis).</summary>
+    public bool IsInlinePlanVisible
+    {
+        get => _isInlinePlanVisible;
+        set { if (SetProperty(ref _isInlinePlanVisible, value)) RaiseFloatingPlan(); }
+    }
+
+    private bool _isFloatingPlanHovered;
+    /// <summary>Set by the chat view: the mouse is over the floating card — a new plan stays while it is.</summary>
+    public bool IsFloatingPlanHovered
+    {
+        get => _isFloatingPlanHovered;
+        set
+        {
+            if (!SetProperty(ref _isFloatingPlanHovered, value) || _planIntroElapsed) return;
+            if (value) _planIntroTimer?.Stop();
+            else StartPlanIntroTimer(PlanIntroAfterHover);
+        }
+    }
+
+    /// <summary>A new plan's intro is on screen (its few seconds, or held by the mouse).</summary>
+    public bool IsPlanIntroOn => _planIsNew && !_planIntroElapsed;
+
+    public bool IsFloatingPlanShown => FloatingPlanShows(HasStickyPlan, _isInlinePlanVisible, _planIsNew, _planIntroElapsed);
+
+    /// <summary>The bar's plan part: with branch chips the bar stays and the plan part follows the floating rule; alone,
+    /// the whole bar comes and goes (the view fades it), so the plan part stays drawn while it fades.</summary>
+    public bool StickyBarShowsPlan => HasStickyPlan && (IsFloatingPlanShown || !HasStickyBranches);
+
+    private void RaiseFloatingPlan()
+    {
+        OnPropertyChanged(nameof(HasStickyPlan));
+        OnPropertyChanged(nameof(IsPlanIntroOn));
+        OnPropertyChanged(nameof(IsFloatingPlanShown));
+        OnPropertyChanged(nameof(StickyBarShowsPlan));
+        OnPropertyChanged(nameof(HasStickyBar));
+    }
+
+    /// <summary>The plan on screen was rebuilt: a different chat resets the card's state; a new plan starts its intro.</summary>
+    private void TrackFloatingPlan(string? sessionId, IReadOnlyList<PlanItemView> items)
+    {
+        if ((sessionId ?? "") != _floatSession)
+        {
+            _floatSession = sessionId ?? "";
+            EndPlanIntro();
+            _isFloatingPlanHovered = false;
+            // The view measures the new chat's card after layout; until then it counts as on screen, so a chat opened
+            // with its plan card in view does not flash the floating one first.
+            _isInlinePlanVisible = true;
+            OnPropertyChanged(nameof(IsInlinePlanVisible));
+        }
+        if (sessionId == null) return;
+        var words = items.Select(p => p.Text).ToList();
+        _planIntroduced.TryGetValue(sessionId, out var before);
+        if (words.Count > 0) _planIntroduced[sessionId] = words;
+        if (!IsNewPlan(before, words)) return;
+        _planIsNew = true;
+        _planIntroElapsed = false;
+        if (!_isFloatingPlanHovered) StartPlanIntroTimer(PlanIntroLength);
+    }
+
+    private void StartPlanIntroTimer(TimeSpan after)
+    {
+        if (_planIntroTimer == null)
+        {
+            _planIntroTimer = new System.Windows.Threading.DispatcherTimer();
+            _planIntroTimer.Tick += (_, _) =>
+            {
+                _planIntroTimer!.Stop();
+                if (_isFloatingPlanHovered) return;   // the leave restarts it
+                _planIntroElapsed = true;
+                RaiseFloatingPlan();
+            };
+        }
+        _planIntroTimer.Stop();
+        _planIntroTimer.Interval = after;
+        _planIntroTimer.Start();
+    }
+
+    /// <summary>Stop a running intro now (a chat switch, the chat view going away).</summary>
+    public void EndPlanIntro()
+    {
+        _planIntroTimer?.Stop();
+        _planIsNew = false;
+        _planIntroElapsed = true;
+        RaiseFloatingPlan();
+    }
+
+    /// <summary>Tests: the intro's time is up now (as the timer would).</summary>
+    public void ElapsePlanIntroForTest()
+    {
+        _planIntroTimer?.Stop();
+        _planIntroElapsed = true;
+        RaiseFloatingPlan();
+    }
 
     private bool _stickyLangHooked;
     private bool _stickyPlanExpanded;
@@ -135,21 +275,26 @@ public partial class ChatViewModel
         if (session == null)
         {
             StickyPlanItems = Array.Empty<PlanItemView>(); StickyBranches = Array.Empty<BranchLink>();
+            TrackFloatingPlan(null, StickyPlanItems);
         }
         else
         {
-            var plan = PlanSnapshot(session.Id).Items;
-            var items = plan.Select((t, i) => new PlanItemView(i + 1, t.Content, t.Status?.ToLowerInvariant() switch
+            var snap = PlanSnapshot(session.Id);
+            var items = snap.Items.Select((t, i) => new PlanItemView(i + 1, t.Content, t.Status?.ToLowerInvariant() switch
             {
                 "completed" or "done" => "done",
                 "in_progress" or "active" => "active",
                 _ => "pending",
-            })).ToList();
+            }) { IsLive = snap.Running }).ToList();
             int done = items.Count(p => p.IsDone);
             if (items.FirstOrDefault(p => p.IsActive) is { } activeStep) activeStep.Running = RunningLineFor(session.Id);
+            // The same plan a step further keeps its rows (state set in place): the bar plays the change, no redraw.
+            if (_stickyPlanSignature.StartsWith(session.Id + "|", StringComparison.Ordinal))
+                items = PlanItemView.Reconcile(_stickyPlanItems, items);
             StickyPlanItems = items;
             // The plan's identity: its chat and its items' words (a status change keeps it; a new plan has new words).
             _stickyPlanSignature = session.Id + "|" + string.Join("|", items.Select(p => p.Text));
+            TrackFloatingPlan(session.Id, items);
             // The number is the step it is on, not how many are finished: the third item running reads 3/5, never 2/5.
             var now = items.FirstOrDefault(p => p.IsActive) ?? items.FirstOrDefault(p => p.IsPending);
             StickyPlanHeader = items.Count == 0 ? "" : $"{Loc("chat.plan")} {now?.Number ?? items.Count}/{items.Count}";
@@ -165,9 +310,8 @@ public partial class ChatViewModel
             StickyBranches = links;
         }
         OnPropertyChanged(nameof(StickyPlanCharacter));
-        OnPropertyChanged(nameof(HasStickyPlan));
         OnPropertyChanged(nameof(HasStickyBranches));
-        OnPropertyChanged(nameof(HasStickyBar));
+        RaiseFloatingPlan();
     }
 
     public void OpenPlanWindow(ChatSession? session)
@@ -204,12 +348,18 @@ public partial class ChatViewModel
     }
 
     /// <summary>An item the owner added in the plan window. Running → the agent gets it at its next step and adds it to
-    /// its plan (true). Idle → false: the window keeps it for "start".</summary>
+    /// its plan (true). Idle → false: the window keeps it for "start". It shows in the chat as a waiting message, like
+    /// one typed in the box: a run that ends before its agent reads it sends it as the next turn, or keeps it in the chat
+    /// marked not sent — an untagged note used to vanish when its chat was off screen.</summary>
     public bool AddPlanItem(string sessionId, string text)
     {
         var run = _runs.FirstOrDefault(r => r.Session.Id == sessionId);
         if (run == null) return false;
-        run.Scope.AddUserNote("Add this to your plan (todo_write), after the items already there, and do it in this turn: " + text);
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = Loc("plan.added.bubble") + " " + text, IsQueuedNote = true };
+        bubble.QueueRow = new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") };
+        run.Messages.Add(bubble);
+        run.Messages.Add(bubble.QueueRow);
+        run.Scope.AddUserNote("Add this to your plan (todo_write / update_plan), after the items already there, and do it in this turn: " + text, bubble);
         return true;
     }
 
@@ -234,10 +384,16 @@ public partial class ChatViewModel
         var chat = Sessions.Where(s => string.Equals((s.ProjectPath ?? "").TrimEnd('\\', '/'), path, StringComparison.OrdinalIgnoreCase))
                            .OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
         if (chat != null && chat.Id != CurrentSession?.Id) await LoadSessionAsync(chat.Id);
-        else if (chat == null)
+        else
         {
-            if (Directory.Exists(path)) ApplyWorkingDirectory(path, announce: false, showEditor: false);
-            NewSession();
+            // The project's chat is on screen (or a new one is made): a sidebar chat still loading must not land over
+            // it with the text in the box.
+            CancelPendingChatLoad();
+            if (chat == null)
+            {
+                if (Directory.Exists(path)) ApplyWorkingDirectory(path, announce: false, showEditor: false);
+                NewSession();
+            }
         }
         NavigateToChatRequested?.Invoke();
         UserInput = text;
@@ -280,6 +436,7 @@ public partial class ChatViewModel
 
             string title = CurrentSession?.Id == sessionId ? CurrentSession.Title
                 : Sessions.FirstOrDefault(s => s.Id == sessionId)?.Title ?? "";
+            CancelPendingChatLoad();
             ApplyWorkingDirectory(target, announce: false, showEditor: false);
             NewSession();
             if (CurrentSession != null)

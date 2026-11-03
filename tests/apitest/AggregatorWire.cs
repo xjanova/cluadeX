@@ -74,9 +74,10 @@ internal static class AggregatorWire
             check(t, $"auth: key in {preset.AuthHeader}", keyOk, string.Join(", ", hit.Headers.Keys));
             var row = cost.Log.ReadAll().LastOrDefault();
             if (preset.Local)
-                check(t, "usage recorded as free local use (like Ollama): tokens on the Billing page, nothing in the spend ledger",
-                    cost.TotalCostUsd == 0m && cost.TotalInputTokens == 0 && row is { Kind: CluadeX.Services.Billing.UsageCostKind.Free, Usd: 0m, Input: 10, Output: 2 } && row.Provider == t,
-                    $"usd={cost.TotalCostUsd} row={row?.Provider}/{row?.Kind}/{row?.Input}/{row?.Output}");
+                check(t, "usage recorded as free local use (like Ollama): tokens and time on the Billing page, nothing in the spend ledger",
+                    cost.TotalCostUsd == 0m && cost.TotalInputTokens == 0 && row is { Kind: CluadeX.Services.Billing.UsageCostKind.Free, Usd: 0m, Input: 10, Output: 2 } && row.Provider == t
+                    && row.Seconds > 0,
+                    $"usd={cost.TotalCostUsd} row={row?.Provider}/{row?.Kind}/{row?.Input}/{row?.Output}/{row?.Seconds}s");
             else
                 check(t, "usage recorded: tokens, cached split out, unknown price → $0 (never the Sonnet fallback), on this service's own Billing tab",
                     cost.TotalInputTokens == 6 && cost.TotalCacheReadTokens == 4 && cost.TotalOutputTokens == 2 && cost.TotalCostUsd == 0m && row?.Provider == t,
@@ -90,6 +91,13 @@ internal static class AggregatorWire
             var r1 = await p.ChatWithToolsAsync(conv, "sys", Echo(), d => deltas.Add(d));
             var b1 = Json(Last(id, "/chat/completions").Body);
             var call = r1.ToolCalls.FirstOrDefault();
+            if (preset.Local)
+            {
+                var toolRow = cost.Log.ReadAll().LastOrDefault(e => e.Provider == t && e.Model == "tool-ok");
+                check(t, "tools: the tool request is local use with its time (Billing shows LM Studio's / vLLM's seconds)",
+                    toolRow is { Kind: CluadeX.Services.Billing.UsageCostKind.Free, Usd: 0m, Input: 20, Output: 7 } && toolRow.Seconds > 0,
+                    $"row={toolRow?.Kind}/{toolRow?.Input}/{toolRow?.Output}/{toolRow?.Seconds}s");
+            }
             check(t, "tools: streamed call assembled (name, id, fragmented arguments)",
                 r1.StopReason == "tool_use" && call?.Name == "echo" && call.Input.GetProperty("text").GetString() == "ping"
                 && call.Id.Length > 0 && r1.TextContent == "Let me echo" && r1.ThinkingContent == "plan",

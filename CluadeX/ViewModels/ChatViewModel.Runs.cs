@@ -131,10 +131,36 @@ public partial class ChatViewModel
 
     public bool HasRunningElsewhere => _runs.Any(r => !ReferenceEquals(r.Session, CurrentSession));
 
-    /// <summary>A run (any chat) is working in <paramref name="folder"/> or a folder inside it — the editor is read-only then.</summary>
+    /// <summary>A run (any chat) is working in <paramref name="folder"/> or a folder inside it — its main folder, or one
+    /// it opened beside it (open_project add=true) — the editor and the UI Studio are read-only then. UI thread.</summary>
     public bool IsAgentWorkingIn(string folder) =>
-        !string.IsNullOrEmpty(folder) && _runs.Any(r => r.Scope?.WorkingDirectory is { Length: > 0 } wd
-            && (IsInsideFolder(wd, folder) || IsInsideFolder(folder, wd)));
+        !string.IsNullOrEmpty(folder) && _runs.Any(r => RunTouches(r, folder));
+
+    /// <summary>Is a run working in <paramref name="folder"/> waiting for the owner (a permission card, an ask_user
+    /// question)? UI thread.</summary>
+    public bool IsAgentWaitingIn(string folder) =>
+        !string.IsNullOrEmpty(folder) && _runs.Any(r => RunTouches(r, folder) && RunWaits(r));
+
+    /// <summary>Open the chat of the run working in <paramref name="folder"/> (one that waits for the owner first). False
+    /// when no run works there.</summary>
+    public async Task<bool> ShowRunChatInAsync(string folder)
+    {
+        var here = _runs.Where(r => RunTouches(r, folder)).ToList();
+        var pick = here.FirstOrDefault(RunWaits) ?? here.FirstOrDefault();
+        if (pick == null) return false;
+        if (!ReferenceEquals(pick.Session, CurrentSession)) await LoadSessionAsync(pick.Session.Id);
+        return true;
+    }
+
+    private static bool RunTouches(ChatRun r, string folder)
+    {
+        if (r.Scope is not { } scope) return false;
+        bool Overlaps(string? wd) => !string.IsNullOrEmpty(wd) && (IsInsideFolder(wd, folder) || IsInsideFolder(folder, wd));
+        return Overlaps(scope.WorkingDirectory) || scope.ExtraFolders.Any(Overlaps);
+    }
+
+    private static bool RunWaits(ChatRun r) =>
+        r.Messages.Any(m => m.Role is MessageRole.PermissionRequest && !m.PermissionAnswered || m.Role == MessageRole.Question && !m.QuestionAnswered);
 
     /// <summary>Open the chat of a run that is going on elsewhere (the one waiting for an answer first).</summary>
     public ICommand ShowRunningChatCommand => _showRunningChatCommand ??= new AsyncRelayCommand(async () =>
@@ -218,7 +244,22 @@ public partial class ChatViewModel
         if (!session.ExtraFolders.Any(f => PathEquals(f, path)) && !PathEquals(session.ProjectPath, path))
             session.ExtraFolders.Add(path);
         RaiseOpenFolders();
+        RaiseRunScopeChanged();   // the run works in that folder too now (the UI Studio locks when it shows it)
         _debugLog?.Info("Chat", $"agent opened related folder {path}");
+    }
+
+    /// <summary>A run's folders changed while it runs (open_project, with add=true or without): no run started or
+    /// ended, yet <see cref="IsAgentWorkingIn"/> may answer differently now. UI thread.</summary>
+    public event Action? RunScopeChanged;
+
+    private void RaiseRunScopeChanged()
+    {
+        if (RunScopeChanged == null) return;
+        foreach (var d in RunScopeChanged.GetInvocationList())
+        {
+            try { ((Action)d)(); }
+            catch (Exception ex) { _debugLog?.Warn("Chat", "a run-folders listener failed", ex); }
+        }
     }
 
     /// <summary>
@@ -440,6 +481,11 @@ public partial class ChatViewModel
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
                 open.CloseQuestion(Loc("chat.ask.cancelled"));
             leftover = run.Scope?.DrainUserNotes();
+            // the owner's words typed into this turn are used up with it (a leftover note keeps the turn's decision instead)
+            Services.Agents.DesignGate.EndOwnerTurn(run.Session.Id);
+            // A step the run left "in progress" keeps its colour but stops turning: nothing works on it any more.
+            if (run.TodoMsg?.PlanItems is { } planCard)
+                foreach (var item in planCard) item.IsLive = false;
             _runs.Remove(run);
             DropDraft(run);
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
@@ -452,6 +498,7 @@ public partial class ChatViewModel
         }
         done.TrySetResult();
         RaiseRunStateChanged();
+        if (run != null && ReferenceEquals(run.Session, CurrentSession)) RefreshStickyPlan();   // its rows stop moving too
         if (run != null) TellParentSplitFinished(run.Session, run.Messages);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
@@ -509,6 +556,7 @@ public partial class ChatViewModel
             case "stopped": node.State = "stopped"; node.Action = Loc("agentmap.stopped"); break;
         }
         int running = nodes.Count(x => x.IsRunning), done = nodes.Count(x => x.IsDone);
+        map.NotifyAgentMap();
         map.AgentMapHeader = running > 0
             ? LocF("agentmap.headerRunning", nodes.Count, running, done)
             : LocF("agentmap.headerDone", nodes.Count, done);
@@ -533,6 +581,7 @@ public partial class ChatViewModel
                     ApplyWorkingDirectory(path, announce: true, showEditor: false);
             }
             RebuildVisibleSessions();
+            RaiseRunScopeChanged();   // the run's main folder moved (a background chat's raises nothing else)
             _debugLog?.Info("Chat", $"agent opened project {path}");
         }
         catch (Exception ex)

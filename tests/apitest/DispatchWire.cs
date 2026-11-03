@@ -9,6 +9,7 @@ using System.Text.Json;
 using CluadeX.Models;
 using CluadeX.Services;
 using CluadeX.Services.Agents;
+using CluadeX.Services.Providers;
 
 namespace ApiTest;
 
@@ -36,6 +37,8 @@ internal static class DispatchWire
             await NoWinner(check, Path.Combine(root, "nowin"));
             section("offline · workers in worktrees (disjoint pieces, reviewer, merge)");
             await Workers(check, Path.Combine(root, "workers"));
+            section("offline · quota fallback: Claude Dev runs in the worker's worktree, never the project");
+            await ClaudeDevFolder(check, Path.Combine(root, "cdfolder"));
         }
         finally
         {
@@ -389,6 +392,71 @@ internal static class DispatchWire
         check("workers", "the reviewer's verdict needs APPROVE as its first word",
             WorkerPool.ParseReview("**APPROVE** looks fine").Approved && !WorkerPool.ParseReview("I would not APPROVE this").Approved, "");
     }
+
+    // ─────────────────────────── Claude Dev fallback folder ───────────────────────────
+
+    // When the API quota is gone, a worker or fixer runs through Claude Dev (CodeAgentService.RunSubAgentOnClaudeDevAsync).
+    // The CLI edits its cwd itself, past CluadeX's file tools — so its cwd must be the worktree. Each worker here does what
+    // RunWorker does (WorktreeScope, then the grant RunSubAgentOnClaudeDevAsync sets) and reads the folder ChatAsync would
+    // start the CLI in (TurnFolder + BuildArgs). The CLI itself is never started.
+    static async Task ClaudeDevFolder(Action<string, string, bool, string> check, string repo)
+    {
+        await NewRepo(repo, new() { ["src/a.txt"] = "a1\n", ["src/b.txt"] = "b1\n" });
+        var pieces = new[]
+        {
+            new DispatchPolicy.WorkPiece("change a", new[] { "src/a.txt" }),
+            new DispatchPolicy.WorkPiece("change b", new[] { "src/b.txt" }),
+        };
+        var fs = new FileSystemService { WorkingDirectory = repo };
+        var seen = new System.Collections.Concurrent.ConcurrentDictionary<int, (string Tree, string? Cwd, string Args, string? Scoped, string? Accept)>();
+        foreach (var parent in new AgentRunScope?[] { new AgentRunScope("chat-1", repo), null })
+        {
+            seen.Clear();
+            AgentRunScope.Enter(parent);
+            async Task<string> Worker(WorkerPool.WorkerContext wc, CancellationToken ct)
+            {
+                var child = CodeAgentService.WorktreeScope(parent, wc.WorkingDirectory);
+                AgentRunScope.Enter(child);
+                await Task.Yield();
+                var grant = new ClaudeDevProvider.WorkerGrant(true, false, wc.WorkingDirectory);
+                string? cwd = ClaudeDevProvider.TurnFolder(grant, fs.HasWorkingDirectory ? fs.WorkingDirectory : null, Directory.Exists);
+                seen[wc.Index] = (wc.WorkingDirectory, cwd, ClaudeDevProvider.BuildArgs(cwd ?? "", grant, "", "auto"),
+                    fs.WorkingDirectory, AgentRunScope.Current?.AcceptEditsRoot);
+                return "";
+            }
+            await WorkerPool.RunAsync(repo, "t", pieces, "", "", 2, Worker, null, null, CancellationToken.None);
+            AgentRunScope.Enter(null);
+            string tag = parent == null ? "no run around the workers" : "inside a run";
+            bool own = seen.Count == 2 && seen.Values.All(v => !Same(v.Tree, repo)) && seen.Values.Select(v => v.Tree).Distinct().Count() == 2;
+            check("cd-folder", $"{tag}: each worker has its own worktree (not the project)", own, string.Join(" | ", seen.Values.Select(v => v.Tree)));
+            check("cd-folder", $"{tag}: Claude Dev's cwd is the worker's worktree",
+                own && seen.Values.All(v => v.Cwd != null && Same(v.Cwd, v.Tree)), string.Join(" | ", seen.Values.Select(v => v.Cwd)));
+            check("cd-folder", $"{tag}: the CLI's wrapper names the worktree, not the project",
+                own && seen.Values.All(v => v.Args.Contains("Project working directory: " + v.Tree + ".") && !v.Args.Contains("Project working directory: " + repo + ".")), "");
+            check("cd-folder", $"{tag}: the worker's file tools and Accept edits are the worktree too",
+                own && seen.Values.All(v => v.Scoped != null && Same(v.Scoped, v.Tree) && v.Accept != null && Same(v.Accept, v.Tree)),
+                string.Join(" | ", seen.Values.Select(v => v.Scoped + " / " + v.Accept)));
+        }
+
+        // The grant's folder wins over whatever scope is current — the order of Enter and the fallback can never move it.
+        string elsewhere = Path.Combine(repo, "src");
+        AgentRunScope.Enter(new AgentRunScope("chat-2", repo));
+        check("cd-folder", "a grant's folder wins over the run's folder",
+            ClaudeDevProvider.TurnFolder(new ClaudeDevProvider.WorkerGrant(true, false, elsewhere), fs.WorkingDirectory, Directory.Exists) == elsewhere, "");
+        AgentRunScope.Enter(null);
+        string gone = Path.Combine(repo, "worktree-that-was-removed");
+        check("cd-folder", "the worktree is gone → no folder at all (never the project or the profile instead)",
+            ClaudeDevProvider.TurnFolder(new ClaudeDevProvider.WorkerGrant(true, false, gone), repo, Directory.Exists) == null, "");
+        check("cd-folder", "no grant folder (a chat turn) → the run's folder, as before",
+            ClaudeDevProvider.TurnFolder(new ClaudeDevProvider.WorkerGrant(true, true), repo, Directory.Exists) == repo
+            && ClaudeDevProvider.TurnFolder(null, repo, Directory.Exists) == repo, "");
+        check("cd-folder", "no folder open → the profile, as before",
+            ClaudeDevProvider.TurnFolder(null, null, Directory.Exists) == Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "");
+        check("cd-folder", "the worktrees are removed after the run", (await Git(repo, "worktree", "list")).Trim().Split('\n').Length == 1, "");
+    }
+
+    static bool Same(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
     static void ForceDelete(string dir)
     {

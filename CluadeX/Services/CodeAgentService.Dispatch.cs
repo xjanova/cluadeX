@@ -75,15 +75,25 @@ public partial class CodeAgentService
         return s;
     }
 
-    /// <summary>A .git folder or file (worktree) here or above — a quick check; worktree creation verifies for real.</summary>
-    private static bool HasGitFolder(string folder)
+    /// <summary>A git repository here or above whose HEAD has a commit — a quick check with no git process; worktree
+    /// creation verifies for real. A repo just made with `git init` has no commit, so no worktree can branch from it: a
+    /// writing sub-agent was sent with isolation and failed at once ("Cannot create agent worktree", GigLive 2026-11-03).</summary>
+    internal static bool HasGitFolder(string folder)
     {
         try
         {
             for (var d = new System.IO.DirectoryInfo(folder); d != null; d = d.Parent)
             {
                 string g = System.IO.Path.Combine(d.FullName, ".git");
-                if (System.IO.Directory.Exists(g) || System.IO.File.Exists(g)) return true;
+                if (System.IO.File.Exists(g)) return true;   // a linked worktree or submodule always has a commit
+                if (!System.IO.Directory.Exists(g)) continue;
+                string head = System.IO.File.ReadAllText(System.IO.Path.Combine(g, "HEAD")).Trim();
+                if (!head.StartsWith("ref:", StringComparison.Ordinal)) return head.Length > 0;   // detached at a commit
+                string reference = head[4..].Trim();
+                if (System.IO.File.Exists(System.IO.Path.Combine(g, reference.Replace('/', System.IO.Path.DirectorySeparatorChar)))) return true;
+                string packed = System.IO.Path.Combine(g, "packed-refs");
+                return System.IO.File.Exists(packed)
+                    && System.IO.File.ReadLines(packed).Any(l => l.EndsWith(" " + reference, StringComparison.Ordinal));
             }
         }
         catch { }
@@ -128,14 +138,20 @@ public partial class CodeAgentService
 
     private void NoteQuotaExhausted() => _quotaExhaustedUtc = DateTime.UtcNow;
 
-    /// <summary>One sub-agent's brief through Claude Dev (the user's Claude login): read-only, or edits in its own folder
-    /// (a worktree) when <paramref name="canEdit"/>. Null when the CLI is not there.</summary>
-    private async Task<string?> RunSubAgentOnClaudeDevAsync(string brief, bool canEdit, CancellationToken ct)
+    /// <summary>The scope a worker or fixer runs in: its git worktree, with Accept edits for that worktree only. Without a
+    /// run around it (no parent) it still gets one — no scope would put its tools, and Claude Dev's cwd, in the project.</summary>
+    public static AgentRunScope WorktreeScope(AgentRunScope? parent, string worktree) =>
+        parent?.CreateChild(worktree, acceptEditsInFolder: true) ?? new AgentRunScope("worktree", worktree) { AcceptEditsRoot = worktree };
+
+    /// <summary>One sub-agent's brief through Claude Dev (the user's Claude login): read-only, or edits when
+    /// <paramref name="canEdit"/>. <paramref name="folder"/>: the worker's or fixer's git worktree — the CLI runs there and
+    /// nowhere else (it edits its cwd itself, past CluadeX's file tools). Null when the CLI is not there.</summary>
+    private async Task<string?> RunSubAgentOnClaudeDevAsync(string brief, bool canEdit, CancellationToken ct, string? folder = null)
     {
         var cd = _providerManager.GetProvider(AiProviderType.ClaudeDev);
         try { await cd.InitializeAsync(ct); } catch (OperationCanceledException) { throw; } catch { }
         if (!cd.IsReady) return null;
-        Providers.ClaudeDevProvider.Grant.Value = canEdit ? new Providers.ClaudeDevProvider.WorkerGrant(true, false) : null;
+        Providers.ClaudeDevProvider.Grant.Value = canEdit ? new Providers.ClaudeDevProvider.WorkerGrant(true, false, folder) : null;
         try
         {
             var sb = new System.Text.StringBuilder();
@@ -261,14 +277,14 @@ public partial class CodeAgentService
 
         async Task<string> RunWorker(WorkerPool.WorkerContext wc, CancellationToken t)
         {
-            var child = parent?.CreateChild(wc.WorkingDirectory, acceptEditsInFolder: true);
+            var child = WorktreeScope(parent, wc.WorkingDirectory);
             scopes[wc.Index] = child;
             AgentRunScope.Enter(child);
             SubAgentModel.Use(codeModel);
             string label = (thai ? "ผู้ทำงาน #" : "Worker #") + (wc.Index + 1);
             var opts = new SubAgentRunOptions(ids[wc.Index], label, "worker", codeModel, child, wc.Prompt);
             return await RunSubAgentCoreAsync(new SubAgentRequest(wc.Prompt, "", "general"), t, opts)
-                   ?? (QuotaRecentlyExhausted ? await RunSubAgentOnClaudeDevAsync(wc.Prompt, true, t) : null)
+                   ?? (QuotaRecentlyExhausted ? await RunSubAgentOnClaudeDevAsync(wc.Prompt, true, t, wc.WorkingDirectory) : null)
                    ?? "(the worker could not run on this model)";
         }
 
@@ -350,13 +366,13 @@ public partial class CodeAgentService
 
         async Task<string> RunFixer(SpeculativeFixer.FixerContext fc, CancellationToken t)
         {
-            var child = parent?.CreateChild(fc.WorkingDirectory, acceptEditsInFolder: true);
+            var child = WorktreeScope(parent, fc.WorkingDirectory);
             scopes[fc.Index] = child;
             AgentRunScope.Enter(child);
             SubAgentModel.Use(model);
             var opts = new SubAgentRunOptions(ids[fc.Index], Label(fc.Index), "fixer", model, child, fc.Prompt, ReportOnDone: false);
             return await RunSubAgentCoreAsync(new SubAgentRequest(fc.Prompt, "", "general"), t, opts)
-                   ?? (QuotaRecentlyExhausted ? await RunSubAgentOnClaudeDevAsync(fc.Prompt, true, t) : null)
+                   ?? (QuotaRecentlyExhausted ? await RunSubAgentOnClaudeDevAsync(fc.Prompt, true, t, fc.WorkingDirectory) : null)
                    ?? "(the fixer could not run on this model)";
         }
 

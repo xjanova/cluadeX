@@ -47,6 +47,7 @@ public static class ChatToolBridge
         .Concat(BrowserToolModule.ToolNames)
         .Concat(Desktop.DesktopToolModule.ToolNames)
         .Concat(EngineeringToolModule.ToolNames)
+        .Append(AutoComment.AutoCommentToolModule.ToolName)
         .Select(n => $"mcp__{ServerName}__{n}")
         .ToArray();
 
@@ -143,9 +144,13 @@ public static class ChatToolBridge
     private const string TokenEnv = "CLUADEX_TOOLS_TOKEN";
     private const string PipeEnv = "CLUADEX_TOOLS_PIPE";
 
-    /// <summary>The pipe; <c>CLUADEX_TOOLS_PIPE</c> renames it (tests use a private name).</summary>
+    /// <summary>The pipe; <c>CLUADEX_TOOLS_PIPE</c> renames it (tests use a private name). The app's own name carries its
+    /// process id, and <see cref="StartServer"/> puts it in the environment, so every CLI, hook and --cx-tools process the
+    /// app starts reaches this app. One fixed name let any other CluadeX process serve it too — a test harness built in
+    /// another worktree — and Windows hands each connection to whichever instance listens: 15 of 20 calls of a live turn
+    /// were answered "this chat turn is over" (GigLive, 2026-11-03).</summary>
     public static string PipeName =>
-        Environment.GetEnvironmentVariable(PipeEnv) is { Length: > 0 } n ? n : "cluadex-chat-tools";
+        Environment.GetEnvironmentVariable(PipeEnv) is { Length: > 0 } n ? n : "cluadex-chat-tools-" + Environment.ProcessId;
 
     /// <summary>How long one relayed call may take: a card waits for the user, who may be away for a while (a closed app
     /// or a finished turn ends the wait at once, so this only guards a wedged pipe).</summary>
@@ -258,21 +263,27 @@ public static class ChatToolBridge
 
     private static int _started;
 
-    /// <summary>Serve relayed calls in the app (once). If another CluadeX already serves the name, this one stays quiet.</summary>
+    /// <summary>Serve relayed calls in the app (once). The first instance is created only if no other process holds the
+    /// name (a child that inherited the name stays quiet and tries again later); the rest join it.</summary>
     public static void StartServer()
     {
         if (Interlocked.Exchange(ref _started, 1) == 1) return;
         string name = PipeName;
+        Environment.SetEnvironmentVariable(PipeEnv, name);
         _ = Task.Run(async () =>
         {
+            bool owned = false;
             while (true)
             {
                 NamedPipeServerStream server;
                 try
                 {
                     server = new NamedPipeServerStream(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
-                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly
+                                                   | (owned ? PipeOptions.None : PipeOptions.FirstPipeInstance));
+                    owned = true;
                 }
+                catch when (!owned) { await Task.Delay(5000).ConfigureAwait(false); continue; }
                 catch { return; }
                 try { await server.WaitForConnectionAsync().ConfigureAwait(false); }
                 catch { server.Dispose(); await Task.Delay(500).ConfigureAwait(false); continue; }
@@ -363,16 +374,18 @@ public static class ChatToolBridge
             : desktop ? Desktop.DesktopToolModule.TypeOf(tool)
             : engineering ? EngineeringToolModule.TypeOf(tool)
             : tool == PlanToolName ? ToolType.TodoWrite
+            : tool == AutoComment.AutoCommentToolModule.ToolName ? ToolType.AddCodeComments
             : OrchestrationToolModule.TypeOf(tool) ?? new ProjectToolModule().ResolveToolType(tool);
         if (type == null || (!browser && !desktop && !engineering && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat
-                                                                 or ToolType.TodoWrite or ToolType.Workflow or ToolType.WrapUp)))
+                                                                 or ToolType.TodoWrite or ToolType.Workflow or ToolType.WrapUp
+                                                                 or ToolType.AddCodeComments)))
             return (false, $"CluadeX: '{tool}' is not one of its tools for CLI agents (open_project, new_chat, close_chat, "
                            + "ask_user, update_plan, workflow, wrap_up, browser_open … browser_close, desktop_windows … desktop_wait, "
                            + "verify_change, find_references, rename_symbol, impact_of, checkpoint_list/diff/restore, gh_pr_view, "
-                           + "gh_pr_checks, gh_run_log, git_blame, git_show, debug).");
+                           + "gh_pr_checks, gh_run_log, git_blame, git_show, debug, add_code_comments).");
         if (type == ToolType.TodoWrite) tool = "todo_write";
         var lane = browser ? reg.BrowserLane : desktop ? reg.DesktopLane
-            : engineering && !new ToolCall { Type = type.Value }.IsReadOnly ? reg.WorkLane : null;
+            : engineering && !new ToolCall { Type = type.Value }.IsReadOnly || type == ToolType.AddCodeComments ? reg.WorkLane : null;
 
         var call = new ToolCall
         {
@@ -396,12 +409,19 @@ public static class ChatToolBridge
         if (!result.Success && ct.IsCancellationRequested) return (false, Stopped(tool, hungUp));
         string text = TextOf(result);
         if (result.Success && type == ToolType.OpenProject) text += "\n\n" + OpenProjectNote(reg.Cwd);
+        text += NotesFor(reg);
         // An error result carries no image (Claude Code keeps only its first text block; Gemini turns it into text).
         if (!result.Success || result.Images is not { Count: > 0 } shots) return new Reply(result.Success, text);
         var (images, notes) = ImagesForCli(shots);
         if (notes.Count > 0) text += "\n" + string.Join("\n", notes);
         return new Reply(true, text, images);
     }
+
+    /// <summary>What the user typed while this turn works (the input box, the plan window's add box), riding on the reply
+    /// of the agent's next CluadeX tool call — the only way in while a CLI runs. It was read by the native loop alone, so a
+    /// Claude Dev turn never saw an item added to its plan until the turn had ended (GigLive, 2026-11-03).</summary>
+    private static string NotesFor(Registration reg) =>
+        reg.Scope?.TakeUserNotes() is { } notes ? "\n\n" + notes : "";
 
     /// <summary>The pipe's name for a spawn the CLI's hook asks about (never offered to a model).</summary>
     public const string AgentGateToolName = "agent_gate";
@@ -552,7 +572,7 @@ public static class ChatToolBridge
             : new List<string>();
         string? answer = await AskOnCardAsync(question, options, reg).ConfigureAwait(false);
         return answer is { Length: > 0 }
-            ? (true, "User answered: " + answer)
+            ? (true, "User answered: " + answer + NotesFor(reg))
             : (false, "The user did not answer in CluadeX (the run was stopped).");
     }
 
@@ -625,6 +645,12 @@ public static class ChatToolBridge
     /// <summary>Claude Code's own shell tools (the run grant opens both: ClaudeDevProvider.ShellTools).</summary>
     private static readonly HashSet<string> CliShellTools = new(StringComparer.Ordinal) { "Bash", "PowerShell" };
 
+    /// <summary>Claude Code's own web tools. They go to the approver like an MCP tool, which judges them as web_search /
+    /// web_fetch are judged on the native loop (the user's rules, URL rules for a fetch, else the permission row): they
+    /// were refused "'WebSearch' is not open in this turn" outright, so a Claude Dev worker could never look anything up
+    /// (GigLive, 2026-11-03).</summary>
+    public static readonly HashSet<string> CliWebTools = new(StringComparer.Ordinal) { "WebSearch", "WebFetch" };
+
     /// <summary>Why a permission question is refused without asking anyone (null = put it to CluadeX's gate).
     /// <paramref name="path"/>: the file a CLI file tool would write. Pure: the harness checks it.
     /// The CLI's own tools reach here only when the CLI itself decided to ask: a write that its safety check guards (.git,
@@ -644,9 +670,10 @@ public static class ChatToolBridge
                  + "(run_command) in this folder, or the command reaches outside the folders this turn may work in or has a form "
                  + "Claude Code's own safety check flags. CluadeX answers no for the CLI's own tools. Commands that ran before keep "
                  + "working; tell the user what you wanted to run.";
+        if (CliWebTools.Contains(toolName)) return null;
         if (!toolName.StartsWith("mcp__", StringComparison.Ordinal) || toolName.Length <= 5)
-            return $"CluadeX: '{toolName}' is not open in this turn. CluadeX gives the CLI's own tools (edit, shell, web) from "
-                 + "your rules and Accept edits for the folder; only MCP tools are asked about here.";
+            return $"CluadeX: '{toolName}' is not open in this turn. CluadeX gives the CLI's own tools (edit, shell) from "
+                 + "your rules and Accept edits for the folder; only web and MCP tools are asked about here.";
         // CluadeX's own tools are given up front and ask inside the call (CluadeX's gate): asking here too would be the
         // second card for one call.
         if (toolName.StartsWith($"mcp__{ServerName}__", StringComparison.Ordinal))
@@ -889,6 +916,11 @@ public static class ChatToolBridge
         description = s.Description,
         inputSchema = CliSchema(s.InputSchema),
         annotations = new { readOnlyHint = Desktop.DesktopToolModule.TypeOf(s.Name) is { } t && new ToolCall { Type = t }.IsReadOnly },
+    })).Concat(new AutoComment.AutoCommentToolModule(null, null, null).GetToolSchemas().Select(s => (object)new
+    {
+        name = s.Name,
+        description = s.Description,
+        inputSchema = CliSchema(s.InputSchema),
     })).Concat(EngineeringToolModule.Schemas().Select(s => (object)new
     {
         name = s.Name,

@@ -274,6 +274,19 @@ public class ChatMessage : INotifyPropertyChanged
     public string AgentMapHeader { get => _agentMapHeader; set { _agentMapHeader = value; OnPropertyChanged(); } }
     private bool _agentMapOpen = true;
     public bool IsAgentMapOpen { get => _agentMapOpen; set { _agentMapOpen = value; OnPropertyChanged(); } }
+    /// <summary>0..1: how many of its sub-agents came back (done, failed or stopped) — the header's line.</summary>
+    public double AgentMapProgress => AgentNodes is { Count: > 0 } n ? (double)n.Count(x => !x.IsRunning) / n.Count : 0;
+    /// <summary>Any sub-agent still working: the root breathes and its line flows only then.</summary>
+    public bool AgentMapRunning => AgentNodes?.Any(x => x.IsRunning) == true;
+    /// <summary>All came back and at least one failed: the header's line ends amber, not green.</summary>
+    public bool AgentMapHasFailures => AgentNodes?.Any(x => x.IsFailed) == true;
+    /// <summary>A node changed state (ChatViewModel.OnSubAgentEvent): the card's live parts re-read.</summary>
+    public void NotifyAgentMap()
+    {
+        OnPropertyChanged(nameof(AgentMapProgress));
+        OnPropertyChanged(nameof(AgentMapRunning));
+        OnPropertyChanged(nameof(AgentMapHasFailures));
+    }
 
     // ─── The agent's plan (todo_write), shown as a checklist card ───
     private List<PlanItemView>? _planItems;
@@ -281,11 +294,14 @@ public class ChatMessage : INotifyPropertyChanged
     public List<PlanItemView>? PlanItems
     {
         get => _planItems;
-        set { _planItems = value; OnPropertyChanged(); OnPropertyChanged(nameof(IsPlan)); }
+        set { _planItems = value; OnPropertyChanged(); OnPropertyChanged(nameof(IsPlan)); OnPropertyChanged(nameof(PlanProgress)); }
     }
     public bool IsPlan => _planItems is { Count: > 0 };
+    /// <summary>0..1: how much of the plan is done — the card's progress line (its rows change in place, so this is
+    /// re-read with the header, which every plan update sets).</summary>
+    public double PlanProgress => _planItems is { Count: > 0 } l ? (double)l.Count(p => p.IsDone) / l.Count : 0;
     /// <summary>"กำลังดำเนินการ (4/5)" · and how long the run has been going.</summary>
-    public string PlanHeader { get => _planHeader; set { _planHeader = value; OnPropertyChanged(); } }
+    public string PlanHeader { get => _planHeader; set { _planHeader = value; OnPropertyChanged(); OnPropertyChanged(nameof(PlanProgress)); } }
     private string _planElapsed = "";
     public string PlanElapsed { get => _planElapsed; set { _planElapsed = value; OnPropertyChanged(); } }
 

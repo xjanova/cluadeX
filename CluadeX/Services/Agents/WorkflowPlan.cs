@@ -64,8 +64,23 @@ public sealed class WorkflowPlan
                     if (string.IsNullOrWhiteSpace(spec.Label)) spec.Label = $"agent {a + 1}";
                     if (!labels.Add(spec.Label)) return $"Two agents of phase \"{p.Title}\" are labelled \"{spec.Label}\".";
                     if (spec.CheckType() is { } bad) return bad;
+                    if (CheckIsolation(spec.Isolation, $"Agent \"{spec.Label}\" of phase \"{p.Title}\"", out var iso) is { } badIso) return badIso;
+                    spec.Isolation = iso;
                 }
             }
+            if (CheckIsolation(p.Isolation, $"Phase \"{p.Title}\"", out var phaseIso) is { } badPhase) return badPhase;
+            p.Isolation = phaseIso;
+            if (p.Agents is not { Count: > 0 } && p.Isolation != null)
+                return $"Phase \"{p.Title}\" has isolation, but only an agents phase can run its agents in worktrees.";
+            // An agent in its own worktree is there to edit: it runs as general.
+            foreach (var spec in p.Agents ?? new()) if (p.IsIsolated(spec)) spec.Type = "general";
+            p.Gate = string.IsNullOrWhiteSpace(p.Gate) ? null : p.Gate.Trim();
+            if (p.Merge is { } m) m.Test = string.IsNullOrWhiteSpace(m.Test) ? null : m.Test.Trim();
+            bool anyIsolated = p.Agents?.Any(p.IsIsolated) == true;
+            if ((p.Gate != null || p.Merge != null) && !anyIsolated)
+                return $"Phase \"{p.Title}\" has a gate or merge, but none of its agents works in a worktree: add isolation \"worktree\".";
+            if (p.Gate is { Length: > MaxCommandChars } || p.Merge?.Test is { Length: > MaxCommandChars })
+                return $"The gate / merge test command of phase \"{p.Title}\" is longer than {MaxCommandChars} characters.";
             if (p.Pipeline is { } pipe)
             {
                 if (pipe.Stages.Count == 0) return $"The pipeline of phase \"{p.Title}\" has no stages.";
@@ -80,6 +95,8 @@ public sealed class WorkflowPlan
                     if (string.IsNullOrWhiteSpace(st.Prompt)) return $"Stage {s + 1} of the pipeline in \"{p.Title}\" has no prompt.";
                     if (string.IsNullOrWhiteSpace(st.Label)) st.Label = $"stage {s + 1}";
                     if (st.CheckType() is { } bad) return bad;
+                    if (!string.IsNullOrWhiteSpace(st.Isolation) && st.Isolation.Trim().ToLowerInvariant() is not ("none" or "shared"))
+                        return $"Stage \"{st.Label}\" of the pipeline in \"{p.Title}\" has isolation: only an agents phase can run its agents in worktrees.";
                 }
             }
             if (p.Verify is { } v)
@@ -131,6 +148,22 @@ public sealed class WorkflowPlan
     }
 
     public int CountAgentsDeclared() => Phases.Sum(p => p.Agents?.Count ?? 0);
+
+    /// <summary>Does any agent of this plan work in its own worktree (the run folder must then be a git repository)?</summary>
+    public bool UsesWorktrees => Phases.Any(p => p.Agents?.Any(p.IsIsolated) == true);
+
+    /// <summary>The commands the engine itself runs (gates and merge tests) — the permission prompt shows them.</summary>
+    public List<string> Commands() => Phases.SelectMany(p => new[] { p.Gate, p.Merge?.Test })
+        .Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c!).Distinct().ToList();
+
+    public const int MaxCommandChars = 2000;
+
+    private static string? CheckIsolation(string? value, string who, out string? normalized)
+    {
+        normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToLowerInvariant();
+        if (normalized is null or "none" or "shared") { normalized = null; return null; }
+        return normalized == "worktree" ? null : $"{who} has isolation \"{value}\": use \"worktree\" (or leave it out).";
+    }
 }
 
 public sealed class WorkflowPhase
@@ -139,6 +172,22 @@ public sealed class WorkflowPhase
     public List<WorkflowAgentSpec>? Agents { get; set; }
     public WorkflowVerify? Verify { get; set; }
     public WorkflowPipeline? Pipeline { get; set; }
+    /// <summary>"worktree" = every agent of this phase works in its own git worktree, so parallel edits never collide;
+    /// its result carries its diff. Null = the run folder, shared.</summary>
+    public string? Isolation { get; set; }
+    /// <summary>The command the engine — not the agent — runs in each agent's worktree after it ends (build, tests):
+    /// exit 0 = green. A red agent's diff is never merged.</summary>
+    public string? Gate { get; set; }
+    /// <summary>When every agent of the phase has ended: apply the green diffs to the run folder one by one.</summary>
+    public WorkflowMerge? Merge { get; set; }
+
+    public bool IsIsolated(WorkflowAgentSpec spec) => (spec.Isolation ?? Isolation) == "worktree";
+}
+
+public sealed class WorkflowMerge
+{
+    /// <summary>Run once on the merged result (the full test suite). Null = the phase's gate.</summary>
+    public string? Test { get; set; }
 }
 
 public sealed class WorkflowAgentSpec
@@ -147,6 +196,8 @@ public sealed class WorkflowAgentSpec
     public string Prompt { get; set; } = "";
     /// <summary>"explore" (read-only, default) or "general" (may edit files).</summary>
     public string Type { get; set; } = "explore";
+    /// <summary>"worktree" = this agent alone works in its own git worktree (overrides the phase's isolation).</summary>
+    public string? Isolation { get; set; }
     /// <summary>A JSON schema the answer must match (an object with "required" and "properties" is checked).</summary>
     public JsonElement? Schema { get; set; }
 

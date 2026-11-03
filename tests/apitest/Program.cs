@@ -560,6 +560,7 @@ internal static class Program
         await DispatchWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
         await UpdateDownloadWire.Run(Check, Section);
+        await UpdateProgressWire.Run(Check, Section);
         await CommentPolicyWire.Run(Check, Section);
         await SettingsSalvageWire.Run(Check, Section);
         await GitMultiRepoWire.Run(Check, Section);
