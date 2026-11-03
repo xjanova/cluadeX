@@ -61,7 +61,12 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
                 // Switching files means you want the file, not the diff you were reading.
                 if (IsDiffViewActive) CloseDiffCommand.Execute(null);
 
+                // A media tab's playback stops when it is left (the page keeps its edits).
+                if (previous is MediaFileTab leftMedia) leftMedia.Session?.Pause();
+
                 OnPropertyChanged(nameof(HasActiveTab));
+                OnPropertyChanged(nameof(IsTextTabActive));
+                OnPropertyChanged(nameof(IsMediaTabActive));
                 OnPropertyChanged(nameof(ActiveFileName));
                 OnPropertyChanged(nameof(ActiveLanguageLabel));
             }
@@ -546,6 +551,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         {
             var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, fullPath, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { OnUi(() => ActiveTab = existing); return true; }
+            // An image, a song or a clip opens in the media editor (it used to stop here with "can't open").
+            if (await TryOpenMediaAsync(fullPath) is { } media) return media;
             var loaded = await _workspace.OpenFileAsync(fullPath);
             if (loaded == null)
             {
@@ -946,6 +953,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
                 OnUi(() => RemoveTab(tab));
                 continue;
             }
+            if (tab is MediaFileTab media) { OnUi(() => media.Session?.ReloadFromDisk()); continue; }   // never read as text
             var fresh = await _workspace.OpenFileAsync(tab.FullPath);
             if (fresh == null) { OnUi(() => RemoveTab(tab)); continue; }   // now binary / too large
             OnUi(() =>
@@ -993,6 +1001,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             long tOpen = 0, tShow = 0;
 
             var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, full, StringComparison.OrdinalIgnoreCase));
+
+            // The agent wrote a file open as media (an SVG it drew, an image it generated): the page shows the new one.
+            if (existing is MediaFileTab mediaTab) { NoteMediaChangedOnDisk(mediaTab); return; }
 
             // NEVER clobber unsaved human edits: the old refresh-in-place silently discarded whatever
             // the user had typed in a dirty tab the moment the agent touched the same file on disk.
@@ -1336,6 +1347,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             }
         }
 
+        if (await TryOpenMediaAsync(node.FullPath) is not null) return;   // image / audio / video: the media editor
+
         var tab = await _workspace.OpenFileAsync(node.FullPath);
         if (tab == null)
         {
@@ -1354,6 +1367,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         int idx = Tabs.IndexOf(tab);
         if (idx < 0) return;
         if (ReferenceEquals(_typingTab, tab)) StopTypeTimer();
+        if (tab is MediaFileTab media) media.Session?.CancelWork();   // (the view closes its page when it leaves Tabs)
         Tabs.Remove(tab);
         if (ActiveTab == tab)
         {
@@ -1369,6 +1383,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     private async Task CloseTabAsync(OpenFileTab? tab)
     {
         if (tab == null) return;
+        // A media tab still writing its save (or ffmpeg still cutting): stop that first, or keep the tab.
+        if (tab is MediaFileTab { IsBusy: true } busy && !ConfirmStopMediaWork(busy)) return;
         if (tab.IsDirty)
         {
             int answer = ChoiceDialog.Show(T("ide.unsavedTitle"), T("ide.closeDirtyBody", tab.FileName),
@@ -1393,6 +1409,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     /// </summary>
     private async Task<bool> SaveTabInteractiveAsync(OpenFileTab tab)
     {
+        if (tab is MediaFileTab media) return await SaveMediaInteractiveAsync(media);   // the page holds those edits
         var result = await _workspace.SaveTabCheckedAsync(tab, overwriteExternalChanges: false);
         if (result.Outcome == SaveOutcome.ChangedOnDisk)
         {
@@ -1492,6 +1509,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         var failed = new List<string>();
         foreach (var tab in dirty)
         {
+            // A media tab's edits are in its page, which cannot be asked synchronously from here: listed as not saved,
+            // so the next question lets the user cancel and save it from its tab.
+            if (tab is MediaFileTab) { failed.Add(tab.FileName); continue; }
             var r = _workspace.SaveTabChecked(tab, overwriteExternalChanges: false);
             if (r.Outcome == SaveOutcome.ChangedOnDisk)
             {
@@ -1532,7 +1552,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     {
         var tab = _activeTab;
         if (tab == null) return;
-        if (tab.IsDirty && !await SaveTabInteractiveAsync(tab)) return;   // preview what the editor shows
+        // (a media tab's edits would be saved as a copy — the preview shows the file itself)
+        if (tab.IsDirty && tab is not MediaFileTab && !await SaveTabInteractiveAsync(tab)) return;   // preview what the editor shows
 
         if (SafeShell.CanPreview(tab.FullPath))
         {

@@ -73,7 +73,11 @@ public partial class CodeEditorView : UserControl
         Unloaded += OnUnloaded;
         // The view model plays the agent's "typing" reveal only while someone can see it (60 fps of editor inserts
         // are pure cost on a hidden page).
-        IsVisibleChanged += (_, e) => { if (_vm != null) _vm.EditorOnScreen = e.NewValue is true; };
+        IsVisibleChanged += (_, e) =>
+        {
+            if (_vm != null) _vm.EditorOnScreen = e.NewValue is true;
+            if (e.NewValue is not true) PauseMedia();   // another page: a song or a clip does not play on unseen
+        };
         // Preview, so Ctrl+S reaches us even when the focused control (editor, terminal box) would
         // otherwise swallow the key.
         PreviewKeyDown += OnPagePreviewKeyDown;
@@ -85,11 +89,13 @@ public partial class CodeEditorView : UserControl
             width.AddValueChanged(ExplorerPanel, OnPanelWidthChanged);
             width.AddValueChanged(EditorChatPanel, OnPanelWidthChanged);
             FitSidePanels();
+            WatchMediaOverlays();   // (again in a window of its own: that window's overlays, if any)
         };
         Unloaded += (_, _) =>
         {
             width.RemoveValueChanged(ExplorerPanel, OnPanelWidthChanged);
             width.RemoveValueChanged(EditorChatPanel, OnPanelWidthChanged);
+            UnwatchMediaOverlays();
         };
     }
 
@@ -253,7 +259,8 @@ public partial class CodeEditorView : UserControl
         // handler would keep every rebuilt editor alive).
         _themes = ThemeService.Current;
         if (_themes != null) _themes.ThemeChanged += OnThemeChanged;
-        BindActiveTab(vm.ActiveTab);
+        BindActiveTab(TextTab(vm.ActiveTab));
+        AttachMedia(vm);
         ApplyViewPrefs();
         // A theme picked while this view was not loaded: catch up on what the resource system cannot reach.
         ApplyTheme();
@@ -279,6 +286,7 @@ public partial class CodeEditorView : UserControl
             vm.BreakpointsChanged -= OnBreakpointsChanged;
             vm.ExecutionPointerMoved -= OnExecutionPointerMoved;
         }
+        DetachMedia();
         if (_themes != null) _themes.ThemeChanged -= OnThemeChanged;
         _themes = null;
         // The tab objects belong to the VM too — let go of the one we listen to. The editor is
@@ -407,8 +415,15 @@ public partial class CodeEditorView : UserControl
     private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(CodeEditorViewModel.ActiveTab))
-            BindActiveTab(_vm?.ActiveTab);
+        {
+            BindActiveTab(TextTab(_vm?.ActiveTab));
+            ShowMediaFor(_vm?.ActiveTab);
+        }
+        else OnMediaVmPropertyChanged(e.PropertyName);
     }
+
+    /// <summary>The tab AvalonEdit shows: a media tab has no text, so the editor is emptied for it (the media area shows).</summary>
+    private static OpenFileTab? TextTab(OpenFileTab? tab) => tab is MediaFileTab ? null : tab;
 
     /// <summary>Point the single editor control at a different tab: swap content, highlighting, glow.</summary>
     private void BindActiveTab(OpenFileTab? tab)

@@ -286,6 +286,7 @@ public class CodeWorkspaceService
     /// </summary>
     public async Task<SaveResult> SaveCopyAsAsync(OpenFileTab tab, string newPath, CancellationToken ct = default)
     {
+        if (tab is MediaFileTab) return new SaveResult(SaveOutcome.Failed, "media tab: saved by the media editor");
         if (!tab.DecodedFaithfully) return new SaveResult(SaveOutcome.NotUtf8, null);
         tab.FlushPendingEdits();
         byte[] bytes;
@@ -332,6 +333,8 @@ public class CodeWorkspaceService
         content = "";
         bytes = Array.Empty<byte>();
         if (tab == null || string.IsNullOrEmpty(tab.FullPath)) return new SaveResult(SaveOutcome.Failed, "no path");
+        // A media tab has no text: its (empty) Content written over a photo or a song would destroy it. Its page saves it.
+        if (tab is MediaFileTab) return new SaveResult(SaveOutcome.Failed, "media tab: saved by the media editor");
         if (!tab.DecodedFaithfully) return new SaveResult(SaveOutcome.NotUtf8, null);
         tab.FlushPendingEdits();   // a large file's last keystrokes may still be only in the editor
 

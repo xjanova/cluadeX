@@ -55,6 +55,7 @@ public partial class CodeEditorViewModel
     {
         var tab = _activeTab;
         if (tab == null || string.IsNullOrWhiteSpace(newPath)) return false;
+        if (tab is MediaFileTab media) return await SaveMediaAsAsync(media, newPath);   // the page writes those edits
         if (string.Equals(Path.GetFullPath(newPath), Path.GetFullPath(tab.FullPath), StringComparison.OrdinalIgnoreCase))
             return await SaveTabInteractiveAsync(tab);
         var other = Tabs.FirstOrDefault(t => !ReferenceEquals(t, tab)

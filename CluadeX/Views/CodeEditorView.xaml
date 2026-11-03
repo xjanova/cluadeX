@@ -2253,7 +2253,7 @@
                          Content sync, neon theme, caret-follow and the changed-region glow renderer
                          are wired in code-behind (CodeEditorView.xaml.cs). -->
                     <avalonedit:TextEditor x:Name="Editor"
-                                           Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}"
+                                           Visibility="{Binding IsTextTabActive, Converter={StaticResource BoolVis}}"
                                            FontFamily="{DynamicResource Font.Mono.Display}" FontSize="13"
                                            Background="{DynamicResource Editor.Background}"
                                            Foreground="{DynamicResource Editor.Foreground}"
@@ -2290,9 +2290,16 @@
                 <!-- Minimap — real document overview: line bars + draggable viewport (MinimapControl) -->
                 <Border Grid.Column="1" Background="{DynamicResource Editor.Minimap.Background}"
                         BorderThickness="1,0,0,0" BorderBrush="{DynamicResource Border.Subtle}"
-                        Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}">
+                        Visibility="{Binding IsTextTabActive, Converter={StaticResource BoolVis}}">
                     <editor:MinimapControl x:Name="Minimap" Margin="0,4"/>
                 </Border>
+
+                <!-- ══════════ MEDIA — an image / audio / video tab shows its editor here instead of AvalonEdit ══════════
+                     One page per open media tab (Views/Editor/MediaEditorHost), the active one shown; filled and
+                     emptied in code (CodeEditorView.Media.cs). A native window: it steps aside while the diff or an
+                     overlay of the main window is on top. -->
+                <Grid x:Name="MediaArea" Grid.Row="0" Grid.ColumnSpan="2" Visibility="Collapsed"
+                      Background="{DynamicResource Bg.Window}"/>
 
                 <!-- ══════════ PROBLEMS — the language server's errors for the file (CodeEditorView.Lsp.cs) ══════════
                      Click a row to jump to it; the sparkle asks the AI to fix it. When no server is installed this is
@@ -2589,7 +2596,7 @@
                  Line ending and encoding are menus: CRLF ↔ LF, UTF-8 / UTF-8 BOM / UTF-16 / TIS-620 (Thai). -->
             <Border x:Name="EditorStatusBar" Grid.Row="5" Background="{DynamicResource Bg.Panel}" BorderThickness="0,1,0,0"
                     BorderBrush="{DynamicResource Border.Subtle}" Height="24"
-                    Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}">
+                    Visibility="{Binding IsTextTabActive, Converter={StaticResource BoolVis}}">
                 <DockPanel LastChildFill="False">
                     <TextBlock x:Name="StPosition" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"
                                Foreground="{DynamicResource Text.Secondary}"/>
