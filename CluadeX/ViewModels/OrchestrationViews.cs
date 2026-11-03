@@ -48,6 +48,10 @@ public sealed class WorkflowCard : ViewModelBase
     public string EstimateText { get => _estimate; private set => SetProperty(ref _estimate, value); }
     public string VerdictsText { get => _verdicts; private set { if (SetProperty(ref _verdicts, value)) OnPropertyChanged(nameof(HasVerdicts)); } }
     public bool HasVerdicts => _verdicts.Length > 0;
+    private string _merge = "";
+    /// <summary>"merge: 2 merged · 1 left out · tests on the merged result ✓" (empty without a merge step).</summary>
+    public string MergeText { get => _merge; private set { if (SetProperty(ref _merge, value)) OnPropertyChanged(nameof(HasMerge)); } }
+    public bool HasMerge => _merge.Length > 0;
     public string Note { get => _note; private set { if (SetProperty(ref _note, value)) OnPropertyChanged(nameof(HasNote)); } }
     public bool HasNote => _note.Length > 0;
     public bool IsRunning => _statusKey == "running";
@@ -122,12 +126,16 @@ public sealed class WorkflowCard : ViewModelBase
         if (!_dirty) return;
         _dirty = false;
         List<WorkflowAgentState> agents;
-        int kept, killed;
+        int kept, killed, merged, leftOut;
+        List<bool?> tests;
         lock (st.Gate)
         {
             agents = st.Agents.ToList();
             kept = st.Verdicts.Count(v => !v.Killed);
             killed = st.Verdicts.Count(v => v.Killed);
+            merged = st.Merges.Count(m => m.Outcome == "merged");
+            leftOut = st.Merges.Count(m => m.Outcome is "conflict" or "red-after-merge" or "gate-red" or "not-run");
+            tests = st.Tests.Select(t => t.Green).ToList();
             Name = st.Name;
             StatusKey = st.Status;
             EstimateText = st.EstimateAgents > 0 ? LocF("orch.wf.estimate", st.EstimateAgents, Math.Max(1, (int)(st.EstimateRamMb / AgentLoad.RamPerAgentMb)),
@@ -138,6 +146,10 @@ public sealed class WorkflowCard : ViewModelBase
         AgentsText = LocF("orch.wf.agents", agents.Count);
         SpentText = LocF("orch.wf.spent", agents.Sum(a => a.CostUsd));
         VerdictsText = kept + killed > 0 ? LocF("orch.wf.verdicts", kept, killed) : "";
+        MergeText = merged + leftOut + tests.Count == 0 ? ""
+            : string.Join(" · ", new[] { merged + leftOut > 0 ? LocF("orch.wf.merge", merged, leftOut) : "" }
+                .Concat(tests.Where(t => t != null).Select(t => Loc(t == true ? "orch.wf.tests.green" : "orch.wf.tests.red")))
+                .Where(s => s.Length > 0));
 
         // A resume starts the run's rows again: start the view again too (once, not per row).
         if (agents.Count < Rows.Count || agents.Where((a, i) => i < Rows.Count && Rows[i].Key != a.Key).Any())
@@ -195,7 +207,7 @@ public sealed class WorkflowRowView : ViewModelBase
     public bool HasAnswer => _answer.Length > 0;
     public string Error { get => _error; private set { if (SetProperty(ref _error, value)) OnPropertyChanged(nameof(HasError)); } }
     public bool HasError => _error.Length > 0;
-    public bool IsFinished => _state is not ("queued" or "running");
+    public bool IsFinished => _state is not ("queued" or "running" or "checking");
 
     private bool _open;
     public bool IsOpen { get => _open; set => SetProperty(ref _open, value); }
@@ -206,7 +218,8 @@ public sealed class WorkflowRowView : ViewModelBase
     {
         Label = a.Label;
         State = a.State;
-        StateText = LocalizedResources.Instance["orch.wf.row." + a.State];
+        StateText = LocalizedResources.Instance["orch.wf.row." + a.State]
+                    + (a.Gate is "green" or "red" ? " · " + LocalizedResources.Instance["orch.wf.gate." + a.Gate] : "");
         Spent = a.CostUsd > 0 ? $"${a.CostUsd:0.000}" : "";
         Prompt = a.Prompt.Length > 4000 ? a.Prompt[..4000] + "…" : a.Prompt;
         Answer = a.Output is { } o ? (o.Length > 8000 ? o[..8000] + "…" : o) : "";

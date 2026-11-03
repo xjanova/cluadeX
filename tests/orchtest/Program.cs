@@ -21,12 +21,13 @@ namespace OrchTest;
 /// No model, no network, no GPU: every sub-agent answer is scripted here. portable.txt keeps settings next to this exe.
 ///   dotnet build CluadeX/CluadeX.csproj   then   cd tests/orchtest && dotnet run
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly StringBuilder Report = new();
     static readonly List<string> Failures = new();
     static AgentToolService Svc;
+    static LocalizationService LocSvc;
     static string Root;
 
     [STAThread]
@@ -139,7 +140,7 @@ internal static class Program
         Check("setup: portable data root (never the user's ~/.cluadex)",
             settings.DataRoot.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase), settings.DataRoot);
         if (!settings.DataRoot.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase)) return 3;
-        var loc = sp.GetRequiredService<LocalizationService>();
+        var loc = LocSvc = sp.GetRequiredService<LocalizationService>();
         LocalizedResources.Instance.Initialize(loc);
         loc.SetLanguage("en");
         Svc = sp.GetRequiredService<AgentToolService>();
@@ -168,6 +169,16 @@ internal static class Program
         await Case("W11", TestDoubleResume);
         await Case("W12", TestEstimate);
         await Case("W13", TestHardCap);
+
+        Log("\n## Isolation, gate and merge (agents in their own git worktrees)");
+        await Case("I1", RealShell(TestIsolatedCleanMerge));
+        await Case("I2", TestIsolatedConflict);
+        await Case("I3", RealShell(TestIsolatedRedGate));
+        await Case("I4", TestIsolatedStop);
+        await Case("I5", TestIsolatedCrashSweep);
+        await Case("I6", TestIsolatedResume);
+        await Case("I7", TestIsolationPlanChecks);
+        await Case("I8", TestIsolationThroughTool);
 
         Log("\n## Opt-in gate and the workflow tool");
         await Case("G1", TestGate);

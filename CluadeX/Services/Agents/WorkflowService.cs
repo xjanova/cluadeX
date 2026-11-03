@@ -35,6 +35,8 @@ public sealed class WorkflowService
     public Func<CancellationToken, Task> EnterSlot { get; set; } = AgentLoad.EnterAsync;
     public Action LeaveSlot { get; set; } = AgentLoad.Leave;
     public Func<int> MachineCap { get; set; } = AgentLoad.CurrentCap;
+    /// <summary>Runs a gate or merge test in a folder (null = the app's shell; the harness scripts it).</summary>
+    public Func<string, string, CancellationToken, Task<(bool Green, string Output)>>? RunCommand { get; set; }
 
     public event Action<WorkflowRunState>? Started;
     public event Action<WorkflowRunState, WorkflowAgentState>? RowChanged;
@@ -97,7 +99,7 @@ public sealed class WorkflowService
                     st.Status = "stopped";
                     st.StopReason = "app closed";
                     st.EndedAt ??= DateTime.Now;
-                    foreach (var a in st.Agents.Where(a => a.State is "queued" or "running")) a.State = "stopped";
+                    foreach (var a in st.Agents.Where(a => a.State is "queued" or "running" or "checking")) a.State = "stopped";
                     Write(st);
                     n++;
                 }
@@ -108,14 +110,51 @@ public sealed class WorkflowService
         return n;
     }
 
+    /// <summary>At startup, after <see cref="MarkInterrupted"/>: remove the worktrees a closed (or crashed) app left
+    /// behind for workflows that are not running. Returns how many were removed.</summary>
+    public async Task<int> SweepLeftWorktreesAsync()
+    {
+        if (_dir == null) return 0;
+        int n = 0;
+        List<string> files;
+        try { files = Directory.EnumerateFiles(_dir, "wf-*.json").ToList(); } catch { return 0; }
+        foreach (var file in files)
+        {
+            try
+            {
+                var st = JsonSerializer.Deserialize<WorkflowRunState>(File.ReadAllText(file));
+                if (st == null || _active.ContainsKey(st.Id) || st.Worktrees.Count == 0) continue;
+                n += await WorkflowEngine.SweepWorktreesAsync(st);
+                if (_known.TryGetValue(st.Id, out var known)) lock (known.Gate) known.Worktrees.Clear();
+                Write(st);
+            }
+            catch { }
+        }
+        return n;
+    }
+
+    /// <summary>Why <paramref name="plan"/> cannot run in <paramref name="runFolder"/>, or null: agents in worktrees need
+    /// the folder to be a git repository with a commit.</summary>
+    public static async Task<string?> FolderRefusalAsync(WorkflowPlan plan, string? runFolder, CancellationToken ct = default)
+    {
+        if (!plan.UsesWorktrees) return null;
+        if (string.IsNullOrWhiteSpace(runFolder))
+            return "This workflow runs agents in worktrees (isolation \"worktree\"), but no project folder is open. Open the project first.";
+        return await WorktreeSandbox.IsGitRepoAsync(runFolder, ct) ? null
+            : $"This workflow runs agents in worktrees (isolation \"worktree\"), but {runFolder} is not a git repository with a commit. "
+              + "Leave isolation out (the agents then share the folder), or the user can make it a repository first.";
+    }
+
     /// <summary>Run a new workflow for chat <paramref name="sessionKey"/> and wait for its end (the tool's call).
-    /// <paramref name="ct"/> is the turn's: stopping the turn stops the workflow.</summary>
-    public async Task<WorkflowRunState> RunAsync(WorkflowPlan plan, string planJson, string sessionKey, CancellationToken ct)
+    /// <paramref name="ct"/> is the turn's: stopping the turn stops the workflow. <paramref name="runFolder"/>: the project
+    /// its worktrees come from and its merges go to.</summary>
+    public async Task<WorkflowRunState> RunAsync(WorkflowPlan plan, string planJson, string sessionKey, CancellationToken ct,
+        string? runFolder = null)
     {
         var est = EstimateFor(plan);
         var st = new WorkflowRunState
         {
-            SessionKey = sessionKey, Name = plan.Name, PlanJson = planJson,
+            SessionKey = sessionKey, Name = plan.Name, PlanJson = planJson, RunFolder = runFolder,
             EstimateAgents = est.Agents, EstimateUsd = est.Usd, EstimateRamMb = est.RamMb,
         };
         await RunStateAsync(st, plan, ct);
@@ -172,17 +211,22 @@ public sealed class WorkflowService
         var engine = new WorkflowEngine(runner)
         {
             EnterSlot = EnterSlot, LeaveSlot = LeaveSlot, BudgetSpent = BudgetSpent, Save = Write,
+            RunCommand = RunCommand ?? WorkflowEngine.DefaultRunCommandAsync,
         };
         engine.RowChanged += (s, r) => { try { RowChanged?.Invoke(s, r); } catch { } };
         RunActivity.WorkflowStarted(st.SessionKey, st.Id);
         try
         {
             try { Started?.Invoke(st); } catch { }
+            // A resume after a crash: what the last attempt left on disk goes first.
+            if (st.Worktrees.Count > 0) await WorkflowEngine.SweepWorktreesAsync(st);
             Write(st);
             await engine.RunAsync(st, plan, cts.Token);
         }
         finally
         {
+            // Every worktree goes with the run, however it ended (one a stop cut off inside `git worktree add` included).
+            if (plan.UsesWorktrees) try { await WorkflowEngine.SweepWorktreesAsync(st); } catch { }
             _active.TryRemove(st.Id, out _);
             done.TrySetResult();
             RunActivity.WorkflowEnded(st.SessionKey, st.Id);
@@ -224,6 +268,33 @@ public sealed class WorkflowService
             {
                 sb.AppendLine().AppendLine($"## Refuted by the verifiers ({killed.Count}) — do not act on these");
                 foreach (var v in killed) sb.AppendLine($"- ({v.Refuted}/{v.Refuters}) " + v.Claim.Trim());
+            }
+            foreach (var phase in st.Merges.Select(m => m.Phase).Concat(st.Tests.Select(t => t.Phase)).Distinct().ToList())
+            {
+                sb.AppendLine().AppendLine($"## Merge of \"{phase}\" into the project");
+                foreach (var m in st.Merges.Where(m => m.Phase == phase))
+                {
+                    string files = m.Files.Count > 0 ? " (" + string.Join(", ", m.Files) + ")" : "";
+                    sb.AppendLine(m.Outcome switch
+                    {
+                        "merged" => $"- {m.Label}: merged{files}" + (m.Detail != null ? " — " + m.Detail : ""),
+                        "conflict" => $"- {m.Label}: NOT merged — its diff no longer applies on top of the others{files}: {m.Detail}",
+                        "red-after-merge" => $"- {m.Label}: NOT merged — green on its own, but the merged tree went red, so it was taken back out{files}: {m.Detail}",
+                        "gate-red" => $"- {m.Label}: NOT merged — its gate was red in its own worktree{files}: {m.Detail}",
+                        "no-change" => $"- {m.Label}: changed nothing",
+                        _ => $"- {m.Label}: NOT merged — the agent did not finish ({m.Detail})",
+                    });
+                    if (m.Patch is { Length: > 0 } p)
+                        sb.AppendLine("  ```diff").AppendLine(p.Length > 4000 ? p[..4000] + "\n… (diff cut)" : p.TrimEnd()).AppendLine("  ```");
+                }
+                foreach (var t in st.Tests.Where(t => t.Phase == phase))
+                {
+                    if (t.Green == null) { sb.AppendLine($"Tests on the merged result: not run — {t.Output}."); continue; }
+                    sb.AppendLine($"Tests on the merged result ({t.Merged} diff(s) merged): `{t.Command}` → {(t.Green == true ? "GREEN" : "RED")}");
+                    if (t.Green == false && t.Output.Length > 0) sb.AppendLine("```").AppendLine(t.Output.Trim()).AppendLine("```");
+                }
+                if (st.Merges.Any(m => m.Phase == phase && m.Outcome == "merged"))
+                    sb.AppendLine("The merged changes are in the project's working tree, not committed.");
             }
             var failed = st.Agents.Where(a => a.State == "failed").ToList();
             if (failed.Count > 0)
