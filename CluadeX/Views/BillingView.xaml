@@ -150,7 +150,7 @@
             </ScrollViewer>
         </Border>
 
-        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Style="{StaticResource SlimScrollViewer}">
+        <ScrollViewer x:Name="PageScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" Style="{StaticResource SlimScrollViewer}">
             <Grid Margin="20,16,20,24">
                 <!-- Nothing recorded yet -->
                 <Border Style="{StaticResource Card}" Padding="28,26" HorizontalAlignment="Center" VerticalAlignment="Top" MaxWidth="560" Margin="0,40,0,0"
@@ -162,6 +162,8 @@
                                    HorizontalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
                         <TextBlock Text="{services:Loc billing.empty.body}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"
                                    TextAlignment="Center" Foreground="{DynamicResource Text.Muted}"/>
+                        <!-- A credit or plan price can be entered before the first request (the old spend window allowed it) -->
+                        <billing:AccountPanel DataContext="{Binding Account}"/>
                     </StackPanel>
                 </Border>
 
@@ -393,8 +395,13 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <!-- Credit / plan price for this tab's account (All: pick one) -->
+                            <billing:AccountPanel DataContext="{Binding Account}"/>
                         </StackPanel>
                     </Border>
+
+                    <!-- Savings & comparison (the old spend window): paid vs without savings, by provider and dates -->
+                    <billing:SavingsPanel x:Name="SavingsSection" DataContext="{Binding Savings}"/>
                 </StackPanel>
             </Grid>
         </ScrollViewer>

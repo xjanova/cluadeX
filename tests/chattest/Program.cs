@@ -236,17 +236,8 @@ internal static partial class Program
         LocalizedResources.Instance.Initialize(LocSvc);
         LocSvc.SetLanguage("en");
 
-        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "USAGE")
-        {
-            await TestUsageWindow();
-            await TestUsageFilters();
-            var changedProfile = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var at) && at != kv.Value).Select(kv => kv.Key).ToList();
-            Check("usage tests leave the real profile unchanged", changedProfile.Count == 0, string.Join(", ", changedProfile));
-            Log($"\n## Result (CHATTEST_ONLY=USAGE): {Pass} pass / {Fail} FAIL");
-            foreach (var f in Failures) Log("  - " + f);
-            sp.Dispose();
-            return Fail == 0 ? 0 : 1;
-        }
+        // CHATTEST_ONLY=USAGE (the old spend window's U8 checks) went with the window: spend & savings are a section of the
+        // Billing page now, proven by tests/billingtest (SavingsChecks.cs).
 
         Db = sp.GetRequiredService<DatabaseService>();
         Persist = sp.GetRequiredService<ChatPersistenceService>();
@@ -362,8 +353,7 @@ internal static partial class Program
         await TestThumbnail();                // T5: tool-row image thumbnail
         await TestAskUserAndPinnedFolder();   // Q + S
         await TestControlStrip();             // U7: model / approvals / budget / spend under the input box
-        await TestUsageWindow();              // U8: the spend window — paid vs without savings, credit left
-        await TestUsageFilters();             // provider colours, multi-select, dates, viewport sizing
+        // U8 (the spend window) moved to tests/billingtest SavingsChecks.cs with the window (now the Billing page).
         TestAutoCompact();                    // U9: the compaction toast's "compact by itself" tick
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
@@ -2451,86 +2441,6 @@ internal static partial class Program
         // The credit link moved to the window's title bar (the "today" chip's menu): MainWindow, not this view.
         Check("U7 text: the composer's \"+\" menu carries the agent switches and the chat actions",
             ((Button)View.FindName("MoreButton")).ContextMenu.Items.OfType<MenuItem>().Count() >= 9);
-    }
-
-    // ═══════════════════════════════════════════ U8 ═══════════════════════════════════════════
-    static async Task TestUsageWindow()
-    {
-        Log("\n## U8 — the spend window: paid vs without savings, 14 days of bars, where the savings came from, credit left");
-        // 14 seeded days in the harness's portable data root (never ~/.cluadex), read by a fresh tracker.
-        string ledger = Path.Combine(Settings.DataRoot, "usage-daily.json");
-        string? ledgerBefore = File.Exists(ledger) ? File.ReadAllText(ledger) : null;
-        var s0 = Settings.Settings;
-        var billingBefore = s0.ProviderSpending;
-        s0.ProviderSpending = new();
-        (decimal? bal, DateTime? at, decimal spentThatDay) balanceBefore = (s0.CreditBalanceUsd, s0.CreditBalanceSetAt, s0.CreditBalanceSpentThatDay);
-        UsageWindow? win = null;
-        try
-        {
-            var days = new Dictionary<string, DailyUsage>();
-            var rnd = new Random(7);
-            for (int i = 13; i >= 0; i--)
-            {
-                decimal paid = i % 5 == 3 ? 0 : Math.Round(0.5m + (decimal)rnd.NextDouble() * 6m, 2);
-                decimal cache = paid * 2.4m, ts = paid * 0.6m, comp = paid * 0.3m, batch = i % 4 == 0 ? paid * 0.2m : 0;
-                days[DateTime.Today.AddDays(-i).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)] = new DailyUsage
-                {
-                    Usd = paid, Requests = paid == 0 ? 0 : 20 + i * 3, BaselineUsd = paid + cache + ts + comp + batch,
-                    SavedCacheUsd = cache, SavedToolSearchUsd = ts, SavedCompactionUsd = comp, SavedBatchUsd = batch,
-                };
-            }
-            File.WriteAllText(ledger, System.Text.Json.JsonSerializer.Serialize(days));
-            var tracker = new CostTrackingService(Settings);
-            var anchor = DateTime.Today.AddDays(-6).AddHours(9);
-            Settings.UpdateSettings(s => { s.CreditBalanceUsd = 50m; s.CreditBalanceSetAt = anchor; s.CreditBalanceSpentThatDay = 0.25m; });
-
-            var vm = new UsageViewModel(tracker, Settings, () => { });
-            Check("U8 numbers: three periods, 14 bars, four saving rows", vm.Periods.Count == 3 && vm.Bars.Count == 14 && vm.Savings.Count == 4,
-                $"{vm.Periods.Count}/{vm.Bars.Count}/{vm.Savings.Count}");
-            double tallest = vm.Bars.Max(b => b.PaidHeight + b.SavedHeight);
-            Check("U8 bars: the tallest bar (paid + saved = without savings) fills the chart; a day with no use is empty",
-                Math.Abs(tallest - UsageViewModel.ChartHeight) < 0.01 && vm.Bars.Any(b => b.PaidHeight == 0 && b.SavedHeight == 0), $"tallest {tallest:F2}");
-            Check("U8 old shared credit is preserved without silently assigning it to a provider", !vm.HasBalance && vm.HasLegacyCredit && Settings.Settings.CreditBalanceUsd == 50m);
-            Check("U8 credit input: '$12.50', '12,50' and '25' parse; 'abc' and '-3' don't",
-                UsageViewModel.TryParseUsd("$12.50", out var a1) && a1 == 12.5m && UsageViewModel.TryParseUsd("12,50", out var a2) && a2 == 12.5m
-                && UsageViewModel.TryParseUsd("25", out var a3) && a3 == 25m && !UsageViewModel.TryParseUsd("abc", out _) && !UsageViewModel.TryParseUsd("-3", out _));
-
-            win = new UsageWindow(vm) { ShowActivated = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = -12000, Top = 0 };
-            win.Show();
-            var themes = Sp.GetRequiredService<ThemeService>();
-            LocSvc.SetLanguage("th");
-            vm.Refresh();
-            foreach (var id in new[] { ThemeIds.Classic, ThemeIds.Midnight, ThemeIds.NeonCyber })
-            {
-                themes.Apply(id, persist: false);
-                await Task.Delay(200);
-                win.UpdateLayout();
-                var el = (FrameworkElement)win.Content;
-                var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap((int)el.ActualWidth, (int)el.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-                bmp.Render(el);
-                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
-                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
-                using (var fs = File.Create(Path.Combine(AppContext.BaseDirectory, $"usage-{id.ToLowerInvariant()}-th.png"))) enc.Save(fs);
-            }
-            themes.Apply(ThemeIds.Midnight, persist: false);
-            Check("U8 look: the window renders in all three themes (usage-*-th.png)", win.ActualHeight > 400, $"{win.ActualWidth:F0}x{win.ActualHeight:F0}");
-
-            vm.BalanceInput = "abc";
-            vm.SetBalanceCommand.Execute(null);
-            bool refused = vm.BalanceError.Length > 0 && Settings.Settings.CreditBalanceUsd == 50m;
-            vm.BalanceInput = "20";
-            vm.SetBalanceCommand.Execute(null);
-            Check("U8 credit: a bad entry is refused; '20' anchors only this provider and leaves legacy credit intact",
-                refused && Settings.Settings.ProviderSpending["Anthropic"].CreditBalanceUsd == 20m && Settings.Settings.CreditBalanceUsd == 50m
-                && vm.BalanceError.Length == 0 && vm.BalanceText.Contains("$20.00"), vm.BalanceText);
-            LocSvc.SetLanguage("en");
-        }
-        finally
-        {
-            win?.Close();
-            if (ledgerBefore != null) File.WriteAllText(ledger, ledgerBefore); else File.Delete(ledger);
-            Settings.UpdateSettings(s => { s.ProviderSpending = billingBefore; s.CreditBalanceUsd = balanceBefore.bal; s.CreditBalanceSetAt = balanceBefore.at; s.CreditBalanceSpentThatDay = balanceBefore.spentThatDay; });
-        }
     }
 
     // ═══════════════════════════════════════════ U9 ═══════════════════════════════════════════

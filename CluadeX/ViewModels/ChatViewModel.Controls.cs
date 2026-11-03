@@ -567,22 +567,7 @@ public partial class ChatViewModel
         string.IsNullOrEmpty(info.Danger) && AllowsAll(askSession);
 
     // ─── Spend ───
-
-    private Views.UsageWindow? _usageWindow;
-
-    /// <summary>The spend window (today's chip ▸ "Spend &amp; savings chart"): one at a time, brought forward if open.</summary>
-    public void OpenUsageWindow()
-    {
-        if (_usageWindow != null) { _usageWindow.Activate(); return; }
-        var vm = new UsageViewModel(_costTracker, _settingsService, HasBillingPage ? () => OpenBillingCommand.Execute(null) : null);
-        var win = new Views.UsageWindow(vm);
-        var owner = App.Current?.MainWindow;
-        if (owner != null && owner.IsLoaded && owner != win) win.Owner = owner;
-        else win.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen;
-        win.Closed += (_, _) => _usageWindow = null;
-        _usageWindow = win;
-        win.Show();
-    }
+    // Spend & savings live on the Billing page (MainWindow's "today" chip ▸ "Spend & savings" opens it).
 
     public IReadOnlyList<StripChoice> BudgetChoices { get; } = new[] { 0.5m, 1m, 2m, 5m, 10m, 20m }
         .Select(v => new StripChoice(v, null, "$" + v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)))
