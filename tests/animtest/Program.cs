@@ -87,6 +87,12 @@ internal static class Program
             await SidebarChecks.RealList(win, vm);
             return 0;
         }
+        if (cli.Contains("--graph"))
+        {
+            await GraphChecks.Run(win, vm, sp, Check);
+            Console.WriteLine($"\n{Pass} passed, {Fail} failed");
+            return Fail == 0 ? 0 : 1;
+        }
         await SidebarChecks.Run(win, vm, settings, Check);
         if (cli.Contains("--sidebar"))
         {
@@ -133,6 +139,8 @@ internal static class Program
         await Task.Delay(400);
         int left = AllClocks().Count(c => c.CurrentState != ClockState.Stopped && Timeline.GetDesiredFrameRate(c.Timeline) == 30);
         Check("rows taken off the list leave no clock behind", left == 0, $"{left} left");
+
+        await GraphChecks.Run(win, vm, sp, Check);
 
         Console.WriteLine($"\n{Pass} passed, {Fail} failed");
         return Fail == 0 ? 0 : 1;

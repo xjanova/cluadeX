@@ -388,10 +388,28 @@ public sealed class NodeGraphViewModel : ViewModelBase
                 if (Graph.ById.TryGetValue(n.Id, out var old)) n.Collapsed = old.Collapsed;
         ApplyCollapse(g);
         TreeLayout(g);
+        // The overlay sends the tree again after any change in the page (a clock ticking, a slide turning): the same
+        // elements are the same graph, which is kept — no new graph to draw, nothing re-laid out under a drag.
+        if (Graph != null && SameTree(Graph, g)) { EmptyText = ""; return; }
         string? keep = SelectedNode?.Id;
         Graph = g;
         EmptyText = "";
         SelectedNode = keep != null && g.ById.TryGetValue(keep, out var again) ? again : null;
+    }
+
+    /// <summary>The same elements, text, sources, collapsed state and places, wired the same way.</summary>
+    private static bool SameTree(ProjectGraph a, ProjectGraph b)
+    {
+        if (a.Truncated != b.Truncated || a.Nodes.Count != b.Nodes.Count || a.Edges.Count != b.Edges.Count) return false;
+        for (int i = 0; i < a.Nodes.Count; i++)
+        {
+            GraphNode x = a.Nodes[i], y = b.Nodes[i];
+            if (x.Id != y.Id || x.Kind != y.Kind || x.Label != y.Label || x.Detail != y.Detail || x.Src != y.Src
+                || x.Collapsed != y.Collapsed || x.Hidden != y.Hidden || x.X != y.X || x.Y != y.Y) return false;
+        }
+        for (int i = 0; i < a.Edges.Count; i++)
+            if (a.Edges[i].From != b.Edges[i].From || a.Edges[i].To != b.Edges[i].To || a.Edges[i].Kind != b.Edges[i].Kind) return false;
+        return true;
     }
 
     private static string ShortSrc(string src)

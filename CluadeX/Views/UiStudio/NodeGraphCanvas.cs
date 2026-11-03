@@ -8,7 +8,8 @@ namespace CluadeX.Views.UiStudio;
 
 /// <summary>
 /// The Node Graph's drawing surface: nodes and wires drawn straight in OnRender (no element per node, so a few
-/// thousand nodes stay smooth), culled to what is on screen, with pan (drag the background / middle button),
+/// thousand nodes stay smooth) — nodes culled to what is on screen, wires and node texts laid out once and kept
+/// between frames (see <see cref="Wires"/>) — with pan (drag the background / middle button),
 /// zoom at the cursor (wheel), node drag, a minimap and fit-to-view. Colours come from the theme tokens, so it
 /// follows the app's theme.
 /// </summary>
@@ -38,8 +39,18 @@ public sealed class NodeGraphCanvas : FrameworkElement
     /// <summary>Draw a frame behind the nodes of each folder.</summary>
     public bool GroupByFolder { get; set; }
     public GraphEdge? SelectedEdge { get; set; }
-    // the wires as last drawn (screen space), for clicking on one
-    private readonly List<(GraphEdge Edge, Geometry Geo)> _wires = new();
+
+    // The wires, laid out in world space and kept between frames: a pan, a zoom step, a hover or a frame of the change
+    // glow only moves the view, so it draws them under a transform. They are laid out again when the graph, a filter
+    // or the selection changes, or a drag starts or ends (laying out ~2800 wires for every frame cost 20–40 ms a frame,
+    // so panning, zooming and the glow stuttered). The wires of the selected or dragged node are re-read every frame.
+    private WireSet? _wireSet;
+    private bool _wiresStale = true;
+    private readonly List<Wire> _hotWires = new();
+    /// <summary>How many times the wires were laid out (the harness proves a pan, a zoom step or a glow frame lays out none).</summary>
+    public int WireLayouts { get; private set; }
+    /// <summary>How many frames were drawn (the harness proves an idle page draws none).</summary>
+    public int Frames { get; private set; }
 
     private Vector _pan = new(40, 40);
     private double _zoom = 1;
@@ -48,8 +59,8 @@ public sealed class NodeGraphCanvas : FrameworkElement
     private Vector _dragOffset;
     private bool _panning, _moved;
     private GraphNode? _hover;
-    private readonly Dictionary<string, (string Text, Brush Brush, FormattedText Ft)> _labels = new();
-    private readonly Dictionary<string, (string Text, Brush Brush, FormattedText Ft)> _details = new();
+    private readonly Dictionary<string, (string Text, Brush Brush, Drawing Ink)> _labels = new();
+    private readonly Dictionary<string, (string Text, Brush Brush, Drawing Ink)> _details = new();
     private const double MiniW = 180, MiniH = 120;
 
     public NodeGraphCanvas()
@@ -74,6 +85,7 @@ public sealed class NodeGraphCanvas : FrameworkElement
         }
         Graph = graph;
         Selected = selected;
+        _wiresStale = true;   // the same graph object may have new positions (layout, collapse) or filters
         InvalidateVisual();
         if (AnyGlow()) StartGlow();
     }
@@ -142,13 +154,25 @@ public sealed class NodeGraphCanvas : FrameworkElement
 
     private GraphEdge? HitEdge(Point screen)
     {
-        var pen = new Pen(Brushes.Black, 9);
-        // last drawn is on top; the bounding box first (thousands of wires: the exact stroke test only where it can hit)
-        for (int i = _wires.Count - 1; i >= 0; i--)
+        if (_wireSet == null) return null;
+        var w = ToWorld(screen);
+        var pen = new Pen(Brushes.Black, 9 / _zoom);
+        double slack = 5 / _zoom;
+        // last drawn is on top; the curve's hull first (thousands of wires: the exact stroke test only where it can hit)
+        bool Hit(Wire wire)
         {
-            var box = _wires[i].Geo.Bounds;
-            box.Inflate(5, 5);
-            if (box.Contains(screen) && _wires[i].Geo.StrokeContains(pen, screen)) return _wires[i].Edge;
+            var box = wire.Hull;
+            box.Inflate(slack, slack);
+            if (!box.Contains(w)) return false;
+            var geo = new StreamGeometry();
+            using (var ctx = geo.Open()) wire.Trace(ctx);
+            return geo.StrokeContains(pen, w);
+        }
+        for (int i = _hotWires.Count - 1; i >= 0; i--) if (Hit(_hotWires[i])) return _hotWires[i].Edge;
+        for (int g = _wireSet.Groups.Count - 1; g >= 0; g--)
+        {
+            var list = _wireSet.Groups[g].Wires;
+            for (int i = list.Count - 1; i >= 0; i--) if (Hit(list[i])) return list[i].Edge;
         }
         return null;
     }
@@ -192,6 +216,113 @@ public sealed class NodeGraphCanvas : FrameworkElement
             for (int k = 0; k < sorted.Count; k++) result[sorted[k]] = (result[sorted[k]].Item1, (k + 1.0) / (sorted.Count + 1));
         }
         return result;
+    }
+
+    /// <summary>A wire's curve in world space: where it leaves, where it enters, and whether it runs down or across.</summary>
+    private readonly record struct Wire(GraphEdge Edge, Point From, Point To, bool Vertical)
+    {
+        private double Bend => Math.Max(30, Math.Abs(To.X - From.X) * 0.5);
+        private Point C1 => Vertical ? new Point(From.X, From.Y + Bend) : new Point(From.X + Bend, From.Y);
+        private Point C2 => Vertical ? new Point(To.X, To.Y - Bend) : new Point(To.X - Bend, To.Y);
+
+        public void Trace(StreamGeometryContext ctx)
+        {
+            ctx.BeginFigure(From, false, false);
+            ctx.BezierTo(C1, C2, To, true, false);
+        }
+
+        /// <summary>The arrow head at the far end, <paramref name="s"/> world units wide.</summary>
+        public void Head(StreamGeometryContext ctx, double s)
+        {
+            ctx.BeginFigure(To, true, true);
+            if (Vertical)
+            {
+                ctx.LineTo(new Point(To.X - s, To.Y - s * 1.6), false, false);
+                ctx.LineTo(new Point(To.X + s, To.Y - s * 1.6), false, false);
+            }
+            else
+            {
+                ctx.LineTo(new Point(To.X - s * 1.6, To.Y - s), false, false);
+                ctx.LineTo(new Point(To.X - s * 1.6, To.Y + s), false, false);
+            }
+        }
+
+        /// <summary>The curve lies inside the box of its four control points.</summary>
+        public Rect Hull
+        {
+            get
+            {
+                var r = new Rect(From, To);
+                r.Union(C1);
+                r.Union(C2);
+                return r;
+            }
+        }
+    }
+
+    /// <summary>One kind of wire (solid or dashed) drawn as a single geometry, with its arrow heads for one head size.</summary>
+    private sealed class WireGroup(GraphEdgeKind kind, bool dashed, StreamGeometry lines, List<Wire> wires)
+    {
+        public GraphEdgeKind Kind { get; } = kind;
+        public bool Dashed { get; } = dashed;
+        public StreamGeometry Lines { get; } = lines;
+        public List<Wire> Wires { get; } = wires;
+        public StreamGeometry? Heads;
+        public double HeadSize = double.NaN;
+    }
+
+    /// <summary>The wires as laid out for one graph, filter and selection: the cold ones in groups, the hot ones (on
+    /// the selected or dragged node, or the selected wire) by edge, and where every wire meets its nodes.</summary>
+    private sealed class WireSet
+    {
+        public ProjectGraph? Graph;
+        public string? Sel, Drag;
+        public GraphEdge? SelEdge;
+        public bool Inferred;
+        public HashSet<GraphEdgeKind> Hidden = new();
+        public Dictionary<GraphEdge, (double From, double To)> Ports = new();
+        public readonly List<WireGroup> Groups = new();
+        public readonly List<GraphEdge> Hot = new();
+    }
+
+    private Wire MakeWire(GraphEdge e, (double From, double To) port)
+    {
+        var a = Graph!.ById[e.From];
+        var b = Graph.ById[e.To];
+        bool vertical = b.X < a.X + a.Width;
+        var p0 = vertical ? new Point(a.X + a.Width * port.From, a.Y + a.Height) : new Point(a.X + a.Width, a.Y + a.Height * port.From);
+        var p3 = vertical ? new Point(b.X + b.Width * port.To, b.Y) : new Point(b.X, b.Y + b.Height * port.To);
+        return new Wire(e, p0, p3, vertical);
+    }
+
+    /// <summary>The wires for this frame: the kept ones unless what they depend on changed since they were laid out.
+    /// A drag keeps the ports where they were until the node is dropped (then they are laid out again).</summary>
+    private WireSet Wires(string? sel, GraphEdge? selEdge)
+    {
+        string? drag = _dragNode?.Id;
+        var set = _wireSet;
+        if (set != null && !_wiresStale && ReferenceEquals(set.Graph, Graph) && set.Sel == sel && set.Drag == drag && ReferenceEquals(set.SelEdge, selEdge)
+            && set.Inferred == ShowInferred && set.Hidden.SetEquals(HiddenKinds))
+            return set;
+        _wiresStale = false;
+        WireLayouts++;
+        set = _wireSet = new WireSet { Graph = Graph, Sel = sel, Drag = drag, SelEdge = selEdge, Inferred = ShowInferred, Hidden = new(HiddenKinds) };
+        var edges = VisibleEdges().ToList();
+        set.Ports = Ports(edges);
+        var groups = new Dictionary<(GraphEdgeKind, bool), List<Wire>>();
+        foreach (var e in edges)
+        {
+            if (ReferenceEquals(e, selEdge) || sel != null && (e.From == sel || e.To == sel) || drag != null && (e.From == drag || e.To == drag)) { set.Hot.Add(e); continue; }
+            (groups.TryGetValue((e.Kind, e.Inferred), out var list) ? list : groups[(e.Kind, e.Inferred)] = new()).Add(MakeWire(e, set.Ports[e]));
+        }
+        foreach (var ((kind, dashed), list) in groups)
+        {
+            var geo = new StreamGeometry();
+            using (var ctx = geo.Open()) foreach (var w in list) w.Trace(ctx);
+            geo.Freeze();
+            set.Groups.Add(new WireGroup(kind, dashed, geo, list));
+        }
+        return set;
     }
 
     /// <summary>A soft frame around the nodes of each folder, the folder's name on top.</summary>
@@ -315,6 +446,7 @@ public sealed class NodeGraphCanvas : FrameworkElement
     protected override void OnMouseUp(MouseButtonEventArgs e)
     {
         if (_dragNode != null && _moved) NodeMoved?.Invoke(_dragNode);
+        if (_dragNode != null) InvalidateVisual();   // dropped: the wires are laid out again around where it landed
         if (_panning && !_moved && e.ChangedButton == MouseButton.Left)
         {
             // a click (no drag) off the nodes: on a wire selects the wire, on empty space clears the selection
@@ -402,6 +534,7 @@ public sealed class NodeGraphCanvas : FrameworkElement
 
     protected override void OnRender(DrawingContext dc)
     {
+        Frames++;
         var bg = Res("Surface.Sunken", Brushes.Black);
         dc.DrawRectangle(bg, null, new Rect(0, 0, ActualWidth, ActualHeight));
         DrawGrid(dc);
@@ -424,7 +557,8 @@ public sealed class NodeGraphCanvas : FrameworkElement
 
         // ── wires: coloured by the kind of connection, dashed when inferred ──
         // Wires of the selected (or dragged) node, or the selected wire, come forward — brighter, thicker, with a soft
-        // glow under them — in their own colour; the rest fade back but keep theirs.
+        // glow under them — in their own colour; the rest fade back but keep theirs. They are drawn in world space under
+        // the view's transform, so a pen's thickness is divided by the zoom to stay the same on screen.
         var pens = new Dictionary<(GraphEdgeKind, int, bool), Pen>();
         Pen PenFor(GraphEdgeKind kind, int state, bool dashed)   // 0 normal · 1 faded · 2 hot · 3 glow under hot
         {
@@ -432,10 +566,10 @@ public sealed class NodeGraphCanvas : FrameworkElement
             var c = EdgeColor(kind);
             p = state switch
             {
-                1 => new Pen(Solid(c, 50), Math.Max(1, 1 * _zoom)),
-                2 => new Pen(Solid(c), Math.Max(1.6, (_dragNode != null ? 2.8 : 2.3) * _zoom)),
-                3 => new Pen(Solid(c, 70), Math.Max(4, 7 * _zoom)),
-                _ => new Pen(Solid(c, 165), Math.Max(1, 1.3 * _zoom)),
+                1 => new Pen(Solid(c, 50), Math.Max(1, 1 * _zoom) / _zoom),
+                2 => new Pen(Solid(c), Math.Max(1.6, (_dragNode != null ? 2.8 : 2.3) * _zoom) / _zoom),
+                3 => new Pen(Solid(c, 70), Math.Max(4, 7 * _zoom) / _zoom),
+                _ => new Pen(Solid(c, 165), Math.Max(1, 1.3 * _zoom) / _zoom),
             };
             p.StartLineCap = p.EndLineCap = PenLineCap.Round;
             if (dashed && state != 3) p.DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0);
@@ -443,63 +577,45 @@ public sealed class NodeGraphCanvas : FrameworkElement
             pens[(kind, state, dashed)] = p;
             return p;
         }
-        var edges = VisibleEdges().ToList();
-        var ports = Ports(edges);
-        _wires.Clear();
         GraphEdge? selEdge = SelectedEdge;
-        bool Hot(GraphEdge e) => ReferenceEquals(e, selEdge) || sel != null && (e.From == sel || e.To == sel);
         bool anyFocus = sel != null || selEdge != null;
-        // the hot wires last, so they are drawn on top of the faded ones
-        foreach (var e in anyFocus ? edges.OrderBy(Hot) : (IEnumerable<GraphEdge>)edges)
+        var wires = Wires(sel, selEdge);
+        bool heads = _zoom > 0.25;
+        double headSize = 5 * Math.Max(0.6, _zoom) / _zoom;
+        _hotWires.Clear();
+        foreach (var e in wires.Hot) _hotWires.Add(MakeWire(e, wires.Ports[e]));
+        dc.PushTransform(new MatrixTransform(_zoom, 0, 0, _zoom, _pan.X, _pan.Y));
+        foreach (var group in wires.Groups)
         {
-            var a = Graph.ById[e.From];
-            var b = Graph.ById[e.To];
-            var box = Rect.Union(new Rect(a.X, a.Y, a.Width, a.Height), new Rect(b.X, b.Y, b.Width, b.Height));
-            if (!box.IntersectsWith(view)) continue;
-            bool touches = Hot(e);
-            var pen = PenFor(e.Kind, touches ? 2 : anyFocus ? 1 : 0, e.Inferred);
-
-            var (fromPort, toPort) = ports[e];
-            bool vertical = b.X < a.X + a.Width;
-            var p0 = vertical ? ToScreen(a.X + a.Width * fromPort, a.Y + a.Height) : ToScreen(a.X + a.Width, a.Y + a.Height * fromPort);
-            var p3 = vertical ? ToScreen(b.X + b.Width * toPort, b.Y) : ToScreen(b.X, b.Y + b.Height * toPort);
-            double dx = Math.Max(30 * _zoom, Math.Abs(p3.X - p0.X) * 0.5);
-            var geo = new StreamGeometry();
-            using (var ctx = geo.Open())
+            var pen = PenFor(group.Kind, anyFocus ? 1 : 0, group.Dashed);
+            dc.DrawGeometry(null, pen, group.Lines);
+            if (!heads) continue;
+            if (group.Heads == null || group.HeadSize != headSize)   // the heads keep their size on screen below zoom 0.6
             {
-                ctx.BeginFigure(p0, false, false);
-                if (vertical)
-                    ctx.BezierTo(new Point(p0.X, p0.Y + dx), new Point(p3.X, p3.Y - dx), p3, true, false);
-                else
-                    ctx.BezierTo(new Point(p0.X + dx, p0.Y), new Point(p3.X - dx, p3.Y), p3, true, false);
+                var geo = new StreamGeometry();
+                using (var ctx = geo.Open()) foreach (var w in group.Wires) w.Head(ctx, headSize);
+                geo.Freeze();
+                group.Heads = geo;
+                group.HeadSize = headSize;
             }
-            geo.Freeze();
-            _wires.Add((e, geo));
-            if (touches) dc.DrawGeometry(null, PenFor(e.Kind, 3, false), geo);
-            dc.DrawGeometry(null, pen, geo);
-            // arrow head
-            if (_zoom > 0.25)
-            {
-                double s = 5 * Math.Max(0.6, _zoom);
-                var head = new StreamGeometry();
-                using (var ctx = head.Open())
-                {
-                    ctx.BeginFigure(p3, true, true);
-                    if (vertical)
-                    {
-                        ctx.LineTo(new Point(p3.X - s, p3.Y - s * 1.6), false, false);
-                        ctx.LineTo(new Point(p3.X + s, p3.Y - s * 1.6), false, false);
-                    }
-                    else
-                    {
-                        ctx.LineTo(new Point(p3.X - s * 1.6, p3.Y - s), false, false);
-                        ctx.LineTo(new Point(p3.X - s * 1.6, p3.Y + s), false, false);
-                    }
-                }
-                head.Freeze();
-                dc.DrawGeometry(pen.Brush, null, head);
-            }
+            dc.DrawGeometry(pen.Brush, null, group.Heads);
         }
+        // the hot wires last, so they are drawn on top of the faded ones
+        foreach (var w in _hotWires)
+        {
+            var geo = new StreamGeometry();
+            using (var ctx = geo.Open()) w.Trace(ctx);
+            geo.Freeze();
+            var pen = PenFor(w.Edge.Kind, 2, w.Edge.Inferred);
+            dc.DrawGeometry(null, PenFor(w.Edge.Kind, 3, false), geo);
+            dc.DrawGeometry(null, pen, geo);
+            if (!heads) continue;
+            var head = new StreamGeometry();
+            using (var ctx = head.Open()) w.Head(ctx, headSize);
+            head.Freeze();
+            dc.DrawGeometry(pen.Brush, null, head);
+        }
+        dc.Pop();
 
         // ── nodes ──
         var selPen = new Pen(accent, 2); selPen.Freeze();
@@ -541,12 +657,12 @@ public sealed class NodeGraphCanvas : FrameworkElement
 
             if (!showText) continue;
             dc.PushClip(new RectangleGeometry(new Rect(r.X + 8 * _zoom, r.Y, Math.Max(1, r.Width - 16 * _zoom - (n.Collapsed ? 14 * _zoom : 0)), r.Height)));
-            var label = Label(_labels, n.Id, n.Label, 12.5, FontWeights.SemiBold, text, dpi);
-            var detail = n.Detail is { Length: > 0 } d ? Label(_details, n.Id, d, 10.5, FontWeights.Normal, muted, dpi) : null;
+            var label = Label(_labels, n.Id, n.Label, 12.5, FontWeights.SemiBold, text, dpi, 0);
+            var detail = n.Detail is { Length: > 0 } d ? Label(_details, n.Id, d, 10.5, FontWeights.Normal, muted, dpi, 18) : null;
             dc.PushTransform(new TranslateTransform(r.X + 10 * _zoom, r.Y + (detail != null ? 5 : 12) * _zoom));
             dc.PushTransform(new ScaleTransform(_zoom, _zoom));
-            dc.DrawText(label, new Point(0, 0));
-            if (detail != null) dc.DrawText(detail, new Point(0, 18));
+            dc.DrawDrawing(label);
+            if (detail != null) dc.DrawDrawing(detail);
             dc.Pop();
             dc.Pop();
             dc.Pop();
@@ -555,14 +671,19 @@ public sealed class NodeGraphCanvas : FrameworkElement
         DrawMinimap(dc, accent, border);
     }
 
-    private FormattedText Label(Dictionary<string, (string Text, Brush Brush, FormattedText Ft)> cache, string id, string s, double size, FontWeight weight, Brush brush, double dpi)
+    /// <summary>A node's text, laid out once and kept as glyphs: drawing a FormattedText lays its line out again every
+    /// time, which cost more than the whole rest of a zoomed-in frame.</summary>
+    private Drawing Label(Dictionary<string, (string Text, Brush Brush, Drawing Ink)> cache, string id, string s, double size, FontWeight weight, Brush brush, double dpi, double y)
     {
-        if (cache.TryGetValue(id, out var c) && c.Text == s && ReferenceEquals(c.Brush, brush)) return c.Ft;   // a theme switch hands new brushes
+        if (cache.TryGetValue(id, out var c) && c.Text == s && ReferenceEquals(c.Brush, brush)) return c.Ink;   // a theme switch hands new brushes
         var ft = new FormattedText(s, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
             new Typeface(new FontFamily("Segoe UI, Leelawadee UI"), FontStyles.Normal, weight, FontStretches.Normal), size, brush, dpi)
         { MaxLineCount = 1, Trimming = TextTrimming.CharacterEllipsis, MaxTextWidth = 150 };
-        cache[id] = (s, brush, ft);
-        return ft;
+        var ink = new DrawingGroup();
+        using (var dc = ink.Open()) dc.DrawText(ft, new Point(0, y));
+        ink.Freeze();
+        cache[id] = (s, brush, ink);
+        return ink;
     }
 
     private void DrawGrid(DrawingContext dc)

@@ -9,8 +9,10 @@ namespace GraphTest;
 /// (C#/WPF, Flutter/Dart, Laravel/PHP, Python, TypeScript with aliases) must give EXACTLY the expected edges —
 /// kind, inferred or not, and the file:line each stands on. Code in comments, strings, docstrings and `#if` blocks
 /// makes none. Then the bounds: a huge synthetic repo (caps hold, a binary file named .js and an oversized file are
-/// skipped, the read is cancellable), a folder deleted between two builds, CRLF and UTF-16 files.
-/// Run: build CluadeX first, then `dotnet run` (report: bin/Debug/net8.0-windows/graph-report.md).
+/// skipped, the read is cancellable), a folder deleted between two builds, CRLF and UTF-16 files. Then the canvas
+/// (CanvasChecks.cs): a frame that only moves the view lays no wire out again.
+/// Run: build CluadeX first, then `dotnet run` (report: bin/Debug/net8.0-windows/graph-report.md; `-- --canvas`
+/// runs only the canvas checks).
 /// `dotnet run -- --dump [fixture…]` prints the edges instead of checking them.
 /// </summary>
 internal static partial class Program
@@ -45,6 +47,7 @@ internal static partial class Program
         if (args.Length > 0 && args[0] == "--dump") return Dump(args[1..]);
 
         var total = System.Diagnostics.Stopwatch.StartNew();
+        if (args.Contains("--canvas")) goto canvas;
         Fixture("wpf", WpfEdges, new[] { "Views/OldView.xaml.cs", "Legacy.cs" });
         Fixture("flutter", FlutterEdges, new[] { "lib/widgets/old_banner.dart" });
         Fixture("laravel", LaravelEdges, new[] { "resources/views/partials/old.blade.php" });
@@ -53,6 +56,8 @@ internal static partial class Program
         Extra();
         Bounds();
         StaticXaml();
+    canvas:
+        Canvas();
 
         Console.WriteLine($"\n{Pass} passed, {Fail} failed ({total.Elapsed.TotalSeconds:0.0} s)");
         Report.Insert(0, $"# graphtest — {Pass} passed, {Fail} failed\n\nRun {DateTime.Now:yyyy-MM-dd HH:mm}, {total.Elapsed.TotalSeconds:0.0} s.\n");
