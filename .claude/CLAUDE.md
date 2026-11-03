@@ -183,6 +183,18 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
 - Proven by `tests/commenttest` (109 checks, mocked model, no network; T* = the chat tool through the real
   `AgentToolService`). Not yet driven by hand in the running app.
 
+## Splash update, Design mode, verified Studio loads (3.0.229, 2026-11-03)
+- Splash: an update found at start is downloaded fully, installed and restarted before the main window opens.
+  `UpdateProgressComposer` = bytes over a fixed total (delta vs full decided first), `StartupUpdatePolicy` caps the check
+  (25 s) and restart prep (6 s); `Program.Main` turns Velopack auto-apply off so the splash owns the install.
+  `UpdateAttemptLog` is the circuit breaker. Proven offline by `tests/apitest` (UpdateProgressWire); never a real install.
+- Design mode (`Services/Agents/DesignGate.cs`, like WorkflowGate): per-chat switch + owner-words regex, decided once per
+  turn (`TakeOwnerTurn`), the result rides on the run. A design turn opens the UI Studio (`DesignViewRequested`).
+- While the AI works in a project the Studio is locked (`StudioService.WriteBlocked`, overlay `__cx.setLocked`); it
+  catches up on unlock. Page loads go through `PageLoadTracker` (Navigating → Verifying → Loaded/…/Failed, generation-
+  guarded, survives a killed browser). Proven by `tests/chattest` DM*/DL*/SW*, `tests/pagestest`, `tests/studiotest`.
+- The old UsageWindow is gone: its account/savings views live in the Billing page (`Views/Billing/`).
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.
