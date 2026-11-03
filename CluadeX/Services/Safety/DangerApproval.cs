@@ -53,30 +53,41 @@ public static class DangerApproval
 /// </summary>
 public static class DangerApprovalPipe
 {
+    private const string NameEnv = "CLUADEX_DANGER_PIPE";
+
+    /// <summary>The app's own name carries its process id and <see cref="StartServer"/> puts it in the environment, so the
+    /// hook of a CLI this app started asks this app — not a test harness that served the same fixed name (it would answer
+    /// no, and the owner's red prompt never showed; ChatToolBridge.PipeName, 2026-11-03).</summary>
     public static string Name =>
-        Environment.GetEnvironmentVariable("CLUADEX_DANGER_PIPE") is { Length: > 0 } n ? n : "cluadex-danger-approval";
+        Environment.GetEnvironmentVariable(NameEnv) is { Length: > 0 } n ? n : "cluadex-danger-approval-" + Environment.ProcessId;
 
     /// <summary>How long the hook waits for the user's answer (the hook's own timeout in GuardHook.SettingsFile is longer).</summary>
     public static readonly TimeSpan AnswerTimeout = TimeSpan.FromSeconds(280);
 
     private static int _started;
 
-    /// <summary>Serve requests in the app (once). If another CluadeX already serves the name, this one stays quiet.</summary>
+    /// <summary>Serve requests in the app (once). The first instance is created only if no other process holds the name
+    /// (a child that inherited the name stays quiet and tries again later); the rest join it.</summary>
     public static void StartServer()
     {
         if (Interlocked.Exchange(ref _started, 1) == 1) return;
         string name = Name;
+        Environment.SetEnvironmentVariable(NameEnv, name);
         _ = Task.Run(async () =>
         {
+            bool owned = false;
             while (true)
             {
                 NamedPipeServerStream server;
                 try
                 {
                     server = new NamedPipeServerStream(name, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
-                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly
+                                                   | (owned ? PipeOptions.None : PipeOptions.FirstPipeInstance));
+                    owned = true;
                 }
-                catch { return; }   // the name is taken (another instance) or pipes are unavailable
+                catch when (!owned) { await Task.Delay(5000).ConfigureAwait(false); continue; }
+                catch { return; }   // pipes are unavailable
                 try { await server.WaitForConnectionAsync().ConfigureAwait(false); }
                 catch { server.Dispose(); await Task.Delay(500).ConfigureAwait(false); continue; }
                 _ = Task.Run(() => ServeOneAsync(server));

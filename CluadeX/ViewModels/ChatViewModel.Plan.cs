@@ -204,12 +204,18 @@ public partial class ChatViewModel
     }
 
     /// <summary>An item the owner added in the plan window. Running → the agent gets it at its next step and adds it to
-    /// its plan (true). Idle → false: the window keeps it for "start".</summary>
+    /// its plan (true). Idle → false: the window keeps it for "start". It shows in the chat as a waiting message, like
+    /// one typed in the box: a run that ends before its agent reads it sends it as the next turn, or keeps it in the chat
+    /// marked not sent — an untagged note used to vanish when its chat was off screen.</summary>
     public bool AddPlanItem(string sessionId, string text)
     {
         var run = _runs.FirstOrDefault(r => r.Session.Id == sessionId);
         if (run == null) return false;
-        run.Scope.AddUserNote("Add this to your plan (todo_write), after the items already there, and do it in this turn: " + text);
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = Loc("plan.added.bubble") + " " + text, IsQueuedNote = true };
+        bubble.QueueRow = new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") };
+        run.Messages.Add(bubble);
+        run.Messages.Add(bubble.QueueRow);
+        run.Scope.AddUserNote("Add this to your plan (todo_write / update_plan), after the items already there, and do it in this turn: " + text, bubble);
         return true;
     }
 

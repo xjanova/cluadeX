@@ -75,15 +75,25 @@ public partial class CodeAgentService
         return s;
     }
 
-    /// <summary>A .git folder or file (worktree) here or above — a quick check; worktree creation verifies for real.</summary>
-    private static bool HasGitFolder(string folder)
+    /// <summary>A git repository here or above whose HEAD has a commit — a quick check with no git process; worktree
+    /// creation verifies for real. A repo just made with `git init` has no commit, so no worktree can branch from it: a
+    /// writing sub-agent was sent with isolation and failed at once ("Cannot create agent worktree", GigLive 2026-11-03).</summary>
+    internal static bool HasGitFolder(string folder)
     {
         try
         {
             for (var d = new System.IO.DirectoryInfo(folder); d != null; d = d.Parent)
             {
                 string g = System.IO.Path.Combine(d.FullName, ".git");
-                if (System.IO.Directory.Exists(g) || System.IO.File.Exists(g)) return true;
+                if (System.IO.File.Exists(g)) return true;   // a linked worktree or submodule always has a commit
+                if (!System.IO.Directory.Exists(g)) continue;
+                string head = System.IO.File.ReadAllText(System.IO.Path.Combine(g, "HEAD")).Trim();
+                if (!head.StartsWith("ref:", StringComparison.Ordinal)) return head.Length > 0;   // detached at a commit
+                string reference = head[4..].Trim();
+                if (System.IO.File.Exists(System.IO.Path.Combine(g, reference.Replace('/', System.IO.Path.DirectorySeparatorChar)))) return true;
+                string packed = System.IO.Path.Combine(g, "packed-refs");
+                return System.IO.File.Exists(packed)
+                    && System.IO.File.ReadLines(packed).Any(l => l.EndsWith(" " + reference, StringComparison.Ordinal));
             }
         }
         catch { }

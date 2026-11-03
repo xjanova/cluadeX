@@ -220,7 +220,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort,
         string? toolsConfig = null, IReadOnlyList<string>? addDirs = null, bool allLevels = false, string? codeComments = null,
         string? browserRefusal = null, Agents.DispatchDecision? dispatch = null, decimal? budgetUsd = null,
-        string? desktopRefusal = null)
+        string? desktopRefusal = null, string? splitGuide = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -246,6 +246,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
               "When the task has two or more independent parts (several folders or questions to investigate, bulky reading, " +
               "separate files to change), hand them to sub-agents with the Task tool — several in one response run in parallel, " +
               "and the user watches each one on the agent map. Keep a small task to yourself. ") +
+              (chatTools && splitGuide is { Length: > 0 } ? splitGuide + " " : "") +
               folders +
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               reach +
@@ -584,7 +585,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         bool allLevels = CliTakesAllLevels(ReportedCliVersion);
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
             CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
-            extras?.DesktopRefusal);
+            extras?.DesktopRefusal, Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, cli: true));
         // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.
         string sentEffort = SentEffort(effort, allLevels);
         if (effortScope != null) effortScope.LiveEffort = sentEffort;

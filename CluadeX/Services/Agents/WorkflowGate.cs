@@ -84,4 +84,42 @@ public static class WorkflowGate
     }
 
     public static bool Allowed(string? chat) => Why(chat) != null;
+
+    /// <summary>The chat the current run belongs to (a sub-agent's run belongs to its root chat).</summary>
+    public static string? CurrentChat
+    {
+        get
+        {
+            var s = AgentRunScope.Current;
+            while (s?.Parent != null) s = s.Parent;
+            return s?.SessionKey;
+        }
+    }
+
+    /// <summary>The split guide for a chat that opted in, else null. The model was never told Ultra was on: the switch only
+    /// opened the workflow tool, and a chat with Ultra on still did everything in one agent (GigLive, 2026-11-03).</summary>
+    public static string? SplitGuideFor(string? chat, bool cli) => Allowed(chat) ? SplitGuide(cli) : null;
+
+    /// <summary>How to decide between doing it yourself, sub-agents, a workflow and a chat of its own. Pure.
+    /// <paramref name="cli"/>: Claude Code's names (its Agent tool, mcp__cluadex__*).</summary>
+    public static string SplitGuide(bool cli)
+    {
+        string spawn = cli ? "the Agent tool" : "agent_spawn";
+        string wf = cli ? "mcp__cluadex__workflow" : "workflow";
+        string chat = cli ? "mcp__cluadex__new_chat" : "new_chat";
+        string close = cli ? "mcp__cluadex__close_chat" : "close_chat";
+        return "The user switched Ultra on for this chat (or asked for multi-agent work): you may split the work, and you decide "
+             + "how. Go down this list and take the first that fits each piece: "
+             + "(1) Do it yourself — one or two files, steps that depend on each other, or work that needs this chat's context. "
+             + $"(2) Sub-agents with {spawn} — two or more independent parts that are mostly reading or checking (several folders, "
+             + "questions, logs); start them in one response so they run in parallel. "
+             + $"(3) {wf} — three or more independent pieces of real work, or findings that must be checked (a review, an audit, a "
+             + "multi-part build): phases of agents with JSON schemas, and refuters on what they find. "
+             + $"(4) {chat} — a separate deliverable the user may want to steer or review on its own (another app or repository, a "
+             + "design or asset track beside the code), or a new standalone request typed while you work; it runs in parallel and "
+             + $"shows under this chat — put it away with {close} once its result is in. "
+             + "Never split pieces that edit the same files, or hand off a piece whose result you need for your very next step. "
+             + "Every brief is complete on its own: the agent or chat cannot see this conversation. Say in one line how you split "
+             + "the work and why, and put the pieces in your plan.";
+    }
 }

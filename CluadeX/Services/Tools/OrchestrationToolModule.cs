@@ -237,9 +237,8 @@ public sealed class OrchestrationToolModule : IAgentToolModule
             s += "\n[ACTION: wrap_up]\nrecap: Fixed the timeout in client.cs; the build passes. Not run against the live API.\n"
                + "ask: Run the live test now?\nactions: [\"Yes, run it\", \"Not now\"]\n[/ACTION]";
         if (wf)
-            s += "\nThe user opted in to workflows in this chat: for a big review, audit or multi-part investigation, plan a workflow "
-               + "(phases of agents with JSON schemas, verify their findings with refuters) instead of many agent_spawn calls. "
-               + "When several agents change code at once, give that phase isolation \"worktree\", a gate (the build/test "
+            s += "\n" + WorkflowGate.SplitGuide(cli: false)
+               + " When several agents change code at once, give that phase isolation \"worktree\", a gate (the build/test "
                + "command) and merge, so the app checks each diff itself and merges only what stays green.";
         return s;
     }
