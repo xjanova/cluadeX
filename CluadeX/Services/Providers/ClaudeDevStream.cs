@@ -281,6 +281,13 @@ public sealed class ClaudeDevStreamTurn
         {
             _late.Clear();   // a new main step: the notices before it reached the model
             _messageKey = key;
+            // The CLI's own request size (its system prompt, tools and every file it read): the status bar counted only the
+            // chat's rows, a fraction of what the CLI holds. Sub-agents' messages never come here (their own context).
+            if (msg.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+            {
+                int Num(string name) => usage.TryGetProperty(name, out var v) && v.TryGetInt32(out int n) ? Math.Max(0, n) : 0;
+                AgentRunScope.ReportPromptSize(Num("input_tokens") + Num("cache_read_input_tokens") + Num("cache_creation_input_tokens"));
+            }
             _step = new AgentStep { StepNumber = Steps.Count + 1 };
             Steps.Add(_step);
             StepStarted?.Invoke(_step.StepNumber);

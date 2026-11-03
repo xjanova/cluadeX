@@ -604,6 +604,29 @@ internal static partial class Program
             $"{modelView.Count} messages");
         Check("C2 the latest answer is still in the model's view", modelView.Last().Content == "answer 15");
 
+        // ─── K: the status bar's context count (owner 2026-11-04: "ถูกต้องแม่นยำไหม ทำไมมันขึ้นช้า") ───
+        var est = new ContextMemoryService(null!);
+        string thai = "ช่วยตรวจสอบไฟล์ทั้งหมดในโปรเจกต์นี้แล้วสรุปให้หน่อยว่าต้องแก้อะไรบ้างก่อนออกเวอร์ชันใหม่";
+        Check("K1 a Thai sentence is not one word: about one token per two characters", est.EstimateTokens(thai) >= thai.Length / 3,
+            $"{est.EstimateTokens(thai)} for {thai.Length} chars");
+        Check("K1 English text is counted as before", est.EstimateTokens("hello world") is >= 2 and <= 4, $"{est.EstimateTokens("hello world")}");
+        var kUser = new ChatMessage { Role = MessageRole.User, Content = "fix it" };
+        var kTool = new ChatMessage { Role = MessageRole.ToolAction, Content = "read_file a.cs", ToolOutput = new string('x', 400) };
+        var kStatus = new ChatMessage { Role = MessageRole.AgentStatus, Content = "working…" };
+        var kRows = new List<ChatMessage> { kUser, kStatus, kTool };
+        int Est(IEnumerable<ChatMessage> rows) => est.CalculateTotalTokens(rows);
+        var kMeasured = new ChatSession.MeasuredContext(42_000, kUser, AiProviderType.ClaudeDev);
+        var (kUsed, kIsMeasured) = ChatViewModel.ContextUsed(kRows, kMeasured, AiProviderType.ClaudeDev, Est);
+        Check("K2 the service's count leads, rows after its anchor are added as a guess",
+            kIsMeasured && kUsed == 42_000 + Est(ChatViewModel.BuildModelHistory(new[] { kStatus, kTool })), $"{kUsed}");
+        var (kOther, kOtherMeasured) = ChatViewModel.ContextUsed(kRows, kMeasured, AiProviderType.Anthropic, Est);
+        Check("K2 another provider answers now: back to the guess", !kOtherMeasured && kOther == Est(ChatViewModel.BuildModelHistory(kRows)), $"{kOther}");
+        var (_, kGoneMeasured) = ChatViewModel.ContextUsed(new List<ChatMessage> { kTool }, kMeasured, AiProviderType.ClaudeDev, Est);
+        Check("K2 the anchor row is gone (rewind): back to the guess", !kGoneMeasured);
+        var kCompacted = new List<ChatMessage>(kRows) { new() { Role = MessageRole.ContextSummary, Content = "summary" } };
+        var (_, kCompactMeasured) = ChatViewModel.ContextUsed(kCompacted, kMeasured, AiProviderType.ClaudeDev, Est);
+        Check("K2 a compaction after the report: back to the guess", !kCompactMeasured);
+
         // The chat list virtualizes (only rows on screen exist): bring the marker into view first.
         ChatList.ScrollIntoView(markers[0]);
         await Render();

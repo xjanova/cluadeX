@@ -618,6 +618,15 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
         set { if (_runStep != value) { _runStep = value; Raise(nameof(RunStep)); } }
     }
 
+    /// <summary>The prompt size the model's service last reported for this chat (rows after its anchor are estimated on
+    /// top). Null until a service reports one. Not stored.</summary>
+    public MeasuredContext? LastMeasuredContext { get; set; }
+
+    /// <summary>A real prompt size: <paramref name="Tokens"/> as the service counted them, from
+    /// <paramref name="Provider"/>. <paramref name="Anchor"/>: the chat's last user / reply / tool row at that moment —
+    /// a row, not an index, because status rows come and go around it.</summary>
+    public sealed record MeasuredContext(int Tokens, ChatMessage? Anchor, AiProviderType Provider);
+
     public string Id { get; set; } = Guid.NewGuid().ToString();
     private string _title = "New Chat";
     /// <summary>Raises its change: opening a chat copies the stored title onto the sidebar's own row (the row is no longer

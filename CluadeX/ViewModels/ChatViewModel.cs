@@ -2133,13 +2133,15 @@ public partial class ChatViewModel : ViewModelBase
         try
         {
             var messages = Messages.ToList();
-            // Measure what the MODEL is sent (after the last compaction marker, minus status/UI rows) against
-            // the window of the model actually answering — not every row on screen against a local setting.
-            var modelView = BuildModelHistory(messages);
-            int used = _contextMemoryService.CalculateTotalTokens(modelView);
+            // What the model's service last measured, plus a guess for the rows since — else a guess over what the MODEL
+            // is sent (after the last compaction marker, minus status/UI rows) — against the window of the model
+            // actually answering, not every row on screen against a local setting.
+            var (used, measured) = ContextUsed(messages, CurrentSession?.LastMeasuredContext, _providerManager.ActiveProviderType,
+                _contextMemoryService.CalculateTotalTokens);
             int max = _contextMemoryService.MaxContextTokens;
             ContextUsagePercent = max > 0 ? Math.Min(100.0, (double)used / max * 100.0) : 0;
-            ContextUsageText = $"{used:N0} / {max:N0}";
+            // "~" = a guess from the chat's text; no mark = the count the service reported for the last request.
+            ContextUsageText = (measured ? "" : "~") + $"{used:N0} / {max:N0}";
 
             // Session stats
             SessionTurnCount = messages.Count(m => m.Role == MessageRole.Assistant);
@@ -2187,6 +2189,43 @@ public partial class ChatViewModel : ViewModelBase
             EvaluateCompactionTrigger(messages);
         }
         catch { /* ignore during initialization */ }
+    }
+
+    /// <summary>How many tokens the model holds for this chat, and whether that is the service's own count.
+    /// The status bar used to show only <paramref name="estimate"/> over the chat's rows: it missed the system prompt,
+    /// the tool definitions and every file a CLI agent read, and counted a Thai sentence as one word — so it rose far
+    /// slower than the real context (owner 2026-11-04). Now: the last reported prompt size, plus a guess for the rows
+    /// added after it. The report stops counting when its chat moved on without it: another provider answers now, its
+    /// anchor row is gone (rewind, a deleted row) or a compaction came after it. Pure: the harness checks it.</summary>
+    public static (int Used, bool Measured) ContextUsed(IReadOnlyList<ChatMessage> messages, ChatSession.MeasuredContext? measured,
+        AiProviderType activeProvider, Func<IEnumerable<ChatMessage>, int> estimate)
+    {
+        if (measured is { Anchor: { } anchor } m && m.Provider == activeProvider)
+        {
+            int at = -1;
+            for (int i = messages.Count - 1; i >= 0; i--)
+                if (ReferenceEquals(messages[i], anchor)) { at = i; break; }
+            if (at >= 0)
+            {
+                var after = messages.Skip(at + 1).ToList();
+                if (!after.Any(r => r.Role == MessageRole.ContextSummary))
+                    return (m.Tokens + estimate(BuildModelHistory(after)), true);
+            }
+        }
+        return (estimate(BuildModelHistory(messages)), false);
+    }
+
+    /// <summary>A service reported the size of a request in <paramref name="run"/> (any thread): keep it on its chat, and
+    /// count the bar again when that chat is the one on screen.</summary>
+    private void OnPromptSized(ChatRun run, int tokens)
+    {
+        var provider = run.Scope.ProviderType ?? _providerManager.ActiveProviderType;
+        App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            var anchor = run.Messages.LastOrDefault(r => r.Role is MessageRole.User or MessageRole.Assistant or MessageRole.ToolAction);
+            run.Session.LastMeasuredContext = new ChatSession.MeasuredContext(tokens, anchor, provider);
+            if (IsOnScreen(run.Session)) UpdateContextInfo();
+        }, System.Windows.Threading.DispatcherPriority.Background);
     }
 
     // ─── Strategic Compaction Toast logic ─────────────────────────────

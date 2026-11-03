@@ -454,6 +454,7 @@ public partial class ChatViewModel
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
         run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
+        run.Scope.PromptSized = tokens => OnPromptSized(run, tokens);
         run.Scope.UserNotesTaken += tags => OnUserNotesTaken(run, tags);
         // The chat's first request in full — the model's view may hold only a compaction summary of it (AgentHandoff).
         run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;

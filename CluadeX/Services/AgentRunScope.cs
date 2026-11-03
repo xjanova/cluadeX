@@ -58,6 +58,20 @@ public sealed class AgentRunScope
         catch { /* the chat's status row must never break the stream */ }
     }
 
+    /// <summary>Told when the model's service says how big the request it just took was: the whole prompt in tokens
+    /// (fresh input + cache read + cache write — system prompt, tool definitions and files read included).</summary>
+    public Action<int>? PromptSized { get; set; }
+
+    /// <summary>Report the real prompt size of a request in the current run (no-op outside a run or for an empty
+    /// report). The status bar's context count used to be only a word-count guess over the chat's rows (owner
+    /// 2026-11-04: "มันถูกต้องแม่นยำไหม ทำไมฉันรู้สึกมันขึ้นช้า").</summary>
+    public static void ReportPromptSize(int promptTokens)
+    {
+        if (promptTokens <= 0) return;
+        try { Current?.PromptSized?.Invoke(promptTokens); }
+        catch { /* the context bar must never break the stream */ }
+    }
+
     /// <summary>The file path a tool input names, read from the JSON streamed so far (null until that value is whole).</summary>
     public static string? DraftPath(string partialJson)
     {

@@ -89,8 +89,17 @@ public static class AgentHandoff
         }
         sb.AppendLine().AppendLine("Check the files as they are now before changing anything, keep the plan the task set, and do not redo finished work. " +
                                    "When you finish, say what you did, what is left, and the test result.");
-        return Cut(sb.ToString().TrimEnd(), maxChars);
+        // The note is the last line, so the overall bound must not be what cuts it.
+        return Cut(sb.ToString().TrimEnd(), Math.Max(200, maxChars - StaleToolsNote.Length - 1)) + "\n" + StaleToolsNote;
     }
+
+    /// <summary>The brief's last line. A refusal the previous model met is history, not a rule: the app may have been
+    /// updated since and the user's rules changed. GigLive 2026-11-03: the brief carried "WebSearch/WebFetch were
+    /// refused" from a run before 3.0.234 fixed it, and the next worker skipped the web check the task asked for without
+    /// calling either tool once.</summary>
+    public const string StaleToolsNote =
+        "A tool the previous model reported as refused or broken may work now (the app may have been updated or the rules changed): " +
+        "call it again before you skip a step that needs it, and report a tool as unavailable only with the error it gave you in this turn.";
 
     /// <summary>The user's words first (an "@codex" target must lead), the brief under them.</summary>
     public static string WithBrief(string userMessage, string brief) =>
