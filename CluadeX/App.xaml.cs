@@ -1238,6 +1238,49 @@ public partial class App : Application
         base.OnExit(e);
     }
 
+    /// <summary>
+    /// The splash restarts into a new version through Velopack, which ends the process with Environment.Exit — OnExit
+    /// never runs. So first a bounded wait for the startup work above that writes files (the license check, the MCP
+    /// startup: mcp_servers.json, the BrainX bridge), then what OnExit flushes: settings, the chat writer's queue (not
+    /// the chat view model — see below), the cost ledger, the debug log. Never longer than about <paramref name="max"/>
+    /// plus the flushes (the chat writer's is capped at 3 s): the apply must not be held forever. Called on the UI thread.
+    /// </summary>
+    internal static async Task PrepareForUpdateRestartAsync(IServiceProvider sp, TimeSpan max)
+    {
+        var dbg = sp.GetService<DebugLogService>();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            // The background task starts a moment after the splash: give it the chance to register what it runs.
+            while (LicenseStartup == null && clock.Elapsed < TimeSpan.FromSeconds(2)) await Task.Delay(100);
+            var left = max - clock.Elapsed;
+            if (left > TimeSpan.Zero)
+            {
+                var waits = new List<Task>();
+                if (LicenseStartup is { } license) waits.Add(license);
+                if (sp.GetService<McpServerManager>() is { } mcp) waits.Add(mcp.WaitForStartupAsync(left));
+                var all = Task.WhenAll(waits);
+                if (await Task.WhenAny(all, Task.Delay(left)) != all)
+                    dbg?.Warn("Update", $"restart: the startup work was still running after {max.TotalSeconds:0} s — restarting anyway");
+            }
+        }
+        catch (Exception ex) { dbg?.Warn("Update", "restart: waiting for the startup work failed", ex); }
+
+        try { sp.GetService<SettingsService>()?.Save(); } catch (Exception ex) { dbg?.Warn("Update", "restart: settings not saved", ex); }
+        // Not ChatViewModel.SaveNow (OnExit calls it): nobody has typed into a chat behind the splash, and while its startup
+        // load is still running SaveNow would write the half-loaded message list over the saved chat. The writer's queue
+        // below is what may hold unwritten rows.
+        try
+        {
+            var chats = sp.GetService<ChatPersistenceService>();
+            if (chats != null) await Task.Run(() => chats.Flush(TimeSpan.FromSeconds(3)));
+        }
+        catch (Exception ex) { dbg?.Warn("Update", "restart: chat writer not flushed", ex); }
+        try { sp.GetService<CostTrackingService>()?.FlushLedger(); } catch (Exception ex) { dbg?.Warn("Update", "restart: cost ledger not saved", ex); }
+        dbg?.Info("Update", $"restart: state saved in {clock.ElapsedMilliseconds} ms");
+        try { dbg?.Flush(); } catch { }
+    }
+
     /// <summary>Run every registered <see cref="IAppShutdownHook"/> once. Never throws.</summary>
     internal static void RunShutdownHooks(IServiceProvider? provider)
     {
