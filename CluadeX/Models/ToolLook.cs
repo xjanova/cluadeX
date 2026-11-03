@@ -113,12 +113,80 @@ public sealed record ToolStepView(string? Kind, string Verb, string? Target, str
     public bool HasElapsed => !string.IsNullOrEmpty(Elapsed);
 }
 
-/// <summary>One step of the agent's plan, as the plan card shows it.</summary>
-public sealed record PlanItemView(int Number, string Text, string State) : System.ComponentModel.INotifyPropertyChanged
+/// <summary>One step of the agent's plan, as the plan card, the plan bar and the plan window show it. Its state changes
+/// IN PLACE (<see cref="Reconcile"/>) so a row on screen sees the change and plays it (the check pops, the shimmer
+/// stops) instead of being redrawn already finished.</summary>
+public sealed class PlanItemView : System.ComponentModel.INotifyPropertyChanged
 {
-    public bool IsDone => State == "done";
-    public bool IsActive => State == "active";
-    public bool IsPending => State == "pending";
+    public PlanItemView(int number, string text, string state)
+    {
+        Number = number;
+        Text = text;
+        _state = state;
+    }
+
+    public int Number { get; }
+    public string Text { get; }
+
+    private string _state;
+    private DateTime _doneAt;
+    /// <summary>"done", "active", "pending" or "queued" (the plan window's items the owner typed, not sent yet).</summary>
+    public string State
+    {
+        get => _state;
+        set
+        {
+            if (_state == value) return;
+            bool wasDone = IsDone;
+            _state = value;
+            // Only a change someone is watching pops: a row drawn already done (a chat opened later) just sits there.
+            if (IsDone && !wasDone && PropertyChanged != null) _doneAt = DateTime.UtcNow;
+            Raise(nameof(State)); Raise(nameof(IsDone)); Raise(nameof(IsActive)); Raise(nameof(IsPending)); Raise(nameof(IsQueued));
+            Raise(nameof(JustDone)); Raise(nameof(IsWorking));
+        }
+    }
+    public bool IsDone => _state == "done";
+    public bool IsActive => _state == "active";
+    public bool IsPending => _state == "pending";
+    public bool IsQueued => _state == "queued";
+    /// <summary>True for a moment after the row turned done on screen: the check pops and the row flashes green once.
+    /// Read again when the row is redrawn (the plan card moving down the chat) — by then it is false, so nothing replays.</summary>
+    public bool JustDone => _doneAt != default && DateTime.UtcNow - _doneAt < TimeSpan.FromSeconds(2);
+
+    private bool _isLive = true;
+    /// <summary>Its run is still going. A step left "in progress" by a run that ended keeps its colour but stops moving.</summary>
+    public bool IsLive
+    {
+        get => _isLive;
+        set { if (_isLive == value) return; _isLive = value; Raise(nameof(IsLive)); Raise(nameof(IsWorking)); }
+    }
+    /// <summary>The step is being worked on right now — the only state whose row animates without end (the ring turns,
+    /// the light sweeps), and only while that row is on screen.</summary>
+    public bool IsWorking => IsActive && _isLive;
+
+    /// <summary>The rows already drawn, brought to <paramref name="fresh"/>: a row with the same words at the same place
+    /// is kept and its state set in place; anything else is the fresh row. Returns <paramref name="current"/> itself when
+    /// every row was kept (the list on screen does not redraw at all).</summary>
+    public static List<PlanItemView> Reconcile(IReadOnlyList<PlanItemView>? current, List<PlanItemView> fresh)
+    {
+        if (current == null || current.Count == 0) return fresh;
+        var merged = new List<PlanItemView>(fresh.Count);
+        bool allKept = current.Count == fresh.Count;
+        for (int i = 0; i < fresh.Count; i++)
+        {
+            var f = fresh[i];
+            if (i < current.Count && current[i].Text == f.Text && current[i].Number == f.Number)
+            {
+                var keep = current[i];
+                keep.State = f.State;
+                keep.IsLive = f.IsLive;
+                keep.Running = f.Running;
+                merged.Add(keep);
+            }
+            else { merged.Add(f); allKept = false; }
+        }
+        return allKept && current is List<PlanItemView> same ? same : merged;
+    }
 
     private string _running = "";
     /// <summary>On the active step only: what runs under it now ("กำลังรัน: เอเจนต์ย่อย 2 · คำสั่งเบื้องหลัง 1"), set in
@@ -137,6 +205,7 @@ public sealed record PlanItemView(int Number, string Text, string State) : Syste
     public bool HasRunning => _running.Length > 0;
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void Raise(string p) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));
 }
 
 /// <summary>One sub-agent on the agent map card: what it was given, what it is doing, how it ended. Updated in place
@@ -152,8 +221,22 @@ public sealed class AgentNode : System.ComponentModel.INotifyPropertyChanged
 
     private string _state = "running", _action = "", _elapsed = "";
     private int _steps, _tools;
+    private DateTime _endedAt;
     /// <summary>"running", "done", "failed" or "stopped".</summary>
-    public string State { get => _state; set { _state = value; Raise(nameof(State)); Raise(nameof(IsRunning)); Raise(nameof(IsDone)); Raise(nameof(IsFailed)); } }
+    public string State
+    {
+        get => _state;
+        set
+        {
+            bool wasRunning = IsRunning;
+            _state = value;
+            // An end someone is watching plays once (the check pops / the card shakes); a node read back from the
+            // database is set here before anything shows it, so it just sits there.
+            if (wasRunning && !IsRunning && PropertyChanged != null) _endedAt = DateTime.UtcNow;
+            Raise(nameof(State)); Raise(nameof(IsRunning)); Raise(nameof(IsDone)); Raise(nameof(IsFailed));
+            Raise(nameof(JustDone)); Raise(nameof(JustFailed)); Raise(nameof(IsNew));
+        }
+    }
     /// <summary>What it is doing now ("อ่าน main.ts"), or how it ended.</summary>
     public string Action { get => _action; set { _action = value; Raise(nameof(Action)); } }
     public int Steps { get => _steps; set { _steps = value; Raise(nameof(Steps)); Raise(nameof(StatsText)); } }
@@ -171,6 +254,19 @@ public sealed class AgentNode : System.ComponentModel.INotifyPropertyChanged
     public bool IsRunning => _state == "running";
     public bool IsDone => _state == "done";
     public bool IsFailed => _state is "failed" or "stopped";
+    private bool JustEnded => _endedAt != default && DateTime.UtcNow - _endedAt < TimeSpan.FromSeconds(2);
+    /// <summary>For a moment after it finished on screen (the check pops). A redrawn card reads false: nothing replays.</summary>
+    public bool JustDone => IsDone && JustEnded;
+    /// <summary>For a moment after it failed or was stopped on screen (the card shakes once).</summary>
+    public bool JustFailed => IsFailed && JustEnded;
+    /// <summary>It started a moment ago: its card slides in once. Only a running node can be new — one read back from
+    /// the database never is.</summary>
+    public bool IsNew => IsRunning && DateTime.Now - StartedAt < TimeSpan.FromSeconds(2);
+
+    /// <summary>"explore", "general" or "specialist" — the avatar's look (a named specialist is any other kind).</summary>
+    public string KindClass => Kind switch { "explore" => "explore", "" or "general" => "general", _ => "specialist" };
+    /// <summary>The avatar's Segoe MDL2 glyph: a magnifier for explore, a wrench for general, a star for a specialist.</summary>
+    public string KindGlyph => KindClass switch { "explore" => "\uE721", "general" => "\uE90F", _ => "\uE734" };
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     private void Raise(string p) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));

@@ -483,6 +483,9 @@ public partial class ChatViewModel
             leftover = run.Scope?.DrainUserNotes();
             // the owner's words typed into this turn are used up with it (a leftover note keeps the turn's decision instead)
             Services.Agents.DesignGate.EndOwnerTurn(run.Session.Id);
+            // A step the run left "in progress" keeps its colour but stops turning: nothing works on it any more.
+            if (run.TodoMsg?.PlanItems is { } planCard)
+                foreach (var item in planCard) item.IsLive = false;
             _runs.Remove(run);
             DropDraft(run);
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
@@ -495,6 +498,7 @@ public partial class ChatViewModel
         }
         done.TrySetResult();
         RaiseRunStateChanged();
+        if (run != null && ReferenceEquals(run.Session, CurrentSession)) RefreshStickyPlan();   // its rows stop moving too
         if (run != null) TellParentSplitFinished(run.Session, run.Messages);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
@@ -552,6 +556,7 @@ public partial class ChatViewModel
             case "stopped": node.State = "stopped"; node.Action = Loc("agentmap.stopped"); break;
         }
         int running = nodes.Count(x => x.IsRunning), done = nodes.Count(x => x.IsDone);
+        map.NotifyAgentMap();
         map.AgentMapHeader = running > 0
             ? LocF("agentmap.headerRunning", nodes.Count, running, done)
             : LocF("agentmap.headerDone", nodes.Count, done);

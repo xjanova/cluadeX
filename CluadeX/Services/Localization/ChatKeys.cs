@@ -290,6 +290,7 @@ internal static class ChatKeys
         ["plan.added.bubble"] = new() { ["en"] = "Add to the plan:", ["th"] = "เพิ่มเข้าแผน:" },
         ["plan.added.queued"] = new() { ["en"] = "Queued — press Start to send the queued items.", ["th"] = "เข้าคิวแล้ว — กด เริ่มทำ เพื่อส่งรายการในคิว" },
         ["plan.startQueued"] = new() { ["en"] = "Start the queued items", ["th"] = "เริ่มทำรายการในคิว" },
+        ["plan.state.queued"] = new() { ["en"] = "waiting", ["th"] = "รอคิว" },
         ["plan.startMessage"] = new() { ["en"] = "Do these next, as a plan:", ["th"] = "ทำรายการนี้ต่อ ตามแผน:" },
         ["plan.rewind"] = new() { ["en"] = "Go back", ["th"] = "ย้อนกลับ" },
         ["plan.rewind.tip"] = new() { ["en"] = "Put the files back to how they were before this step", ["th"] = "คืนไฟล์ให้เป็นเหมือนก่อนขั้นนี้" },
