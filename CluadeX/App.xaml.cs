@@ -113,6 +113,11 @@ public partial class App : Application
         var panelSettings = _serviceProvider.GetRequiredService<SettingsService>();
         CluadeX.Views.ResizeGrip.Load = key => panelSettings.Settings.PanelWidths.TryGetValue(key, out var w) ? w : null;
         CluadeX.Views.ResizeGrip.Save = (key, w) => panelSettings.UpdateSettings(s => s.PanelWidths[key] = w);
+        // Where each page's own window was (Node Graph, UI Studio, Code Editor popped out) — reopened there, on a screen
+        // that still exists. The windows themselves are not reopened at start.
+        CluadeX.Views.PopOut.PagePopOut.LoadPlacement = key =>
+            panelSettings.Settings.PopOutWindows?.TryGetValue(key, out var p) == true && p != null ? p : null;
+        CluadeX.Views.PopOut.PagePopOut.SavePlacement = (key, p) => panelSettings.UpdateSettings(s => (s.PopOutWindows ??= new())[key] = p);
 
         // Async commands catch their own exceptions so async-void can't kill the process — but that
         // made a throwing command look like a dead button with nothing in any log. Route those

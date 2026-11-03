@@ -298,6 +298,9 @@ public class AppSettings
     public bool ChatSidePanel { get; set; } = true;
     /// <summary>Widths the user dragged panels to, by <see cref="Views.ResizeGrip.Key"/> (px).</summary>
     public Dictionary<string, double> PanelWidths { get; set; } = new();
+    /// <summary>Where each page's own window was (Node Graph, UI Studio, Code Editor popped out), by page key
+    /// ("NodeGraph", "UiStudio", "Code"). The windows are not reopened at start: the page is back in the main window.</summary>
+    public Dictionary<string, PopOutPlacement> PopOutWindows { get; set; } = new();
     public bool ShowThinkingSteps { get; set; } = true; // show AI thinking/reasoning in chat
 
     /// <summary>
