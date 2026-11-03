@@ -1790,6 +1790,7 @@ public partial class ChatViewModel : ViewModelBase
         // A reply running in the chat being left keeps running there (it writes into its own chat's list).
         bool leavingRun = RunOf(CurrentSession) != null;
         var leaving = CurrentSession;
+        var clickedFrom = CurrentSession;
         int mySwitch = ++_switchSeq;
 
         // Force save current session before switching: the rows are taken now, the write happens in the background
@@ -1799,20 +1800,11 @@ public partial class ChatViewModel : ViewModelBase
             _isDirty = true;
             AutoSave(background: true);
         }
-        // Leaving an untouched chat: drop it from the sidebar (and the DB, if a cleared chat was saved
-        // empty) instead of leaving a stray "New Chat". The DB check keeps a session whose messages
-        // exist but aren't on screen.
-        else if (CurrentSession != null && !_persistenceService.SessionHasMessages(CurrentSession.Id))
-        {
-            string emptyId = CurrentSession.Id;
-            _persistenceService.DeleteEmptySessions(emptyId);
-            for (int i = Sessions.Count - 1; i >= 0; i--)
-                if (Sessions[i].Id == emptyId) Sessions.RemoveAt(i);
-        }
 
         // A chat with a run in progress: its live list IS the chat — never reload it from the database.
         if (_runs.FirstOrDefault(r => r.Session.Id == sessionId) is { } running)
         {
+            DropIfUntouched(CurrentSession);   // no await since the click: the chat on screen is still the one left
             CurrentSession = running.Session;
             Messages = running.Messages;
             _isDirty = false;
@@ -1850,6 +1842,17 @@ public partial class ChatViewModel : ViewModelBase
             await LoadSessionAsync(sessionId);
             return;
         }
+        // What the screen holds NOW is what this switch replaces — not what it held at the click: a pipe task or an
+        // agent's split may have opened a chat meanwhile, or the user pressed Send and a run started in it. Deciding on
+        // the old capture dismissed a live run's permission prompts and gave back the rows of the wrong chat.
+        leaving = CurrentSession;
+        leavingRun = RunOf(leaving) != null;
+        // A chat that came on screen (or got rows) since the click was not in the save above: saved before it goes.
+        if (leaving != null && Messages.Count > 0 && (_isDirty || !ReferenceEquals(leaving, clickedFrom)))
+        {
+            _isDirty = true;
+            AutoSave(background: true);
+        }
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
         {
             _debugLog?.Info("Perf", $"chat switch {switchWatch.ElapsedMilliseconds} ms (save {tSave} · load {tLoad} · {session?.Messages.Count ?? 0} rows · list@{tList} follow@{tFollow} ctx@{tCtx} · realized {Views.ChatView.RealizedRows()})");
@@ -1879,6 +1882,8 @@ public partial class ChatViewModel : ViewModelBase
         // The sidebar's own row becomes the chat, with the stored rows and header copied onto it.
         else session = AdoptLoadedSession(session);
 
+        // Only now, when this switch really happens: a load that is overtaken leaves its chat on screen WITH its row.
+        DropIfUntouched(leaving);
         // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
         CurrentSession = session;
 
@@ -1914,6 +1919,26 @@ public partial class ChatViewModel : ViewModelBase
 
     /// <summary>Switches in flight: a chat whose load finishes after another chat was picked is not shown.</summary>
     private int _switchSeq;
+
+    /// <summary>The user's own move away from what is on screen (New Chat, /new, /close, deleting the chat on screen, a
+    /// project opened in a chat of its own, a plan branch …): a sidebar chat still loading loses — it used to land over
+    /// the new chat and leave it behind as a stray empty "New Chat". Called before the new chat is made, so it holds
+    /// when NewSession reuses the untouched chat on screen too. Never from a pipe task, an agent's new_chat / split,
+    /// startup or BeginTurn: the chat the user just picked wins over those.</summary>
+    private void CancelPendingChatLoad() => _switchSeq++;
+
+    /// <summary>Leaving an untouched chat: drop it from the sidebar (and the DB, if a cleared chat was saved empty)
+    /// instead of leaving a stray "New Chat". <paramref name="left"/> must be the chat on screen at the moment of the
+    /// switch (its rows are <see cref="Messages"/>). The DB check keeps a session whose messages exist but aren't on
+    /// screen.</summary>
+    private void DropIfUntouched(ChatSession? left)
+    {
+        if (left == null || !ReferenceEquals(left, CurrentSession) || Messages.Count > 0 || RunOf(left) != null) return;
+        if (_persistenceService.SessionHasMessages(left.Id)) return;
+        _persistenceService.DeleteEmptySessions(left.Id);
+        for (int i = Sessions.Count - 1; i >= 0; i--)
+            if (Sessions[i].Id == left.Id) Sessions.RemoveAt(i);
+    }
 
     /// <summary>
     /// The chat just read from the database, put onto the sidebar's own object for it: its rows and what the database
@@ -2005,6 +2030,7 @@ public partial class ChatViewModel : ViewModelBase
         // If we deleted the current session, create a new one
         if (CurrentSession?.Id == sessionId)
         {
+            CancelPendingChatLoad();   // a chat still loading must not land over the new one
             CurrentSession = null;
             ResolvePendingPermissionPrompts();
             Messages = new ObservableCollection<ChatMessage>();
@@ -2255,7 +2281,7 @@ public partial class ChatViewModel : ViewModelBase
     {
         // A reply running in the chat on screen keeps its own folder (its run pinned it); the new project gets
         // a new chat so the two never mix.
-        if (IsGenerating) NewSession();
+        if (IsGenerating) { CancelPendingChatLoad(); NewSession(); }
 
         // Use the owner-aware COM picker (it passes the MainWindow hwnd). A plain
         // Microsoft.Win32.OpenFolderDialog with NO owner opened its modal BEHIND our borderless
@@ -2361,7 +2387,7 @@ public partial class ChatViewModel : ViewModelBase
     private async Task CloneRepo()
     {
         // Cloning ends by switching the project: a reply running here keeps its folder; the clone gets a new chat.
-        if (IsGenerating) NewSession();
+        if (IsGenerating) { CancelPendingChatLoad(); NewSession(); }
 
         // 1) Ask for the repo URL.
         string? url = CluadeX.Services.Helpers.InputDialog.Show(
@@ -2476,7 +2502,7 @@ public partial class ChatViewModel : ViewModelBase
     private async Task CloseFolderAsync()
     {
         await Task.CompletedTask;
-        if (IsGenerating) NewSession();   // the running reply keeps its folder
+        if (IsGenerating) { CancelPendingChatLoad(); NewSession(); }   // the running reply keeps its folder
 
         // Mirror SetWorkingDirectory: the closed project's branch badge, its skills, the system prompt that
         // described it and its "Accept edits" all go with it.
@@ -2487,6 +2513,7 @@ public partial class ChatViewModel : ViewModelBase
     /// the Code page hosts this same chat docked beside the editor.</summary>
     private Task NewSessionFromUserAsync()
     {
+        CancelPendingChatLoad();
         NewSession(keepProject: false);   // a reply running in the chat on screen carries on in the background
         return Task.CompletedTask;
     }
@@ -2496,6 +2523,7 @@ public partial class ChatViewModel : ViewModelBase
     /// did nothing.</summary>
     private Task NewChatAndShowAsync()
     {
+        CancelPendingChatLoad();
         NewSession(keepProject: false);
         NavigateToChatRequested?.Invoke();
         return Task.CompletedTask;
@@ -3506,15 +3534,19 @@ public partial class ChatViewModel : ViewModelBase
         {
             // Close this chat's session: stop what its agent left running, then start a fresh chat (this one is kept).
             ClearBox();
-            if (!await EnsureIdleAsync()) return;
+            // The chat the command was typed in — read before the wait: a chat still loading landed during the "stop
+            // the reply first?" question and was the one closed (its dev servers and preview stopped).
             string? closing = CurrentSession?.Id;
-            NewSession();
+            CancelPendingChatLoad();
+            if (!await EnsureIdleAsync()) return;
+            if (CurrentSession?.Id == closing) NewSession();   // a chat the user opened during the wait stays
             await CleanUpSessionAsync(closing, deleteImages: false);
             return;
         }
         if (input.Equals("/new", StringComparison.OrdinalIgnoreCase))
         {
             ClearBox();
+            CancelPendingChatLoad();
             NewSession();
             return;
         }

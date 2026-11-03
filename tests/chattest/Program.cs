@@ -286,6 +286,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=SW: just a chat still loading when the user moves on (New Chat, delete, pipe / agent chats).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SW")
+        {
+            await TestSwitchRace();
+            Log($"\n## Result (CHATTEST_ONLY=SW): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=SUP: just the pipe supervision checks (late sub-agent results, consent wait, progress, poll limit).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SUP")
         {
@@ -371,6 +380,7 @@ internal static partial class Program
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
+        await TestSwitchRace();               // SW: a chat still loading never lands over New Chat / delete; pipe and agent chats don't cancel a pick
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();

@@ -234,10 +234,16 @@ public partial class ChatViewModel
         var chat = Sessions.Where(s => string.Equals((s.ProjectPath ?? "").TrimEnd('\\', '/'), path, StringComparison.OrdinalIgnoreCase))
                            .OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
         if (chat != null && chat.Id != CurrentSession?.Id) await LoadSessionAsync(chat.Id);
-        else if (chat == null)
+        else
         {
-            if (Directory.Exists(path)) ApplyWorkingDirectory(path, announce: false, showEditor: false);
-            NewSession();
+            // The project's chat is on screen (or a new one is made): a sidebar chat still loading must not land over
+            // it with the text in the box.
+            CancelPendingChatLoad();
+            if (chat == null)
+            {
+                if (Directory.Exists(path)) ApplyWorkingDirectory(path, announce: false, showEditor: false);
+                NewSession();
+            }
         }
         NavigateToChatRequested?.Invoke();
         UserInput = text;
@@ -280,6 +286,7 @@ public partial class ChatViewModel
 
             string title = CurrentSession?.Id == sessionId ? CurrentSession.Title
                 : Sessions.FirstOrDefault(s => s.Id == sessionId)?.Title ?? "";
+            CancelPendingChatLoad();
             ApplyWorkingDirectory(target, announce: false, showEditor: false);
             NewSession();
             if (CurrentSession != null)
