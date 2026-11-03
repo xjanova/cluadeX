@@ -239,12 +239,24 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
     // ─── Accept loop ──────────────────────────────────────────────────────
     private async Task AcceptLoopAsync(CancellationToken ct)
     {
+        bool owned = false;
         while (!ct.IsCancellationRequested)
         {
             NamedPipeServerStream? pipe = null;
             try
             {
-                pipe = CreateServerPipe();
+                try { pipe = CreateServerPipe(first: !owned); }
+                catch (Exception ex) when (!owned && ex is IOException or UnauthorizedAccessException)
+                {
+                    // Another process serves this name (a test harness, or the copy that is closing for an update): its
+                    // callers would get this app's answers half the time. Wait until the name is free.
+                    if (LastError == null || !LastError.StartsWith("pipe-in-use", StringComparison.Ordinal))
+                        Log($"[accept] pipe '{_pipeName}' is held by another process — waiting for it");
+                    LastError = $"pipe-in-use: {_pipeName}";
+                    await Task.Delay(5000, ct);
+                    continue;
+                }
+                owned = true;
                 await pipe.WaitForConnectionAsync(ct);
                 Interlocked.Increment(ref _activeConnections);
                 OnPropertyChanged(nameof(ActiveConnections));
@@ -269,8 +281,9 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
     /// <summary>
     /// Create a per-user-only named pipe. Windows ACL guarantees no other
     /// account on the box (and no remote connection) can read or write.
+    /// <paramref name="first"/>: only if no process holds the name yet — every later instance joins this app's own.
     /// </summary>
-    private NamedPipeServerStream CreateServerPipe()
+    private NamedPipeServerStream CreateServerPipe(bool first = false)
     {
         var ps = new PipeSecurity();
         var sid = WindowsIdentity.GetCurrent().User
@@ -285,7 +298,7 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
             PipeDirection.InOut,
             NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous,
+            PipeOptions.Asynchronous | (first ? PipeOptions.FirstPipeInstance : PipeOptions.None),
             inBufferSize: 64 * 1024,
             outBufferSize: 64 * 1024,
             pipeSecurity: ps);

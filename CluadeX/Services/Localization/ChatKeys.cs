@@ -287,6 +287,7 @@ internal static class ChatKeys
         ["plan.add"] = new() { ["en"] = "Add", ["th"] = "เพิ่ม" },
         ["plan.add.tip"] = new() { ["en"] = "Add to the plan (Enter). While the agent works it picks it up at its next step.", ["th"] = "เพิ่มเข้าแผน (Enter) ถ้าเอเจนต์กำลังทำอยู่ จะรับไปทำในขั้นถัดไป" },
         ["plan.added.running"] = new() { ["en"] = "Sent — the agent adds it to its plan at its next step.", ["th"] = "ส่งแล้ว — เอเจนต์จะเพิ่มเข้าแผนในขั้นถัดไป" },
+        ["plan.added.bubble"] = new() { ["en"] = "Add to the plan:", ["th"] = "เพิ่มเข้าแผน:" },
         ["plan.added.queued"] = new() { ["en"] = "Queued — press Start to send the queued items.", ["th"] = "เข้าคิวแล้ว — กด เริ่มทำ เพื่อส่งรายการในคิว" },
         ["plan.startQueued"] = new() { ["en"] = "Start the queued items", ["th"] = "เริ่มทำรายการในคิว" },
         ["plan.startMessage"] = new() { ["en"] = "Do these next, as a plan:", ["th"] = "ทำรายการนี้ต่อ ตามแผน:" },

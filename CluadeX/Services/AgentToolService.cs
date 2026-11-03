@@ -514,6 +514,8 @@ public class AgentToolService : IDisposable
     /// </summary>
     public async Task<(bool Allow, string? Reason)> AuthorizeCliMcpCallAsync(string qualifiedName, Dictionary<string, string> args)
     {
+        if (Tools.ChatToolBridge.CliWebTools.Contains(qualifiedName))
+            return await AuthorizeCliWebCallAsync(qualifiedName == "WebFetch" ? ToolType.WebFetch : ToolType.WebSearch, args);
         if (!IsToolAllowed(ToolType.McpTool))
             return (false, "MCP tools are switched off in CluadeX (Features page).");
         var call = new ToolCall { Type = ToolType.McpTool, ToolName = qualifiedName, Arguments = args };
@@ -524,6 +526,27 @@ public class AgentToolService : IDisposable
         }
         var refused = await CheckMcpPermissionAsync(call);
         return refused == null ? (true, null) : (false, refused.Error ?? $"Permission denied for {qualifiedName}");
+    }
+
+    /// <summary>Claude Code's own WebSearch / WebFetch, judged exactly as web_search / web_fetch are on the native loop:
+    /// off with the Web feature, a fetch by the user's URL rules, otherwise the permission row in the asking chat.</summary>
+    private async Task<(bool Allow, string? Reason)> AuthorizeCliWebCallAsync(ToolType type, Dictionary<string, string> args)
+    {
+        if (!IsToolAllowed(type))
+            return (false, "Web tools are switched off in CluadeX (Features page) or not activated on this licence.");
+        var call = new ToolCall { Type = type, ToolName = type == ToolType.WebFetch ? "web_fetch" : "web_search", Arguments = args };
+        if (!_settingsService.Settings.Features.PermissionSystem) return (true, null);
+        var (perm, scope, resource) = EvaluatePermission(call, out _);
+        if (perm == PermAction.Deny) return (false, $"Permission denied for {scope}: {resource}");
+        if (perm == PermAction.Allow) return (true, null);
+        bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+        {
+            ToolName = call.ToolName,
+            Detail = DescribePermissionRequest(call, scope, resource),
+            Args = call.Arguments,
+            AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask,
+        });
+        return allowed ? (true, null) : (false, $"User denied permission for {scope}: {resource}");
     }
 
     private static bool McpPolicyHides(IMcpToolPolicy policy, McpToolKey key)
