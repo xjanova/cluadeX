@@ -186,6 +186,26 @@ internal static partial class Program
             done7 && storedX != null && storedX.Messages.Any(m => m.Content.Contains("SW7 done")) && !Vm.Messages.Any(m => m.Content.Contains("SW7")),
             storedX == null ? "not stored" : string.Join(" | ", storedX.Messages.Select(m => m.Content.Length > 40 ? m.Content[..40] : m.Content)));
 
+        // ── SW8: the UI Studio opens a project into the chat on screen (reused, untouched) while a big chat loads ──
+        // The Studio's own move wins like New Chat does: only the branch that made a new chat used to cancel the load, so a
+        // reused chat had the late chat land over it and the Studio followed that chat's project instead.
+        var bigQuiet = Saved("sw quiet big", rows: 3000);
+        string quiet = Path.Combine(PipeRoot, "sw-quiet-" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(quiet);
+        Vm.NewSession(keepProject: false);
+        await Render();
+        var reused = Vm.CurrentSession;
+        Vm.LoadSessionCommand.Execute(bigQuiet.Id);
+        inFlight = ReferenceEquals(Vm.CurrentSession, reused);
+        Vm.OpenProjectQuietly(quiet);
+        bool reusedIt = ReferenceEquals(Vm.CurrentSession, reused);
+        await Landed(1500);
+        Check("SW8 (control) the big chat was still loading when the Studio opened a project into the untouched chat on screen (reused)",
+            inFlight && reusedIt, $"inFlight={inFlight} reused={reusedIt}");
+        Check("SW8 the Studio's project open wins: the late load never lands, the chat on screen keeps the project just opened",
+            ReferenceEquals(Vm.CurrentSession, reused) && SamePath(Vm.CurrentSession?.ProjectPath ?? "", quiet) && SamePath(Vm.ChatProject, quiet),
+            $"on screen={Vm.CurrentSession?.Title} project={Vm.ChatProject}");
+
         Vm.NewSession(keepProject: false);
         await Render();
         Vm.SetWorkingDirectory(folderBefore);

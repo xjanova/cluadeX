@@ -49,8 +49,11 @@ public partial class ChatViewModel
     public void OpenProjectQuietly(string path)
     {
         if (PathEquals(ChatProject, path) && PathEquals(WorkingDirectory, path)) return;
+        // The user's own move: a sidebar chat still loading must not land over it — when the chat on screen is reused
+        // too, or the Studio would follow the late chat's project and lose the one just opened.
+        CancelPendingChatLoad();
         bool holdsOtherProject = Messages.Count > 0 && ChatProject.Length > 0 && !PathEquals(ChatProject, path);
-        if (IsGenerating || holdsOtherProject) { CancelPendingChatLoad(); NewSession(); }
+        if (IsGenerating || holdsOtherProject) NewSession();
         ApplyWorkingDirectory(path, announce: true, showEditor: false);
         if (CurrentSession is { } chat && !PathEquals(chat.ProjectPath ?? "", path))
         {
@@ -69,9 +72,15 @@ public partial class ChatViewModel
         UserInput = prompt;
         if (!SendMessageCommand.CanExecute(null)) return false;
         _studioChat = CurrentSession;
-        SendMessageCommand.Execute(null);
+        // SendMessage reads the owner's words synchronously, before its first await: the flag covers exactly that.
+        _sendingFromStudio = true;
+        try { SendMessageCommand.Execute(null); }
+        finally { _sendingFromStudio = false; }
         return true;
     }
+
+    /// <summary>SendMessage is sending the Studio's request, not words the owner typed (see DesignGate).</summary>
+    private bool _sendingFromStudio;
 
     /// <summary>The chat the Studio's last request went to.</summary>
     private Models.ChatSession? _studioChat;

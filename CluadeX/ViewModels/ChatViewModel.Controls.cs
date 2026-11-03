@@ -418,10 +418,12 @@ public partial class ChatViewModel
     {
         if (!ReferenceEquals(CurrentSession, session) || !await EnsureProviderReadyAsync()) return;
         if (!ReferenceEquals(CurrentSession, session) || RunOf(session) != null) return;
+        // the stopped task was a design turn (or the chat's Design switch is on): it goes on as one
+        bool design = WasDesignAsk(Messages.LastOrDefault(m => m.Role == MessageRole.User)) || Services.Agents.DesignGate.IsOn(session.Id);
         Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "🔄 " + LocF("chat.model.carryOn", c.Model) });
         var bubble = new ChatMessage { Role = MessageRole.User, Content = Loc("chat.pause.resumeText") };
         Messages.Add(bubble);
-        Detached(() => RunTurnAsync(bubble, bubble.Content, null, false));
+        Detached(() => RunTurnAsync(bubble, bubble.Content, null, false, design: design));
     }
 
     /// <summary>

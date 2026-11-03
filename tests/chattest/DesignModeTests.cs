@@ -44,6 +44,8 @@ internal static partial class Program
         await TestStudioLock(root);
         await TestDesignView(root);
         await TestDesignFollowTick(root);
+        await TestDesignDecidedOnce(root);
+        await TestDesignForget(root);
     }
 
     static string DmSite(string root, string name)
@@ -74,6 +76,13 @@ internal static partial class Program
             "design a landing page for my bakery", "Redesign the header", "make a mock-up of the pricing table", "wireframe the settings screen",
             "a landing page for the app", "the layout breaks on mobile", "improve the UI", "UX review of the checkout",
             "ออกแบบหน้าจอใหม่แล้วดูใน UI Studio",
+            // a screen word after one that alone would be data/system ("system settings page"), a pricing table, Thai web-page
+            // wording, "ให้สวย", a theme
+            "Redesign the system settings page", "redesign the API settings screen", "ออกแบบตารางราคา", "ออกแบบตารางราคาสินค้าบนหน้าเว็บ",
+            "ทำหน้าเว็บใหม่ให้สวยขึ้น", "ปรับสีปุ่มหน้าเว็บ", "สร้างหน้าเว็บร้านกาแฟ", "จัดหน้าเว็บใหม่", "แก้หน้าเว็บให้ดูง่ายขึ้น",
+            "ทำปุ่มให้สวยๆ", "เปลี่ยนธีมเป็นสีเข้ม", "ออกแบบระบบหน้าจอสมาชิก",
+            // a screen made better is still a design ("ขึ้น" alone is no error), a table shown on a page
+            "ปรับให้ดีขึ้นในหน้าจอ login", "ปรับปุ่มให้ใหญ่ขึ้นบนหน้าจอ", "ออกแบบตาราง pricing บนหน้าเว็บ",
         };
         string[] no =
         {
@@ -82,6 +91,15 @@ internal static partial class Program
             "guide me through the build", "ช่วยแก้บั๊กหน่อย", "write the system design doc", "", null,
             // the app's own page by name, a screenshot, a screen that hangs: bug reports, not designs
             "UI Studio ค้างตอนเปิดโปรเจกต์", "the UI Studio crashes on open", "แคปหน้าจอมาให้ดูแล้ว", "หน้าจอดำหลังเปิดแอป",
+            // the UI as code (its thread, tests, automation, dispatcher), an error shown on a screen, a layout that is no page's
+            "the UI thread freezes when a chat loads, fix it", "run the UI tests", "UI automation tests fail on CI", "the UI dispatcher deadlocks on exit",
+            "move the work off the UI-thread", "มี error ขึ้นที่หน้าจอ login", "มีเออเร่อขึ้นบนหน้าจอตอนกดบันทึก", "keyboard layout switch is broken",
+            // a database table, and web-page words with no making or shaping verb ("ทำไม", "ทำให้", a bug fix)
+            "ออกแบบตารางฐานข้อมูลสินค้า", "ออกแบบตารางในฐานข้อมูล", "ทำไมหน้าเว็บโหลดช้า", "ทำให้หน้าเว็บค้าง", "แก้บั๊กหน้าเว็บ login",
+            // an error on a screen said other ways, a table named for a database, neat code, a web page's tests or speed
+            "มี error ที่หน้าจอ login", "error บนหน้าจอ login", "มี error แสดงที่หน้าจอ login", "หน้าจอ login มี error", "แก้บั๊กหน้าจอ login",
+            "ออกแบบตาราง users", "ออกแบบตาราง users ในฐานข้อมูล", "ออกแบบตารางเก็บ order ใน db",
+            "จัดโค้ดให้สวย", "refactor ให้สวยขึ้น", "format โค้ดให้สวยงาม", "ทำเทสหน้าเว็บ login", "ทำการทดสอบหน้าเว็บ", "ปรับความเร็วหน้าเว็บ",
         };
         var missed = yes.Where(t => !DesignGate.AsksForDesign(t)).ToList();
         Check("DM1 the owner's words that ask for a design count, Thai and English (ออกแบบ/ดีไซน์/ดีไซด์/หน้าตา/หน้าจอ/เลย์เอาต์/UI, design/redesign/mock-up/wireframe/landing page/layout/UX)",
@@ -117,8 +135,19 @@ internal static partial class Program
         Vm.IsDesignMode = false;
         var th = new LocalizationService();
         th.SetLanguage("th");
-        Check("DM2 its words exist in Thai", th.T("chat.design") == "ดีไซน์" && th.T("chat.designTip").Contains("UI Studio") && th.T("studio.err.aiWorking").Contains("AI"),
-            th.T("chat.designTip"));
+        var en = new LocalizationService();
+        en.SetLanguage("en");
+        // every key of Design mode and the Studio's AI lock: a real Thai value (Thai letters, not the English copied in — T
+        // falls back to English when the Thai entry is missing), and an English one
+        var dmKeys = ((System.Collections.IDictionary)typeof(LocalizationService).Assembly.GetType("CluadeX.Services.Localization.DesignKeys")!
+                .GetField("Keys", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!).Keys.Cast<string>()
+            .Where(k => k.StartsWith("chat.design") || k.StartsWith("studio.lock.") || k == "studio.err.aiWorking").ToList();
+        var notThai = dmKeys.Where(k => th.T(k) == k || !System.Text.RegularExpressions.Regex.IsMatch(th.T(k), "[\u0E00-\u0E7F]") || th.T(k) == en.T(k)).ToList();
+        var notEnglish = dmKeys.Where(k => en.T(k) == k || System.Text.RegularExpressions.Regex.IsMatch(en.T(k), "^[^A-Za-z]*$")).ToList();
+        Check($"DM2 its words exist in Thai: all {dmKeys.Count} keys (chat.design*, studio.lock.*, studio.err.aiWorking) have Thai letters and differ from English",
+            th.T("chat.design") == "ดีไซน์" && dmKeys.Count >= 11 && dmKeys.Contains("chat.designTip") && dmKeys.Contains("studio.err.aiWorking") && notThai.Count == 0,
+            $"keys={dmKeys.Count} notThai={string.Join(", ", notThai)}");
+        Check("DM2 …and in English", notEnglish.Count == 0, string.Join(", ", notEnglish));
     }
 
     // ── the lock ──
@@ -376,5 +405,195 @@ internal static partial class Program
             Vm.FileMutatedByAgent -= onMutated;
             Vm.ShowEditorRequested -= onShown;
         }
+    }
+
+    // ── a turn is decided as a design turn once ──
+
+    /// <summary>DM11–DM15: the owner's words decide a design turn once, when its Send starts it, and the decision rides
+    /// with that turn. Later turns the owner did not type — a pipe caller's, a next-step button's label, the UI Studio's
+    /// own request — never read the old words, a Retry and a note typed into the turn keep its decision, and the follow
+    /// tick reads the turn, not the words.</summary>
+    static async Task TestDesignDecidedOnce(string root)
+    {
+        var ui = Sp.GetRequiredService<UiStudioViewModel>();
+        var studio = Sp.GetRequiredService<StudioService>();
+        var fire = typeof(ChatViewModel).GetMethod("OnToolExecuted", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var pick = typeof(ChatViewModel).GetMethod("OnNextStepPicked", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        int ready = 0, mutated = 0, shown = 0;
+        Action onReady = () => ready++;
+        Action<string, int, EditDiffResult?> onMutated = (_, _, _) => mutated++;
+        Action onShown = () => shown++;
+        ui.DesignViewReady += onReady;
+        Vm.FileMutatedByAgent += onMutated;
+        Vm.ShowEditorRequested += onShown;
+        bool? agenticWas = null;
+        var keys = new[] { "[DMO1]", "[DMO1b]", "[DMO2]", "[DMO3]", "[DMO4]", "[DMO4-more]", "[DMO5]", "[DMO6]", "[DMO6-note]" };
+        try
+        {
+            string h = DmSite(root, "dm-once");
+            var chat = DmChat("dm once", h);
+            await Open(chat.Id);
+            await WaitUntil(() => studio.HasProject && SamePath(studio.Root, h));
+            Vm.IsDesignMode = false;
+            Vm.FollowEditsHere = true;
+            async Task Edit()
+            {
+                fire.Invoke(Vm, [new ToolResult { ToolName = "edit_file", Type = ToolType.EditFile, Success = true, Output = "edited", FilePath = "index.html", Arguments = new() { ["path"] = "index.html" } }]);
+                await Render(); await Task.Delay(50); await Render();
+            }
+            bool Told(string marker) => Fake.Calls.ToList().Any(c => c.Input.Contains(marker) && c.Input.Contains("Design mode is on"));
+            bool Asked(string marker) => Fake.Calls.ToList().Any(c => c.Input.Contains(marker));
+            int Notices() => Vm.Messages.Count(m => m.IsNotice && m.Content.Contains(L("chat.design.notice")));
+
+            // DM11 — the owner's design turn, then a turn nobody typed: the follow tick reads the turn, not the old words
+            var gate = new SemaphoreSlim(0);
+            Fake.ScriptFor["[DMO1]"] = new Queue<FakeStep>([FakeStep.Gated(["Designing"], gate, [" — done."])]);
+            await Send("[DMO1] redesign the header");
+            await WaitUntil(() => ready == 1 && Vm.IsGenerating, 5000);
+            await Edit();
+            Check("DM11 (control) the owner's design turn: the Studio is asked for, and while it runs the follow tick stays off the Code page",
+                ready == 1 && Vm.DesignOnScreen && mutated == 1 && shown == 0, $"ready={ready} onScreen={Vm.DesignOnScreen} mutated={mutated} shown={shown}");
+            gate.Release();
+            await WaitIdle();
+            await Edit();
+            Check("DM11 the turn is over: an edit from a turn the owner did not type (a pipe caller's, an agent's) brings the Code page forward again",
+                mutated == 2 && shown == 1 && !Vm.DesignOnScreen && !DesignGate.IsDesignTurn(chat.Id), $"mutated={mutated} shown={shown} onScreen={Vm.DesignOnScreen}");
+
+            // DM11 — words typed into a running turn (no design turn) are used up when that turn ends
+            var gate1b = new SemaphoreSlim(0);
+            Fake.ScriptFor["[DMO1b]"] = new Queue<FakeStep>([FakeStep.Gated(["Fixing"], gate1b, [" — done."])]);
+            await Send("[DMO1b] fix the footer link");
+            await WaitUntil(() => Vm.IsGenerating, 5000);
+            DesignGate.NoteOwnerMessage(chat.Id, "redesign the landing page", append: true);
+            bool heldWhileRunning = DesignGate.IsDesignTurn(chat.Id);
+            gate1b.Release();
+            await WaitIdle();
+            Check("DM11 the owner's words typed into a running turn are used up when it ends: no later turn reads them",
+                heldWhileRunning && !DesignGate.IsDesignTurn(chat.Id), $"held={heldWhileRunning} after={DesignGate.IsDesignTurn(chat.Id)}");
+
+            // DM12 — a next-step button after it: the model's label is no design words, even with words left lying around
+            int notices = Notices(), readyAt = ready;
+            DesignGate.NoteOwnerMessage(chat.Id, "redesign the landing page");   // a Send that never started its turn (say, refused)
+            Fake.ScriptFor["[DMO2]"] = new Queue<FakeStep>([FakeStep.Reply("Committed.")]);
+            pick.Invoke(Vm, [new ChatMessage { Role = MessageRole.System }, "[DMO2] Commit"]);
+            await Task.Delay(100);
+            await WaitIdle();
+            Check("DM12 a next-step button's label starts no design turn: no guidance, no notice, no Studio",
+                Asked("[DMO2]") && !Told("[DMO2]") && Notices() == notices && ready == readyAt, $"asked={Asked("[DMO2]")} told={Told("[DMO2]")} ready={ready}");
+
+            // DM13 — the UI Studio's own request is not the owner asking for a design (its header says "of the UI")
+            notices = Notices();
+            readyAt = ready;
+            Fake.ScriptFor["[DMO3]"] = new Queue<FakeStep>([FakeStep.Reply("Made it bold.")]);
+            bool sent = Vm.SendFromStudio("[UI Studio] Change one element of the UI. [DMO3] make the h1 bold");
+            await Task.Delay(100);
+            await WaitIdle();
+            Check("DM13 an Ask AI request from the UI Studio is no design turn (its own wording never counts as the owner's)",
+                sent && Asked("[DMO3]") && !Told("[DMO3]") && Notices() == notices && ready == readyAt, $"sent={sent} told={Told("[DMO3]")} ready={ready}");
+            Vm.IsDesignMode = true;
+            Fake.ScriptFor["[DMO3]"] = new Queue<FakeStep>([FakeStep.Reply("Made it red.")]);
+            int callsBefore = Fake.Calls.Count;
+            Vm.SendFromStudio("[UI Studio] Change one element of the UI. [DMO3] make the h1 red");
+            await Task.Delay(100);
+            await WaitIdle();
+            bool switchCounts = Fake.Calls.Skip(callsBefore).Any(c => c.Input.Contains("make the h1 red") && c.Input.Contains("Design mode is on"));
+            Vm.IsDesignMode = false;
+            Check("DM13 (control) with the chat's Design switch on, every owner turn is one — the Studio's request too", switchCounts && ready == readyAt + 1, $"ready={readyAt}→{ready}");
+
+            // DM14 — Retry of a failed design turn is a design turn again
+            Fake.ScriptFor["[DMO4]"] = new Queue<FakeStep>([FakeStep.Throw(new System.Net.Http.HttpRequestException("invalid request", null, System.Net.HttpStatusCode.BadRequest)),
+                FakeStep.Reply("Here is the new pricing page.")]);
+            await Send("[DMO4] ออกแบบหน้าราคาใหม่");
+            await WaitIdle();
+            var err = Vm.Messages.LastOrDefault(m => m.HasError);
+            int readyBefore = ready;
+            callsBefore = Fake.Calls.Count;
+            if (err != null) Vm.RetryMessageCommand.Execute(err);
+            await Task.Delay(100);
+            await WaitIdle();
+            bool retriedTold = Fake.Calls.Skip(callsBefore).Any(c => c.Input.Contains("[DMO4]") && c.Input.Contains("Design mode is on"));
+            Check("DM14 Retry on a failed design turn asks it again as one: the guidance, and the Studio asked for again",
+                err != null && retriedTold && ready == readyBefore + 1, $"err={err != null} told={retriedTold} ready={readyBefore}→{ready}");
+
+            // DM14 — a note the agent took mid-turn is the question a Retry finds (the last user row before the failed reply):
+            // typed into a design turn, it is asked again as one
+            var gate6 = new SemaphoreSlim(0);
+            Fake.ScriptFor["[DMO6]"] = new Queue<FakeStep>([FakeStep.Gated(["Designing"], gate6, [" — done."])]);
+            Fake.ScriptFor["[DMO6-note]"] = new Queue<FakeStep>([FakeStep.Reply("Menu made bigger.")]);
+            await Send("[DMO6] redesign the menu");
+            await WaitUntil(() => Vm.IsGenerating, 5000);
+            Vm.UserInput = "[DMO6-note] and make it bigger";
+            Vm.SendMessageCommand.Execute(null);
+            var runNow = typeof(ChatViewModel).GetMethod("RunOf", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(Vm, [Vm.CurrentSession]);
+            var scope = (AgentRunScope?)runNow?.GetType().GetProperty("Scope")!.GetValue(runNow);
+            bool taken = scope?.TakeUserNotes() != null;   // what the agent loop does at its next step
+            gate6.Release();
+            await WaitIdle();
+            var failedAfterNote = new ChatMessage { Role = MessageRole.Assistant, Content = "overloaded", HasError = true };
+            Vm.Messages.Add(failedAfterNote);
+            readyBefore = ready;
+            callsBefore = Fake.Calls.Count;
+            Vm.RetryMessageCommand.Execute(failedAfterNote);
+            await Task.Delay(100);
+            await WaitIdle();
+            bool noteTold = Fake.Calls.Skip(callsBefore).Any(c => c.Input.Contains("[DMO6-note]") && c.Input.Contains("Design mode is on"));
+            Check("DM14 Retry of a failed reply to a note typed into a design turn asks it again as a design turn too",
+                taken && noteTold && ready == readyBefore + 1, $"taken={taken} told={noteTold} ready={readyBefore}→{ready}");
+
+            // DM15 — a note typed into a design turn that ended before reading it goes as the next turn, a design turn too
+            // (a plain reply, not the agent loop — the loop reads a note at its next step, inside the same turn)
+            agenticWas = Vm.AgenticMode;
+            Vm.AgenticMode = false;
+            var gate5 = new SemaphoreSlim(0);
+            Fake.ScriptFor["[DMO5]"] = new Queue<FakeStep>([FakeStep.Gated(["Designing"], gate5, [" — done."])]);
+            Fake.ScriptFor["[DMO4-more]"] = new Queue<FakeStep>([FakeStep.Reply("Footer done.")]);
+            await Send("[DMO5] design a new footer");
+            await WaitUntil(() => Vm.IsGenerating, 5000);
+            Vm.UserInput = "[DMO4-more] and make it dark";
+            Vm.SendMessageCommand.Execute(null);
+            await Task.Delay(100);
+            gate5.Release();
+            bool more = await WaitUntil(() => Asked("[DMO4-more] and make it dark"), 15000);
+            await WaitIdle();
+            Check("DM15 a note typed into a design turn and sent after it is a design turn too",
+                more && Told("[DMO4-more] and make it dark"), $"sent={more} told={Told("[DMO4-more] and make it dark")} input={Fake.Calls.ToList().LastOrDefault(c => c.Input.Contains("[DMO4-more]"))?.Input.Replace('\n', '⏎')}");
+        }
+        finally
+        {
+            if (agenticWas is { } was) Vm.AgenticMode = was;
+            Vm.FollowEditsHere = false;
+            Vm.IsDesignMode = false;
+            ui.DesignViewReady -= onReady;
+            Vm.FileMutatedByAgent -= onMutated;
+            Vm.ShowEditorRequested -= onShown;
+            foreach (var k in keys) Fake.ScriptFor.Remove(k);
+        }
+    }
+
+    /// <summary>DM16: design-chats.json forgets a chat that is gone — deleted, or an untouched chat dropped on the way out.</summary>
+    static async Task TestDesignForget(string root)
+    {
+        string file = Path.Combine(Settings.DataRoot, "design-chats.json");
+        string Stored() => File.Exists(file) ? File.ReadAllText(file) : "";
+        var keep = DmChat("dm keep", DmSite(root, "dm-keep"));
+        var doomed = DmChat("dm doomed", DmSite(root, "dm-doomed"));
+        await Open(doomed.Id);
+        Vm.IsDesignMode = true;
+        bool storedFirst = Stored().Contains(doomed.Id);
+        bool confirmWas = ConfirmAnswer;
+        ConfirmAnswer = true;
+        Vm.DeleteSessionCommand.Execute(doomed.Id);
+        await WaitUntil(() => !Vm.Sessions.Any(s => s.Id == doomed.Id), 5000);
+        ConfirmAnswer = confirmWas;
+        Check("DM16 a deleted chat's Design switch leaves design-chats.json", storedFirst && !Stored().Contains(doomed.Id) && !DesignGate.IsOn(doomed.Id),
+            $"storedFirst={storedFirst}");
+
+        await FreshChat();
+        var empty = Vm.CurrentSession!;
+        Vm.IsDesignMode = true;
+        storedFirst = Stored().Contains(empty.Id);
+        await Open(keep.Id);
+        Check("DM16 an untouched chat dropped on the way out leaves it too", storedFirst && !Vm.Sessions.Any(s => s.Id == empty.Id)
+            && !Stored().Contains(empty.Id) && !DesignGate.IsOn(empty.Id), $"storedFirst={storedFirst} row={Vm.Sessions.Any(s => s.Id == empty.Id)}");
     }
 }

@@ -250,7 +250,12 @@ public partial class ChatViewModel
     {
         row.ToolSummary = label;   // saved with the chat: a reopened box shows what was picked, without buttons
         string draft = UserInput ?? "";
-        if (CurrentSession is { } s) WorkflowGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
+        if (CurrentSession is { } s)
+        {
+            WorkflowGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
+            // nor for a design: the model's label is no design words (a chat with its Design switch on still counts)
+            DesignGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
+        }
         if (IsGenerating) SendIntoRunningReply(label);
         else _ = SendMessageCore(label, pipe: null);
         if (draft.Length > 0 && string.IsNullOrEmpty(UserInput)) UserInput = draft;
