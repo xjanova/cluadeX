@@ -84,7 +84,7 @@ public class AutoUpdateService : IAppShutdownHook
     // ════════════════════════════════════════════════════════════════════════
 
     private Velopack.UpdateManager? _vpk;
-    private Velopack.UpdateInfo? _vpkPending;
+    private volatile Velopack.UpdateInfo? _vpkPending;
     // ~/.cluadex, not the Velopack install root — a failure counter stored inside the
     // directory the installer empties would be wiped by the very event it exists to
     // survive. See SettingsService.MigrateLegacyDataRoot.
@@ -113,61 +113,90 @@ public class AutoUpdateService : IAppShutdownHook
 
     // ─── progress ──────────────────────────────────────────────────────────────────────
 
+    // One figure for everyone (splash, update bar): bytes over a size known up front — UpdateProgressComposer.
     private readonly object _progressLock = new();
-    private UpdateProgressInfo _progress = UpdateProgressInfo.Idle;
-    private readonly Dictionary<string, (long Bytes, long Total)> _files = new(StringComparer.OrdinalIgnoreCase);
-    private double _speed;                         // bytes/s, smoothed
-    private long _speedBytes; private DateTime _speedAt = DateTime.MinValue;
+    private readonly UpdateProgressComposer _composer = new();
+    private UpdatePhase _phase = UpdatePhase.Idle;
+    private string? _phaseVersion, _phaseError;
+    private bool _downloadBegun;          // the composer holds this download's figures (Downloading → Staged / Failed)
+    private bool _stagedWithoutBytes;     // Velopack found the package already on disk: nothing was downloaded
+    private long _seq;
     private DateTime _lastPublish = DateTime.MinValue;
 
-    /// <summary>The latest state, for a window that opens in the middle of a download.</summary>
-    public UpdateProgressInfo Progress { get { lock (_progressLock) return _progress; } }
+    /// <summary>The latest state, for a window that opens in the middle of a download (stall seconds are as of now).</summary>
+    public UpdateProgressInfo Progress { get { lock (_progressLock) return Compose(DateTime.UtcNow); } }
+
+    /// <summary>The snapshot at <paramref name="now"/>. Under <see cref="_progressLock"/>. Every snapshot gets a higher
+    /// <see cref="UpdateProgressInfo.Seq"/>, so a listener can drop one that arrives after a newer one.</summary>
+    private UpdateProgressInfo Compose(DateTime now)
+    {
+        var info = new UpdateProgressInfo(_phase, _phaseVersion, 0, 0, 0, 0, false, _phaseError) { Seq = ++_seq };
+        if (!_downloadBegun) return _phase == UpdatePhase.Staged ? info with { Percent = 100, FromCache = _stagedWithoutBytes } : info;
+        var s = _composer.Read(now);
+        info = info with
+        {
+            Bytes = s.Bytes, Total = s.Total,
+            Delta = s.Route == UpdateProgressComposer.Route.Delta, DeltaCount = s.DeltaCount, FellBackToFull = s.FellBackToFull,
+        };
+        return _phase switch
+        {
+            UpdatePhase.Downloading when s.Stage == UpdateProgressComposer.Stage.Preparing =>
+                info with { Phase = UpdatePhase.Preparing, Percent = 100, PhaseSeconds = s.StageSeconds },
+            UpdatePhase.Downloading => info with
+            {
+                Percent = s.Percent, BytesPerSecond = s.BytesPerSecond, Resuming = s.Resuming, Error = s.Error,
+                StalledSeconds = s.StalledSeconds, Redownloading = s.Redownloading,
+            },
+            UpdatePhase.Staged => info with { Percent = 100, FromCache = _stagedWithoutBytes },
+            _ => info with { Percent = s.Percent },   // Failed: how far it got
+        };
+    }
 
     private void SetPhase(UpdatePhase phase, string? version, string? error = null)
     {
         lock (_progressLock)
         {
-            if (phase == UpdatePhase.Downloading && _progress.Phase != UpdatePhase.Downloading)
-            {
-                _files.Clear(); _speed = 0; _speedBytes = 0; _speedAt = DateTime.MinValue;   // the first report only sets the baseline (a resumed file starts far from 0)
-                _progress = _progress with { Bytes = 0, Total = 0, Percent = 0 };
-            }
-            _progress = _progress with { Phase = phase, Version = version, Error = error, Percent = phase == UpdatePhase.Staged ? 100 : phase == UpdatePhase.Downloading ? _progress.Percent : 0 };
-            if (phase != UpdatePhase.Downloading) _progress = _progress with { Resuming = false, BytesPerSecond = 0 };
+            _phase = phase; _phaseVersion = version; _phaseError = error;
+            if (phase is UpdatePhase.Idle or UpdatePhase.Checking) _downloadBegun = false;
         }
         Publish(force: true);
     }
 
-    /// <summary>Velopack's own percent (download, then delta patching) drives the bar.</summary>
+    /// <summary>A download starts: the composer learns the sizes up front, and the route Velopack will take.</summary>
+    private void BeginDownload(Velopack.UpdateInfo info, string target)
+    {
+        var full = new UpdateProgressComposer.Asset(info.TargetFullRelease.FileName ?? "", info.TargetFullRelease.Size);
+        var deltas = (info.DeltasToTarget ?? []).Select(d => new UpdateProgressComposer.Asset(d.FileName ?? "", d.Size)).ToArray();
+        // The manager is built without UpdateOptions, so Velopack uses its default limit (its property is protected).
+        BeginTracked(full, deltas, info.BaseRelease?.FileName != null, UpdateProgressComposer.DefaultMaximumDeltas, target);
+    }
+
+    private void BeginTracked(UpdateProgressComposer.Asset full, UpdateProgressComposer.Asset[] deltas, bool hasBase, int maxDeltas, string? target)
+    {
+        lock (_progressLock)
+        {
+            _composer.Begin(full, deltas, hasBase, maxDeltas, DateTime.UtcNow);
+            _downloadBegun = true;
+            _stagedWithoutBytes = false;
+            _phase = UpdatePhase.Downloading; _phaseVersion = target; _phaseError = null;
+        }
+        Publish(force: true);
+    }
+
+    /// <summary>Velopack's own percent: a hint of its stage (patching), not the figure — see UpdateProgressComposer.</summary>
     private void OnVelopackPercent(int percent)
     {
-        lock (_progressLock) _progress = _progress with { Percent = Math.Clamp(percent, 0, 100) };
+        lock (_progressLock) { if (_phase == UpdatePhase.Downloading) _composer.OnVelopackPercent(percent, DateTime.UtcNow); }
         Publish(force: false);
     }
 
-    /// <summary>The downloader's bytes drive the text: sizes, speed, "resuming".</summary>
+    /// <summary>The downloader's bytes: the figure, the speed, "resuming".</summary>
     private void OnFileProgress(ResumableDownloader.FileProgress f)
     {
         lock (_progressLock)
         {
-            _files[f.FileName] = (f.Bytes, f.Total);
-            long bytes = 0, total = 0;
-            foreach (var (b, t) in _files.Values) { bytes += b; total += t; }
-            var now = DateTime.UtcNow;
-            double secs = (now - _speedAt).TotalSeconds;
-            if (_speedAt == DateTime.MinValue || bytes < _speedBytes) { _speedAt = now; _speedBytes = bytes; }
-            else if (secs >= 1)
-            {
-                double inst = (bytes - _speedBytes) / secs;
-                _speed = _speed <= 0 ? inst : _speed * 0.6 + inst * 0.4;
-                _speedAt = now; _speedBytes = bytes;
-            }
-            _progress = _progress with
-            {
-                Bytes = bytes, Total = total, BytesPerSecond = _speed,
-                Resuming = f.FailuresInARow > 0,   // between a drop and the next byte
-                Error = f.LastError,
-            };
+            if (_phase != UpdatePhase.Downloading) return;   // the zip path (portable) has its own bar
+            _composer.OnFile(f.FileName, f.Bytes, f.Total, f.FailuresInARow, f.LastError, DateTime.UtcNow);
         }
         Publish(force: f.LastError != null);
     }
@@ -180,10 +209,10 @@ public class AutoUpdateService : IAppShutdownHook
             var now = DateTime.UtcNow;
             if (!force && now - _lastPublish < TimeSpan.FromMilliseconds(250)) return;
             _lastPublish = now;
-            snap = _progress;
+            snap = Compose(now);
         }
         try { ProgressChanged?.Invoke(snap); } catch (Exception ex) { _log?.Warn("Update", $"progress listener failed: {ex.Message}"); }
-        if (snap.Phase == UpdatePhase.Downloading)
+        if (snap.Phase is UpdatePhase.Downloading or UpdatePhase.Preparing)
             try { OnDownloadProgress?.Invoke(snap.Percent, snap.Describe(thai: false)); } catch { }
     }
 
@@ -215,6 +244,7 @@ public class AutoUpdateService : IAppShutdownHook
     private async Task<string?> CheckAndStageCoreAsync()
     {
         if (!CanSelfUpdate) { _log?.Info("Update", "Velopack: not an installed build — self-update unavailable (portable/dev)"); return null; }
+        AdoptStagedFromDisk();   // a package an earlier run downloaded is known before (and without) the network
         string? target = null;
         try
         {
@@ -231,23 +261,27 @@ public class AutoUpdateService : IAppShutdownHook
             target = info.TargetFullRelease.Version.ToString();
             // The circuit breaker. Without it a package that cannot be applied gets
             // retried on every launch forever — which is exactly how BrainX ended up
-            // relaunching itself every 18 seconds.
+            // relaunching itself every 18 seconds. It stops the AUTOMATIC install only (splash, exit): the package is
+            // still downloaded, so the update bar's Install & Restart is the manual way to try again.
             if (_attempts.ShouldStopTrying(target))
-            {
-                _log?.Warn("Update", $"Velopack: v{target} already failed {UpdateAttemptLog.MaxConsecutiveFailures}× — automatic apply paused, waiting for a manual restart");
-                SetPhase(UpdatePhase.Idle, null);
-                return null;
-            }
+                _log?.Warn("Update", $"Velopack: v{target} already failed {UpdateAttemptLog.MaxConsecutiveFailures}× — automatic install paused; it is downloaded for a manual Install & Restart");
 
             int deltas = info.DeltasToTarget?.Length ?? 0;
             _log?.Info("Update", deltas > 0
-                ? $"Velopack: downloading v{target} as {deltas} delta package(s)…"
+                ? $"Velopack: downloading v{target} as {deltas} delta package(s) ({(info.DeltasToTarget ?? []).Sum(d => d.Size) / (1024.0 * 1024):0.0} MB; full package {info.TargetFullRelease.Size / (1024.0 * 1024):0} MB)…"
                 : $"Velopack: downloading v{target} (full package {info.TargetFullRelease.Size / (1024.0 * 1024):0} MB)…");
-            SetPhase(UpdatePhase.Downloading, target);
+            BeginDownload(info, target);
             var sw = Stopwatch.StartNew();
-            await Vpk.DownloadUpdatesAsync(info, OnVelopackPercent, _shutdown.Token).ConfigureAwait(false);
+            // Nothing reports while a line is stalled or Update.exe patches: a heartbeat keeps the stall seconds and the
+            // "preparing" seconds moving on the splash and the update bar.
+            using (new System.Threading.Timer(_ => Publish(force: true), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)))
+                await Vpk.DownloadUpdatesAsync(info, OnVelopackPercent, _shutdown.Token).ConfigureAwait(false);
             _vpkPending = info;
-            _log?.Info("Update", $"Velopack: v{target} staged in {sw.Elapsed.TotalSeconds:0} s — applies on exit or on Install");
+            bool fromCache;
+            lock (_progressLock) fromCache = _stagedWithoutBytes = !_composer.Read(DateTime.UtcNow).AnyBytes;
+            _log?.Info("Update", fromCache
+                ? $"Velopack: v{target} was already downloaded — applies on exit or on Install"
+                : $"Velopack: v{target} staged in {sw.Elapsed.TotalSeconds:0} s — applies on exit or on Install");
             SetPhase(UpdatePhase.Staged, target);
             OnUpdateStatus?.Invoke($"Update v{target} downloaded — restart to apply.");
             return target;
@@ -263,10 +297,47 @@ public class AutoUpdateService : IAppShutdownHook
                 ? "another update is running (a second CluadeX, or the installer)"
                 : ex.Message;
             _log?.Warn("Update", $"Velopack check/stage failed: {ex.Message}");
+            // Offline, but an earlier run downloaded an update: that one is still ready to install.
+            if (target == null && _vpkPending != null)
+            {
+                SetPhase(UpdatePhase.Staged, StagedVersion);
+                return StagedVersion;
+            }
             SetPhase(UpdatePhase.Failed, target, why);
             return null;
         }
     }
+
+    /// <summary>
+    /// An update an earlier run downloaded and never installed (Velopack's packages folder holds a full package newer
+    /// than this version — read from disk, no network). Taken as the staged update; its version, or null. The splash
+    /// installs it before the app opens, also offline.
+    /// </summary>
+    public string? AdoptStagedFromDisk()
+    {
+        if (!CanSelfUpdate) return null;
+        try
+        {
+            if (_vpkPending != null) return StagedVersion;
+            var asset = Vpk.UpdatePendingRestart;
+            if (asset?.Version == null) return null;
+            _vpkPending = new Velopack.UpdateInfo(asset, false, null, []);
+            string v = asset.Version.ToString();
+            _log?.Info("Update", $"Velopack: v{v} was downloaded by an earlier run and is waiting to be installed");
+            lock (_progressLock) { _downloadBegun = false; _stagedWithoutBytes = true; }
+            SetPhase(UpdatePhase.Staged, v);
+            return v;
+        }
+        catch (Exception ex)
+        {
+            _log?.Warn("Update", $"Velopack: could not read the downloaded packages: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>May <paramref name="version"/> be installed without the user asking (splash, exit)? Not when the
+    /// circuit breaker tripped for it — see <see cref="StartupUpdatePolicy.MayAutoInstall"/>.</summary>
+    public bool MayAutoInstall(string? version) => StartupUpdatePolicy.MayAutoInstall(_attempts, version);
 
     // ─── finding a new release while the app runs ─────────────────────────────────────
 
@@ -373,17 +444,24 @@ public class AutoUpdateService : IAppShutdownHook
     public void OnAppShutdown()
     {
         try { _shutdown.Cancel(); } catch { }
-        if (_applying || _vpkPending == null) return;
-        string target = _vpkPending.TargetFullRelease.Version.ToString();
-        if (_attempts.ShouldStopTrying(target)) return;
+        var pending = _vpkPending;
+        if (_applying || pending == null) return;
+        string target = pending.TargetFullRelease.Version.ToString();
+        if (!MayAutoInstall(target)) return;
         try
         {
-            _attempts.RecordAttempt(target);   // nothing of ours runs afterwards to record it
             _applying = true;
-            Vpk.WaitExitThenApplyUpdates(_vpkPending, silent: true, restart: false);
+            Vpk.WaitExitThenApplyUpdates(pending, silent: true, restart: false);
+            // Update.exe is running and waiting for this process: only now is it an attempt. Nothing of ours runs
+            // afterwards to record it, so it is written here, before the exit goes on.
+            _attempts.RecordAttempt(target);
             _log?.Info("Update", $"Velopack: v{target} installs after exit");
         }
-        catch (Exception ex) { _log?.Warn("Update", $"Velopack: install on exit failed to start: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            _applying = false;
+            _log?.Warn("Update", $"Velopack: install on exit failed to start: {ex.Message}");
+        }
     }
 
     /// <summary>How this copy was started — shown on the title bar so the installed app and a dev build
@@ -422,8 +500,17 @@ public class AutoUpdateService : IAppShutdownHook
     /// <summary>Version of the staged update, or null.</summary>
     public string? StagedVersion => _vpkPending?.TargetFullRelease?.Version?.ToString();
 
-    /// <summary>Why automatic updating is paused, or null when it isn't.</summary>
-    public string? PausedReason => _attempts.Describe();
+    /// <summary>Why automatic updating is paused (or what the last attempt did), in the UI's language; null when there
+    /// is nothing to say.</summary>
+    public string? PausedReason => _attempts.Describe(thai: IsThai);
+
+    private bool IsThai
+    {
+        get { try { return _settingsService.Settings.Language?.StartsWith("th", StringComparison.OrdinalIgnoreCase) ?? false; } catch { return false; } }
+    }
+
+    /// <summary>Why the last <see cref="VelopackApplyAndRestart"/> did not restart, or null.</summary>
+    public string? LastApplyError { get; private set; }
 
     /// <summary>
     /// Call once at startup, before any check. Whatever version we are running now
@@ -433,24 +520,30 @@ public class AutoUpdateService : IAppShutdownHook
     public void NoteRunningVersion() => _attempts.NoteRunningVersion(CurrentVersion);
 
     /// <summary>
-    /// Apply the staged update and restart. Records the attempt FIRST — this call
-    /// does not return, so anything written afterwards would never be written.
+    /// Apply the staged update and restart. Update.exe is started first (it waits for this process to exit); the
+    /// attempt is recorded once it really runs — a start that throws is no attempt — and then this process exits.
+    /// Does not return on success. False (and <see cref="LastApplyError"/>) when nothing was handed over.
     /// </summary>
     public bool VelopackApplyAndRestart()
     {
-        if (_vpkPending == null) return false;
-        string target = _vpkPending.TargetFullRelease.Version.ToString();
+        var pending = _vpkPending;
+        if (pending == null) { LastApplyError = "no update is downloaded"; return false; }
+        string target = pending.TargetFullRelease.Version.ToString();
         try
         {
-            _attempts.RecordAttempt(target);          // must be flushed BEFORE we hand over
             _applying = true;
+            LastApplyError = null;
             _log?.Info("Update", $"Velopack: applying v{target} and restarting");
-            Vpk.ApplyUpdatesAndRestart(_vpkPending);
-            return true;                               // unreachable in practice
+            Vpk.WaitExitThenApplyUpdates(pending, silent: false, restart: true, null);   // ApplyUpdatesAndRestart, minus its exit
+            _attempts.RecordAttempt(target);           // flushed BEFORE we exit — nothing of ours runs afterwards
+            try { _log?.Flush(); } catch { }
+            Environment.Exit(0);
+            return true;                               // unreachable
         }
         catch (Exception ex)
         {
             _applying = false;
+            LastApplyError = ex.Message;
             _log?.Error("Update", $"Velopack apply failed: {ex.Message}");
             OnUpdateStatus?.Invoke($"Could not apply the update: {ex.Message}");
             return false;
@@ -626,7 +719,7 @@ public class AutoUpdateService : IAppShutdownHook
             Directory.CreateDirectory(tempDir);
             string zipPath = Path.Combine(tempDir, info.FileName.Length > 0 ? Path.GetFileName(info.FileName) : "update.zip");
 
-            SetPhase(UpdatePhase.Downloading, info.NewVersion);
+            BeginTracked(new UpdateProgressComposer.Asset(ResumableDownloader.FileNameOf(info.DownloadUrl), info.FileSize), [], false, 0, info.NewVersion);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct, _shutdown.Token);
             await _downloader.DownloadFile(info.DownloadUrl, zipPath, OnVelopackPercent, cancelToken: stop.Token);
             OnDownloadProgress?.Invoke(100, "Download complete!");
@@ -776,29 +869,57 @@ public class UpdateInfo
     };
 }
 
-public enum UpdatePhase { Idle, Checking, Downloading, Staged, Failed }
+/// <summary>Preparing (appended, so the other values keep their numbers): every byte is in and Velopack verifies the
+/// package / Update.exe applies the delta patches — no bytes move, so it is its own step, not a bar stuck at a split.</summary>
+public enum UpdatePhase { Idle, Checking, Downloading, Staged, Failed, Preparing }
 
-/// <summary>Where the update stands, for the splash and the update bar. Bytes/Total cover every file of the current
-/// download (a delta chain is several); Percent is Velopack's own (download, then patching).</summary>
+/// <summary>Where the update stands, for the splash and the update bar. Percent, Bytes and Total come from one source
+/// (<see cref="UpdateProgressComposer"/>): bytes over the sizes the release feed states up front, never backwards within
+/// a step. The positional shape is pinned by tests/apitest UpdateDownloadWire; the rest are init properties.</summary>
 public sealed record UpdateProgressInfo(UpdatePhase Phase, string? Version, double Percent, long Bytes, long Total,
     double BytesPerSecond, bool Resuming, string? Error)
 {
     public static readonly UpdateProgressInfo Idle = new(UpdatePhase.Idle, null, 0, 0, 0, 0, false, null);
 
+    /// <summary>Order of the snapshots (higher = newer). A listener drops one older than what it already shows.</summary>
+    public long Seq { get; init; }
+    /// <summary>Seconds without a byte, once that is long enough to say (<see cref="UpdateProgressComposer.StallAfter"/>).</summary>
+    public double? StalledSeconds { get; init; }
+    /// <summary>Seconds in <see cref="UpdatePhase.Preparing"/>.</summary>
+    public double PhaseSeconds { get; init; }
+    /// <summary>The delta packages failed and Velopack is downloading the full package: the figure started again.</summary>
+    public bool FellBackToFull { get; init; }
+    /// <summary>A file restarted from its first byte (the server would not resume it): the figure holds until it is back.</summary>
+    public bool Redownloading { get; init; }
+    /// <summary>The download is a chain of <see cref="DeltaCount"/> delta packages.</summary>
+    public bool Delta { get; init; }
+    public int DeltaCount { get; init; }
+    /// <summary>Staged without a byte downloaded now (an earlier run downloaded it).</summary>
+    public bool FromCache { get; init; }
+
     /// <summary>Seconds left at the current speed, or null when it cannot be told.</summary>
     public double? EtaSeconds => Phase == UpdatePhase.Downloading && Total > 0 && BytesPerSecond > 1 && Bytes <= Total
         ? (Total - Bytes) / BytesPerSecond : null;
 
-    /// <summary>"12.3 / 27.0 MB · 2.1 MB/s" (+ "· resuming"), or the percent alone before the first byte.</summary>
+    /// <summary>"12.3 / 27.0 MB · 2.1 MB/s" (+ "· resuming", a stall, a fall-back to the full package), the preparing
+    /// step, or the percent alone before the sizes are known.</summary>
     public string Describe(bool thai)
     {
         static string Mb(long b) => (b / (1024.0 * 1024)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        static string N(double v) => v.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+        if (Phase == UpdatePhase.Preparing)
+            return Delta
+                ? thai ? $"โหลดครบแล้ว — กำลังประกอบอัปเดตจาก {DeltaCount} แพตช์… {N(PhaseSeconds)} วินาที" : $"downloaded — applying {DeltaCount} patch(es)… {N(PhaseSeconds)} s"
+                : thai ? $"โหลดครบแล้ว — กำลังตรวจไฟล์… {N(PhaseSeconds)} วินาที" : $"downloaded — verifying the package… {N(PhaseSeconds)} s";
         if (Total <= 0) return $"{Percent:0}%";
         string s = $"{Mb(Bytes)} / {Mb(Total)} MB";
+        if (FellBackToFull) s = (thai ? "แพตช์ใช้ไม่ได้ — โหลดตัวเต็มแทน · " : "patches failed — downloading the full package · ") + s;
         if (BytesPerSecond > 1)
             s += BytesPerSecond >= 1024 * 1024
                 ? $" · {(BytesPerSecond / (1024 * 1024)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} MB/s"
                 : $" · {(BytesPerSecond / 1024).ToString("0", System.Globalization.CultureInfo.InvariantCulture)} KB/s";
+        if (Redownloading) s += thai ? " · เซิร์ฟเวอร์ไม่ให้โหลดต่อ กำลังโหลดส่วนนั้นใหม่" : " · the server would not resume — fetching that part again";
+        if (StalledSeconds is double st) s += thai ? $" · สัญญาณค้าง {N(st)} วินาที — กำลังลองใหม่…" : $" · connection stalled {N(st)} s — retrying…";
         if (Resuming) s += thai ? " · สัญญาณหลุด กำลังต่อจากเดิม" : " · connection dropped, resuming";
         return s;
     }

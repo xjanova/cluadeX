@@ -1031,11 +1031,15 @@ public class MainViewModel : ViewModelBase
     private string? _dismissedUpdateKey;   // the state the bar was closed on: it stays closed until the state moves on
     private bool _sawDownload;             // a failure is shown for a download the bar was showing, or a manual check
     private bool _manualCheck;
-    private static string UpdateKey(UpdateProgressInfo p) => $"{p.Phase}:{p.Version}";
+    private long _updateSeq;               // the newest snapshot drawn: reports from several threads can arrive out of order
+    // Preparing is the end of the same download: a bar closed while downloading stays closed through it.
+    private static string UpdateKey(UpdateProgressInfo p) => $"{(p.Phase == UpdatePhase.Preparing ? UpdatePhase.Downloading : p.Phase)}:{p.Version}";
 
     private void RenderUpdate(UpdateProgressInfo p)
     {
         if (IsRestartingForUpdate) return;
+        if (p.Seq < _updateSeq) return;
+        _updateSeq = p.Seq;
         if (_dismissedUpdateKey == UpdateKey(p)) return;
         bool thai = _loc.CurrentLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase);
         switch (p.Phase)
@@ -1049,9 +1053,21 @@ public class MainViewModel : ViewModelBase
                 CanInstallUpdate = false;
                 ShowUpdateBar = true;
                 break;
+            case UpdatePhase.Preparing:
+                _sawDownload = true;
+                UpdateMessage = string.Format(L("update.bgPreparing"), p.Version, p.Describe(thai));
+                UpdateProgress = 100;
+                UpdateProgressText = p.Describe(thai);
+                IsUpdating = true;
+                CanInstallUpdate = false;
+                ShowUpdateBar = true;
+                break;
             case UpdatePhase.Staged when _autoUpdate.HasStagedUpdate:
                 _sawDownload = false;
-                UpdateMessage = "🔔 " + string.Format(L("update.staged"), p.Version);
+                // A version the circuit breaker paused does not install on exit: the bar says so, Install is the way.
+                UpdateMessage = !_autoUpdate.MayAutoInstall(p.Version) && _autoUpdate.PausedReason is { } paused
+                    ? "⚠ " + paused
+                    : "🔔 " + string.Format(L("update.staged"), p.Version);
                 UpdateProgress = 100;
                 IsUpdating = false;
                 CanInstallUpdate = true;
