@@ -260,6 +260,6 @@ public sealed partial class UiStudioViewModel
     private ICommand? _makeSamplesRealCommand, _clearSampleOverridesCommand;
 
     public ICommand MakeSamplesRealCommand => _makeSamplesRealCommand ??= new AsyncRelayCommand(MakeSamplesRealAsync,
-        () => ShowSampleBar && SampleDataOn && !_makingSamples && !AiWorking && !IsChecking);
+        () => ShowSampleBar && SampleDataOn && !_makingSamples && !AiWorking && !IsLockedByAi && !IsChecking);
     public ICommand ClearSampleOverridesCommand => _clearSampleOverridesCommand ??= new RelayCommand(ClearSampleOverrides, () => _hasSampleOverrides && !_makingSamples);
 }

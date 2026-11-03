@@ -332,12 +332,15 @@ public sealed partial class UiStudioViewModel
     {
         var s = _session;
         if (s == null || AiWorking || IsChecking) return;
+        if (AiWorkingHere()) { Status(T("studio.err.aiWorking"), error: true); return; }   // (before the question)
         var changed = s.Changed.Where(p => s.Before.ContainsKey(p)).ToList();
         if (changed.Count == 0) { EndSession(); return; }
         int created = changed.Count(p => s.Before[p] == null && File.Exists(p));
         bool go = ToolConfirmOverride ?? Views.Editor.ChoiceDialog.Show(T("studio.session.undoTitle"), T("studio.session.undoBody", changed.Count - created, created),
             new[] { T("studio.session.undoAll"), T("studio.cancel") }, 1) == 0;
         if (!go) return;
+        // a run began while the question was up: RestoreFiles would refuse every file — say why, not "N could not be restored"
+        if (AiWorkingHere()) { Status(T("studio.err.aiWorking"), error: true); return; }
         var failed = _studio.RestoreFiles(changed.ToDictionary(p => p, p => s.Before[p], StringComparer.OrdinalIgnoreCase));
         foreach (var p in changed) _selfWrites.Remove(p);
         _pendingFocus = null;
@@ -584,9 +587,9 @@ public sealed partial class UiStudioViewModel
 
     private ICommand? _keepChangesCommand, _undoAllCommand, _reviseCommand, _stopCheckCommand, _dismissCheckCommand, _toggleBeforeCommand;
 
-    public ICommand KeepChangesCommand => _keepChangesCommand ??= new AsyncRelayCommand(KeepAsync, () => SessionReview);
-    public ICommand UndoAllCommand => _undoAllCommand ??= new RelayCommand(UndoAll, () => SessionReview);
-    public ICommand ReviseCommand => _reviseCommand ??= new RelayCommand(Revise, () => SessionReview && !string.IsNullOrWhiteSpace(ReviseText));
+    public ICommand KeepChangesCommand => _keepChangesCommand ??= new AsyncRelayCommand(KeepAsync, () => SessionReview && !IsLockedByAi);
+    public ICommand UndoAllCommand => _undoAllCommand ??= new RelayCommand(UndoAll, () => SessionReview && !IsLockedByAi);
+    public ICommand ReviseCommand => _reviseCommand ??= new RelayCommand(Revise, () => SessionReview && !IsLockedByAi && !string.IsNullOrWhiteSpace(ReviseText));
     public ICommand StopCheckCommand => _stopCheckCommand ??= new RelayCommand(() => _checkCts?.Cancel(), () => IsChecking);
     public ICommand DismissCheckCommand => _dismissCheckCommand ??= new RelayCommand(() => { CheckPassed = null; CheckFindings.Clear(); CheckStatus = ""; });
     public ICommand ToggleBeforeCommand => _toggleBeforeCommand ??= new RelayCommand(() => ShowBefore = !ShowBefore, () => HasBeforeImage);

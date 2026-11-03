@@ -265,6 +265,9 @@ internal static partial class Program
         await StaticSite(vm, view, fx);
         await AddedWebPage(vm, fx);
         await EmptyFolderBecomesSite(vm, fx);
+        await PageLoading(vm, view, fx);
+        await EngineChecks(vm, view);
+        await DesignChecks(vm, fx);
         if (WebOnly) return Finish();
         await LaravelSite(vm, view, fx);
         await FlutterApp(vm, view, fx);
@@ -304,6 +307,9 @@ internal static partial class Program
                       + File.ReadAllText(Path.Combine(repo, "CluadeX", "ViewModels", "UiStudioViewModel.Tools.cs"))
                       + File.ReadAllText(Path.Combine(repo, "CluadeX", "ViewModels", "UiStudioViewModel.Session.cs"))
                       + File.ReadAllText(Path.Combine(repo, "CluadeX", "ViewModels", "UiStudioViewModel.Samples.cs"))
+                      + File.ReadAllText(Path.Combine(repo, "CluadeX", "ViewModels", "UiStudioViewModel.PageLoad.cs"))
+                      + File.ReadAllText(Path.Combine(repo, "CluadeX", "ViewModels", "UiStudioViewModel.AiLock.cs"))
+                      + File.ReadAllText(Path.Combine(repo, "CluadeX", "ViewModels", "UiStudioViewModel.Design.cs"))
                       + File.ReadAllText(Path.Combine(repo, "CluadeX", "Services", "UiStudio", "StudioService.cs"));
         // the edit engine's refusals ("studio.fedit." + reason) and the palette's names / samples ("studio.fedit.palette." + key)
         string engine = File.ReadAllText(Path.Combine(repo, "CluadeX", "Services", "UiStudio", "Sketch", "FlutterCodeEdit.cs"));

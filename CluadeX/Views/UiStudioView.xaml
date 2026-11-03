@@ -158,6 +158,7 @@
     <Grid Background="{DynamicResource Page.Background}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -206,6 +207,10 @@
                     <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ReloadCommand}" ToolTip="{services:Loc studio.reloadTip}">
                         <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/>
                     </Button>
+                    <!-- the page is on its way: a thin bar here, never a spinner over the page (it is a native window) -->
+                    <ProgressBar IsIndeterminate="True" Width="40" Height="3" Margin="2,0,4,0" VerticalAlignment="Center" BorderThickness="0"
+                                 Background="Transparent" Foreground="{DynamicResource Accent.1}" ToolTip="{Binding PageLoadText}"
+                                 Visibility="{Binding IsPageLoading, Converter={StaticResource BoolVis}}"/>
                 </StackPanel>
 
                 <!-- right side -->
@@ -259,8 +264,18 @@
             </DockPanel>
         </Border>
 
+        <!-- ░░░ AI LOCK ░░░ an AI run edits this project: look-only until it ends (a row of its own, never over the browser) -->
+        <Border x:Name="AiLockBanner" Grid.Row="1" Background="{DynamicResource Status.Warning.Tint}" BorderBrush="{DynamicResource Status.Warning.Border}"
+                BorderThickness="0,0,0,1" Padding="12,7" Visibility="{Binding IsLockedByAi, Converter={StaticResource BoolVis}}">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Style="{StaticResource StudioAccentBtn}" Content="{services:Loc studio.lock.openChat}" Command="{Binding OpenLockChatCommand}" Margin="8,0,0,0"/>
+                <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock x:Name="AiLockText" Text="{Binding AiLockText}" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+            </DockPanel>
+        </Border>
+
         <!-- ░░░ BODY ░░░ -->
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="250" MinWidth="160"/>
                 <ColumnDefinition Width="5"/>
@@ -374,8 +389,26 @@
 
                 <!-- engine missing / crashed -->
                 <Border x:Name="EngineError" Grid.Row="1" Background="{DynamicResource Surface.Sunken}" Visibility="Collapsed">
-                    <TextBlock x:Name="EngineErrorText" TextWrapping="Wrap" MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Status.Danger}" FontSize="13" TextAlignment="Center"/>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460">
+                        <TextBlock x:Name="EngineErrorText" TextWrapping="Wrap" HorizontalAlignment="Center"
+                                   Foreground="{DynamicResource Status.Danger}" FontSize="13" TextAlignment="Center"/>
+                        <Button x:Name="EngineRetry" Style="{StaticResource StudioAccentBtn}" Content="{services:Loc studio.load.retry}" Click="EngineRetry_Click"
+                                HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- the page could not be shown (the browser's error page after every retry, a page that stayed blank): the
+                     view hides the browser while this is up — nothing WPF draws can be seen over it -->
+                <Border x:Name="LoadFailedCard" Grid.Row="1" Background="{DynamicResource Surface.Sunken}"
+                        Visibility="{Binding PageLoadFailed, Converter={StaticResource BoolVis}}">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460">
+                        <TextBlock Text="&#xE783;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="{DynamicResource Status.Danger}" HorizontalAlignment="Center"/>
+                        <TextBlock Text="{services:Loc studio.load.failedTitle}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                   HorizontalAlignment="Center" Margin="0,10,0,4"/>
+                        <TextBlock Text="{Binding PageLoadText}" TextWrapping="Wrap" FontSize="12.5" Foreground="{DynamicResource Text.Secondary}" TextAlignment="Center"/>
+                        <Button Style="{StaticResource StudioAccentBtn}" Content="{services:Loc studio.load.retry}" Command="{Binding RetryLoadCommand}"
+                                HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                    </StackPanel>
                 </Border>
 
                 <!-- a simulated app screen (Flutter): drawn from its code; click a part to see / open its line -->
@@ -943,7 +976,7 @@
                             </Button>
                         </StackPanel>
                         <!-- the widget tools: each one changes the picked widget in the app's code (Undo takes an edit back) -->
-                        <StackPanel Visibility="{Binding HasTools, Converter={StaticResource BoolVis}}">
+                        <StackPanel Visibility="{Binding HasTools, Converter={StaticResource BoolVis}}" IsEnabled="{Binding CanEditNow}">
                             <Border Style="{StaticResource StudioChip}" Visibility="{Binding HasToolSharedNote, Converter={StaticResource BoolVis}}" Margin="0,10,0,0" HorizontalAlignment="Left">
                                 <TextBlock Text="{Binding ToolSharedNote}" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource Status.Warning}"/>
                             </Border>
@@ -1130,7 +1163,7 @@
                         </StackPanel>
 
                         <TextBlock Text="{services:Loc studio.stage.aiTitle}" Style="{StaticResource StudioKicker}" Margin="0,20,0,6"/>
-                        <DockPanel>
+                        <DockPanel IsEnabled="{Binding CanEditNow}">
                             <Button DockPanel.Dock="Right" Style="{StaticResource StudioAccentBtn}" Command="{Binding AskAiStageCommand}" Margin="6,0,0,0" Padding="9,5" VerticalAlignment="Top">
                                 <TextBlock Text="&#xE724;" FontFamily="Segoe MDL2 Assets"/>
                             </Button>
@@ -1230,7 +1263,7 @@
 
                                 <!-- AI -->
                                 <TextBlock Text="{services:Loc studio.ai.title}" Style="{StaticResource StudioKicker}"/>
-                                <DockPanel>
+                                <DockPanel IsEnabled="{Binding CanEditNow}">
                                     <Button DockPanel.Dock="Right" Style="{StaticResource StudioAccentBtn}" Command="{Binding AskAiCommand}" Margin="6,0,0,0" Padding="9,5" VerticalAlignment="Top">
                                         <TextBlock Text="&#xE724;" FontFamily="Segoe MDL2 Assets"/>
                                     </Button>
@@ -1246,12 +1279,13 @@
                                 <!-- text & classes -->
                                 <TextBlock Text="{services:Loc studio.text}" Style="{StaticResource StudioKicker}" Visibility="{Binding CanEditText, Converter={StaticResource BoolVis}}"/>
                                 <TextBox Style="{StaticResource StudioBox}" Text="{Binding TextValue, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" AcceptsReturn="True"
-                                         MaxHeight="120" VerticalScrollBarVisibility="Auto" Visibility="{Binding CanEditText, Converter={StaticResource BoolVis}}"/>
+                                         MaxHeight="120" VerticalScrollBarVisibility="Auto" Visibility="{Binding CanEditText, Converter={StaticResource BoolVis}}" IsEnabled="{Binding CanEditNow}"/>
                                 <TextBlock Text="{services:Loc studio.classes}" Style="{StaticResource StudioKicker}"/>
-                                <TextBox Style="{StaticResource StudioMonoBox}" Text="{Binding ClassValue, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" MaxHeight="90" VerticalScrollBarVisibility="Auto"/>
+                                <TextBox Style="{StaticResource StudioMonoBox}" Text="{Binding ClassValue, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" MaxHeight="90" VerticalScrollBarVisibility="Auto"
+                                         IsEnabled="{Binding CanEditNow}"/>
 
                                 <!-- attributes -->
-                                <ItemsControl ItemsSource="{Binding AttrFields}">
+                                <ItemsControl ItemsSource="{Binding AttrFields}" IsEnabled="{Binding CanEditNow}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate DataType="{x:Type vm:AttrField}">
                                             <StackPanel>
@@ -1263,7 +1297,7 @@
                                 </ItemsControl>
 
                                 <!-- styles -->
-                                <ItemsControl ItemsSource="{Binding StyleGroups}">
+                                <ItemsControl ItemsSource="{Binding StyleGroups}" IsEnabled="{Binding CanEditNow}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate DataType="{x:Type vm:StyleGroup}">
                                             <StackPanel>
@@ -1287,10 +1321,23 @@
 
         <!-- ░░░ STATUS ░░░ -->
 
-        <Border Grid.Row="2" Background="{DynamicResource Page.StatusBar.Background}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="12,4">
+        <Border Grid.Row="3" Background="{DynamicResource Page.StatusBar.Background}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="12,4">
             <DockPanel>
                 <Button DockPanel.Dock="Right" Style="{StaticResource StudioLinkBtn}" Content="{services:Loc studio.openChat}" Command="{Binding OpenChatCommand}" Margin="12,0,0,0"/>
                 <Button DockPanel.Dock="Right" Style="{StaticResource StudioLinkBtn}" Content="{services:Loc studio.log}" Command="{Binding ToggleLogCommand}" Margin="12,0,0,0"/>
+                <TextBlock x:Name="PageLoadLine" DockPanel.Dock="Right" Text="{Binding PageLoadText}" FontSize="11.5" Margin="12,0,0,0" MaxWidth="420"
+                           TextTrimming="CharacterEllipsis" ToolTip="{Binding PageLoadText}" Visibility="{Binding PageLoadText, Converter={StaticResource BoolVis}}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding PageLoadIsError}" Value="True">
+                                    <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
                 <TextBlock x:Name="StatusLine" FontSize="11.5" TextTrimming="CharacterEllipsis">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">

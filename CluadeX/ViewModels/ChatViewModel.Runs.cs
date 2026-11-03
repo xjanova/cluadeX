@@ -131,10 +131,36 @@ public partial class ChatViewModel
 
     public bool HasRunningElsewhere => _runs.Any(r => !ReferenceEquals(r.Session, CurrentSession));
 
-    /// <summary>A run (any chat) is working in <paramref name="folder"/> or a folder inside it — the editor is read-only then.</summary>
+    /// <summary>A run (any chat) is working in <paramref name="folder"/> or a folder inside it — its main folder, or one
+    /// it opened beside it (open_project add=true) — the editor and the UI Studio are read-only then. UI thread.</summary>
     public bool IsAgentWorkingIn(string folder) =>
-        !string.IsNullOrEmpty(folder) && _runs.Any(r => r.Scope?.WorkingDirectory is { Length: > 0 } wd
-            && (IsInsideFolder(wd, folder) || IsInsideFolder(folder, wd)));
+        !string.IsNullOrEmpty(folder) && _runs.Any(r => RunTouches(r, folder));
+
+    /// <summary>Is a run working in <paramref name="folder"/> waiting for the owner (a permission card, an ask_user
+    /// question)? UI thread.</summary>
+    public bool IsAgentWaitingIn(string folder) =>
+        !string.IsNullOrEmpty(folder) && _runs.Any(r => RunTouches(r, folder) && RunWaits(r));
+
+    /// <summary>Open the chat of the run working in <paramref name="folder"/> (one that waits for the owner first). False
+    /// when no run works there.</summary>
+    public async Task<bool> ShowRunChatInAsync(string folder)
+    {
+        var here = _runs.Where(r => RunTouches(r, folder)).ToList();
+        var pick = here.FirstOrDefault(RunWaits) ?? here.FirstOrDefault();
+        if (pick == null) return false;
+        if (!ReferenceEquals(pick.Session, CurrentSession)) await LoadSessionAsync(pick.Session.Id);
+        return true;
+    }
+
+    private static bool RunTouches(ChatRun r, string folder)
+    {
+        if (r.Scope is not { } scope) return false;
+        bool Overlaps(string? wd) => !string.IsNullOrEmpty(wd) && (IsInsideFolder(wd, folder) || IsInsideFolder(folder, wd));
+        return Overlaps(scope.WorkingDirectory) || scope.ExtraFolders.Any(Overlaps);
+    }
+
+    private static bool RunWaits(ChatRun r) =>
+        r.Messages.Any(m => m.Role is MessageRole.PermissionRequest && !m.PermissionAnswered || m.Role == MessageRole.Question && !m.QuestionAnswered);
 
     /// <summary>Open the chat of a run that is going on elsewhere (the one waiting for an answer first).</summary>
     public ICommand ShowRunningChatCommand => _showRunningChatCommand ??= new AsyncRelayCommand(async () =>

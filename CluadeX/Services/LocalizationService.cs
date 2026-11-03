@@ -26,6 +26,7 @@ public class LocalizationService
                                       Localization.StarterKeys.Keys,
                                       Localization.AutoCommentKeys.Keys,
                                       Localization.OrchestrationKeys.Keys,
+                                      Localization.DesignKeys.Keys,
                                       Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
                                       Localization.AggregatorKeys.Keys,
                                       Localization.LspKeys.Keys })

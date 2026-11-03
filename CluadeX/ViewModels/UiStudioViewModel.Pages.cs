@@ -642,7 +642,7 @@ public sealed partial class UiStudioViewModel
         }
         if (IsServerSite && !_studio.IsServing) _ = _studio.StartAsync();
         ShowPages = false;
-        NavigateTo?.Invoke(url);
+        _studio.NavigatePage(url);
     }
 
     /// <summary>The preview server came up: open the page the user picked before it was running.</summary>
@@ -653,7 +653,7 @@ public sealed partial class UiStudioViewModel
         if (_openWhenServing is { } p && p.UrlOn(_studio.CurrentBaseUrl) is { } url)
         {
             _openWhenServing = null;
-            NavigateTo?.Invoke(url);
+            _studio.NavigatePage(url);
         }
         if (_showPages) RebuildRows();
     }
@@ -747,7 +747,7 @@ public sealed partial class UiStudioViewModel
         if (changed) { _store.ClearShots(); _store.SaveState(); BuildCards(); }
         OnPropertyChanged(nameof(IsRemoteSite));
         Status(T("studio.pages.baseSet", u));
-        if (_studio.IsServing) NavigateTo?.Invoke(u);
+        if (_studio.IsServing) _studio.NavigatePage(u);
     }
 
     private void OpenCardSource(PageCard? c)
@@ -917,6 +917,6 @@ public sealed partial class UiStudioViewModel
     public ICommand ApplyBaseUrlCommand => _applyBaseUrlCommand ??= new RelayCommand(ApplyBaseUrl);
     public ICommand PickSectionCommand => _pickSectionCommand ??= new RelayCommand<PageSection>(PickSection);
     public ICommand OpenStageNodeCommand => _openStageNodeCommand ??= new RelayCommand(OpenStageNode, () => _stageCard != null);
-    public ICommand AskAiStageCommand => _askAiStageCommand ??= new RelayCommand(AskAiAboutStage, () => _stageCard != null && !string.IsNullOrWhiteSpace(StageRequest));
+    public ICommand AskAiStageCommand => _askAiStageCommand ??= new RelayCommand(AskAiAboutStage, () => _stageCard != null && !IsLockedByAi && !string.IsNullOrWhiteSpace(StageRequest));
     public ICommand OpenScreenCommand => _openScreenCommand ??= new RelayCommand<PageCard>(c => { if (c != null) OpenStage(c, closeGallery: true); });
 }

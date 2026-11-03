@@ -126,8 +126,35 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     private void RequestNavigate(string url)
     {
         LastRequestedUrl = url;
+        PageGeneration++;
         NavigateRequested?.Invoke(url);
     }
+
+    /// <summary>Show this page of the project (the address bar, a gallery card, a new base address): it becomes the
+    /// page the Studio wants, the one a reload or a retry comes back to.</summary>
+    public void NavigatePage(string url) => RequestNavigate(url);
+
+    /// <summary>Bumped by every navigation the Studio asks for and by every project left: a document the browser
+    /// started loading for an older generation never counts as this project's page.</summary>
+    public int PageGeneration { get; private set; }
+
+    /// <summary>How the page's loading stands (set by the view, which tracks it — see <see cref="PageLoadTracker"/>).</summary>
+    public PageLoadInfo PageLoad { get; private set; } = PageLoadInfo.Idle;
+    public PageLoadState PageLoadState => PageLoad.State;
+    public event Action? PageLoadChanged;
+
+    public void SetPageLoad(PageLoadInfo info)
+    {
+        if (Equals(PageLoad, info)) return;
+        PageLoad = info;
+        PageLoadChanged?.Invoke();
+    }
+
+    /// <summary>The user's Reload (<paramref name="hard"/>: ignore the cache). The view reloads the page — or, when it
+    /// shows a blank page or the browser's error page, opens the wanted page again. (Not <see cref="ReloadRequested"/>:
+    /// that one is the file watcher's, and waits while the page is hidden.)</summary>
+    public event Action<bool>? PageReloadRequested;
+    public void ReloadPage(bool hard) => PageReloadRequested?.Invoke(hard);
 
     /// <summary>What the browser is sent to when its project is gone: no page shows under another project's name.</summary>
     public const string BlankPage = "about:blank";
@@ -138,6 +165,17 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
 
     /// <summary>The view reports that a navigation landed: messages now come from a page opened for this project.</summary>
     public void NotePageLoaded() => PageIsOld = false;
+
+    /// <summary>The view reports that a document of a navigation started for <paramref name="generation"/> began
+    /// loading (ContentLoading — before any of its scripts runs, so its first "tree" and "ready" are not dropped).
+    /// Only the current generation's page counts; false (and nothing changes) for an older one or after the project
+    /// was left.</summary>
+    public bool NoteDocumentLoaded(int generation)
+    {
+        if (generation != PageGeneration || LastRequestedUrl == null) return false;
+        PageIsOld = false;
+        return true;
+    }
 
     private void LeavePage()
     {
@@ -150,6 +188,8 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         Tree = null;
         TreeTruncated = false;
         _undo.Clear();
+        PageGeneration++;
+        SetPageLoad(PageLoadInfo.Idle);
         NavigateRequested?.Invoke(BlankPage);
     }
 
@@ -480,12 +520,26 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
 
     public SourceRef? ResolveSource(string? src) => HasProject ? SourceLocator.Resolve(src, Root) : null;
 
+    /// <summary>Asked before every write the Studio makes to the project (an edit, a tool's edit, an undo, an undo-all):
+    /// a localization key = refused (an AI run is editing this project — "studio.err.aiWorking"), null = go ahead. Set by
+    /// the UI Studio's view model, which knows the chat's runs; null (a harness without one) never refuses. Asked at the
+    /// moment of the write, not only by the buttons: the page's overlay calls in directly, and a save can wait for the
+    /// browser while a run starts.</summary>
+    public Func<string?>? WriteBlocked { get; set; }
+
+    private string? Blocked()
+    {
+        try { return WriteBlocked?.Invoke(); }
+        catch (Exception ex) { _log?.Warn("UiStudio", "the write check failed", ex); return "studio.err.aiWorking"; }
+    }
+
     /// <summary>
     /// Apply an edit to the element's opening tag in its source file. Returns null on success, else a
     /// localization key (the file is untouched then). Only pages served from this machine are written.
     /// </summary>
     public string? EditSource(string? src, string tagName, string label, Func<string, SourceTag, SourceDialect, SourceEdit> edit)
     {
+        if (Blocked() is { } blocked) return blocked;
         if (!PageIsLocal) return "studio.err.remotePage";
         var where = ResolveSource(src);
         if (where == null) return "studio.err.noSource";
@@ -520,6 +574,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     /// </summary>
     public string? SwapSiblings(string? firstSrc, string? secondSrc, string label)
     {
+        if (Blocked() is { } blocked) return blocked;
         var a = ResolveSource(firstSrc);
         var b = ResolveSource(secondSrc);
         if (a == null || b == null) return "studio.edit.noSibling";
@@ -536,6 +591,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     /// stack like every Studio edit. Returns null or an error key.</summary>
     public string? WriteEdit(string path, string before, string after, bool bom, string label)
     {
+        if (Blocked() is { } blocked) return blocked;
         string now;
         try { now = CluadeX.Helpers.TextFileCodec.Read(path).Text; }
         catch (Exception ex) { _log?.Warn("UiStudio", "read failed " + path, ex); return "studio.err.read"; }
@@ -551,12 +607,13 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
 
     /// <summary>Put files back as they were (the review's "undo all"): each path gets its old text, a file that did
     /// not exist (null) is deleted. The undo stack is cleared — its entries no longer match the files. Returns the
-    /// paths that could not be restored.
+    /// paths that could not be restored — every one of them, untouched, while a write is refused (<see cref="WriteBlocked"/>).
     /// Restores run first and recreate a folder the AI moved or removed. The deletes run only when every restore
     /// worked: after `git mv lib/screens lib/pages` the moved files are the only other copy of that text, so they
     /// are never deleted while an original could not be put back.</summary>
     public List<string> RestoreFiles(IReadOnlyDictionary<string, string?> before)
     {
+        if (Blocked() != null) return before.Keys.ToList();
         var failed = new List<string>();
         foreach (var (path, text) in before)
         {
@@ -595,6 +652,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     public string? Undo(out string? label)
     {
         label = null;
+        if (Blocked() is { } blocked) return blocked;
         if (_undo.Count == 0) return "studio.undo.empty";
         var e = _undo.Peek();
         label = e.Label;
