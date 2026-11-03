@@ -209,14 +209,19 @@ public partial class MainWindow : Window
     private void ProjectRow_Drop(object sender, DragEventArgs e) =>
         Views.SidebarMenus.ProjectRowDrop(_viewModel.ChatVM, ((sender as FrameworkElement)?.DataContext as Models.ChatProject)?.Id ?? "", e);
 
-    /// <summary>The "today" chip: pick the daily budget (a paid run asks before going on past it), or open the billing
-    /// page — the only place the account's remaining credit is shown.</summary>
+    /// <summary>The "today" chip: the Billing page's spend &amp; savings, the daily budget (a paid run asks before going on
+    /// past it), or the provider's own billing page — the only place the account's real remaining credit is shown.</summary>
     private void TodayChip_Click(object sender, RoutedEventArgs e)
     {
         var chat = _viewModel.ChatVM;
         var menu = new System.Windows.Controls.ContextMenu { PlacementTarget = (UIElement)sender, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
         var usage = new System.Windows.Controls.MenuItem { Header = Services.LocalizedResources.Instance["usage.menu"], FontWeight = FontWeights.SemiBold };
-        usage.Click += (_, _) => chat.OpenUsageWindow();
+        // The spend & savings window became a section of the Billing page: open the page there.
+        usage.Click += (_, _) =>
+        {
+            _viewModel.NavigateToCommand.Execute("Billing");
+            _viewModel.BillingVM?.ShowSavings();
+        };
         menu.Items.Add(usage);
         menu.Items.Add(new System.Windows.Controls.Separator());
         menu.Items.Add(new System.Windows.Controls.MenuItem

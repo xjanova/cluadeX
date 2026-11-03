@@ -815,14 +815,7 @@ public partial class ChatViewModel : ViewModelBase
     public string RateLimitTip { get => _rateLimitTip; set => SetProperty(ref _rateLimitTip, value); }
     public string SessionCostText { get => _sessionCostText; set => SetProperty(ref _sessionCostText, value); }
     /// <summary>The provider's billing / usage page — the only place an account's credit balance is shown.</summary>
-    public string? BillingUrl => _providerManager.ActiveProviderType switch
-    {
-        AiProviderType.Anthropic => "https://platform.claude.com/settings/billing",
-        AiProviderType.OpenAI => "https://platform.openai.com/settings/organization/billing",
-        AiProviderType.Gemini => "https://aistudio.google.com/usage",
-        AiProviderType.ClaudeDev => "https://claude.ai/settings/usage",
-        _ => null,
-    };
+    public string? BillingUrl => Services.Billing.BillingSites.For(_providerManager.ActiveProviderType.ToString());
     public bool HasBillingPage => BillingUrl != null;
     public ICommand OpenBillingCommand { get; private set; } = null!;
 

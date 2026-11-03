@@ -1,12 +1,12 @@
 namespace CluadeX.Services.Localization;
 
-/// <summary>Localized strings for the spend window (what CluadeX spent, and what its savings saved). Every key needs both
-/// "en" and "th".</summary>
+/// <summary>Localized strings for spend &amp; savings (what CluadeX spent, and what its savings saved) — once the spend
+/// window, now the Billing page's Savings section and credit / plan editor. Every key needs both "en" and "th".</summary>
 internal static class UsageKeys
 {
     internal static readonly Dictionary<string, Dictionary<string, string>> Keys = new()
     {
-        ["usage.menu"] = new() { ["en"] = "Spend & savings chart…", ["th"] = "กราฟค่าใช้จ่ายและเงินที่ประหยัดได้…" },
+        ["usage.menu"] = new() { ["en"] = "Spend & savings (Billing page)…", ["th"] = "ค่าใช้จ่ายและเงินที่ประหยัดได้ (หน้าบิล)…" },
         ["usage.title"] = new() { ["en"] = "Spend & savings", ["th"] = "ค่าใช้จ่ายและเงินที่ประหยัดได้" },
         ["usage.rangeLabel"] = new() { ["en"] = "Date range · local dates", ["th"] = "ช่วงเวลา · วันที่ตามเวลาท้องถิ่น" },
         ["usage.lastDays"] = new() { ["en"] = "Last {0} days", ["th"] = "{0} วันล่าสุด" },
