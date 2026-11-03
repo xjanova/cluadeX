@@ -20,11 +20,14 @@ public sealed partial class UiStudioViewModel
     /// <summary>A design turn is waiting for its project to become something the Studio can show.</summary>
     public bool DesignViewPending => _designChat != null;
 
-    /// <summary>Something the Studio shows: a web preview or an app's screens of the chat's own project.</summary>
+    /// <summary>Something the Studio shows: a web preview or an app's screens of the chat's own project. A dev server
+    /// counts once it runs or starts, or when its packages are installed (it may start beside the design turn's run then);
+    /// one that needs an install waits for that run's end, so until it starts there would only be an empty Studio.</summary>
     internal bool CanShowForDesign =>
         _studio.HasProject && SamePath(_studio.Root, _chat.ChatProject)
-        && _studio.Project.Kind is StudioProjectKind.Static or StudioProjectKind.Vite or StudioProjectKind.NodeOther
-            or StudioProjectKind.Server or StudioProjectKind.Simulated;
+        && (_studio.Project.Kind is StudioProjectKind.Static or StudioProjectKind.Server or StudioProjectKind.Simulated
+            || _studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther
+               && (_studio.IsServing || _studio.IsStarting || !DevServerRunner.NeedsInstall(_studio.Root)));
 
     private void HookDesignView()
     {
@@ -39,6 +42,8 @@ public sealed partial class UiStudioViewModel
         // the project became showable: the chat opened one (open_project), files appeared in an empty folder (detected
         // again), the AI turned it into another kind
         _studio.ProjectChanged += TryDesignView;
+        // a dev server that started (or began to) after all: there is a page to show now
+        _studio.ServingChanged += () => { if (_designChat != null) TryDesignView(); };
         _chat.PropertyChanged += (_, e) =>
         {
             if (_designChat == null) return;

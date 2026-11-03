@@ -44,10 +44,16 @@ public sealed class DevServerRunner : IDisposable
         : File.Exists(Path.Combine(root, "bun.lockb")) || File.Exists(Path.Combine(root, "bun.lock")) ? "bun"
         : "npm";
 
-    /// <summary>Install (when needed) and start. Returns false with a reason when it could not start.</summary>
-    public async Task<(bool Ok, string? Error)> StartAsync(string script, CancellationToken ct)
+    /// <summary>The project's packages are not installed: starting it would run an install first.</summary>
+    public static bool NeedsInstall(string root) => !Directory.Exists(Path.Combine(root, "node_modules"));
+
+    /// <summary>Install (when needed) and start. Returns false with a reason when it could not start. With
+    /// <paramref name="mayInstall"/> false (an AI run works in this folder: two installs would fight over node_modules) a
+    /// project whose packages are missing is not started at all — "wait" — and nothing is checked or run.</summary>
+    public async Task<(bool Ok, string? Error)> StartAsync(string script, CancellationToken ct, bool mayInstall = true)
     {
         if (IsRunning) return (true, null);
+        if (!mayInstall && NeedsInstall(_root)) return (false, "wait");
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         string pm = PackageManagerFor(_root);
 
@@ -68,8 +74,9 @@ public sealed class DevServerRunner : IDisposable
             return (false, "cancelled");
         }
 
-        if (!Directory.Exists(Path.Combine(_root, "node_modules")))
+        if (NeedsInstall(_root))
         {
+            if (!mayInstall) return (false, "wait");   // (removed while the check ran)
             Output?.Invoke($"$ {pm} install");
             int code;   // (its output is shown, never searched for the page's URL)
             try { code = await RunToEndAsync($"{pm} install", _cts.Token); }

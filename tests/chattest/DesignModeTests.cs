@@ -44,6 +44,7 @@ internal static partial class Program
         await TestStudioLock(root);
         await TestDesignView(root);
         await TestDesignFollowTick(root);
+        await TestStudioLockMoves(root);   // (StudioLockMoveTests.cs)
     }
 
     static string DmSite(string root, string name)

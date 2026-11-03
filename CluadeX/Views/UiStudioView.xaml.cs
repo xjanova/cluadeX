@@ -245,9 +245,9 @@ public partial class UiStudioView : UserControl
         t.Tick += async (_, _) =>
         {
             t.Stop();
-            var core = Web.CoreWebView2;
-            if (core == null || IsVisible || _studio?.KeepPageAwake == true || core.IsSuspended) return;
-            try { await core.TrySuspendAsync(); }
+            var core = CurrentCore();
+            if (core == null || IsVisible || _studio?.KeepPageAwake == true) return;
+            try { if (!core.IsSuspended) await core.TrySuspendAsync(); }
             catch { /* still marked visible by the control, or the page is busy: it simply stays awake */ }
         };
         return t;
@@ -255,7 +255,7 @@ public partial class UiStudioView : UserControl
 
     private void Wake()
     {
-        try { if (Web.CoreWebView2 is { IsSuspended: true } core) core.Resume(); }
+        try { if (CurrentCore() is { IsSuspended: true } core) core.Resume(); }
         catch { }
         if (!IsVisible && IsLoaded) QueueSuspend();   // woken while hidden (a script, a reload): back to sleep later
     }
@@ -384,13 +384,13 @@ public partial class UiStudioView : UserControl
         core.SourceChanged += (_, _) => Safe(() => _vm?.NotePage(core.Source));
         core.NavigationStarting += (_, e) =>
         {
-            if (!ReferenceEquals(core, Web.CoreWebView2)) return;
+            if (!ReferenceEquals(core, CurrentCore())) return;
             Safe(() => _load.Started(e.NavigationId, e.Uri ?? "", Now));
             ArmLoadTimer();
         };
         core.ContentLoading += (_, e) =>
         {
-            if (!ReferenceEquals(core, Web.CoreWebView2)) return;
+            if (!ReferenceEquals(core, CurrentCore())) return;
             Safe(() =>
             {
                 // The new document replaces the old one before any of its scripts runs: from here on its picks and its
@@ -403,7 +403,7 @@ public partial class UiStudioView : UserControl
         };
         core.NavigationCompleted += (_, e) =>
         {
-            if (!ReferenceEquals(core, Web.CoreWebView2)) return;
+            if (!ReferenceEquals(core, CurrentCore())) return;
             int status = 0;
             try { status = e.HttpStatusCode; } catch { }
             Safe(() => _vm?.NotePage(core.Source));
@@ -417,8 +417,12 @@ public partial class UiStudioView : UserControl
             var kind = e.ProcessFailedKind;
             Dispatcher.BeginInvoke(() =>
             {
-                if (!ReferenceEquals(core, Web.CoreWebView2)) return;
-                if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+                // Compared with the core this handler hooked, never by reading Web.CoreWebView2: once the browser process
+                // is gone the control's own handler (it runs first) marks it crashed, and from then on that getter
+                // throws — which used to end this handler before the rebuild, leaving the Studio dead for good.
+                if (!ReferenceEquals(core, _hookedCore)) return;   // a browser since replaced
+                CoreOf(Web, out bool dead);
+                if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited || dead)
                 {
                     // the whole browser is gone: this control cannot be used again, only replaced
                     _vm?.Status(Loc("studio.err.browserGone", kind.ToString()), error: true);
@@ -446,6 +450,7 @@ public partial class UiStudioView : UserControl
         _rebuilds.Add(now);
         string? url = _studio?.PageUrl ?? _wantedUrl ?? _studio?.LastRequestedUrl;
         _engineReady = false;
+        _hookedCore = null;   // (a late failure of the old browser rebuilds nothing more)
         var old = Web;
         var fresh = new Microsoft.Web.WebView2.Wpf.WebView2 { DefaultBackgroundColor = System.Drawing.Color.White };
         Frame.Child = fresh;
@@ -491,8 +496,21 @@ public partial class UiStudioView : UserControl
 
     private string? SafeSource()
     {
-        try { return Web.CoreWebView2?.Source; }
+        try { return CurrentCore()?.Source; }
         catch { return null; }
+    }
+
+    /// <summary>The browser of the control in the frame, or null — before it started, and after its browser process
+    /// died (the control's getter throws then, until the control is replaced). Every read of the core goes through
+    /// here: the callers are the service's event handlers and timers, and a throw from them reached the chat's run
+    /// start and end (the AI lock runs a script on every run).</summary>
+    private CoreWebView2? CurrentCore() => CoreOf(Web, out _);
+
+    private static CoreWebView2? CoreOf(Microsoft.Web.WebView2.Wpf.WebView2 web, out bool dead)
+    {
+        dead = false;
+        try { return web.CoreWebView2; }
+        catch { dead = true; return null; }
     }
 
     // ───────────────────────────── navigation & reload ─────────────────────────────
@@ -520,7 +538,7 @@ public partial class UiStudioView : UserControl
     /// <summary>Send the browser there (the tracker already knows).</summary>
     private void GoCore(string url)
     {
-        var core = Web.CoreWebView2;
+        var core = CurrentCore();
         if (!_engineReady || core == null) { Defer(url); return; }
         Wake();
         try { core.Navigate(url); }
@@ -540,7 +558,7 @@ public partial class UiStudioView : UserControl
     /// only shows them again, which is what location.reload() used to do).</summary>
     private void Reload(bool hard, bool keepSelection)
     {
-        var core = Web.CoreWebView2;
+        var core = CurrentCore();
         if (core == null) return;
         if (_load.ReloadTarget(SafeSource()) is { } target)
         {
@@ -575,7 +593,7 @@ public partial class UiStudioView : UserControl
 
     private void Run(string js)
     {
-        var core = Web.CoreWebView2;
+        var core = CurrentCore();
         if (core == null || !_engineReady) return;
         Wake();
         _ = RunAsync(core, js);
@@ -589,7 +607,7 @@ public partial class UiStudioView : UserControl
 
     private async Task<string?> EvaluateAsync(string js)
     {
-        var core = Web.CoreWebView2;
+        var core = CurrentCore();
         if (core == null || !_engineReady) return null;
         Wake();
         try { return await core.ExecuteScriptAsync(js); }
@@ -599,7 +617,7 @@ public partial class UiStudioView : UserControl
     /// <summary>The file watcher: a file the page shows changed on disk.</summary>
     private void OnReloadRequested(bool cssOnly)
     {
-        var core = Web.CoreWebView2;
+        var core = CurrentCore();
         if (core == null || !_engineReady) return;   // (the first navigation loads fresh files anyway)
         Wake();
         if (cssOnly) { Run("window.__cx && __cx.reloadCss(); window.__cx && setTimeout(() => __cx.refreshSelection(), 120)"); return; }
@@ -610,7 +628,7 @@ public partial class UiStudioView : UserControl
 
     private void OnLoadCommand(PageLoadCommand c)
     {
-        var core = Web.CoreWebView2;
+        var core = CurrentCore();
         switch (c.Kind)
         {
             case PageLoadCommandKind.Navigate when c.Url != null:
@@ -636,7 +654,7 @@ public partial class UiStudioView : UserControl
 
     private async Task ProbeAsync(long token)
     {
-        var core = Web.CoreWebView2;
+        var core = CurrentCore();
         string? json = null;
         if (core != null && _engineReady)
         {
@@ -672,7 +690,7 @@ public partial class UiStudioView : UserControl
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (!ReferenceEquals(sender, Web.CoreWebView2) || e.Source == StudioService.BlankPage) return;   // (a browser since replaced)
+        if (!ReferenceEquals(sender, CurrentCore()) || e.Source == StudioService.BlankPage) return;   // (a browser since replaced)
         string json;
         try { json = e.WebMessageAsJson; }
         catch { return; }

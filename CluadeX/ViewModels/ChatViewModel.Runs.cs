@@ -244,7 +244,22 @@ public partial class ChatViewModel
         if (!session.ExtraFolders.Any(f => PathEquals(f, path)) && !PathEquals(session.ProjectPath, path))
             session.ExtraFolders.Add(path);
         RaiseOpenFolders();
+        RaiseRunScopeChanged();   // the run works in that folder too now (the UI Studio locks when it shows it)
         _debugLog?.Info("Chat", $"agent opened related folder {path}");
+    }
+
+    /// <summary>A run's folders changed while it runs (open_project, with add=true or without): no run started or
+    /// ended, yet <see cref="IsAgentWorkingIn"/> may answer differently now. UI thread.</summary>
+    public event Action? RunScopeChanged;
+
+    private void RaiseRunScopeChanged()
+    {
+        if (RunScopeChanged == null) return;
+        foreach (var d in RunScopeChanged.GetInvocationList())
+        {
+            try { ((Action)d)(); }
+            catch (Exception ex) { _debugLog?.Warn("Chat", "a run-folders listener failed", ex); }
+        }
     }
 
     /// <summary>
@@ -559,6 +574,7 @@ public partial class ChatViewModel
                     ApplyWorkingDirectory(path, announce: true, showEditor: false);
             }
             RebuildVisibleSessions();
+            RaiseRunScopeChanged();   // the run's main folder moved (a background chat's raises nothing else)
             _debugLog?.Info("Chat", $"agent opened project {path}");
         }
         catch (Exception ex)
