@@ -19,6 +19,7 @@
     'border-top-color', 'opacity', 'box-shadow', 'overflow', 'z-index', 'cursor'];
 
   let mode = 'select';          // 'select' | 'interact'
+  let locked = false;           // an AI run edits the project: look and pick only (no in-place edit, resize or keys)
   let hovered = null, selected = null, editing = null;
   let nextId = 1;
   const ids = new WeakMap(), byId = new Map();
@@ -112,7 +113,7 @@
     place(paddingBox, { left: r.left + px(cs.borderLeftWidth), top: r.top + px(cs.borderTopWidth),
       width: r.width - px(cs.borderLeftWidth) - px(cs.borderRightWidth), height: r.height - px(cs.borderTopWidth) - px(cs.borderBottomWidth) });
     placeTag(selTag, r, label(selected) + '  ' + Math.round(r.width) + '×' + Math.round(r.height));
-    const show = mode === 'select' && !editing;
+    const show = mode === 'select' && !editing && !locked;
     const put = (h, x, y) => { h.style.display = show ? 'block' : 'none'; h.style.left = (x - 5) + 'px'; h.style.top = (y - 5) + 'px'; };
     put(handles.e, r.right, r.top + r.height / 2);
     put(handles.s, r.left + r.width / 2, r.bottom);
@@ -239,6 +240,7 @@
   document.addEventListener('dblclick', (e) => {
     if (mode !== 'select' || editing) return;
     e.preventDefault(); e.stopImmediatePropagation();
+    if (locked) return;
     const el = pickable(e.target);
     if (onlyText(el) && el !== document.body) beginEdit(el);
   }, true);
@@ -246,6 +248,7 @@
   // ── inline text edit ───────────────────────────────────────────────────────
   let editOriginal = '';
   function beginEdit(el) {
+    if (locked) return;
     select(el);
     editing = el;
     editOriginal = el.textContent;
@@ -269,7 +272,7 @@
   // ── resize by dragging ─────────────────────────────────────────────────────
   let resizing = null;
   function startResize(e, dir) {
-    if (!selected) return;
+    if (!selected || locked) return;
     e.preventDefault(); e.stopPropagation();
     const r = selected.getBoundingClientRect();
     snap(selected);
@@ -288,7 +291,7 @@
   function endResize(e) {
     const z = resizing; resizing = null;
     e.target.removeEventListener('pointermove', onResize);
-    if (!z) return;
+    if (!z || locked) return;
     post({ type: 'resize', width: z.dir !== 's' ? z.el.style.width : null, height: z.dir !== 'e' ? z.el.style.height : null, el: describe(z.el) });
   }
 
@@ -308,7 +311,8 @@
     else if (e.altKey && k === 'ArrowUp') cmd = 'moveUp';
     else if (e.altKey && k === 'ArrowDown') cmd = 'moveDown';
     else if (ctrl && (k === 'z' || k === 'Z')) cmd = 'undo';
-    else if (k === 'Enter' && onlyText(selected)) { e.preventDefault(); beginEdit(selected); return; }
+    else if (k === 'Enter' && onlyText(selected)) { e.preventDefault(); if (!locked) beginEdit(selected); return; }
+    if (cmd && locked) { e.preventDefault(); e.stopImmediatePropagation(); return; }   // nothing is written while an AI run edits
     if (cmd) { e.preventDefault(); e.stopImmediatePropagation(); post({ type: 'command', value: cmd }); }
   }, true);
 
@@ -350,6 +354,20 @@
   // ── API for the host ───────────────────────────────────────────────────────
   window.__cx = {
     setMode(m) { mode = m === 'interact' ? 'interact' : 'select'; if (editing) finishEdit(true); hovered = null; redraw(); },
+    /** An AI run edits the project (true) or is done (false). Locked: a text being edited in place is put back (not
+     *  sent), a resize being dragged is dropped and the element gets its size back, the handles hide and the edit keys do
+     *  nothing — hover and pick still work. Every load starts unlocked: the host sends this again on "ready". */
+    setLocked(b) {
+      locked = !!b;
+      if (locked && editing) finishEdit(false);
+      if (locked && resizing) {
+        const z = resizing; resizing = null;
+        const s = preview.get(z.el);
+        if (s) { if (s.style == null) z.el.removeAttribute('style'); else z.el.setAttribute('style', s.style); }
+      }
+      redraw();
+    },
+    isLocked() { return locked; },
     selectById(n) { const el = elById(n); if (el) { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); select(el); } },
     hoverById(n) { hovered = elById(n); redraw(); },
     selectBySrc(src) { const el = src ? document.querySelector('[' + ATTR + '="' + CSS.escape(src) + '"]') : null; if (el) { el.scrollIntoView({ block: 'nearest' }); select(el); } return !!el; },

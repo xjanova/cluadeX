@@ -69,6 +69,7 @@ public sealed class NodeGraphViewModel : ViewModelBase
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveLayout(); };
 
         studio.TreeChanged += () => { if (IsLive) BuildLive(); };
+        ui.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(UiStudioViewModel.IsLockedByAi)) OnPropertyChanged(nameof(CanEditLive)); };
         studio.SelectionChanged += () =>
         {
             if (IsLive && studio.Selection is { } s && Graph?.ById.TryGetValue("n" + s.NodeId, out var n) == true && !ReferenceEquals(n, SelectedNode))
@@ -709,7 +710,8 @@ public sealed class NodeGraphViewModel : ViewModelBase
     public ObservableCollection<GraphLink> Incoming { get; } = new();
 
     public string LiveSelectionLabel => _studio.Selection?.Label ?? "";
-    public bool CanEditLive => IsLive && _ui.CanEditSource;
+    /// <summary>The live view's structure buttons: an element with an exact source, while no AI run edits the project.</summary>
+    public bool CanEditLive => IsLive && _ui.CanEditSource && !_ui.IsLockedByAi;
 
     private string KindText(GraphEdgeKind k) => T("graph.edge." + k.ToString().ToLowerInvariant());
     private string LinkKind(GraphEdge e) => KindText(e.Kind) + (e.Inferred ? " · " + T("graph.inferredShort") : "");

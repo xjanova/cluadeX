@@ -61,10 +61,11 @@ public partial class ChatViewModel
     }
 
     /// <summary>Send <paramref name="prompt"/> as the user's next message. False when a reply is already running in
-    /// the chat on screen (the Studio says so instead of queueing behind it).</summary>
+    /// the chat on screen, or a run in another chat works on this project (the Studio says so instead of queueing
+    /// behind it, or starting a second run that edits the same files).</summary>
     public bool SendFromStudio(string prompt)
     {
-        if (IsGenerating || string.IsNullOrWhiteSpace(prompt)) return false;
+        if (IsGenerating || string.IsNullOrWhiteSpace(prompt) || IsAgentWorkingIn(ChatProject)) return false;
         UserInput = prompt;
         if (!SendMessageCommand.CanExecute(null)) return false;
         _studioChat = CurrentSession;

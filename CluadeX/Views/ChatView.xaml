@@ -3228,6 +3228,15 @@
                                     </StackPanel>
                                 </CheckBox>
 
+                                <!-- Design: this chat's design turns bring the UI Studio forward (off by default, per chat) -->
+                                <CheckBox x:Name="DesignToggle" IsChecked="{Binding IsDesignMode}" Foreground="{DynamicResource Accent.2}"
+                                          VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc chat.designTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{services:Loc chat.design}" FontSize="12" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
+
                                 <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center"
                                             Visibility="{Binding EffortVisible, Converter={StaticResource BoolVis}}">
                                     <TextBlock x:Name="EffortLabel" Text="{services:Loc chat.effort}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"

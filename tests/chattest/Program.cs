@@ -277,6 +277,8 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "DESIGN") return await RunDesignOnly();
+
         // CHATTEST_ONLY=CP: just the UI Studio / Node Graph following the chat on screen.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "CP")
         {
@@ -371,6 +373,7 @@ internal static partial class Program
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
+        await TestDesignMode();               // DM: design mode (the way to the UI Studio) and the Studio locked while a run edits its project
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();

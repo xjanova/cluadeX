@@ -1286,6 +1286,7 @@ public partial class ChatViewModel : ViewModelBase
         // Claude-Code-style orchestration views: the plan's "N running" line, workflow cards, split chips, notices,
         // the next-step box (ChatViewModel.Orchestration.cs).
         InitOrchestration();
+        InitDesign();
 
         // Agent map: every sub-agent this command started, live, as one tree card per command.
         _agentService.OnSubAgentEvent += e =>
@@ -3452,7 +3453,11 @@ public partial class ChatViewModel : ViewModelBase
     {
         string input = UserInput?.Trim() ?? "";
         // The owner's own words, for the workflow opt-in (a pipe caller's or an agent's text never counts).
-        if (CurrentSession is { } s && input.Length > 0) Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+        if (CurrentSession is { } s && input.Length > 0)
+        {
+            Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+            Services.Agents.DesignGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+        }
         return SendMessageCore(input, pipe: null);
     }
 
@@ -3612,7 +3617,10 @@ public partial class ChatViewModel : ViewModelBase
         string modelInput = input.Length > 0 ? input
             : images > 0 && files == 0 ? "Look at the attached image(s)."
             : "Look at the attached file(s).";
-        await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride), pipe);
+        // Design mode: the owner's own Send in a chat whose switch is on or whose words ask for a design (a skill keeps its
+        // own instructions; a pipe caller's message never counts).
+        bool design = fromBox && activeSkill == null && Services.Agents.DesignGate.IsDesignTurn(CurrentSession?.Id);
+        await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride), pipe, design);
     }
 
     /// <summary>
@@ -3781,7 +3789,7 @@ public partial class ChatViewModel : ViewModelBase
     /// by substring — so "prompt is too long: 215000 tokens" matched "500" and was resent 3× with a growing
     /// prompt — and kept counting down after Stop.
     /// </summary>
-    private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill, PipeTurn? pipe = null)
+    private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill, PipeTurn? pipe = null, bool design = false)
     {
         await AutoOpenProjectsAsync(input);
         // Related folders ride along with the message so the model knows they are there (and how to reach them).
@@ -3789,6 +3797,13 @@ public partial class ChatViewModel : ViewModelBase
             input += "\n\n[Open folders — main: " + _fileSystemService.AppWorkingDirectory + "; also open: "
                 + string.Join(", ", withExtras.ExtraFolders) + ". Relative paths are in the main folder; use absolute paths for the others.]";
         var turn = BeginTurn();
+        if (design && CurrentSession is { } designChat)
+        {
+            // what the model is told rides on this turn's input (the first request reads it; the shared system prompt
+            // stays the same for every chat, so its cache holds)
+            input += "\n\n" + NoticePrefix + Services.Agents.DesignGate.Guidance;
+            BeginDesignTurn(designChat);
+        }
         if (pipe != null && FlowRun is { } pipeRun)
         {
             // A message a pipe caller sent (cluadex.continue_chat): marked as such (the BrainX model never relays it
@@ -4781,8 +4796,10 @@ public partial class ChatViewModel : ViewModelBase
             {
                 string full = Path.GetFullPath(Path.Combine(runFolder ?? windowFolder, toolResult.FilePath!));
                 FileMutatedByAgent?.Invoke(full, toolResult.Diff?.FirstChangedLine ?? 1, toolResult.Diff);
-                // Only a file the editor can show (the window's project) is worth leaving the page for.
-                if (ticked && IsInsideFolder(full, windowFolder)) ShowEditorRequested?.Invoke();
+                // Only a file the editor can show (the window's project) is worth leaving the page for — and not in a design
+                // turn: the owner watches the UI Studio then, and every edit would pull them off it to the Code page.
+                if (ticked && IsInsideFolder(full, windowFolder) && !Services.Agents.DesignGate.IsDesignTurn((target ?? CurrentSession)?.Id))
+                    ShowEditorRequested?.Invoke();
             }
 
             // Format arguments for display

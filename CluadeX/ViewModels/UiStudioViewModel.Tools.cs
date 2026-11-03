@@ -372,7 +372,7 @@ public sealed partial class UiStudioViewModel
     private void RunTool(string label, Func<string, int, int, FlutterEdit> op, (string File, int Line, int Column)? target = null, bool keepPick = false, string? done = null)
     {
         if ((target ?? _toolAt) is not { } at) return;
-        if (AiWorking) { Status(T("studio.fedit.aiBusy"), error: true); return; }
+        if (AiBlocksEdits) { Status(T("studio.fedit.aiBusy"), error: true); return; }
         if (IsChecking) { Status(T("studio.fedit.checkBusy"), error: true); return; }
         CluadeX.Helpers.TextFileCodec.TextFile file;
         try { file = CluadeX.Helpers.TextFileCodec.Read(at.File); }
@@ -431,7 +431,7 @@ public sealed partial class UiStudioViewModel
     /// are drawn again with the translations made anew (flutter gen-l10n) — the picked Text stays picked.</summary>
     private void RunTranslation(L10nText tr, string value)
     {
-        if (AiWorking) { Status(T("studio.fedit.aiBusy"), error: true); return; }
+        if (AiBlocksEdits) { Status(T("studio.fedit.aiBusy"), error: true); return; }
         if (IsChecking) { Status(T("studio.fedit.checkBusy"), error: true); return; }
         string? message = ArbFile.Encode(value, tr.UseEscaping);
         if (message == null) { Status(T("studio.fedit.text.l10nBraces"), error: true); return; }
@@ -656,7 +656,7 @@ public sealed partial class UiStudioViewModel
     /// <summary>Where a palette widget dragged to (x, y) on the picture — logical pixels — would go (null: nowhere).</summary>
     public FlutterDropPlan? PlanDrop(double x, double y)
     {
-        if (_stageBoxes.Count == 0 || !ShowRealRender || AiWorking) return null;
+        if (_stageBoxes.Count == 0 || !ShowRealRender || AiBlocksEdits) return null;
         try { return FlutterCodeEdit.PlanDrop(_stageBoxes, x, y, ReadSource, IsEditable); }
         catch (Exception ex) { _log?.Warn("UiStudio", "drop plan failed", ex); return null; }
     }

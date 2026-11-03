@@ -77,6 +77,14 @@ public sealed class AttrField : ViewModelBase
     public string Value { get => _value; set { if (SetProperty(ref _value, value ?? "")) { OnPropertyChanged(nameof(IsChanged)); Edited?.Invoke(this); } } }
     public bool IsChanged => Value != Original;
     public event Action<AttrField>? Edited;
+
+    /// <summary>Back to <see cref="Original"/> without raising Edited (the page is reverted as a whole).</summary>
+    public void Reset()
+    {
+        _value = Original;
+        OnPropertyChanged(nameof(Value));
+        OnPropertyChanged(nameof(IsChanged));
+    }
 }
 
 /// <summary>A node in the Layers panel.</summary>
@@ -194,36 +202,41 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         StartCommand = new AsyncRelayCommand(StartAsync, () => _studio.HasProject && !_studio.IsStarting);
         RedetectCommand = new RelayCommand(RedetectAndStart, () => _studio.HasProject && !_studio.IsStarting && _session == null && !IsChecking);
         StopCommand = new RelayCommand(() => { _studio.StopServing(); Status(T("studio.stopped")); });
-        ReloadCommand = new RelayCommand(() => _studio.RunScript("location.reload()"));
+        // a real reload (the browser's, not location.reload() in the page — that one reloads a blank or an error page
+        // as it is); Shift+click ignores the cache
+        ReloadCommand = new RelayCommand(() => _studio.ReloadPage(hard: Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)));
         NavigateCommand = new RelayCommand(() =>
         {
             string u = Url.Trim();
             if (u.Length == 0) return;
             if (!u.Contains("://", StringComparison.Ordinal)) u = (u.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) || u.StartsWith("127.", StringComparison.Ordinal) ? "http://" : "https://") + u;
             NoteTypedUrl(u);
-            NavigateTo?.Invoke(u);
+            _studio.NavigatePage(u);
         });
         SetDeviceCommand = new RelayCommand<string>(d => Device = d ?? "desktop");
         ToggleModeCommand = new RelayCommand(() => IsSelectMode = !IsSelectMode);
         ToggleLogCommand = new RelayCommand(() => ShowLog = !ShowLog);
 
-        SaveCommand = new AsyncRelayCommand(SaveAsync, () => IsDirty && CanEditSource);
+        SaveCommand = new AsyncRelayCommand(SaveAsync, () => IsDirty && CanEditSource && !IsLockedByAi);
         RevertCommand = new RelayCommand(Revert, () => IsDirty);
         SelectParentCommand = new RelayCommand(() => _studio.RunScript("__cx.selectParent()"), () => HasSelection);
-        MoveUpCommand = new RelayCommand(() => Structure("moveUp"), () => CanEditSource);
-        MoveDownCommand = new RelayCommand(() => Structure("moveDown"), () => CanEditSource);
-        DuplicateCommand = new RelayCommand(() => Structure("duplicate"), () => CanEditSource);
-        DeleteCommand = new RelayCommand(() => Structure("delete"), () => CanEditSource);
-        UndoCommand = new RelayCommand(Undo, () => _studio.UndoCount > 0);
+        MoveUpCommand = new RelayCommand(() => Structure("moveUp"), () => CanEditSource && !IsLockedByAi);
+        MoveDownCommand = new RelayCommand(() => Structure("moveDown"), () => CanEditSource && !IsLockedByAi);
+        DuplicateCommand = new RelayCommand(() => Structure("duplicate"), () => CanEditSource && !IsLockedByAi);
+        DeleteCommand = new RelayCommand(() => Structure("delete"), () => CanEditSource && !IsLockedByAi);
+        UndoCommand = new RelayCommand(Undo, () => _studio.UndoCount > 0 && !IsLockedByAi);
         OpenSourceCommand = new RelayCommand(OpenSource, () => SourceRef != null);
         OpenCandidateCommand = new RelayCommand<SourceCandidate>(c => { if (c != null) { _ = _editor.OpenAtLineAsync(c.FullPath, c.Line); OpenPageRequested?.Invoke("Code"); } });
-        AskAiCommand = new RelayCommand(AskAi, () => HasSelection && !string.IsNullOrWhiteSpace(AiRequest));
+        AskAiCommand = new RelayCommand(AskAi, () => HasSelection && !string.IsNullOrWhiteSpace(AiRequest) && !IsLockedByAi);
         OpenChatCommand = new RelayCommand(() => OpenPageRequested?.Invoke("Chat"));
         CopySelectorCommand = new RelayCommand(() => { if (Selection != null) TryCopy(Selection.Selector); });
         ExportCssCommand = new AsyncRelayCommand(ExportCssAsync);
-        InstallLocatorCommand = new RelayCommand(InstallLocator);
+        InstallLocatorCommand = new RelayCommand(InstallLocator, () => !IsLockedByAi);
         OpenGraphCommand = new RelayCommand(() => OpenPageRequested?.Invoke("NodeGraph"));
         HookAppProject();
+        HookPageLoad();
+        HookAiLock();
+        HookDesignView();
     }
 
     private string T(string key) => _loc.T(key);
@@ -240,8 +253,8 @@ public sealed partial class UiStudioViewModel : ViewModelBase
 
     /// <summary>Ask the main window to show another page ("Chat", "Code", "NodeGraph").</summary>
     public event Action<string>? OpenPageRequested;
-    /// <summary>The view navigates its browser (address bar).</summary>
-    public event Action<string>? NavigateTo;
+    // (the browser is navigated through StudioService.NavigatePage: the page asked for is the one a reload or a
+    // retry comes back to)
 
     // ───────────────────────────── project ─────────────────────────────
 
@@ -318,6 +331,14 @@ public sealed partial class UiStudioViewModel : ViewModelBase
     private async Task StartAsync()
     {
         string root = _studio.Root;
+        if (_studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther && AiWorkingHere())
+        {
+            // `npm install` / `npm run dev` beside an AI run in the same folder: two installs fight over node_modules, and
+            // the AI may be starting its own dev server. It starts when the run ends (OnUnlocked → CatchUpOnShow).
+            _startOnShow = true;
+            Status(T("studio.lock.devWaits"));
+            return;
+        }
         if (_studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther)
         {
             ShowLog = true;
@@ -365,6 +386,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         OnPropertyChanged(nameof(ProjectKindText));
         OnPropertyChanged(nameof(UnsupportedText));
         OnPropertyChanged(nameof(PrecisionText));
+        OnPropertyChanged(nameof(PageLoadText));
     }
 
     // ───────────────────────────── browser chrome ─────────────────────────────
@@ -715,6 +737,8 @@ public sealed partial class UiStudioViewModel : ViewModelBase
             // Ask the browser which values it accepts — a typo is refused here instead of being written to the source.
             string? json = await _studio.Evaluate($"window.__cx ? __cx.invalidCss({JsonSerializer.Serialize(styleChanges)}) : []");
             if (!ReferenceEquals(el, Selection)) return;   // the user picked something else, or the chat moved on, while the page answered
+            // a run began in this project while the page answered: nothing is written (the lock reverted the preview)
+            if (IsLockedByAi || AiWorkingHere()) { Status(T("studio.saveFailed", T("studio.err.aiWorking")), error: true); return; }
             string[] bad = Array.Empty<string>();
             try { bad = json == null ? bad : JsonSerializer.Deserialize<string[]>(json) ?? bad; } catch { }
             if (bad.Length > 0)
@@ -769,10 +793,10 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         CommandManager.InvalidateRequerySuggested();
     }
 
-    private void Revert()
-    {
-        _studio.RunScript("window.__cx && __cx.revertPreview()");   // the page answers with a fresh "select"
-    }
+    /// <summary>The inspector's values go back to the saved ones first: the page's answer (a fresh "select" of the same
+    /// element) used to find the inspector still dirty and keep the unsaved values, so Revert put the page back but left
+    /// the edits in the inspector (and Save would write them).</summary>
+    private void Revert() => DiscardPreviewEdits();
 
     /// <summary>Structural edits from the toolbar or the page's keys (Delete, Ctrl+D, Alt+↑/↓, Ctrl+Z).</summary>
     public void Structure(string cmd)
@@ -780,6 +804,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         var el = Selection;
         if (cmd == "undo") { Undo(); return; }
         if (el == null) return;
+        if (AiWorkingHere()) { Status(T("studio.err.aiWorking"), error: true); return; }   // (before the delete question)
         if (!CanEditSource) { Status(T(IsRemotePage ? "studio.err.remotePage" : "studio.err.noSource"), error: true); return; }
         string? err;
         switch (cmd)
@@ -927,6 +952,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
     {
         var p = _studio.Project;
         if (p.Kind != StudioProjectKind.Vite || p.ViteConfigPath == null) return;
+        if (AiWorkingHere()) { Status(T("studio.err.aiWorking"), error: true); return; }
         string configName = Path.GetFileName(p.ViteConfigPath);
         if (configName.EndsWith(".cjs", StringComparison.OrdinalIgnoreCase))
         {
@@ -945,6 +971,8 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         int choice = Views.Editor.ChoiceDialog.Show(T("studio.locator.title"), T("studio.locator.confirm", configName, StudioProject.LocatorFileName),
             new[] { T("studio.locator.install"), T("studio.cancel") });
         if (choice != 0) return;
+        // a run may have begun while the question was up, and these writes do not go through StudioService's check
+        if (AiWorkingHere()) { Status(T("studio.err.aiWorking"), error: true); return; }
         try
         {
             File.WriteAllText(Path.Combine(p.Root, StudioProject.LocatorFileName), StudioTemplates.ReadAsset("cluadex-locator.mjs"), new UTF8Encoding(false));

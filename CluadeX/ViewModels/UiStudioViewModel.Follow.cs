@@ -209,5 +209,7 @@ public sealed partial class UiStudioViewModel
             _renderDebounce.Stop();
             _renderDebounce.Start();
         }
+        // an AI run ended while the page was hidden: the page as it left it
+        ReloadAfterLockOnShow();
     }
 }
