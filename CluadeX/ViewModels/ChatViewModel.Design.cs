@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using CluadeX.Models;
 using CluadeX.Services.Agents;
 
@@ -29,8 +30,39 @@ public partial class ChatViewModel
     /// once it can show the chat's project. Raised on the UI thread, after the turn's run began.</summary>
     public event Action<string>? DesignViewRequested;
 
-    /// <summary>The chat on screen is in a design turn (its switch, or the owner's words this turn).</summary>
-    public bool DesignOnScreen => DesignGate.IsDesignTurn(CurrentSession?.Id);
+    /// <summary>The chat on screen is in a design turn: its switch is on, or its running turn was decided as one.</summary>
+    public bool DesignOnScreen => InDesignTurn(CurrentSession);
+
+    // A turn is decided as a design turn once, when it starts (the owner's Send: DesignGate.TakeOwnerTurn), and the
+    // decision rides with the turn — on its run while it works, on its question for a Retry. Nothing reads the owner's
+    // words again later: a pipe caller's turn, a retry or a next-step button after a design turn used to find the old
+    // words still there and count as design (no Code-page follow, the Studio pulled forward).
+    private readonly ConditionalWeakTable<ChatRun, object> _designRuns = new();
+    private readonly ConditionalWeakTable<ChatMessage, object> _designAsks = new();
+    private static readonly object DesignMark = new();
+
+    /// <summary>The run of <paramref name="turn"/> (just begun for <paramref name="question"/>) is a design turn.</summary>
+    private void MarkDesignTurn(TaskCompletionSource turn, ChatMessage question)
+    {
+        if (_runs.FirstOrDefault(r => ReferenceEquals(r.Done, turn)) is { } run) _designRuns.AddOrUpdate(run, DesignMark);
+        _designAsks.AddOrUpdate(question, DesignMark);
+    }
+
+    /// <summary>The owner typed <paramref name="note"/> into <paramref name="run"/>: in a design turn it is that turn's
+    /// question too — a Retry of the reply after it, or the task a model switch carries on from it, stays a design turn.</summary>
+    private void NoteTypedIntoRun(ChatRun run, ChatMessage note)
+    {
+        if (WasDesignRun(run)) _designAsks.AddOrUpdate(note, DesignMark);
+    }
+
+    /// <summary>Was <paramref name="run"/> decided as a design turn? (It may have ended — a leftover note reuses it.)</summary>
+    private bool WasDesignRun(ChatRun? run) => run != null && _designRuns.TryGetValue(run, out _);
+
+    /// <summary>Was the turn that answered <paramref name="question"/> a design turn? (A Retry asks it again the same way.)</summary>
+    private bool WasDesignAsk(ChatMessage? question) => question != null && _designAsks.TryGetValue(question, out _);
+
+    /// <summary>Is <paramref name="chat"/> in a design turn now: its switch, or its running turn decided as one.</summary>
+    private bool InDesignTurn(ChatSession? chat) => chat != null && (DesignGate.IsOn(chat.Id) || WasDesignRun(RunOf(chat)));
 
     /// <summary>Is <paramref name="chatId"/> the chat on screen?</summary>
     public bool IsChatOnScreen(string? chatId) => chatId != null && CurrentSession?.Id == chatId;

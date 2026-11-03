@@ -23,20 +23,42 @@ public static class DesignGate
     private static readonly Regex Asked = new(
         @"ออกแบบ|ดีไซ[นด]์?|หน้าตา|หน้าจอ|เลย์เอา[ตท]์|เลย์เอ้า[ตท]์|"
         + @"(?<![A-Za-z])(re-?)?design(s|ed|ing|er)?(?![A-Za-z])|(?<![A-Za-z])mock-?ups?(?![A-Za-z])|(?<![A-Za-z])wire-?frames?(?![A-Za-z])|"
-        + @"(?<![A-Za-z])landing\s+pages?(?![A-Za-z])|(?<![A-Za-z])layouts?(?![A-Za-z])|(?<![A-Za-z])ui(?![A-Za-z])|(?<![A-Za-z])ux(?![A-Za-z])",
+        + @"(?<![A-Za-z])landing\s+pages?(?![A-Za-z])|(?<![A-Za-z])layouts?(?![A-Za-z])|(?<![A-Za-z])ui(?![A-Za-z])|(?<![A-Za-z])ux(?![A-Za-z])|"
+        // Thai web-page wording: a web page with a verb that makes or shapes it ("ทำหน้าเว็บใหม่", "ปรับสีปุ่มหน้าเว็บ" — not
+        // "ทำไม/ทำให้หน้าเว็บ…", and "แก้" only right before it: "แก้บั๊กหน้าเว็บ" is a bug), "ให้สวย", a theme
+        + @"(ทำ(?!ไม|ให้|งาน)|ปรับ|แต่ง|สร้าง|จัด)\S{0,10}?หน้าเว็บ|แก้\s*หน้าเว็บ|ให้สวย|ธีม",
         RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
 
     /// <summary>"Design" that is not about screens: a database, an API, a schema, a system, a design pattern. These
     /// phrases are taken out before <see cref="Asked"/> looks — "ออกแบบฐานข้อมูลและหน้าจอ" still asks (หน้าจอ).</summary>
     private static readonly Regex NotScreens = new(
         @"(?<![A-Za-z])(database|db|data|api|apis|rest|graphql|schema|system|software|class|object|algorithm|backend|back-end|server|network|protocol|domain)\s*(re-?)?design(s|ed|ing)?(?![A-Za-z])|"
-        + @"(?<![A-Za-z])(re-?)?design(ing)?\s+(the\s+|a\s+|an\s+|our\s+|my\s+|its\s+)?(database|db|schema|api|apis|endpoints?|data\s+model|architecture|system|backend|back-end|algorithm|class(es)?|tables?)(?![A-Za-z])|"
+        // …unless a screen word follows ("redesign the system settings page" is a page)
+        + @"(?<![A-Za-z])(re-?)?design(ing)?\s+(the\s+|a\s+|an\s+|our\s+|my\s+|its\s+)?(database|db|schema|api|apis|endpoints?|data\s+model|architecture|system|backend|back-end|algorithm|class(es)?|tables?)(?![A-Za-z])"
+        + @"(?!\s+(settings?|pages?|screens?|views?|dialogs?|forms?|ui|ux|dashboards?|menus?|panels?|windows?|tabs?)(?![A-Za-z]))|"
         + @"(?<![A-Za-z])design\s*patterns?(?![A-Za-z])|(?<![A-Za-z])design\s+docs?(?![A-Za-z])|(?<![A-Za-z])design\s+documents?(?![A-Za-z])|"
-        + @"ออกแบบ\s*(ฐานข้อมูล|ดาต้าเบส|database|db|api|เอพีไอ|schema|สคีมา|ระบบ|โครงสร้างข้อมูล|ตาราง|อัลกอริทึม|คลาส|สถาปัตยกรรม|architecture)|"
+        // a table only of a database ("ออกแบบตารางราคา" is a pricing table on a page): a database word later in the line
+        // before any หน้า ("ออกแบบตาราง users ในฐานข้อมูล"), or a table named in English with no page after it
+        // ("ออกแบบตาราง users"); never one with a screen word next
+        + @"ออกแบบ\s*(ฐานข้อมูล|ดาต้าเบส|database|db|api|เอพีไอ|schema|สคีมา|ระบบ|โครงสร้างข้อมูล|อัลกอริทึม|คลาส|สถาปัตยกรรม|architecture|"
+        + @"ตาราง(?=(?:(?!หน้า)[^\n]){0,40}?(ฐานข้อมูล|ดาต้าเบส|database|(?<![A-Za-z])db(?![A-Za-z])|(?<![A-Za-z])sql|migration|คอลัมน์|(?<![A-Za-z])columns?(?![A-Za-z]))"
+        + @"|\s*[A-Za-z_][A-Za-z0-9_]*(?![A-Za-z0-9_])(?![^\n]{0,30}?(หน้า|(?<![A-Za-z])(pages?|screens?|ui)(?![A-Za-z])))))"
+        + @"(?!\s*(หน้า|ui|ยูไอ))|"
         + @"ดีไซ[นด]์?\s*แพทเทิร์น|design\s*pattern|"
         // the app's own page by name ("UI Studio ค้าง" is a bug report, not a design), a screenshot, a screen that hangs
         // or goes black — "หน้าจอ" and "UI" alone would otherwise pull the window to the Studio for every such message
-        + @"(?<![A-Za-z])ui[\s-]*studio(?![A-Za-z])|(ภาพ|แคป|แคปเจอร์|จับภาพ|จับ)\s*หน้าจอ|หน้าจอ\s*(ค้าง|ดำ|ขาว|กระพริบ|กะพริบ|กระตุก|เด้ง)",
+        + @"(?<![A-Za-z])ui[\s-]*studio(?![A-Za-z])|(ภาพ|แคป|แคปเจอร์|จับภาพ|จับ)\s*หน้าจอ|หน้าจอ\s*(ค้าง|ดำ|ขาว|กระพริบ|กะพริบ|กระตุก|เด้ง)|"
+        // the UI as code, not as a look: its thread, its tests, UI automation, the dispatcher ("the UI thread freezes")
+        + @"(?<![A-Za-z])ui[\s-]*(threads?|tests?|testing|automation|dispatcher)(?![A-Za-z])|"
+        // an error that shows on a screen is a bug report ("มี error ขึ้นที่หน้าจอ login", "มี error ที่หน้าจอ login", "error
+        // แสดงบนหน้าจอ", "หน้าจอ login มี error"), and a layout that is not a page's
+        + @"(error|errors|exception|เออเร่อ|เออเรอ|เอเร่อ|ข้อผิดพลาด|บั๊ก|(?<![A-Za-z])bugs?)\S{0,6}(\s*(แสดง|ขึ้น|โผล่|เด้ง)\S{0,4})?\s*(ที่|บน|ใน)?\s*หน้าจอ|"
+        + @"หน้าจอ\S{0,12}\s*\S{0,12}\s*(มี|ขึ้น|แสดง|เจอ|โชว์|เด้ง)\s*(error|exception|เออเร่อ|เออเรอ|เอเร่อ|ข้อผิดพลาด|บั๊ก|(?<![A-Za-z])bugs?(?![A-Za-z]))|"
+        // the code made neat, not the page ("จัดโค้ดให้สวย", "refactor ให้สวยขึ้น"), and a web page's tests or speed
+        // ("ทำเทสหน้าเว็บ", "ปรับความเร็วหน้าเว็บ") — "ให้สวย" and a verb before หน้าเว็บ would count them as designs
+        + @"(โค้ด|โค๊ด|ฟอร์แมต|ฟอร์แมท|รีแฟคเตอร์|รีแฟกเตอร์|(?<![A-Za-z])(code|format|refactor|indent))\S{0,12}?\s*ให้สวย|"
+        + @"(เทส|ทดสอบ|ความเร็ว|ประสิทธิภาพ|(?<![A-Za-z])(tests?|testing|performance|speed|seo))\S{0,4}\s*(ของ\s*)?หน้าเว็บ|"
+        + @"(?<![A-Za-z])(keyboard|memory|struct|data|file|disk)\s+layouts?(?![A-Za-z])",
         RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
 
     /// <summary>Persist the per-chat switch here (DataRoot/design-chats.json). Null = memory only (the harness).</summary>
@@ -72,6 +94,38 @@ public static class DesignGate
             try { if (_file != null) File.WriteAllText(_file, JsonSerializer.Serialize(On.ToList())); } catch { }
         }
         Changed?.Invoke(chat);
+    }
+
+    /// <summary>A chat that is gone (deleted, or an untouched chat dropped on the way out): its switch and words go too,
+    /// so design-chats.json holds only chats that exist.</summary>
+    public static void Forget(string? chat)
+    {
+        if (string.IsNullOrEmpty(chat)) return;
+        bool was;
+        lock (Lock)
+        {
+            OwnerWords.Remove(chat);
+            was = On.Remove(chat);
+            if (was) try { if (_file != null) File.WriteAllText(_file, JsonSerializer.Serialize(On.ToList())); } catch { }
+        }
+        if (was) Changed?.Invoke(chat);
+    }
+
+    /// <summary>The owner's Send is starting its turn: is it a design turn? Decided once, here — the words are used up, so
+    /// a later turn the owner did not type (a pipe caller's, a retry, a next-step button) never reads them again.</summary>
+    public static bool TakeOwnerTurn(string? chat)
+    {
+        bool design = IsDesignTurn(chat);
+        EndOwnerTurn(chat);
+        return design;
+    }
+
+    /// <summary>The turn the owner's words were typed for has ended (words typed into it while it ran included): they go,
+    /// so no later turn in <paramref name="chat"/> reads them. The chat's Design switch stays as it is.</summary>
+    public static void EndOwnerTurn(string? chat)
+    {
+        if (string.IsNullOrEmpty(chat)) return;
+        lock (Lock) OwnerWords.Remove(chat);
     }
 
     /// <summary>The owner sent <paramref name="text"/> in <paramref name="chat"/> (this turn's words; the next turn's replace
@@ -110,6 +164,6 @@ public static class DesignGate
         + "edit there. Follow the project's existing styling approach (its CSS files, Tailwind classes, component styles or "
         + "widget kit), keep the page runnable after every edit, and prefer small visible steps over one huge rewrite. While "
         + "you work the user cannot edit in the UI Studio; it unlocks when your turn ends. For a brand-new site, create its "
-        + "folder with open_project (create=true) and start with plain HTML/CSS (index.html at the folder's root) or a Vite "
-        + "template, so the Studio can show it at once. Do not ask the user to open a browser.";
+        + "folder with open_project (create=true) and start with plain HTML/CSS (index.html at the folder's root), so the Studio "
+        + "can show it at once; a new Vite template shows once its packages are installed. Do not ask the user to open a browser.";
 }

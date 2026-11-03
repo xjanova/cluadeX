@@ -1932,6 +1932,7 @@ public partial class ChatViewModel : ViewModelBase
         _persistenceService.DeleteEmptySessions(left.Id);
         for (int i = Sessions.Count - 1; i >= 0; i--)
             if (Sessions[i].Id == left.Id) Sessions.RemoveAt(i);
+        Services.Agents.DesignGate.Forget(left.Id);
     }
 
     /// <summary>
@@ -2005,6 +2006,7 @@ public partial class ChatViewModel : ViewModelBase
         // Delete from DB
         _persistenceService.DeleteSession(sessionId);
         await CleanUpSessionAsync(sessionId, deleteImages: false);   // DeleteSession already removed its screenshots
+        Services.Agents.DesignGate.Forget(sessionId);
 
         if (_settingsService.Settings.PinnedChatIds.Contains(sessionId))
         {
@@ -3477,7 +3479,9 @@ public partial class ChatViewModel : ViewModelBase
         if (CurrentSession is { } s && input.Length > 0)
         {
             Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
-            Services.Agents.DesignGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+            // The UI Studio's own request ("[UI Studio] Change one element of the UI.") is not the owner asking for a
+            // design: its words are none (the chat's Design switch still counts).
+            Services.Agents.DesignGate.NoteOwnerMessage(s.Id, _sendingFromStudio ? "" : input, append: IsGenerating);
         }
         return SendMessageCore(input, pipe: null);
     }
@@ -3643,8 +3647,9 @@ public partial class ChatViewModel : ViewModelBase
             : images > 0 && files == 0 ? "Look at the attached image(s)."
             : "Look at the attached file(s).";
         // Design mode: the owner's own Send in a chat whose switch is on or whose words ask for a design (a skill keeps its
-        // own instructions; a pipe caller's message never counts).
-        bool design = fromBox && activeSkill == null && Services.Agents.DesignGate.IsDesignTurn(CurrentSession?.Id);
+        // own instructions; a pipe caller's message never counts). Decided once, here: the words are used up, and the
+        // decision rides with the turn (MarkDesignTurn) for the follow tick, a Retry and a note left over after it.
+        bool design = fromBox && Services.Agents.DesignGate.TakeOwnerTurn(CurrentSession?.Id) && activeSkill == null;
         await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride), pipe, design);
     }
 
@@ -3658,6 +3663,7 @@ public partial class ChatViewModel : ViewModelBase
         if (run?.Scope == null) return;
         if (text.StartsWith("/")) { StatusText = Loc("chat.steer.noSlash"); return; }
         var bubble = new ChatMessage { Role = MessageRole.User, Content = text, IsQueuedNote = true };
+        NoteTypedIntoRun(run, bubble);
         run.Messages.Add(bubble);
         // Said in the chat, not only the status bar: the user sees it was taken and when it will be done.
         bubble.QueueRow = new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") };
@@ -3756,7 +3762,9 @@ public partial class ChatViewModel : ViewModelBase
         }
         var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
         Messages.Add(bubble);
-        Detached(() => RunTurnAsync(bubble, text, null, false));
+        // typed into a design turn (or a chat whose Design switch is on): the next turn is one too
+        bool design = WasDesignRun(run) || Services.Agents.DesignGate.IsOn(run.Session.Id);
+        Detached(() => RunTurnAsync(bubble, text, null, false, design: design));
     }
 
     /// <summary>True when the active provider can answer. Waits for (or retries) its initialise — after a
@@ -3827,6 +3835,7 @@ public partial class ChatViewModel : ViewModelBase
             // what the model is told rides on this turn's input (the first request reads it; the shared system prompt
             // stays the same for every chat, so its cache holds)
             input += "\n\n" + NoticePrefix + Services.Agents.DesignGate.Guidance;
+            MarkDesignTurn(turn, userMsg);
             BeginDesignTurn(designChat);
         }
         if (pipe != null && FlowRun is { } pipeRun)
@@ -4045,16 +4054,18 @@ public partial class ChatViewModel : ViewModelBase
         if (!await EnsureProviderReadyAsync()) return;
 
         bool latestExchange = !Messages.Skip(idx + 1).Any(m => m.Role == MessageRole.User);
+        // asked again the way it was asked: a design turn stays one (the owner's words are long used up by now)
+        bool design = WasDesignAsk(user) || Services.Agents.DesignGate.IsOn(CurrentSession?.Id);
         if (latestExchange)
         {
             Messages.Remove(failed);
-            await RunTurnAsync(user, user.Content, activeSkill: null, isSkill: false);
+            await RunTurnAsync(user, user.Content, activeSkill: null, isSkill: false, design: design);
         }
         else
         {
             var again = new ChatMessage { Role = MessageRole.User, Content = user.Content };
             Messages.Add(again);
-            await RunTurnAsync(again, again.Content, activeSkill: null, isSkill: false);
+            await RunTurnAsync(again, again.Content, activeSkill: null, isSkill: false, design: design);
         }
     }
 
@@ -4823,7 +4834,9 @@ public partial class ChatViewModel : ViewModelBase
                 FileMutatedByAgent?.Invoke(full, toolResult.Diff?.FirstChangedLine ?? 1, toolResult.Diff);
                 // Only a file the editor can show (the window's project) is worth leaving the page for — and not in a design
                 // turn: the owner watches the UI Studio then, and every edit would pull them off it to the Code page.
-                if (ticked && IsInsideFolder(full, windowFolder) && !Services.Agents.DesignGate.IsDesignTurn((target ?? CurrentSession)?.Id))
+                // (the run captured when the tool finished: an edit landing just after its turn ended is still that turn's)
+                bool designTurn = run != null ? WasDesignRun(run) || Services.Agents.DesignGate.IsOn(run.Session.Id) : InDesignTurn(CurrentSession);
+                if (ticked && IsInsideFolder(full, windowFolder) && !designTurn)
                     ShowEditorRequested?.Invoke();
             }
 
