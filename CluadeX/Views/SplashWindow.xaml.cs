@@ -59,7 +59,7 @@ public partial class SplashWindow : Window
         string info = asm.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
             .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "";
         VersionText.Text = "v" + (info.Length > 0 ? info.Replace("+", " · ") : asm.GetName().Version?.ToString(3));
-        HeadText.Text = T("กำลังตรวจระบบ…", "Checking the system…");
+        HeadText.Text = CheckingHead;
         EnterTitle.Text = T("เข้าใช้งาน", "Enter");
         // A different girl each start (never the last one); the original splash girl when the build has none.
         string? girl = GirlArt.PickName(sp.GetService<SettingsService>() is { } ss ? System.IO.Path.Combine(ss.DataRoot, "splash-girl.txt") : null);
@@ -337,7 +337,8 @@ public partial class SplashWindow : Window
         Progress();
     }
 
-    /// <summary>The update row is final: no late snapshot redraws it, the gauge goes, Enter is Enter again.</summary>
+    /// <summary>The update row is final: no late snapshot redraws it, the gauge goes, Enter is Enter again, and the head
+    /// line stops promising an install that will not happen before the app opens (the other checks may still run).</summary>
     private void EndUpdateRow()
     {
         _updateRowDone = true;
@@ -345,7 +346,10 @@ public partial class SplashWindow : Window
         UpdatePanel.Visibility = Visibility.Collapsed;
         ShowSkip(false, downloading: false);
         _updateShare = 0;
+        HeadText.Text = CheckingHead;
     }
+
+    private string CheckingHead => T("กำลังตรวจระบบ…", "Checking the system…");
 
     /// <summary>Save what OnExit would save (Velopack exits without it), install, restart. Skip still works while saving.</summary>
     private async Task<bool> InstallNowAsync(AutoUpdateService up, Check update, string version, bool downloadedBefore)
@@ -381,10 +385,7 @@ public partial class SplashWindow : Window
 
         // Nothing was handed over (the attempt is not counted): say why, and open this version.
         _handingOver = false;
-        UpdateBar.IsIndeterminate = false;
-        UpdatePanel.Visibility = Visibility.Collapsed;
-        ShowSkip(false, downloading: false);
-        _updateShare = 0;
+        EndUpdateRow();   // also takes back "Updating to v…" from the head line
         string why = up.LastApplyError ?? "?";
         update.Bad(T($"ติดตั้ง v{version} ไม่สำเร็จ: {why} — ลองอีกครั้งได้ด้วย “ติดตั้งแล้วเริ่มใหม่” ในแอป",
                      $"could not install v{version}: {why} — try again with Install & Restart in the app"));

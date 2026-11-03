@@ -300,6 +300,7 @@ internal static partial class Program
         Check("SA9 monthly history survives new usage beyond the old 90-day retention", new CostTrackingService(settings).FirstUsageDay <= DateTime.Today.AddDays(-119));
         Check("SA9 USD entries tell thousands from decimal commas", UsdText.TryParse("1,000", out var thousand) && thousand == 1000m
             && UsdText.TryParse("1,234.56", out var grouped) && grouped == 1234.56m && !UsdText.TryParse("1,2,3", out _));
+        UsdEntryCases();
         Check("SA9 tiny API costs stay nonzero on screen", BillingViewModel.Usd(0.0000001m) == "$0.0000001" && BillingViewModel.Usd(12.5m) == "$12.50");
         vm.SetVisible(false);
     }
@@ -631,5 +632,36 @@ internal static partial class Program
         Check("SS6 the old window is gone and nothing refers to it (CluadeX/ and tests/)", gone.All(f => !File.Exists(f)) && refs.Count == 0, string.Join(", ", refs));
         string mainCode = R("MainWindow.xaml.cs");
         Check("SS7 the today chip's menu opens the Billing page's savings", mainCode.Contains("NavigateToCommand.Execute(\"Billing\")") && mainCode.Contains("ShowSavings()"));
+    }
+
+    // ── The credit / plan-fee box: the dollar habit, the comma-decimal habit, and refusals instead of guesses ──
+
+    static void UsdEntryCases()
+    {
+        (string Text, decimal? Usd)[] cases =
+        [
+            ("1,234.56", 1234.56m), ("1.234,56", 1234.56m), ("12,50", 12.50m), ("$12.50", 12.50m), ("25", 25m),
+            ("1,000", 1000m), ("1.234.567,8", 1234567.8m), ("1,234,567", 1234567m), ("0,125", 0.125m), ("0.125", 0.125m),
+            ("1 234,56", 1234.56m), (" $ 7 ", 7m),
+            ("1.000", null), ("1,2,3", null), ("1,23.45", null), ("1.234.56,7", null), ("1,234,56", null), ("1,234.5,6", null),
+            ("1.2,3", null), ("-3", null), ("abc", null), ("", null), (".", null), ("12.3.4", null), ("๑๒", null),
+        ];
+        var saved = CultureInfo.CurrentCulture;
+        var wrong = new List<string>();
+        try
+        {
+            foreach (var culture in new[] { "en-US", "th-TH", "de-DE" })
+            {
+                CultureInfo.CurrentCulture = new CultureInfo(culture);
+                foreach (var (text, usd) in cases)
+                {
+                    bool ok = UsdText.TryParse(text, out var got);
+                    if (ok != usd.HasValue || (ok && got != usd)) wrong.Add($"{culture} \"{text}\" → {(ok ? got.ToString(CultureInfo.InvariantCulture) : "refused")}");
+                }
+            }
+        }
+        finally { CultureInfo.CurrentCulture = saved; }
+        Check("SA10 USD entries: \"1.234,56\" is 1234.56, never $1.23; mixed or misplaced separators and \"1.000\" are refused, under en-US / th-TH / de-DE",
+            wrong.Count == 0, string.Join("; ", wrong));
     }
 }

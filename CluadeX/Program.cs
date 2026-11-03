@@ -64,7 +64,13 @@ public static class Program
 
         try
         {
+            // Velopack's own startup apply is ON by default: it would install any downloaded package right here, before
+            // the splash — past the circuit breaker (a paused version would be retried, uncounted, on every launch),
+            // without the bounded save before the restart, and with no Skip. The splash is the one automatic installer
+            // at startup (SplashWindow.RunUpdateAsync reads the package from disk); the exit-time install
+            // (AutoUpdateService.OnAppShutdown) and Install & Restart start Update.exe themselves and are unaffected.
             Velopack.VelopackApp.Build()
+                .SetAutoApplyOnStartup(false)
                 .OnBeforeUninstallFastCallback(_ => Services.Chrome.ChromeBridgeInstall.Unregister())
                 .Run();
         }

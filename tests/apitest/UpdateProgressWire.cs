@@ -5,7 +5,11 @@
 // from deltas to the full package, a package already on disk, clamping, the preparing step, stall timing — and the
 // splash's rules (StartupUpdatePolicy): the bounded check, Skip, the circuit breaker, the overall bar.
 using System.IO;
+using System.Reflection;
+using System.Windows.Controls;
 using CluadeX.Services;
+using CluadeX.Views;
+using Microsoft.Extensions.DependencyInjection;
 using C = CluadeX.Services.UpdateProgressComposer;
 
 namespace ApiTest;
@@ -166,8 +170,15 @@ internal static class UpdateProgressWire
         var cs = cached.Read(At(0.3));
         check("update-progress", "package already on disk: no callbacks → no bytes counted, no figure invented",
             !cs.AnyBytes && cs.Percent == 0 && cs.Bytes == 0, $"{cs.AnyBytes} {cs.Percent}");
-        var staged = new UpdateProgressInfo(UpdatePhase.Staged, "3.0.225", 100, 0, 0, 0, false, null) { FromCache = true };
-        check("update-progress", "…the staged state carries it", staged.FromCache && staged.Percent == 100, "");
+        // …and the service's real staged step turns "no byte arrived" into FromCache ("already downloaded" on the splash),
+        // in the snapshot a window reads and in the one its listener is sent — and a real download into "downloaded".
+        var (cacheProgress, cacheSent, cacheSaid) = StageThroughService(bytes: 0);
+        var (dlProgress, dlSent, dlSaid) = StageThroughService(bytes: 10 * MB);
+        check("update-progress", "…the service's staged step carries it: nothing arrived → FromCache, bytes arrived → not",
+            cacheProgress.Phase == UpdatePhase.Staged && cacheProgress.FromCache && cacheProgress.Percent == 100 && cacheSaid
+            && cacheSent?.Phase == UpdatePhase.Staged && cacheSent.FromCache
+            && dlProgress.Phase == UpdatePhase.Staged && !dlProgress.FromCache && dlProgress.Percent == 100 && !dlSaid && dlSent is { FromCache: false },
+            $"cache: {cacheProgress.Phase} fromCache={cacheProgress.FromCache} sent={cacheSent?.FromCache} · download: {dlProgress.Phase} fromCache={dlProgress.FromCache}");
         var cl = new C();
         cl.Begin(new C.Asset("CluadeX-9-full.nupkg", 100), [], false, 10, At(0));
         cl.OnFile("CluadeX-9-full.nupkg", 80, 70, 0, null, At(1));   // the server says less than the feed
@@ -244,6 +255,85 @@ internal static class UpdateProgressWire
             LocalizationService.Lookup("update.bgPreparing", "th") is { } pth && pth != LocalizationService.Lookup("update.bgPreparing", "en") && pth.Contains("{0}") && pth.Contains("{1}"), "");
         check("startup-update", "UpdatePhase keeps its numbers (Preparing appended)",
             (int)UpdatePhase.Idle == 0 && (int)UpdatePhase.Failed == 4 && (int)UpdatePhase.Preparing == 5, "");
+
+        // Velopack's own startup apply (ON by default) would install a downloaded package inside VelopackApp.Run(),
+        // before the splash: past the breaker, uncounted, no save, no Skip. Proven on the built Program.Main's IL.
+        var setAuto = typeof(Velopack.VelopackApp).GetMethod("SetAutoApplyOnStartup", [typeof(bool)]);
+        var (autoOff, beforeRun, autoWhy) = AutoApplyOffBeforeRun(typeof(CluadeX.Program).GetMethod("Main", BindingFlags.Public | BindingFlags.Static));
+        check("startup-update", "Velopack's own startup apply is off: the splash is the one automatic installer at startup",
+            setAuto?.ReturnType == typeof(Velopack.VelopackApp) && autoOff && beforeRun, autoWhy);
+
+        // The head line follows the row: once the row ends early (breaker, slow check, failure) it no longer says the
+        // update "installs before the app opens".
+        var (headStart, headDownloading, headEnded, splashErr) = SplashHeadAroundEndedRow();
+        check("startup-update", "the splash head line stops promising an install once the update row ends early",
+            splashErr == null && headDownloading.Contains("3.0.225") && headDownloading != headStart && headEnded == headStart,
+            splashErr ?? $"start='{headStart}' downloading='{headDownloading}' ended='{headEnded}'");
         return Task.CompletedTask;
+    }
+
+    const BindingFlags Inst = BindingFlags.NonPublic | BindingFlags.Instance;
+
+    /// <summary>The real AutoUpdateService: a download begins (BeginTracked), <paramref name="bytes"/> arrive through the
+    /// downloader's callback (none = Velopack found the package on disk), then its staged step runs. No network.</summary>
+    static (UpdateProgressInfo Progress, UpdateProgressInfo Sent, bool SaidFromCache) StageThroughService(long bytes)
+    {
+        var svc = new AutoUpdateService(new SettingsService());
+        UpdateProgressInfo sent = null;
+        svc.ProgressChanged += p => sent = p;
+        var t = typeof(AutoUpdateService);
+        t.GetMethod("BeginTracked", Inst)!.Invoke(svc, [Full, Array.Empty<C.Asset>(), false, C.DefaultMaximumDeltas, "3.0.225"]);
+        if (bytes > 0)
+            t.GetMethod("OnFileProgress", Inst)!.Invoke(svc, [new ResumableDownloader.FileProgress(Full.FileName, bytes, Full.Size, false, 0, null)]);
+        bool said = (bool)t.GetMethod("MarkDownloadStaged", Inst)!.Invoke(svc, ["3.0.225", TimeSpan.FromSeconds(3)])!;
+        return (svc.Progress, sent, said);
+    }
+
+    /// <summary>Program.Main calls VelopackApp.SetAutoApplyOnStartup with a constant false, before VelopackApp.Run.</summary>
+    static (bool Off, bool BeforeRun, string Why) AutoApplyOffBeforeRun(MethodInfo main)
+    {
+        byte[] il = main?.GetMethodBody()?.GetILAsByteArray();
+        if (il == null) return (false, false, "no Program.Main IL");
+        int setAt = -1, runAt = -1;
+        bool off = false;
+        for (int i = 0; i + 4 < il.Length; i++)
+        {
+            if (il[i] is not (0x28 or 0x6F)) continue;   // call / callvirt <method token>
+            MethodBase m;
+            try { m = main.Module.ResolveMethod(BitConverter.ToInt32(il, i + 1)); } catch { continue; }
+            if (m?.DeclaringType != typeof(Velopack.VelopackApp)) continue;
+            if (m.Name == "SetAutoApplyOnStartup" && setAt < 0) { setAt = i; off = i > 0 && il[i - 1] == 0x16; }   // ldc.i4.0
+            if (m.Name == "Run" && runAt < 0) runAt = i;
+        }
+        return (off, setAt >= 0 && runAt > setAt, $"SetAutoApplyOnStartup at {setAt} (false: {off}), Run at {runAt}");
+    }
+
+    /// <summary>A real SplashWindow (not shown) on its own STA thread: the head line before, while the update downloads,
+    /// and after the row ends early.</summary>
+    static (string Start, string Downloading, string Ended, string Error) SplashHeadAroundEndedRow()
+    {
+        string start = "", downloading = "", ended = "", error = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                using var sp = new ServiceCollection().BuildServiceProvider();
+                var w = new SplashWindow(sp);
+                var head = (TextBlock)w.FindName("HeadText");
+                start = head.Text;
+                typeof(SplashWindow).GetMethod("RenderUpdate", Inst)!.Invoke(w,
+                    [new SplashWindow.Check { Label = "Update" }, new UpdateProgressInfo(UpdatePhase.Downloading, "3.0.225", 40, 200 * MB, 500 * MB, 0, false, null) { Seq = 1 }]);
+                downloading = head.Text;
+                typeof(SplashWindow).GetMethod("EndUpdateRow", Inst)!.Invoke(w, null);
+                ended = head.Text;
+                w.Close();
+            }
+            catch (Exception ex) { error = (ex is TargetInvocationException { InnerException: { } inner } ? inner : ex).ToString(); }
+            finally { System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown(); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        if (!thread.Join(TimeSpan.FromSeconds(30))) error ??= "the splash thread did not finish";
+        return (start, downloading, ended, error);
     }
 }
