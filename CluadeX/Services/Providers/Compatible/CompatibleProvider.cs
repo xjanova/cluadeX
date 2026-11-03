@@ -622,15 +622,20 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
     /// <summary>Tokens always. Dollars at the price the service itself reported (OpenRouter, Together and Hugging Face
     /// list theirs), else the built-in table when it knows the model (an "anthropic/…" id through OpenRouter); a model
     /// neither knows is counted at $0 — the table's unknown-model fallback is Claude Sonnet's price, which made a
-    /// $0.10 open model read 30x too dear. A server on this PC is $0.</summary>
+    /// $0.10 open model read 30x too dear. A server on this PC is $0 and goes in as local use, like Ollama. Every row
+    /// is filed under this service's own Billing tab, never under the maker its model id names.</summary>
     private void Record(string model, int input, int output, int cached)
     {
         if (_costTracker == null) return;
-        bool builtIn = BuiltInPriced(model);
-        if (!CostTrackingService.HasRegisteredPricing(model) && !builtIn)
+        string provider = Preset.Type.ToString();
+        if (Preset.Local)
+        {
+            _costTracker.RecordLocalUsage(provider, model, input + cached, output, 0);
+            return;
+        }
+        if (!CostTrackingService.HasRegisteredPricing(model) && !BuiltInPriced(model))
             CostTrackingService.RegisterPricing(model, new ModelPricing(0m, 0m, 0m, 0m));
-        decimal factor = Preset.Local && builtIn ? 0m : 1m;
-        _costTracker.RecordUsage(model, input, output, cached, 0, priceFactor: factor);
+        _costTracker.RecordUsage(model, input, output, cached, 0, provider: provider);
     }
 
     /// <summary>Does the built-in price table know this model, rather than falling back to its default row?</summary>

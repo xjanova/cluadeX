@@ -341,7 +341,8 @@ public class CostTrackingService
             if (!_days.TryGetValue(day, out var du)) _days[day] = du = new DailyUsage();
             // The day's total, and the same record under the model's provider (the spend window can show one alone).
             du.ByProvider ??= new();
-            string prov = ProviderOf(model);
+            // a service that names itself (OpenRouter) keeps its spend: an "anthropic/…" id there is not Anthropic's credit
+            string prov = provider ?? ProviderOf(model);
             if (!du.ByProvider.TryGetValue(prov, out var pu)) du.ByProvider[prov] = pu = new DailyUsage();
             foreach (var u in new[] { du, pu })
             {

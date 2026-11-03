@@ -1232,7 +1232,9 @@ public partial class ChatViewModel : ViewModelBase
         OpenFolderCommand = new AsyncRelayCommand(OpenFolderAsync);
         CloseFolderCommand = new AsyncRelayCommand(CloseFolderAsync);
         CloneRepoCommand = new AsyncRelayCommand(CloneRepo);
-        LoadSessionCommand = new AsyncRelayCommand<string>(LoadSessionAsync);
+        // Not an AsyncRelayCommand: that one ignores a click while the last is still running, so a chat picked while
+        // another was loading never opened. Each click runs; the last one picked wins (_switchSeq).
+        LoadSessionCommand = new RelayCommand<string>(id => _ = LoadSessionReportingAsync(id));
         DeleteSessionCommand = new AsyncRelayCommand<string>(DeleteSessionAsync);
         ClearSearchCommand = new RelayCommand(ClearHistorySearch);
         LoadSearchResultCommand = new AsyncRelayCommand<string>(LoadSessionAsync);
@@ -1757,6 +1759,15 @@ public partial class ChatViewModel : ViewModelBase
         _isDirty = true;
         AutoSave();
         if (FlowRun is { } run && !ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
+    }
+
+    private async Task LoadSessionReportingAsync(string? sessionId)
+    {
+        // The user clicking the chat on screen while another is still loading: that load loses. Only the user's click —
+        // a pipe task opening the chat on screen must not cancel the chat the user just picked.
+        if (!string.IsNullOrEmpty(sessionId) && CurrentSession?.Id == sessionId) { _switchSeq++; return; }
+        try { await LoadSessionAsync(sessionId); }
+        catch (Exception ex) { CommandErrorSink.Report("LoadSession", ex); }
     }
 
     private async Task LoadSessionAsync(string? sessionId)
@@ -2791,7 +2802,7 @@ public partial class ChatViewModel : ViewModelBase
                 if (ProjectPageOnScreen || !MayTakeScreen(DateTime.UtcNow, _lastUserActivityUtc, _lastScreenTakeUtc, RunOf(CurrentSession) != null))
                 {
                     string folder = runDir ?? _fileSystemService.AppWorkingDirectory;
-                    var bg = new ChatSession { ProjectPath = folder, Title = taskId };
+                    var bg = new ChatSession { ProjectPath = folder, ProjectId = FolderProjectId(folder), Title = taskId };
                     _pipeChatIds.Add(bg.Id);
                     var bgList = new ObservableCollection<ChatMessage>();
                     var bgMsg = new ChatMessage { Role = MessageRole.User, Content = prompt };

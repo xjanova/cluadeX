@@ -92,6 +92,13 @@ public partial class ChatViewModel
     private string DefaultProjectId(string? folder)
     {
         if (!string.IsNullOrEmpty(_projectFilterId) && ChatProjects.Any(p => p.Id == _projectFilterId)) return _projectFilterId;
+        return FolderProjectId(folder);
+    }
+
+    /// <summary>The project bound to <paramref name="folder"/>, else none — for a chat whose folder is given (a pipe task),
+    /// where the project the sidebar happens to show says nothing.</summary>
+    private string FolderProjectId(string? folder)
+    {
         string key = Models.ChatProject.FolderKey(folder);
         if (key.Length == 0) return "";
         return ChatProjects.FirstOrDefault(p => Models.ChatProject.FolderKey(p.Folder) == key)?.Id ?? "";

@@ -72,9 +72,15 @@ internal static class AggregatorWire
                 ? hit.Headers.GetValueOrDefault("api-key") == Key && !hit.Headers.ContainsKey("Authorization")
                 : hit.Headers.GetValueOrDefault("Authorization") == "Bearer " + Key;
             check(t, $"auth: key in {preset.AuthHeader}", keyOk, string.Join(", ", hit.Headers.Keys));
-            check(t, "usage recorded: tokens, cached split out, unknown price → $0 (never the Sonnet fallback)",
-                cost.TotalInputTokens == 6 && cost.TotalCacheReadTokens == 4 && cost.TotalOutputTokens == 2 && cost.TotalCostUsd == 0m,
-                $"in={cost.TotalInputTokens} cache={cost.TotalCacheReadTokens} out={cost.TotalOutputTokens} usd={cost.TotalCostUsd}");
+            var row = cost.Log.ReadAll().LastOrDefault();
+            if (preset.Local)
+                check(t, "usage recorded as free local use (like Ollama): tokens on the Billing page, nothing in the spend ledger",
+                    cost.TotalCostUsd == 0m && cost.TotalInputTokens == 0 && row is { Kind: CluadeX.Services.Billing.UsageCostKind.Free, Usd: 0m, Input: 10, Output: 2 } && row.Provider == t,
+                    $"usd={cost.TotalCostUsd} row={row?.Provider}/{row?.Kind}/{row?.Input}/{row?.Output}");
+            else
+                check(t, "usage recorded: tokens, cached split out, unknown price → $0 (never the Sonnet fallback), on this service's own Billing tab",
+                    cost.TotalInputTokens == 6 && cost.TotalCacheReadTokens == 4 && cost.TotalOutputTokens == 2 && cost.TotalCostUsd == 0m && row?.Provider == t,
+                    $"in={cost.TotalInputTokens} cache={cost.TotalCacheReadTokens} out={cost.TotalOutputTokens} usd={cost.TotalCostUsd} tab={row?.Provider}");
 
             // tool round trip
             s.ProviderConfigs[t] = Cfg("tool-ok");

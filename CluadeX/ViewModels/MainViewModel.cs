@@ -431,6 +431,15 @@ public class MainViewModel : ViewModelBase
         {
             chatVM.ConnectionRequested += (provider, model) =>
             {
+                // An OpenAI-compatible provider has no wizard (ProviderConnections only knows the built-in ones): its key
+                // and "get a key" link are on Settings ▸ AI Provider.
+                if (Services.Providers.CompatiblePresets.IsCompatible(provider))
+                {
+                    settingsVM.SelectedCategory = "provider";
+                    settingsVM.SelectedProvider = provider;
+                    NavigateTo("Settings");
+                    return;
+                }
                 setupVM.OpenWizard(provider, model, fromChat: true);
                 NavigateTo("Setup");
             };

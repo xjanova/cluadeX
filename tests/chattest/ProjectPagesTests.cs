@@ -69,15 +69,24 @@ internal static partial class Program
         var sw = System.Diagnostics.Stopwatch.StartNew();
         int wrong = 0;
         string detail = "";
+        // The chat is read from the database off the UI thread, so the switch lands a moment after the click; what is
+        // checked is the moment it lands: the pages move in that same call, no timer in between shows the last project.
+        string otherNow = "";
+        bool? atSwitch = null;
+        Action onSwitch = () => atSwitch = StudioOn(Vm.ChatProject) && !GraphHas(otherNow);
+        Vm.ChatProjectChanged += onSwitch;
         for (int i = 0; i < 6; i++)
         {
             var (chat, project, own, other) = i % 2 == 0 ? (chatA, a, "alpha-only.js", "beta-only.js") : (chatB, b, "beta-only.js", "alpha-only.js");
+            otherNow = other;
+            atSwitch = null;
             Vm.LoadSessionCommand.Execute(chat.Id);
-            // the same tick as the switch: no timer in between shows the last project under this chat
-            bool now = Vm.CurrentSession?.Id == chat.Id && StudioOn(project) && SamePath(Vm.ChatProject, project) && !GraphHas(other);
+            await WaitUntil(() => Vm.CurrentSession?.Id == chat.Id);
+            bool now = Vm.CurrentSession?.Id == chat.Id && atSwitch == true && StudioOn(project) && SamePath(Vm.ChatProject, project);
             bool drawn = await GraphShows(own, other);
             if (!now || !drawn || !SamePath(graph.RootName, Path.GetFileName(project))) { wrong++; detail += $" #{i}: now={now} drawn={drawn} studio={ui.ProjectName} graph={graph.RootName}"; }
         }
+        Vm.ChatProjectChanged -= onSwitch;
         Check("CP1 six switches between two projects: the UI Studio is on the chat's project in the same tick, the graph drops the old one at once and draws the chat's", wrong == 0, detail);
         Log($"  (six switches with graph builds: {sw.ElapsedMilliseconds} ms)");
         await WaitUntil(() => studio.IsServing);
@@ -124,7 +133,11 @@ internal static partial class Program
         await Task.Delay(400);
         Check("CP3 a run in another chat changing ITS project moves nothing here", moved == 0 && StudioOn(b), $"{moved} {ui.ProjectPath}");
         offScreen.ProjectPath = a;
-        Persist.SaveSession(offScreen);
+        // the sidebar's entry carries no messages: saving IT would store chat A as empty (and the next switch away from
+        // A would then drop it as an untouched chat) — the stored chat is read, its folder put back, and saved
+        var storedA = Persist.LoadSession(chatA.Id)!;
+        storedA.ProjectPath = a;
+        Persist.SaveSession(storedA);
         fs.WorkingDirectory = c;     // the app's folder moved by anything but a chat switch
         await Task.Delay(400);
         Check("CP3 the app's working folder moving moves nothing here: the pages read the chat, not the folder", moved == 0 && StudioOn(b), $"{moved} {ui.ProjectPath}");
@@ -224,7 +237,11 @@ internal static partial class Program
         File.WriteAllText(Path.Combine(big, "big-only.js"), imports.ToString());
         File.WriteAllText(Path.Combine(big, "index.html"), "<script type=module src=big-only.js></script>");
         var chatBig = Chat("cp big", big);
+        int buildsBefore = graph.BuildCount;
         Vm.LoadSessionCommand.Execute(chatBig.Id);
+        await WaitUntil(() => Vm.CurrentSession?.Id == chatBig.Id, 5000);
+        Check("CP4 (control) the big project is on screen and its graph build has begun", Vm.CurrentSession?.Id == chatBig.Id && graph.BuildCount > buildsBefore,
+            $"builds {buildsBefore} → {graph.BuildCount} busy={graph.IsBusy}");
         Vm.LoadSessionCommand.Execute(chatB.Id);   // the build of big has only just begun
         bool bigGone = await GraphShows("beta-only.js", "big-only.js");
         await Task.Delay(600);
@@ -232,7 +249,10 @@ internal static partial class Program
 
         // the graph: a drag whose save was still waiting
         await Open(chatA.Id);
-        await GraphShows("alpha-only.js", "beta-only.js");
+        bool backOnA = await GraphShows("alpha-only.js", "beta-only.js");
+        Check("CP4 (control) back on A, the graph shows A", backOnA,
+            $"chat={Vm.CurrentSession?.Title} studio={ui.ProjectName} root={graph.RootName} busy={graph.IsBusy} mode={graph.Mode} builds={graph.BuildCount} graph={graph.Summary} empty='{graph.EmptyText}' status='{Vm.StatusText}'");
+        if (!backOnA) return;
         var node = graph.Graph.ById["alpha-only.js"];
         node.X = 1234;
         node.Y = 567;
@@ -354,7 +374,14 @@ internal static partial class Program
         Check("CP7 opening the same folder twice makes no chat and leaves the Studio on it", Vm.Sessions.Count == chatsBefore && StudioOn(a));
 
         foreach (var id in new[] { chatB.Id, chatA.Id, chatB.Id, chatA.Id, chatB.Id }) Vm.LoadSessionCommand.Execute(id);
-        Check("CP7 a burst of switches ends on the last chat, at once", StudioOn(b));
+        await WaitUntil(() => Vm.CurrentSession?.Id == chatB.Id);
+        await Task.Delay(400);   // any older load that would land late has landed by now
+        await Render();
+        Check("CP7 a burst of switches (each click before the last chat has loaded) ends on the last chat", Vm.CurrentSession?.Id == chatB.Id && StudioOn(b));
+        foreach (var id in new[] { chatA.Id, chatB.Id }) Vm.LoadSessionCommand.Execute(id);   // away and straight back
+        await Task.Delay(500);
+        await Render();
+        Check("CP7 clicking back to the chat on screen while another loads stays there", Vm.CurrentSession?.Id == chatB.Id && StudioOn(b), Vm.CurrentSession?.Title);
         await WaitUntil(() => studio.IsServing);
         await Task.Delay(400);
         using (var http = new HttpClient())

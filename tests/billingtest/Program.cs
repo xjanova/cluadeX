@@ -401,6 +401,11 @@ internal static class Program
             .All(t => t.Logo is BitmapSource { PixelWidth: > 0 }), string.Join(",", vm.Tabs.Select(t => t.Key + ":" + (t.Logo != null))));
         Check("V2 …and every logo file named in ProviderBrand loads", ProviderBrand.All.Where(b => b.Logo != null)
             .All(b => BillingViewModel.BillingTab.LoadLogo(b.LogoUri) is BitmapSource { PixelWidth: > 0 }));
+        Check("V2b an OpenAI-compatible service has its own tab, name and logo (OpenRouter's \"anthropic/…\" ids are its bill)",
+            ProviderBrand.For("OpenRouter") is { Key: "OpenRouter", Name: "OpenRouter", Logo: "openrouter.png", Kind: BillingKind.Api }
+            && ProviderBrand.All.Select(b => b.Key).Distinct().Count() == ProviderBrand.All.Count && ProviderBrand.All[^1].Key == "Other");
+        Check("V2b …a server on this PC (LM Studio, vLLM) is a free local tab",
+            ProviderBrand.For("LMStudio").Kind == BillingKind.Local && ProviderBrand.CostKindOf("Vllm") == UsageCostKind.Free);
         Check("V3 All: this month reads \"$3.25 + ≈ $2.90\"", vm.Periods[2].Amount == "$3.25 + ≈ $2.90", vm.Periods[2].Amount);
         vm.SelectedTab = vm.Tabs.First(t => t.Key == "ClaudeDev");
         Check("V4 Claude Dev: amounts carry ≈ and the note says estimate", vm.IsEstimate && vm.Periods[2].Amount == "≈ $2.90"
@@ -586,10 +591,11 @@ internal static class Program
         Check("S4 every {Binding} names a real property", bad.Count == 0, string.Join(", ", bad));
         Check("S5 MainWindow: the Billing page has a DataTemplate and an activity-bar button", main.Contains("vm:BillingViewModel")
             && main.Contains("CommandParameter=\"Billing\"") && main.Contains("{services:Loc nav.billingTip}"));
-        string attribution = R("Assets", "Logos", "ATTRIBUTION.md");
+        // the six marks the Billing page always had are in ATTRIBUTION.md; the OpenAI-compatible services' in ATTRIBUTION-providers.md
+        string attribution = R("Assets", "Logos", "ATTRIBUTION.md") + R("Assets", "Logos", "ATTRIBUTION-providers.md");
         var logos = ProviderBrand.All.Where(b => b.Logo != null).Select(b => b.Logo!).Distinct().ToList();
-        Check("S6 every bundled logo is in the repo and named in ATTRIBUTION.md", logos.All(l => File.Exists(Path.Combine(repo, "CluadeX", "Assets", "Logos", l))
-            && attribution.Contains("`" + l + "`")), string.Join(",", logos));
+        Check("S6 every bundled logo is in the repo and named in an ATTRIBUTION file", logos.All(l => File.Exists(Path.Combine(repo, "CluadeX", "Assets", "Logos", l))
+            && (attribution.Contains("`" + l + "`") || attribution.Contains("| " + l + " |"))), string.Join(",", logos));   // backticks, or a table row
     }
 
     // ═══════════════════════════════════════════ the real window ═══════════════════════════════════════════

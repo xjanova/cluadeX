@@ -19,8 +19,8 @@ public sealed record ProviderBrand(string Key, string Name, string? Logo, string
     public const string AllKey = "All";
 
     /// <summary>Tab order. Keys are <see cref="Models.AiProviderType"/> names; "Other" catches the rest.</summary>
-    public static IReadOnlyList<ProviderBrand> All { get; } = new ProviderBrand[]
-    {
+    public static IReadOnlyList<ProviderBrand> All { get; } =
+    [
         // Anthropic reports cache reads and writes; extended thinking is billed inside output_tokens, never apart.
         new("Anthropic", "Anthropic API", "anthropic.png", "A", "#D97757", BillingKind.Api, true, true, false),
         // OpenAI: cached input, and reasoning tokens (output_tokens_details / completion_tokens_details).
@@ -35,8 +35,23 @@ public sealed record ProviderBrand(string Key, string Name, string? Logo, string
         new("Ollama", "Ollama", "ollama.png", "O", "#6B7280", BillingKind.Local, false, false, false),
         new("LlamaServer", "llama-server", "llamacpp.png", "L", "#FF8236", BillingKind.Local, false, false, false),
         new("Local", "Local GGUF", "llamacpp.png", "L", "#FF8236", BillingKind.Local, false, false, false),
+        .. CompatibleBrands(),
         new("Other", "Other", null, "?", "#8B8B99", BillingKind.Api, true, true, true),
-    };
+    ];
+
+    /// <summary>The OpenAI-compatible services each get their own tab (OpenRouter's "anthropic/…" ids are OpenRouter's
+    /// bill, not Anthropic's); a server on this PC (LM Studio, vLLM) is a local tab. Cached tokens are read from the
+    /// chat-completions usage of every one of them; reasoning tokens are not recorded apart, so that column says "not reported".</summary>
+    private static IEnumerable<ProviderBrand> CompatibleBrands()
+    {
+        string[] palette = ["#6366F1", "#F55036", "#4D6BFE", "#FA520F", "#111827", "#0F6FFF", "#7C3AED", "#F97316",
+            "#0EA5E9", "#14B8A6", "#EC4899", "#84CC16", "#A855F7", "#EAB308", "#22C55E", "#EF4444"];
+        int i = 0;
+        foreach (var p in Providers.CompatiblePresets.All)
+            yield return new(p.Type.ToString(), p.Name, p.Logo, p.Badge is { Length: > 0 } b ? b : p.Name[..1],
+                p.Local ? "#6B7280" : palette[i++ % palette.Length], p.Local ? BillingKind.Local : BillingKind.Api,
+                !p.Local, false, false);
+    }
 
     public static ProviderBrand For(string key) => All.FirstOrDefault(b => b.Key == key) ?? All[^1];
 

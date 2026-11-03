@@ -272,7 +272,8 @@ internal static partial class Program
             Press(save);
             await WaitUntil(() => vm.ActiveTab is { IsDirty: false }, 4000);
             Check($"{set}/editor tools: clicking Save writes the file to disk",
-                File.ReadAllText(file).EndsWith("// edited by the harness\n") && vm.ActiveTab is { IsDirty: false });
+                File.ReadAllText(file).EndsWith("// edited by the harness\n") && vm.ActiveTab is { IsDirty: false },
+                $"dirty={vm.ActiveTab?.IsDirty} status='{vm.StatusMessage}' tail='{string.Concat(File.ReadAllText(file).TakeLast(40)).Replace("\r", "\\r").Replace("\n", "\\n")}'");
 
             // ── find ──
             Press(El<Button>("TbFind")!);

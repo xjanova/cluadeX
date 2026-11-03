@@ -270,6 +270,22 @@ internal static partial class Program
         Fake = new FakeProvider();
         SetField(Providers, "_activeProvider", Fake);
 
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "U11")
+        {
+            await TestLiveEffort();
+            Log($"\n## Result (CHATTEST_ONLY=U11): {Pass} pass / {Fail} FAIL");
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=CP: just the UI Studio / Node Graph following the chat on screen.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "CP")
+        {
+            await TestProjectPagesFollowChat();
+            Log($"\n## Result (CHATTEST_ONLY=CP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=SUP: just the pipe supervision checks (late sub-agent results, consent wait, progress, poll limit).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SUP")
         {
@@ -2725,7 +2741,8 @@ internal static partial class Program
         await Render();
         var effortBox = Find<ComboBox>(Win).First(c => c.Name == "EffortBox");
         string shown = string.Join(" ", Find<TextBlock>(effortBox).Where(t => t.IsVisible).Select(t => t.Text));
-        Check("U11 the effort box reads auto → high while the run uses high", shown.Contains("auto") && shown.Contains("high"), shown);
+        Check("U11 the effort box reads auto → high while the run uses high", shown.Contains("auto") && shown.Contains("high"),
+            $"'{shown}' visible={effortBox.IsVisible} w={effortBox.ActualWidth:F0} sel={effortBox.SelectedItem} tag={effortBox.Tag} effortVisible={Vm.EffortVisible} generating={Vm.IsGenerating}");
         Check("U11 the model box carries the live effort too", Vm.LiveEffortSuffix.Contains("auto → high"), Vm.LiveEffortSuffix);
         scope.LiveEffort = "medium";
         await Render();

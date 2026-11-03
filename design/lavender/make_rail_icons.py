@@ -202,6 +202,15 @@ def g_settings(d, c):
     d.ellipse(box(cx - 3.4, cy - 3.4, cx + 3.4, cy + 3.4), fill=c)
 
 
+def g_billing(d, c):
+    # A coin over rising bars: what the AI has cost, by day and provider (the Billing page).
+    stroke(d, [(6, 25.5), (26, 25.5)], 2.4)
+    for x0, top in ((14.5, 17.5), (19.2, 13.5), (23.9, 9.0)):
+        d.rounded_rectangle(box(x0 - 1.9, top, x0 + 1.9, 24), radius=1.2 * U, fill=WHITE)
+    d.ellipse(box(4.5, 6.5, 14.5, 16.5), fill=WHITE)
+    d.ellipse(box(6.9, 8.9, 12.1, 14.1), outline=c, width=int(1.4 * U))
+
+
 # tag: (symbol, tile top, tile bottom, cut-out colour, shadow colour)
 ICONS = {
     "chat":        (g_chat,        "#C7A2FF", "#8848F0", "#9A5CF6", "#4A1E8F"),
@@ -215,6 +224,7 @@ ICONS = {
     "uistudio":    (g_uistudio,    "#FFDF8E", "#E9A335", "#EDAA40", "#7A4E0C"),
     "nodegraph":   (g_nodegraph,   "#93D6FF", "#3787E0", "#4394E6", "#123F78"),
     "settings":    (g_settings,    "#D9CDEB", "#8875A8", "#9583B4", "#3A2C55"),
+    "billing":     (g_billing,     "#D6F28C", "#7AA82C", "#86B336", "#3B5410"),
 }
 
 

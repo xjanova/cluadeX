@@ -456,8 +456,11 @@ public sealed partial class McpServerManager
             candidate = CreateTransport(name, launch);
             _retiring[candidate] = 1;
             Log(name, $"Starting version {targetVersion} beside the running one: {launch.Command}");
+            long startedAtMs = Environment.TickCount64;
             await candidate.StartAsync(launch);
-            var reply = await candidate.SendRequestAsync("initialize", InitializeParams(), StartupTimeoutFor(name, launch) * 1000, ct);
+            // the start-up allowance covers the launch too, as at a first start
+            int initTimeoutMs = (int)Math.Max(1000, StartupTimeoutFor(name, launch) * 1000L - (Environment.TickCount64 - startedAtMs));
+            var reply = await candidate.SendRequestAsync("initialize", InitializeParams(), initTimeoutMs, ct);
             if (!reply.IsSuccess) throw new InvalidOperationException(reply.Error?.Message ?? "initialize failed");
             string? version = ReadServerVersion(reply);
             await candidate.SendNotificationAsync("notifications/initialized", ct: ct);

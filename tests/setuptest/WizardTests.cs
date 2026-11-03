@@ -33,8 +33,11 @@ static partial class Program
     static void WizardSteps()
     {
         Console.WriteLine("── the wizard's steps ──");
-        Check("W1", "every provider CluadeX has is offered",
-            Enum.GetValues<AiProviderType>().All(ProviderConnections.All.Contains) && ProviderConnections.All.Distinct().Count() == Enum.GetValues<AiProviderType>().Length);
+        // The OpenAI-compatible services have no wizard: their key and "get a key" link are on Settings ▸ AI Provider,
+        // where the chat sends them (MainViewModel), so none of them may be in the wizard's list either.
+        var wizardTypes = Enum.GetValues<AiProviderType>().Where(t => !CluadeX.Services.Providers.CompatiblePresets.IsCompatible(t)).ToArray();
+        Check("W1", "every provider CluadeX has is offered (the OpenAI-compatible ones on Settings, not here)",
+            wizardTypes.All(ProviderConnections.All.Contains) && ProviderConnections.All.Distinct().Count() == wizardTypes.Length);
         Check("W2", "every provider has a setup row on a bare PC",
             ProviderConnections.All.All(p => SystemSetupService.BuildItems(new SetupFacts()).Any(i => i.Id == ProviderConnections.RowId(p))));
         Check("W3", "a cloud provider starts with the license; this PC and the BrainX room do not need one",

@@ -101,6 +101,8 @@ public sealed class BuildProblemsService : IAppShutdownHook, IDisposable
     {
         if (r.Type is ToolType.RunBuild or ToolType.RunTests or ToolType.RunCommand or ToolType.PowerShell) return true;
         string n = (r.ToolName ?? "").ToLowerInvariant();
+        // "check" is a checker's name (run_checks, cargo_check) but not a checkpoint or a pull request's CI checks
+        if (n.Contains("checkpoint") || n.StartsWith("gh_", StringComparison.Ordinal)) return false;
         return n.Contains("verify") || n.Contains("lint") || n.Contains("analy") || n.Contains("typecheck") || n.Contains("build") || n.Contains("check");
     }
 
