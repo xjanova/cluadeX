@@ -306,6 +306,16 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=MOTION: just the plan / agent-map motion checks and their renders (CHATTEST_RENDERS = where).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "MOTION")
+        {
+            await TestPlanAgentMotion();
+            await TestFloatingPlan();
+            Log($"\n## Result (CHATTEST_ONLY=MOTION): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PP: just the plain-language permission prompt and the live model chip (quick renders to look at).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") is "PP" or "PB")
         {
@@ -359,6 +369,8 @@ internal static partial class Program
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
+        await TestPlanAgentMotion();          // MO: plan steps and sub-agents animate by their real state
+        await TestFloatingPlan();             // MF: the floating plan card comes and goes by the chat's own card
         await TestOrchestrationViews();       // OR: workflow card, split chips, notices, next-step box, Ultra
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message

@@ -85,10 +85,35 @@ public static class AmbientAnimation
                     || (GetWhileActive(fe) && !window.IsActive);
                 SetOwnPaused(fe, paused);
             }
+            // State-driven loops (a plan step at work, a sub-agent running) live in Style triggers: they stop by their
+            // own ExitActions, but a minimised window must not tick them either.
+            if (d is FrameworkElement styled && styled.Style is { } style) SetStylePaused(styled, style, minimized);
+            if (d is FrameworkElement looping) Motion.SetLoopPaused(looping, minimized);
             int count = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetChildrenCount(d) : 0;
             for (int i = 0; i < count; i++) Walk(VisualTreeHelper.GetChild(d, i));
         }
         Walk(window);
+        // Owned windows (a chat's plan window) go away with their owner; their loops pause with it.
+        foreach (Window owned in window.OwnedWindows) SetMinimized(owned, minimized || owned.WindowState == WindowState.Minimized);
+    }
+
+    /// <summary>Pause (or resume) the endless storyboards <paramref name="style"/>'s triggers began on <paramref name="fe"/>
+    /// — only the named ones are controllable. Pause / Resume on one that never began does nothing (GetCurrentState
+    /// would throw for it, so it is not asked); the pause lands on the next frame.</summary>
+    private static void SetStylePaused(FrameworkElement fe, Style style, bool paused)
+    {
+        for (var s = style; s != null; s = s.BasedOn)
+            foreach (var trigger in s.Triggers)
+            {
+                if (trigger.EnterActions.Count == 0) continue;
+                foreach (var action in trigger.EnterActions)
+                {
+                    if (action is not BeginStoryboard { Name: { Length: > 0 }, Storyboard: { RepeatBehavior: { HasCount: false, HasDuration: false } } sb })
+                        continue;
+                    try { if (paused) sb.Pause(fe); else sb.Resume(fe); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[AmbientAnimation] {ex.Message}"); }
+                }
+            }
     }
 
     private static void SetOwnPaused(FrameworkElement fe, bool paused) =>

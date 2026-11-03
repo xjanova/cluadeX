@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using CluadeX.Helpers;
 using CluadeX.Models;
 using CluadeX.ViewModels;
@@ -53,6 +54,7 @@ public partial class ChatView : UserControl
                 ChatList.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Messages"));
             if (e.NewValue is true && !_hostedInEditor)
                 Dispatcher.InvokeAsync(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+            if (e.NewValue is true) { SyncStickyBar(animate: false); QueuePlanCheck(); }
         };
         SizeChanged += (_, _) => UpdateSidePanelRoom();
         // A dragged grip (or the grip restoring its saved width) changes Width: refit, as the Edit page does.
@@ -247,6 +249,8 @@ public partial class ChatView : UserControl
             vm.StarterApplied -= OnStarterApplied;
             vm.StarterApplied += OnStarterApplied;
         }
+        SyncStickyBar(animate: false);
+        QueuePlanCheck();
     }
 
     /// <summary>Spoken words just landed in the box: keep the caret (and the view) at the end, where they arrive.</summary>
@@ -271,10 +275,139 @@ public partial class ChatView : UserControl
     private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ChatViewModel.Messages) && sender is ChatViewModel vm) WatchMessages(vm);
+        switch (e.PropertyName)
+        {
+            case nameof(ChatViewModel.HasStickyBar):
+                if (Dispatcher.CheckAccess()) SyncStickyBar(animate: true);
+                else Dispatcher.BeginInvoke(() => SyncStickyBar(animate: true));
+                break;
+            case nameof(ChatViewModel.Messages):
+            case nameof(ChatViewModel.HasStickyPlan):
+                if (Dispatcher.CheckAccess()) QueuePlanCheck();
+                else Dispatcher.BeginInvoke(QueuePlanCheck);
+                break;
+        }
+    }
+
+    // ─── The floating plan card (ChatViewModel.Plan: FloatingPlanShows) ───
+    // The view's half: is the chat's own plan card on screen (checked at most every 120 ms while the chat scrolls or
+    // grows, never per frame), is the mouse over the floating card, and the card's slide in / fade out.
+
+    private System.Windows.Threading.DispatcherTimer? _planCheckTimer;
+    private bool? _barWanted;
+    private const double PlanCheckMs = 120;
+
+    private void QueuePlanCheck()
+    {
+        if (_planCheckTimer == null)
+        {
+            _planCheckTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+            { Interval = TimeSpan.FromMilliseconds(PlanCheckMs) };
+            _planCheckTimer.Tick += OnPlanCheckTick;
+        }
+        if (!_planCheckTimer.IsEnabled) _planCheckTimer.Start();
+    }
+
+    private void OnPlanCheckTick(object? sender, EventArgs e)
+    {
+        _planCheckTimer?.Stop();
+        CheckInlinePlan();
+    }
+
+    /// <summary>Measure where the chat's plan card is against the visible part of the list and tell the view model.
+    /// A row the list has not realised (virtualised away) is off screen.</summary>
+    public void CheckInlinePlan()
+    {
+        // Two chat views can share one view model (the chat page and the editor's panel): only the one on screen reports.
+        if (DataContext is not ChatViewModel vm || !IsVisible) return;
+        HookScrollViewer();
+        var sv = _chatScrollViewer;
+        if (sv == null || !vm.HasStickyPlan) return;
+        ChatMessage? card = null;
+        var list = vm.Messages;
+        for (int i = list.Count - 1; i >= 0; i--)
+            if (list[i].IsPlan) { card = list[i]; break; }
+        bool seen = false;
+        if (card != null && ChatList.ItemContainerGenerator.ContainerFromItem(card) is FrameworkElement row
+            && row.IsVisible && row.ActualHeight > 0 && row.IsDescendantOf(sv))
+        {
+            try
+            {
+                var at = row.TransformToAncestor(sv).TransformBounds(new Rect(0, 0, row.ActualWidth, row.ActualHeight));
+                seen = ChatViewModel.InlinePlanSeen(vm.IsInlinePlanVisible, at.Top, at.Bottom, sv.ActualHeight);
+            }
+            catch (InvalidOperationException) { seen = false; }   // a recycled row between parents
+        }
+        vm.IsInlinePlanVisible = seen;
+    }
+
+    /// <summary>Show or hide the bar over the chat as the view model says: a short slide down and fade in, a fade out
+    /// (none with Windows' animations off, or while this view is hidden).</summary>
+    private void SyncStickyBar(bool animate)
+    {
+        if (DataContext is not ChatViewModel vm) return;
+        bool show = vm.HasStickyBar;
+        if (_barWanted == show) return;
+        bool first = _barWanted == null;
+        _barWanted = show;
+        var bar = StickyPlanBar;
+        bool motion = animate && !first && IsVisible && SystemParameters.ClientAreaAnimation;
+        if (!motion)
+        {
+            bar.BeginAnimation(OpacityProperty, null);
+            bar.BeginAnimation(Motion.ShiftYProperty, null);
+            bar.Opacity = 1;
+            Motion.SetShiftY(bar, 0);
+            bar.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            return;
+        }
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        if (show)
+        {
+            bool fromHidden = bar.Visibility != Visibility.Visible;
+            bar.Visibility = Visibility.Visible;
+            var fadeIn = new DoubleAnimation { To = 1, Duration = TimeSpan.FromMilliseconds(240), EasingFunction = ease };
+            if (fromHidden) fadeIn.From = 0;
+            var slideIn = new DoubleAnimation { To = 0, Duration = TimeSpan.FromMilliseconds(320),
+                                                EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.35 } };
+            if (fromHidden) slideIn.From = -12;
+            Timeline.SetDesiredFrameRate(fadeIn, 60);
+            bar.BeginAnimation(OpacityProperty, fadeIn);
+            bar.BeginAnimation(Motion.ShiftYProperty, slideIn);
+        }
+        else
+        {
+            if (bar.Visibility != Visibility.Visible) return;
+            var fadeOut = new DoubleAnimation { To = 0, Duration = TimeSpan.FromMilliseconds(220), EasingFunction = ease };
+            fadeOut.Completed += (_, _) =>
+            {
+                if (_barWanted != false) return;   // shown again meanwhile
+                bar.Visibility = Visibility.Collapsed;
+                bar.BeginAnimation(OpacityProperty, null);
+                bar.BeginAnimation(Motion.ShiftYProperty, null);
+                bar.Opacity = 1;
+                Motion.SetShiftY(bar, 0);
+            };
+            bar.BeginAnimation(OpacityProperty, fadeOut);
+            bar.BeginAnimation(Motion.ShiftYProperty, new DoubleAnimation { To = -8, Duration = TimeSpan.FromMilliseconds(220), EasingFunction = ease });
+        }
+    }
+
+    private void StickyPlanBar_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm) vm.IsFloatingPlanHovered = true;
+    }
+
+    private void StickyPlanBar_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm) vm.IsFloatingPlanHovered = false;
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        _planCheckTimer?.Stop();
+        if (DataContext is ChatViewModel leaving) leaving.IsFloatingPlanHovered = false;
+
         if (_chatScrollViewer != null)
         {
             _chatScrollViewer.ScrollChanged -= OnChatScrollChanged;
@@ -320,6 +453,7 @@ public partial class ChatView : UserControl
     private void OnChatScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (sender is not ScrollViewer sv) return;
+        QueuePlanCheck();   // the floating plan card: is the chat's own plan card still on screen? (throttled)
         if (e.ExtentHeightChange == 0 && e.ViewportHeightChange == 0)
         {
             // The offset moved by itself: the user scrolled (wheel, drag, keys) — remember where they are.

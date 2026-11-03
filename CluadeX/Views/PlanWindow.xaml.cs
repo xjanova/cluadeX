@@ -20,6 +20,8 @@ public partial class PlanWindow : Window
             else { Left = area.Right - Width - 8; Top = area.Top + 60; }
             NewItemBox.Focus();
         };
+        // Minimised on its own (it has a taskbar button): its step's ring and sweep stop asking for frames.
+        StateChanged += (_, _) => AmbientAnimation.SetMinimized(this, WindowState == WindowState.Minimized);
     }
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

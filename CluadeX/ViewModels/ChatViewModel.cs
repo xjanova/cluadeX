@@ -1331,6 +1331,9 @@ public partial class ChatViewModel : ViewModelBase
                 })).ToList();
                 if (planItems.FirstOrDefault(p => p.IsActive) is { } activeStep)
                     activeStep.Running = RunningLineFor(todoRun?.Session.Id ?? CurrentSession?.Id);
+                // The same plan with a step further: its rows change state in place, so the card plays the change.
+                if (_todoListMsg != null && Messages.Contains(_todoListMsg))
+                    planItems = PlanItemView.Reconcile(_todoListMsg.PlanItems, planItems);
                 int planDone = planItems.Count(p => p.IsDone);
                 string planHeader = planDone == planItems.Count
                     ? LocF("chat.plan.done", planDone, planItems.Count)
