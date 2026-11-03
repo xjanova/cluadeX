@@ -47,6 +47,7 @@ internal static partial class Program
         if (args.Length > 0 && args[0] == "--dump") return Dump(args[1..]);
 
         var total = System.Diagnostics.Stopwatch.StartNew();
+        if (args.Contains("--gpu")) goto gpu;
         if (args.Contains("--canvas")) goto canvas;
         Fixture("wpf", WpfEdges, new[] { "Views/OldView.xaml.cs", "Legacy.cs" });
         Fixture("flutter", FlutterEdges, new[] { "lib/widgets/old_banner.dart" });
@@ -58,6 +59,8 @@ internal static partial class Program
         StaticXaml();
     canvas:
         Canvas();
+    gpu:
+        if (!args.Contains("--canvas")) Gpu();
 
         Console.WriteLine($"\n{Pass} passed, {Fail} failed ({total.Elapsed.TotalSeconds:0.0} s)");
         Report.Insert(0, $"# graphtest — {Pass} passed, {Fail} failed\n\nRun {DateTime.Now:yyyy-MM-dd HH:mm}, {total.Elapsed.TotalSeconds:0.0} s.\n");

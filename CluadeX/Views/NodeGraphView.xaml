@@ -151,9 +151,11 @@
             </Grid.ColumnDefinitions>
 
             <ui:NodeGraphCanvas x:Name="Canvas"/>
+            <!-- the GPU view (WebGL in a WebView2) goes here when the machine has it; it draws its own legend -->
+            <Border x:Name="GpuHost" Visibility="Collapsed"/>
 
             <!-- legend -->
-            <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12" Padding="10,6" CornerRadius="8"
+            <Border x:Name="Legend" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12" Padding="10,6" CornerRadius="8"
                     Background="{DynamicResource Surface.Panel}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1" IsHitTestVisible="False">
                 <StackPanel Orientation="Horizontal">
                     <StackPanel Orientation="Horizontal" Visibility="{Binding IsProject, Converter={StaticResource BoolVis}}">

@@ -918,6 +918,17 @@ public class AgentToolService : IDisposable
                 }
             }
 
+            // The Node Graph shows the file being worked on (it lights the node and runs data along its wires).
+            if (call.Type is ToolType.ReadFile or ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.NotebookEdit)
+            {
+                string touched = call.Type == ToolType.NotebookEdit ? call.GetArg("notebook_path", call.GetArg("path")) : call.GetArg("path");
+                if (!string.IsNullOrWhiteSpace(touched))
+                {
+                    try { Agents.FileActivity.Note(_fileSystem.ResolveSafePath(touched), call.Type != ToolType.ReadFile); }
+                    catch { /* the tool itself reports a bad path */ }
+                }
+            }
+
             var toolResult = call.Type switch
             {
                 // File tools

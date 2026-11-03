@@ -101,7 +101,7 @@ public partial class CodeEditorView : UserControl
     {
         if (ActualWidth <= 0) return;
         if (ApplyOrientation()) return;
-        var (explorer, chat) = SidePanelWidths(ActualWidth, ExplorerPanel.Width, EditorChatPanel.Width);
+        var (explorer, chat) = SidePanelWidths(ActualWidth, ExplorerPanel.Width, _chatHidden ? 0 : EditorChatPanel.Width);
         ExplorerPanel.MaxWidth = explorer;
         ExplorerPanel.Visibility = explorer < 1 ? Visibility.Collapsed : Visibility.Visible;
         EditorChatPanel.MaxWidth = chat;
@@ -115,7 +115,7 @@ public partial class CodeEditorView : UserControl
     /// landscape. True while stacked (the side-panel fitting then only concerns the file tree).</summary>
     private bool ApplyOrientation()
     {
-        bool stacked = IsPortrait(ActualWidth, ActualHeight);
+        bool stacked = !_chatHidden && IsPortrait(ActualWidth, ActualHeight);   // (no chat in its own window: nothing to stack)
         if (stacked != _stacked)
         {
             _stacked = stacked;
@@ -128,8 +128,6 @@ public partial class CodeEditorView : UserControl
                 EditorChatPanel.BorderThickness = new Thickness(0, 1, 0, 0);
                 EditorRow.Height = new GridLength(1.15, GridUnitType.Star);
                 ChatRow.Height = new GridLength(1, GridUnitType.Star);
-                ChatGrip.Visibility = Visibility.Collapsed;
-                ChatSplitter.Visibility = Visibility.Visible;
             }
             else
             {
@@ -138,10 +136,10 @@ public partial class CodeEditorView : UserControl
                 EditorChatPanel.BorderThickness = new Thickness(1, 0, 0, 0);
                 EditorRow.Height = new GridLength(1, GridUnitType.Star);
                 ChatRow.Height = new GridLength(0);
-                ChatGrip.Visibility = Visibility.Visible;
-                ChatSplitter.Visibility = Visibility.Collapsed;
             }
         }
+        ChatGrip.Visibility = stacked || _chatHidden ? Visibility.Collapsed : Visibility.Visible;
+        ChatSplitter.Visibility = stacked ? Visibility.Visible : Visibility.Collapsed;
         if (!stacked) return false;
         // Stacked: only the file tree shares the editor's row.
         var (explorer, _) = SidePanelWidths(ActualWidth, ExplorerPanel.Width, 0);
@@ -193,7 +191,42 @@ public partial class CodeEditorView : UserControl
     /// them, so each visit left another invisible editor alive, still syncing text, still scrolling,
     /// still repainting on every agent edit.
     /// </summary>
-    private void OnUnloaded(object sender, RoutedEventArgs e) => DetachVm();
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        // Moved to another window (the page popped out or brought back, Views/PopOut): it is loaded there before this
+        // runs, so it keeps its text, undo, caret and scroll. Really gone: detached as before.
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+        {
+            if (!IsLoaded) DetachVm();
+        }));
+    }
+
+    // ─── in a window of its own (Views/PopOut): no docked chat — the owner types in the main window's chat ───
+
+    private bool _chatHidden;
+
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.Property == PopOut.PagePopOut.IsFloatingProperty) ApplyFloating(e.NewValue is true);
+    }
+
+    /// <summary>Floating: the chat panel, its grip and its splitter go, and the docked ChatView with them (it is not
+    /// built at all there); back in the main window the chat docks again.</summary>
+    private void ApplyFloating(bool floating)
+    {
+        if (floating == _chatHidden) return;
+        _chatHidden = floating;
+        if (floating) EditorChatHost.ClearValue(ContentControl.ContentProperty);
+        else EditorChatHost.SetBinding(ContentControl.ContentProperty, new Binding(nameof(CodeEditorViewModel.ChatVM)));
+        EditorChatPanel.Visibility = floating ? Visibility.Collapsed : Visibility.Visible;
+        ChatGrip.Visibility = floating ? Visibility.Collapsed : Visibility.Visible;
+        if (floating) ChatSplitter.Visibility = Visibility.Collapsed;
+        FitSidePanels();   // (lays the panels out again: a portrait window stacks the chat only when there is one)
+    }
+
+    /// <summary>Is the docked chat shown (false in the page's own window)?</summary>
+    public bool ShowsDockedChat => !_chatHidden;
 
     private void AttachVm(CodeEditorViewModel vm)
     {

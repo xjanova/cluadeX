@@ -193,6 +193,7 @@ internal static class StudioKeys
         ["graph.fitTip"] = E("Fit to view (F)", "พอดีหน้าจอ (F)"),
         ["graph.hint"] = E("Drag nodes · wheel to zoom · drag empty space to pan · click a wire to see why · double-click to open", "ลากโหนด · ล้อเมาส์ซูม · ลากพื้นที่ว่างเพื่อเลื่อน · คลิกเส้นเพื่อดูที่มา · ดับเบิลคลิกเพื่อเปิด"),
         ["graph.busy"] = E("Reading the project…", "กำลังอ่านโปรเจกต์…"),
+        ["graph.flow"] = E("AI at work (data running)", "AI กำลังทำงาน (ข้อมูลวิ่ง)"),
         ["graph.empty"] = E("No source files found in this project.", "ไม่พบไฟล์ซอร์สในโปรเจกต์นี้"),
         ["graph.failed"] = E("Could not read the project — see the Debug Log.", "อ่านโปรเจกต์ไม่สำเร็จ — ดูที่ Debug Log"),
         ["graph.noProject"] = E("This chat has no project yet. Open a folder for it (in the chat, the Code editor or the UI Studio) to see its graph.", "แชทนี้ยังไม่มีโปรเจกต์ — เปิดโฟลเดอร์ให้แชทนี้ (จากแชท, Code editor หรือ UI Studio) แล้วจะเห็นกราฟ"),

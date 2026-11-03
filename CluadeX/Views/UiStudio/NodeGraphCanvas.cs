@@ -13,7 +13,7 @@ namespace CluadeX.Views.UiStudio;
 /// zoom at the cursor (wheel), node drag, a minimap and fit-to-view. Colours come from the theme tokens, so it
 /// follows the app's theme.
 /// </summary>
-public sealed class NodeGraphCanvas : FrameworkElement
+public sealed class NodeGraphCanvas : FrameworkElement, INodeGraphSurface
 {
     public ProjectGraph? Graph { get; private set; }
     public GraphNode? Selected { get; private set; }
@@ -21,6 +21,10 @@ public sealed class NodeGraphCanvas : FrameworkElement
     /// <summary>Nodes whose file changed lately (id → when, UTC): drawn with a fading glow.</summary>
     public IReadOnlyDictionary<string, DateTime>? Changed { get; set; }
     public TimeSpan ChangeGlow { get; set; } = TimeSpan.FromSeconds(4);
+    /// <summary>Not drawn here: this canvas shows an agent's edits through <see cref="Changed"/> (the file watcher sees
+    /// them); the reads and the data on the wires are the GPU view's.</summary>
+    public IReadOnlyDictionary<string, (DateTime At, bool Write)>? Active { get; set; }
+    public void SetActivity() { }
     private System.Windows.Threading.DispatcherTimer? _glowTimer;
 
     public event Action<GraphNode?>? NodeSelected;
@@ -523,6 +527,7 @@ public sealed class NodeGraphCanvas : FrameworkElement
     };
 
     public static Color EdgeColor(GraphEdgeKind kind) => EdgeColors.TryGetValue(kind, out var c) ? c : Colors.Gray;
+    public static Color KindColor(GraphNodeKind kind) => KindColors.TryGetValue(kind, out var c) ? c : Colors.Gray;
 
     private static readonly Dictionary<Color, SolidColorBrush> BrushCache = new();
     private static SolidColorBrush Solid(Color c, byte alpha = 255)
