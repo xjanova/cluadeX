@@ -44,19 +44,26 @@ public partial class CodeAgentService
     {
         var provider = _providerManager.ActiveProvider;
         bool edit = string.Equals(call.Type, "general", StringComparison.OrdinalIgnoreCase);
+        string? worktree = call.WorkingDirectory;
         if (provider is { RunsOwnSubAgents: true, IsReady: true } && !provider.SupportsNativeToolUse)
         {
+            // Claude Dev runs in the project folder itself: an agent meant for its own worktree would edit the real one.
+            if (worktree != null)
+                throw new InvalidOperationException("This agent must work in its own git worktree, which a Claude Dev (CLI) agent cannot do — "
+                    + "it would edit the project itself. Run the workflow on a model with native tools (Claude / OpenAI / Gemini API, "
+                    + "llama-server), or leave isolation out.");
             string? cd = await RunSubAgentOnClaudeDevAsync(call.Prompt, edit, ct);
             return cd != null ? new WorkflowAgentResult(cd, 0)
                 : throw new InvalidOperationException("Claude Dev (the Claude Code CLI) is not ready, so this workflow agent could not run.");
         }
         if (provider == null || !provider.SupportsNativeToolUse || !provider.IsReady)
             throw new InvalidOperationException(WorkflowRunnerRefusal() ?? "no model");
-        // In a turn: a child of its run. Resumed from the card: a scope of its own for that chat.
+        // In a turn: a child of its run. Resumed from the card: a scope of its own for that chat. An isolated agent's scope
+        // is its worktree, and Accept edits covers that worktree only (as a worker's does).
         var parent = AgentRunScope.Current;
-        var scope = parent?.CreateChild()
-                    ?? new AgentRunScope(call.SessionKey, _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null)
-                    { Provider = provider, ProviderType = _providerManager.ActiveProviderType };
+        var scope = (worktree != null ? parent?.CreateChild(worktree, acceptEditsInFolder: true) : parent?.CreateChild())
+                    ?? new AgentRunScope(call.SessionKey, worktree ?? (_fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null))
+                    { Provider = provider, ProviderType = _providerManager.ActiveProviderType, AcceptEditsRoot = worktree };
         var kind = DispatchPolicy.KindOf(edit);
         if (kind == SubAgentKind.Explore) scope.StepEffort = "low";
         AgentRunScope.Enter(scope);

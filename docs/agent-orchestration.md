@@ -76,6 +76,36 @@ Rule for every piece: **one source of truth that already exists, one more view o
 - **Provider without native tools** (`[ACTION:]` loop / local LLamaSharp): sub-agents cannot run, so
   `workflow` is refused with that reason, as `agent_spawn` falls back today.
 
+### 2a. Isolation, gate, merge (what a careful lead does with many coding agents)
+
+```json
+{ "title": "Implement", "isolation": "worktree", "gate": "dotnet build",
+  "merge": { "test": "dotnet test" },
+  "agents": [ {"label":"parser","prompt":"…"}, {"label":"ui","prompt":"…"} ] }
+```
+- **`isolation: "worktree"`** (on the phase, or on one agent): each agent gets its own `WorktreeSandbox` —
+  made once it has its slot (creation and removal one at a time: git's lock), seeded with the run folder's
+  uncommitted state, removed when the agent ends. It runs as `general`, its scope is the worktree (Accept
+  edits covers only it), the prompt and the sub-agent system prompt name that folder. Its row and its cache
+  entry carry `git diff seed` and the changed files. Claude Dev agents are refused here: the CLI works in
+  the project folder itself. The run folder must be a git repository with a commit (checked before start).
+- **`gate`**: the engine — not the agent's word — runs it in the worktree after the agent ends (row state
+  `checking`), exit 0 = green, through `ShellRunner` (10 min cap). The verdict is cached with the diff, so
+  a Resume does not need the worktree again.
+- **`merge`**: after the phase's barrier, in plan order: red gate → left out; diff already in the tree →
+  counted merged (a resumed merge never applies twice); `git apply --check` fails → `conflict`; else
+  applied, then the gate runs on the merged tree; red → `git apply -R` and `red-after-merge`. A stop while
+  that check runs takes the diff back out. Then `merge.test` (default: the gate) runs **once** on the
+  merged result. Every left-out diff is in the report with its patch; nothing is committed.
+- **Commands are shown, always.** A plan with a gate or test asks on every call (even with Ultra on) and
+  the prompt lists the commands — the engine runs them outside the tool path a `run_command` takes.
+- **Worktrees never outlive the run.** Each one is written to the state's `Worktrees` before an agent
+  starts in it; the run's end sweeps every folder named after the workflow in the worktree home (one a
+  stop cut off inside `git worktree add` too); at app start `SweepLeftWorktreesAsync` removes what a crash
+  left. The sweep only touches `<home>/<repo>-<wf-id>-*` folders, whatever paths a state file names.
+- Proven by `tests/orchtest` I1–I8 (scripted agents, a real throwaway repository, the real shell for the
+  gate in I1/I3).
+
 ## 3. Workflow card
 
 - A `ChatMessage` with `Workflow` (a `WorkflowCard` view model), Role System, `ToolName = "cx:workflow"`,

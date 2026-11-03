@@ -40,6 +40,7 @@ public partial class ChatViewModel
 
         var svc = WorkflowService.Current ??= new WorkflowService(_settingsService.DataRoot);
         svc.MarkInterrupted();   // a workflow the last app run left "running" is stopped (its card offers Resume)
+        _ = Task.Run(svc.SweepLeftWorktreesAsync);   // … and the worktrees its agents were in go (git, off the UI thread)
         _agentService.ConnectWorkflows(svc);
         svc.Started += st => App.Current?.Dispatcher.BeginInvoke(() => OnWorkflowStarted(st));
         svc.RowChanged += (st, _) => { if (_workflowCards.TryGetValue(st.Id, out var card)) card.MarkDirty(); };

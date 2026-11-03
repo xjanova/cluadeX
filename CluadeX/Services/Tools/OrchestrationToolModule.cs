@@ -45,6 +45,7 @@ public sealed class OrchestrationToolModule : IAgentToolModule
           "agents":{"type":"array","items":{"type":"object","properties":{
              "label":{"type":"string"},"prompt":{"type":"string","description":"Self-contained task: the agent sees nothing else"},
              "type":{"type":"string","description":"explore (read-only, default) or general (may edit files)"},
+             "isolation":{"type":"string","description":"worktree = this agent alone works in its own git worktree (overrides the phase)"},
              "schema":{"type":"object","description":"Optional JSON schema the answer must match, e.g. {\"type\":\"object\",\"properties\":{\"findings\":{\"type\":\"array\"}},\"required\":[\"findings\"]}"}},
              "required":["label","prompt"]}},
           "verify":{"type":"object","properties":{
@@ -58,6 +59,10 @@ public sealed class OrchestrationToolModule : IAgentToolModule
              "stages":{"type":"array","items":{"type":"object","properties":{
                 "label":{"type":"string"},"prompt":{"type":"string","description":"May use {{item}} and {{prev}}"},
                 "type":{"type":"string"},"schema":{"type":"object"}},"required":["label","prompt"]}}}}},
+          "isolation":{"type":"string","description":"worktree = every agent of this agents phase edits in its own git worktree (seeded with the project's current state, uncommitted work included), so parallel agents never overwrite each other; each result carries its diff. Agents become type general. Needs the project to be a git repository."},
+          "gate":{"type":"string","description":"With isolation: a build/test command the app itself runs in each agent's worktree after it ends (exit 0 = green), e.g. dotnet build. A red agent's diff is never merged. It runs in a fresh checkout: ignored folders (node_modules, bin, obj) are not there."},
+          "merge":{"type":"object","description":"With isolation: when every agent of the phase has ended, apply the green diffs to the project one by one (plan order). After each, the gate runs on the merged tree; a diff that no longer applies, or turns it red, is left out and reported with its diff. Then test runs once on the merged result. Nothing is committed.",
+             "properties":{"test":{"type":"string","description":"The full test command run once on the merged result (default: the gate)"}}},
           "required":["title"]}},
       "resume_id":{"type":"string","description":"Resume a stopped workflow by its id instead (finished agents are reused)"}},
      "required":[]}
@@ -79,7 +84,10 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         {
             Name = WorkflowToolName,
             Description = "Run a multi-agent workflow the app executes deterministically: phases of parallel sub-agents, pipelines with "
-                + "no barrier, per-agent JSON answers, and adversarial verification (N refuters per claim, majority drops it). Only "
+                + "no barrier, per-agent JSON answers, and adversarial verification (N refuters per claim, majority drops it). For "
+                + "parallel code changes, give the implementing phase isolation \"worktree\" + gate (the build/test command) + "
+                + "merge: each agent edits its own git worktree, the app re-runs the gate there itself, merges only green diffs, "
+                + "reports conflicts and red merges, and runs the test command once on the merged result. Only "
                 + "offered when the user opted in (the chat's Ultra switch, or they asked for a workflow / multi-agent work) because "
                 + "it spends many tokens; for one sub-task use agent_spawn. The call waits for the workflow and returns each phase's "
                 + "results; the user watches it on a workflow card and can stop or resume it.",
@@ -124,13 +132,27 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         string chat = Chat ?? context.SessionKey;
         string resume = call.GetArg("resume_id").Trim();
         string detail;
-        if (resume.Length > 0) detail = $"Resume workflow {resume}: finished agents are reused, the rest run.";
+        List<string> commands = new();
+        if (resume.Length > 0)
+        {
+            detail = $"Resume workflow {resume}: finished agents are reused, the rest run.";
+            if (WorkflowService.Current?.Get(resume) is { } old && WorkflowPlan.Parse(old.PlanJson, out _) is { } oldPlan) commands = oldPlan.Commands();
+        }
         else if (PlanOf(call, out _, out _) is { } p && WorkflowService.Current is { } svc)
         {
             var est = svc.EstimateFor(p);
             detail = $"Workflow \"{p.Name}\": up to {est.Agents} agents, {est.AtOnce} at once · ≈ ${est.Usd:0.00} · ≈ {est.RamMb / 1024.0:0.0} GB RAM while it runs.";
+            if (p.UsesWorktrees) detail += " Agents edit in their own git worktrees; green diffs are merged into the project's working tree (not committed).";
+            commands = p.Commands();
         }
         else detail = "Workflow (its plan has a problem — the call will say what).";
+        // The engine runs these itself, outside the tool path a run_command would take: the owner sees them every time.
+        if (commands.Count > 0)
+            return new ToolPermission
+            {
+                Scope = "execute", Resource = WorkflowToolName, AlwaysAsk = true,
+                Detail = detail + " The app itself runs these commands in the worktrees and the project: " + string.Join(" · ", commands.Select(c => "`" + c + "`")),
+            };
         // Ultra on = the owner already said yes to workflows in this chat; the card still shows the estimate.
         if (WorkflowGate.IsUltra(chat)) return new ToolPermission { Scope = "execute", Resource = WorkflowToolName, IsFree = true, Detail = detail };
         return new ToolPermission { Scope = "execute", Resource = WorkflowToolName, AlwaysAsk = true, Detail = detail };
@@ -188,11 +210,13 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         {
             var plan = PlanOf(call, out string json, out var error);
             if (plan == null) return Fail(error!);
+            string? folder = RootOf(AgentRunScope.Current)?.WorkingDirectory ?? context.WorkingDirectory;
+            if (await WorkflowService.FolderRefusalAsync(plan, folder, ct) is { } noFolder) return Fail(noFolder);
             var est = svc.EstimateFor(plan);
             if (svc.BudgetLeft() is { } left && est.Usd > left)
                 return Fail($"This workflow is estimated at ≈ ${est.Usd:0.00} ({est.Agents} agents) but the run has ${left:0.00} of its budget left. "
                             + "Plan fewer agents, items or refuters, or ask the user to raise the budget.");
-            st = await svc.RunAsync(plan, json, chat ?? "", ct);
+            st = await svc.RunAsync(plan, json, chat ?? "", ct, folder);
         }
         return new ToolResult
         {
@@ -214,7 +238,9 @@ public sealed class OrchestrationToolModule : IAgentToolModule
                + "ask: Run the live test now?\nactions: [\"Yes, run it\", \"Not now\"]\n[/ACTION]";
         if (wf)
             s += "\nThe user opted in to workflows in this chat: for a big review, audit or multi-part investigation, plan a workflow "
-               + "(phases of agents with JSON schemas, verify their findings with refuters) instead of many agent_spawn calls.";
+               + "(phases of agents with JSON schemas, verify their findings with refuters) instead of many agent_spawn calls. "
+               + "When several agents change code at once, give that phase isolation \"worktree\", a gate (the build/test "
+               + "command) and merge, so the app checks each diff itself and merges only what stays green.";
         return s;
     }
 }

@@ -12,6 +12,7 @@
             <Setter Property="Fill" Value="{DynamicResource Text.Faint}"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding State}" Value="running"><Setter Property="Fill" Value="{DynamicResource Accent.1}"/></DataTrigger>
+                <DataTrigger Binding="{Binding State}" Value="checking"><Setter Property="Fill" Value="{DynamicResource Accent.1}"/></DataTrigger>
                 <DataTrigger Binding="{Binding State}" Value="done"><Setter Property="Fill" Value="{DynamicResource Status.Success}"/></DataTrigger>
                 <DataTrigger Binding="{Binding State}" Value="cached"><Setter Property="Fill" Value="{DynamicResource Status.Info}"/></DataTrigger>
                 <DataTrigger Binding="{Binding State}" Value="failed"><Setter Property="Fill" Value="{DynamicResource Status.Danger}"/></DataTrigger>
@@ -103,6 +104,9 @@
                     <TextBlock Text="  ·  " Foreground="{DynamicResource Text.Faint}" Visibility="{Binding HasVerdicts, Converter={StaticResource BoolVis}}"/>
                     <TextBlock Text="{Binding VerdictsText}" FontSize="11" Foreground="{DynamicResource Text.Muted}"
                                Visibility="{Binding HasVerdicts, Converter={StaticResource BoolVis}}"/>
+                    <TextBlock Text="  ·  " Foreground="{DynamicResource Text.Faint}" Visibility="{Binding HasMerge, Converter={StaticResource BoolVis}}"/>
+                    <TextBlock Text="{Binding MergeText}" FontSize="11" Foreground="{DynamicResource Text.Muted}"
+                               Visibility="{Binding HasMerge, Converter={StaticResource BoolVis}}"/>
                 </StackPanel>
                 <ItemsControl x:Name="PhaseList" ItemsSource="{Binding Phases}">
                     <ItemsControl.ItemTemplate>

@@ -119,24 +119,50 @@ public sealed class WorktreeSandbox : IAsyncDisposable
         return ap.Code == 0 ? null : ap.Out.Trim();
     }
 
+    /// <summary>Take an applied patch back out of the run folder (checked first). Null = reverted; otherwise git's reason.</summary>
+    public static async Task<string?> RevertAsync(string runFolder, string patch, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(patch)) return null;
+        string repo = await RepoRootOfAsync(runFolder, ct) ?? runFolder;
+        var check = await GitAsync(repo, ct, patch, "apply", "-R", "--check", "--binary", "--whitespace=nowarn", "-");
+        if (check.Code != 0) return check.Out.Trim();
+        var ap = await GitAsync(repo, ct, patch, "apply", "-R", "--binary", "--whitespace=nowarn", "-");
+        return ap.Code == 0 ? null : ap.Out.Trim();
+    }
+
+    /// <summary>Is the patch already in the run folder (it reverses cleanly)? A resumed merge does not apply it twice.</summary>
+    public static async Task<bool> IsAppliedAsync(string runFolder, string patch, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(patch)) return false;
+        string repo = await RepoRootOfAsync(runFolder, ct) ?? runFolder;
+        return (await GitAsync(repo, ct, patch, "apply", "-R", "--check", "--binary", "--whitespace=nowarn", "-")).Code == 0;
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
         _disposed = true;
+        await RemoveAsync(RepoRoot, Root);
+    }
+
+    /// <summary>Remove a worktree this class made (git first, the folder itself when git cannot), then prune and drop the
+    /// empty home. Also what the crash sweep calls for a worktree a closed app left behind.</summary>
+    public static async Task RemoveAsync(string repoRoot, string root)
+    {
         try
         {
-            var r = await GitAsync(RepoRoot, CancellationToken.None, null, "worktree", "remove", "--force", Root);
-            if (r.Code != 0 && Directory.Exists(Root))
+            var r = await GitAsync(repoRoot, CancellationToken.None, null, "worktree", "remove", "--force", root);
+            if (r.Code != 0 && Directory.Exists(root))
             {
-                ClearReadOnly(Root);
-                Directory.Delete(Root, recursive: true);
+                ClearReadOnly(root);
+                Directory.Delete(root, recursive: true);
             }
         }
         catch { /* best effort: prune below forgets a folder that is gone */ }
-        try { await GitAsync(RepoRoot, CancellationToken.None, null, "worktree", "prune"); } catch { }
+        try { await GitAsync(repoRoot, CancellationToken.None, null, "worktree", "prune"); } catch { }
         try
         {
-            string home = HomeFor(RepoRoot);
+            string home = HomeFor(repoRoot);
             if (Directory.Exists(home) && !Directory.EnumerateFileSystemEntries(home).Any()) Directory.Delete(home);
         }
         catch { }
