@@ -30,7 +30,8 @@ public class LocalizationService
                                       Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
                                       Localization.AggregatorKeys.Keys,
                                       Localization.LspKeys.Keys,
-                                      Localization.PopOutKeys.Keys })
+                                      Localization.PopOutKeys.Keys,
+                                      Localization.MediaKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }
@@ -980,7 +981,13 @@ public class LocalizationService
         ["chat.refreshModelsTip"] = new() { ["en"] = "Refresh model list", ["th"] = "รีเฟรชรายชื่อโมเดล" },
         ["chat.loading"] = new() { ["en"] = "Loading...", ["th"] = "กำลังโหลด…" },
         ["chat.generating"] = new() { ["en"] = "Generating...", ["th"] = "กำลังสร้างคำตอบ…" },
-        ["chat.ctxTip"] = new() { ["en"] = "Context Memory — AI quality degrades as this fills up", ["th"] = "หน่วยความจำ context — ยิ่งเต็ม คุณภาพคำตอบยิ่งลด" },
+        ["chat.ctxTip"] = new()
+        {
+            ["en"] = "Context the model holds for this chat (system prompt, tools, files read and the conversation) — the fuller it is, the slower, costlier and less sharp each reply. "
+                   + "The number is the count the model's service reported for the last request; with \"~\" it is a guess from the chat's text, until a request reports one.",
+            ["th"] = "context ที่โมเดลถืออยู่ในแชตนี้ (system prompt, เครื่องมือ, ไฟล์ที่อ่าน และบทสนทนา) — ยิ่งเต็ม แต่ละคำตอบยิ่งช้า แพง และคมน้อยลง "
+                   + "ตัวเลขคือจำนวนที่บริการของโมเดลรายงานในคำขอล่าสุด ถ้ามี \"~\" นำหน้าคือการประมาณจากข้อความในแชต จนกว่าจะมีคำขอที่รายงานตัวเลขจริง",
+        },
         ["chat.lastTurnTip"] = new() { ["en"] = "Last turn: tokens · time · speed", ["th"] = "ตาล่าสุด: โทเค็น · เวลา · ความเร็ว" },
         ["chat.costTip"] = new() { ["en"] = "Session API cost (USD)", ["th"] = "ค่าใช้จ่าย API ของเซสชันนี้ (USD)" },
         ["chat.reviewTip"] = new() { ["en"] = "Review code changes", ["th"] = "รีวิวการเปลี่ยนแปลงโค้ด" },

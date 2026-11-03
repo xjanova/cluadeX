@@ -60,6 +60,8 @@ internal static class HandoffWire
         string? small = AgentHandoff.Compose(huge, @"D:\Game", git, 3600);
         check("handoff", "the room's budget is kept (a 50 KB task still fits ~3.6 KB) and git is not crowded out",
             small != null && small.Length <= 3600 && small.Contains("lyra-skills"), $"{small?.Length}");
+        check("handoff", "an earlier refusal is not passed on as a rule: the brief ends telling the worker to try the tool again (GigLive web check)",
+            brief!.EndsWith(AgentHandoff.StaleToolsNote) && small!.EndsWith(AgentHandoff.StaleToolsNote), "");
         // A compacted chat: the model's first turn is a summary that cuts the request short (the real hive-t2 brief).
         string fullTask = "Next task on HIVE // BREACH. CONTEXT: build on enemies-spitter-brute: create branch `lyra-skills` from it. " + new string('y', 900) + " END-OF-TASK";
         var compacted = new List<ChatMessage>

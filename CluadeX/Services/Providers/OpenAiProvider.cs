@@ -198,15 +198,16 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                     && delta.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
                     content = c.GetString();
 
-                if (_costTracker != null && root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
                 {
                     int inTok = usage.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var a) ? a : 0;
+                    AgentRunScope.ReportPromptSize(inTok);   // prompt_tokens already holds the cached part
                     int outTok = usage.TryGetProperty("completion_tokens", out var ot) && ot.TryGetInt32(out var b) ? b : 0;
                     int cached = usage.TryGetProperty("prompt_tokens_details", out var pd)
                                  && pd.TryGetProperty("cached_tokens", out var cd) && cd.TryGetInt32(out var cc) ? cc : 0;
                     int reasoning = usage.TryGetProperty("completion_tokens_details", out var cdt)
                                     && cdt.TryGetProperty("reasoning_tokens", out var rt) && rt.TryGetInt32(out var rv) ? rv : 0;
-                    if (inTok > 0 || outTok > 0)
+                    if (_costTracker != null && (inTok > 0 || outTok > 0))
                         _costTracker.RecordUsage(model, inTok - cached, outTok, cached, 0, thinkingTokens: reasoning);
                 }
             }
@@ -505,6 +506,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
 
         using var ownedResponse = response;
         var result = await ParseResponsesStreamAsync(response.Content, onTextDelta, ct);
+        AgentRunScope.ReportPromptSize(result.InputTokens + result.CacheReadTokens);
         // Cached input is billed at the cached rate (and counts toward GPT-6's 272K long-context line) — it was dropped
         // here, so a cache-heavy agent step read as nearly free.
         if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0 || result.CacheReadTokens > 0))

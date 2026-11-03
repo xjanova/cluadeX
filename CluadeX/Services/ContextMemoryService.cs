@@ -37,9 +37,18 @@ public class ContextMemoryService
         int digitRunCount = 0;
         bool inDigitRun = false;
 
+        // Scripts written without spaces (Thai, CJK, kana, Hangul): a Thai sentence is one long "word" to the loop below,
+        // so it counted as ~1 token where the model's tokenizer spends one per one or two characters (owner 2026-11-04:
+        // the context bar "rose slowly" on Thai chats). Those characters are counted by themselves.
+        int thaiChars = 0, cjkChars = 0;
+
         for (int i = 0; i < text.Length; i++)
         {
             char c = text[i];
+
+            if (c is >= '฀' and <= '๿') { thaiChars++; inWord = false; inDigitRun = false; continue; }
+            if (c is >= '぀' and <= 'ヿ' or >= '㐀' and <= '鿿' or >= '가' and <= '힯' or >= '豈' and <= '﫿')
+            { cjkChars++; inWord = false; inDigitRun = false; continue; }
 
             if (char.IsLetterOrDigit(c) || c == '_')
             {
@@ -69,6 +78,10 @@ public class ContextMemoryService
 
         // Each punctuation/operator is roughly 1 token
         tokens += punctCount;
+
+        // Thai: about two characters a token (tone marks and vowels above/below included); CJK: about one each.
+        // Rough by design: the bar shows the service's own count as soon as a request reports one.
+        tokens += (thaiChars + 1) / 2 + cjkChars;
 
         // Newlines: roughly 1 token per newline
         int newlines = 0;

@@ -128,11 +128,11 @@ public partial class CodeEditorView
         bool ctrl = (mods & ModifierKeys.Control) != 0, shift = (mods & ModifierKeys.Shift) != 0, alt = (mods & ModifierKeys.Alt) != 0;
         bool tab = _boundTab != null;
 
-        if (ctrl && alt && !shift && key == Key.S && tab) { OnSaveAs(this, new RoutedEventArgs()); return true; }
+        if (ctrl && alt && !shift && key == Key.S && _vm.ActiveTab != null) { OnSaveAs(this, new RoutedEventArgs()); return true; }
         if (alt) return false;
         if (ctrl && !shift && key == Key.N) { OnNewFile(this, new RoutedEventArgs()); return true; }
         if (ctrl && !shift && key == Key.O) { OnOpenFile(this, new RoutedEventArgs()); return true; }
-        if (ctrl && !shift && key == Key.W && tab) { _vm.CloseActiveTab(); return true; }
+        if (ctrl && !shift && key == Key.W && _vm.ActiveTab != null) { _vm.CloseActiveTab(); return true; }   // (a media tab too)
         if (ctrl && !shift && key == Key.F && tab) { OpenFindBar(replace: false); return true; }
         if (ctrl && !shift && key == Key.H && tab) { OpenFindBar(replace: true); return true; }
         if (ctrl && !shift && key == Key.G && tab) { OpenGoTo(); return true; }
@@ -230,12 +230,13 @@ public partial class CodeEditorView
     {
         try
         {
-            if (_vm == null || _boundTab == null) return;
+            var tab = _vm?.ActiveTab;   // (a media tab too: its page writes the file)
+            if (_vm == null || tab == null) return;
             var dlg = new Microsoft.Win32.SaveFileDialog
             {
                 Title = L("edt.saveAsTitle"),
                 InitialDirectory = _vm.DefaultFolder,
-                FileName = _boundTab.FileName,
+                FileName = tab.FileName,
                 OverwritePrompt = true,
                 Filter = L("edt.allFiles") + "|*.*",
             };

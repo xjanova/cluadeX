@@ -27,6 +27,8 @@ namespace EditorTest;
 ///   S*  security scan: cancellation is reported, junction loops are skipped
 ///   B*  C# debugging builds the project and finds the output .dll
 ///   I*  fabricated demo instincts are removed only when untouched
+///   M*  media tabs: which files are media, copy names that never overwrite, the chunked upload, the ffmpeg cut
+///       (arguments, cancel, timeout), overwriting asks first, text saves refuse a media tab, Thai + English keys
 /// Run: build CluadeX, then `dotnet run -p:CluadeXBin=&lt;OutDir&gt;\`.
 /// </summary>
 internal static class Program
@@ -1884,6 +1886,261 @@ internal static class Program
             int aiBindings = System.Text.RegularExpressions.Regex.Matches(xaml, @"\{Binding\s+(?:Path=)?\w*AiComment").Count;
             Check("A2d", $"every AI-comments {{Binding}} names a real CodeEditorViewModel property ({aiBindings} bindings)",
                 badBindings.Count == 0 && aiBindings >= 12, string.Join(", ", badBindings));
+            return Task.CompletedTask;
+        });
+
+        // ═══════════════════════ media tabs (images / audio / video) ═══════════════════════
+        // Owner 2026-11-03: a work file that is a picture opens as a picture and can be cropped / resized; audio plays
+        // with a waveform and can be cut; video the same. These check the host side: which files are media, where a
+        // save may land (never on an existing file without asking), the ffmpeg cut, the chunked upload.
+        Console.WriteLine("\n── media tabs ──");
+        await Case("M1", () =>
+        {
+            static CluadeX.Services.Media.MediaKind K(string p) => CluadeX.Services.Media.MediaFiles.KindOf(p);
+            const CluadeX.Services.Media.MediaKind Img = CluadeX.Services.Media.MediaKind.Image, Aud = CluadeX.Services.Media.MediaKind.Audio,
+                Vid = CluadeX.Services.Media.MediaKind.Video, None = CluadeX.Services.Media.MediaKind.None;
+            bool kinds = K(@"C:\x\รูป ภาพ.PNG") == Img && K("a.jpeg") == Img && K("icon.svg") == Img && K("song.flac") == Aud
+                         && K("voice.m4a") == Aud && K("clip.MKV") == Vid && K("clip.webm") == Vid;
+            bool text = K("main.ts") == None && K("App.xaml") == None && K("noext") == None && K(null) == None && K("png") == None;
+            Check("M1", "media kind by extension (any case, Thai path); .ts (TypeScript) / .xaml / no extension stay text", kinds && text);
+            Check("M1b", "SVG is view-only; JPEG/JFIF are the same format as .jpg, PNG is not",
+                CluadeX.Services.Media.MediaFiles.IsViewOnly("a.SVG") && !CluadeX.Services.Media.MediaFiles.IsViewOnly("a.png")
+                && CluadeX.Services.Media.MediaFiles.SameFormat(@"C:\p\a.jpeg", "jpg") && CluadeX.Services.Media.MediaFiles.SameFormat(@"C:\p\a.JFIF", "jpeg")
+                && !CluadeX.Services.Media.MediaFiles.SameFormat(@"C:\p\a.png", "jpg") && !CluadeX.Services.Media.MediaFiles.SameFormat(@"C:\p\a.mp4", "webm"));
+            static string? S(string? e) => CluadeX.Services.Media.MediaFiles.SafeExt(e);
+            Check("M1c", "an extension from the page is letters/digits only (no '../', ':stream', spaces, over-long)",
+                S(".PNG") == "png" && S("webm") == "webm" && S("../exe") == null && S("png:x") == null && S("p ng") == null
+                && S("abcdef") == null && S("") == null && S(null) == null, $"{S(".PNG")}|{S("../exe")}");
+            return Task.CompletedTask;
+        });
+
+        await Case("M2", () =>
+        {
+            // The copy-name picker: "name-edit.ext", then "-2", "-3"… — never a name that exists (file OR folder).
+            string dir = Dir("media", "ภาพ งาน");
+            string orig = Path.Combine(dir, "รูป ปก.png");
+            File.WriteAllBytes(orig, new byte[] { 1 });
+            string first = CluadeX.Services.Media.MediaFiles.CopyPathFor(orig, "png");
+            File.WriteAllBytes(first, new byte[] { 2 });
+            string second = CluadeX.Services.Media.MediaFiles.CopyPathFor(orig, "png");
+            Directory.CreateDirectory(second);   // a folder takes the name too
+            string third = CluadeX.Services.Media.MediaFiles.CopyPathFor(orig, "png");
+            string webp = CluadeX.Services.Media.MediaFiles.CopyPathFor(orig, "webp");
+            string cut = CluadeX.Services.Media.MediaFiles.CopyPathFor(Path.Combine(dir, "clip a.mp4"), "", "cut");
+            Check("M2", "copy names: '-edit', then '-edit-2', '-edit-3' around a file and a folder; another format gets its own extension; same folder",
+                Path.GetFileName(first) == "รูป ปก-edit.png" && Path.GetFileName(second) == "รูป ปก-edit-2.png"
+                && Path.GetFileName(third) == "รูป ปก-edit-3.png" && Path.GetFileName(webp) == "รูป ปก-edit.webp"
+                && Path.GetFileName(cut) == "clip a-cut.mp4" && Path.GetDirectoryName(third) == dir,
+                $"{first} | {second} | {third} | {webp} | {cut}");
+            int asked = 0;
+            string far = CluadeX.Services.Media.MediaFiles.CopyPathFor(orig, "png", "edit", _ => { asked++; return true; });
+            Check("M2b", "every name taken: a unique name, not an endless loop",
+                asked == 9_999 && Path.GetFileName(far).StartsWith("รูป ปก-edit-") && far.EndsWith(".png") && !File.Exists(far), far);
+            return Task.CompletedTask;
+        });
+
+        await Case("M3", async () =>
+        {
+            // The page sends its edited bytes in base64 chunks; they go to a hidden temp file beside the original.
+            string dir = Dir("media", "upload ทดสอบ");
+            string orig = Path.Combine(dir, "เสียง a.wav");
+            File.WriteAllBytes(orig, Encoding.ASCII.GetBytes("ORIGINAL"));
+            byte[] data = Enumerable.Range(0, 3000).Select(i => (byte)(i * 7)).ToArray();
+            string b64a = Convert.ToBase64String(data, 0, 1500), b64b = Convert.ToBase64String(data, 1500, 1500);
+
+            using (var up = new CluadeX.Services.Media.MediaUpload(orig, "wav", data.Length))
+            {
+                bool outOfOrder = false;
+                try { await up.AppendBase64Async(1, b64b); } catch (InvalidDataException) { outOfOrder = true; }
+                await up.AppendBase64Async(0, b64a);
+                bool shortFinish;
+                using (var shortUp = new CluadeX.Services.Media.MediaUpload(orig, "wav", 10)) shortFinish = !await shortUp.FinishAsync();
+                await up.AppendBase64Async(1, b64b);
+                bool overrun = false;
+                try { await up.AppendBase64Async(2, Convert.ToBase64String(new byte[] { 9 })); } catch (InvalidDataException) { overrun = true; }
+                bool done = await up.FinishAsync();
+                Check("M3", "chunks: out of order refused, more than announced refused, a short upload does not finish; the temp file is hidden beside the original",
+                    outOfOrder && overrun && shortFinish && done && Path.GetDirectoryName(up.TempPath) == dir
+                    && Path.GetFileName(up.TempPath).StartsWith(".") && up.TempPath.EndsWith(".wav"), up.TempPath);
+
+                // Commit as a copy: the name picked is taken a moment before the move — it picks again, never overwrites.
+                string taken = Path.Combine(dir, "เสียง a-edit.wav");
+                File.WriteAllBytes(taken, Encoding.ASCII.GetBytes("SOMEONE ELSE"));
+                int picks = 0;
+                string final = up.CommitAsCopy(() => picks++ == 0 ? taken : CluadeX.Services.Media.MediaFiles.CopyPathFor(orig, "wav"));
+                Check("M3b", "commit as copy never replaces a file that took the name meanwhile; the original is untouched",
+                    final != taken && File.ReadAllText(taken) == "SOMEONE ELSE" && File.ReadAllBytes(final).SequenceEqual(data)
+                    && File.ReadAllText(orig) == "ORIGINAL" && !File.Exists(up.TempPath) && picks == 2, final);
+            }
+
+            string tempB;
+            using (var up = new CluadeX.Services.Media.MediaUpload(orig, "wav", 4))
+            {
+                tempB = up.TempPath;
+                await up.AppendBase64Async(0, Convert.ToBase64String(new byte[] { 1, 2 }));
+            }   // dropped half way (tab closed, Cancel pressed)
+            var leftovers = Directory.GetFiles(dir, "*.cxpart.*");
+            Check("M3c", "an upload dropped half way leaves no temp file behind; nothing else changed",
+                !File.Exists(tempB) && leftovers.Length == 0 && File.ReadAllText(orig) == "ORIGINAL", string.Join(", ", leftovers));
+
+            using (var up = new CluadeX.Services.Media.MediaUpload(orig, "wav", 3))
+            {
+                await up.AppendBase64Async(0, Convert.ToBase64String(new byte[] { 7, 8, 9 }));
+                await up.FinishAsync();
+                up.CommitOverwrite(orig);
+            }
+            Check("M3d", "overwrite (after the user said yes) replaces the original in one step",
+                File.ReadAllBytes(orig).SequenceEqual(new byte[] { 7, 8, 9 }) && Directory.GetFiles(dir, "*.cxpart.*").Length == 0);
+        });
+
+        await Case("M4", () =>
+        {
+            var args = CluadeX.Services.Media.Ffmpeg.CutArguments(@"D:\งาน\clip a.mp4", @"D:\งาน\.clip a.x.cxpart.mp4", 1.5, 12.25).ToList();
+            var prev = System.Globalization.CultureInfo.CurrentCulture;
+            string commaSafe;
+            try
+            {
+                System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+                commaSafe = CluadeX.Services.Media.Ffmpeg.Seconds(3.25) + "|" + CluadeX.Services.Media.Ffmpeg.Seconds(-1);
+            }
+            finally { System.Globalization.CultureInfo.CurrentCulture = prev; }
+            int ss = args.IndexOf("-ss"), t = args.IndexOf("-t"), i = args.IndexOf("-i"), c = args.IndexOf("-c");
+            Check("M4", "ffmpeg cut arguments: lossless copy, no prompt, never overwrites (-n), each path one argument, invariant seconds",
+                c >= 0 && args[c + 1] == "copy" && args.Contains("-n") && !args.Contains("-y") && args.Contains("-nostdin")
+                && ss >= 0 && args[ss + 1] == "1.500" && t >= 0 && args[t + 1] == "10.750"
+                && i > ss && args[i + 1] == @"D:\งาน\clip a.mp4" && args[^1] == @"D:\งาน\.clip a.x.cxpart.mp4"
+                && commaSafe == "3.250|0.000",
+                string.Join(" ", args) + " || " + commaSafe);
+            Check("M4b", "ffmpeg time limit grows with the file (2 min + 1 min/GB, at most 30)",
+                CluadeX.Services.Media.Ffmpeg.TimeoutFor(0) == TimeSpan.FromMinutes(2)
+                && CluadeX.Services.Media.Ffmpeg.TimeoutFor(2L << 30) == TimeSpan.FromMinutes(4)
+                && CluadeX.Services.Media.Ffmpeg.TimeoutFor(long.MaxValue) == TimeSpan.FromMinutes(30));
+            CluadeX.Services.Media.Ffmpeg.PathOverride = "";
+            bool missing = CluadeX.Services.Media.Ffmpeg.Locate() == null;
+            CluadeX.Services.Media.Ffmpeg.PathOverride = null;
+            Check("M4c", "no ffmpeg: Locate says so (the page then saves audio as WAV, video by recording)", missing);
+            return Task.CompletedTask;
+        });
+
+        await Case("M5", async () =>
+        {
+            // A real cut with the ffmpeg on this machine (skipped, not failed, where there is none).
+            string? exe = CluadeX.Services.Media.Ffmpeg.Locate();
+            if (exe == null) { Console.WriteLine("  SKIP M5    no ffmpeg on this machine"); return; }
+            string dir = Dir("media", "วิดีโอ งาน");
+            string src = Path.Combine(dir, "คลิป a.mp4");
+            var (code, outp) = RunProcess(exe, new[] { "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=6:size=160x120:rate=25",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=6", "-shortest", "-c:v", "mpeg4", "-g", "25", "-c:a", "aac", "-y", src }, dir);
+            if (code != 0 || !File.Exists(src)) { Check("M5", "make a test clip", false, outp); return; }
+            long srcLen = new FileInfo(src).Length;
+            string outFile = Path.Combine(dir, ".คลิป a.test.cxpart.mp4");
+            var r = await CluadeX.Services.Media.Ffmpeg.CutAsync(src, outFile, 1, 4, TimeSpan.FromMinutes(1), CancellationToken.None);
+            var (_, probe) = RunProcess(exe, new[] { "-hide_banner", "-i", outFile }, dir);
+            var dur = System.Text.RegularExpressions.Regex.Match(probe, @"Duration: 00:00:(\d+\.\d+)");
+            double secs = dur.Success ? double.Parse(dur.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : -1;
+            Check("M5", "ffmpeg cut of a Thai-named clip with a space: done, about 3 s long, the original untouched",
+                r.Outcome == CluadeX.Services.Media.FfmpegOutcome.Done && secs > 2 && secs < 4.5 && new FileInfo(src).Length == srcLen,
+                $"{r.Outcome} {r.Detail} | {secs}s");
+
+            var again = await CluadeX.Services.Media.Ffmpeg.CutAsync(src, outFile, 1, 2, TimeSpan.FromMinutes(1), CancellationToken.None);
+            Check("M5b", "a cut onto a name that exists fails (ffmpeg -n) and leaves that file alone",
+                again.Outcome == CluadeX.Services.Media.FfmpegOutcome.Failed && File.Exists(outFile) && new FileInfo(outFile).Length > 0,
+                again.Outcome + " " + again.Detail);
+            File.Delete(outFile);
+
+            // A long job: cancelled → killed, partial output deleted; past its time limit → TimedOut, deleted too.
+            string slow = Path.Combine(dir, ".slow.cxpart.mp4");
+            var longArgs = new[] { "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=600:size=1280x720:rate=60",
+                "-c:v", "mpeg4", "-q:v", "1", "-n", slow };
+            var started = DateTime.Now;
+            using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1500)))
+            {
+                var sw = Stopwatch.StartNew();
+                var cancelled = await CluadeX.Services.Media.Ffmpeg.RunAsync(exe, longArgs, slow, TimeSpan.FromMinutes(5), cts.Token);
+                Check("M5c", "cancel stops ffmpeg at once and deletes the partial output",
+                    cancelled.Outcome == CluadeX.Services.Media.FfmpegOutcome.Cancelled && !File.Exists(slow) && sw.Elapsed < TimeSpan.FromSeconds(10),
+                    $"{cancelled.Outcome} {sw.Elapsed}");
+            }
+            var timedOut = await CluadeX.Services.Media.Ffmpeg.RunAsync(exe, longArgs, slow, TimeSpan.FromMilliseconds(1500), CancellationToken.None);
+            Check("M5d", "past the time limit: TimedOut, partial output deleted",
+                timedOut.Outcome == CluadeX.Services.Media.FfmpegOutcome.TimedOut && !File.Exists(slow), timedOut.Outcome.ToString());
+            await Task.Delay(500);
+            var stray = Process.GetProcessesByName("ffmpeg").Where(p =>
+            {
+                try { return p.StartTime >= started.AddSeconds(-1) && string.Equals(p.MainModule?.FileName, exe, StringComparison.OrdinalIgnoreCase); }
+                catch { return false; }
+            }).ToList();
+            Check("M5e", "no ffmpeg left running from those", stray.Count == 0, $"{stray.Count} still running");
+        });
+
+        await Case("M6", () => OnSta(() =>
+        {
+            // Overwriting the original always asks, and Cancel (the default) or Esc means no.
+            var vm = provider.GetRequiredService<CluadeX.ViewModels.CodeEditorViewModel>();
+            var tab = new MediaFileTab { FullPath = Path.Combine(Scratch, "ภาพ.png"), Kind = CluadeX.Services.Media.MediaKind.Image };
+            var asked = new List<(string title, IReadOnlyList<string> buttons)>();
+            var prior = CluadeX.Views.Editor.ChoiceDialog.Override;
+            try
+            {
+                loc.SetLanguage("th");
+                CluadeX.Views.Editor.ChoiceDialog.Override = (title, msg, buttons) => { asked.Add((title, buttons)); return 1; };
+                bool cancelled = vm.ConfirmMediaOverwrite(tab);
+                CluadeX.Views.Editor.ChoiceDialog.Override = (title, msg, buttons) => -1;   // Esc / the window closed
+                bool escaped = vm.ConfirmMediaOverwrite(tab);
+                CluadeX.Views.Editor.ChoiceDialog.Override = (title, msg, buttons) => 0;
+                bool yes = vm.ConfirmMediaOverwrite(tab);
+                Check("M6", "overwrite asks first (in Thai); Cancel or Esc → no, only the first button → yes",
+                    !cancelled && !escaped && yes && asked.Count == 1 && asked[0].buttons.Count == 2
+                    && System.Text.RegularExpressions.Regex.IsMatch(asked[0].title + asked[0].buttons[0], "[฀-๿]"),
+                    asked.Count > 0 ? asked[0].title + " | " + string.Join(", ", asked[0].buttons) : "not asked");
+            }
+            finally { CluadeX.Views.Editor.ChoiceDialog.Override = prior; loc.SetLanguage("en"); }
+        }));
+
+        await Case("M7", async () =>
+        {
+            // A media tab has no text: no text-save path may write its empty Content over the picture.
+            var ws = provider.GetRequiredService<CodeWorkspaceService>();
+            string dir = Dir("media", "guard");
+            string pic = Path.Combine(dir, "photo.png");
+            byte[] png = { 0x89, 0x50, 0x4E, 0x47, 1, 2, 3 };
+            File.WriteAllBytes(pic, png);
+            var tab = new MediaFileTab { FullPath = pic, Kind = CluadeX.Services.Media.MediaKind.Image, ByteLength = png.Length };
+            tab.MarkOpened("");
+            tab.IsDirty = true;
+            var r1 = await ws.SaveTabCheckedAsync(tab, overwriteExternalChanges: true);
+            bool r2 = await ws.SaveTabAsync(tab);
+            string copy = Path.Combine(dir, "photo copy.png");
+            var r3 = await ws.SaveCopyAsAsync(tab, copy);
+            Check("M7", "text save / Save As refuse a media tab: the picture keeps its bytes, no empty copy appears",
+                r1.Outcome == SaveOutcome.Failed && !r2 && r3.Outcome == SaveOutcome.Failed
+                && File.ReadAllBytes(pic).SequenceEqual(png) && !File.Exists(copy), $"{r1.Outcome} {r2} {r3.Outcome}");
+        });
+
+        await Case("M8", () =>
+        {
+            // Every media key has Thai and English and is registered; every key the page and the host name exists.
+            string root = Path.Combine(repo, "CluadeX");
+            string page = File.ReadAllText(Path.Combine(root, "Resources", "MediaEditor", "media.html"));
+            string code = File.ReadAllText(Path.Combine(root, "Views", "Editor", "MediaEditorHost.cs"))
+                          + File.ReadAllText(Path.Combine(root, "ViewModels", "CodeEditorViewModel.Media.cs"));
+            var used = System.Text.RegularExpressions.Regex.Matches(page + code, @"[""'](media\.\w+\.[\w.]+)[""']").Select(m => m.Groups[1].Value)
+                .Where(k => !k.EndsWith('.')).Distinct().ToList();
+            var table = (Dictionary<string, Dictionary<string, string>>)typeof(LocalizationService).Assembly
+                .GetType("CluadeX.Services.Localization.MediaKeys")!.GetField("Keys", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+            var incomplete = table.Where(p => !p.Value.TryGetValue("en", out var en) || string.IsNullOrWhiteSpace(en)
+                                              || !p.Value.TryGetValue("th", out var th) || string.IsNullOrWhiteSpace(th)).Select(p => p.Key).ToList();
+            loc.SetLanguage("th");
+            var thaiShown = table.Keys.Count(k => System.Text.RegularExpressions.Regex.IsMatch(loc.T(k), "[฀-๿]"));
+            var unregistered = table.Keys.Where(k => loc.T(k) == k).ToList();
+            loc.SetLanguage("en");
+            var undeclared = used.Where(k => !table.ContainsKey(k)).ToList();
+            Check("M8", $"media keys: {table.Count} declared, all with Thai and English and registered ({thaiShown} show Thai); the {used.Count} named by the page and the host all exist",
+                table.Count > 80 && incomplete.Count == 0 && unregistered.Count == 0 && undeclared.Count == 0 && used.Count > 50 && thaiShown > table.Count * 0.8,
+                "incomplete: " + string.Join(", ", incomplete) + " | unregistered: " + string.Join(", ", unregistered) + " | undeclared: " + string.Join(", ", undeclared));
+            Check("M8b", "the page reaches nothing on the network: its CSP allows only the media host, blob: and data:; no eval",
+                page.Contains("Content-Security-Policy") && !System.Text.RegularExpressions.Regex.IsMatch(page, @"https?://(?!cluadex-media\.example|www\.w3\.org/2000/svg)[a-z]")
+                && !page.Contains("eval("), "");
             return Task.CompletedTask;
         });
 

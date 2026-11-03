@@ -355,6 +355,8 @@ internal static partial class Program
                 pops.WindowOf(edVm) == null && Find<CodeEditorView>(MainWin).SingleOrDefault() == ed && ed.ShowsDockedChat && panel.Visibility == Visibility.Visible
                 && ReferenceEquals(chatHost.Content, MainVm.ChatVM) && te.Text.Contains("int x = 1"),
                 $"docked={ed.ShowsDockedChat} content={chatHost.Content?.GetType().Name} text='{te.Text.Trim()}'");
+
+            await MediaTabChecks(ed, edVm, te, ebutton, proj, pops);
         }
         fs.WorkingDirectory = oldWd;
 
@@ -373,6 +375,184 @@ internal static partial class Program
         Check("PO9 …and no page can pop out of a closed main window", pops.PopOut(vm) == null);
         PagePopOut.LoadPlacement = null;
         PagePopOut.SavePlacement = null;
+    }
+
+    /// <summary>
+    /// MT: a picture opens as a picture (owner 2026-11-03: "เปิดไฟล์งานที่เป็นรูปภาพ ให้แสดงภาพ แก้ไขได้"). The media page
+    /// takes AvalonEdit's place for an image tab and gives it back for a text tab; it survives the editor's pop-out; an
+    /// edit saved with Ctrl+S lands in a NEW file beside the original (opened in its own tab); overwriting asks first
+    /// and Cancel leaves the original alone; closing the tab closes its page.
+    /// </summary>
+    static async Task MediaTabChecks(CodeEditorView ed, CodeEditorViewModel edVm, ICSharpCode.AvalonEdit.TextEditor te,
+        PopOutButton ebutton, string proj, CluadeX.Views.PopOut.PagePopOutManager pops)
+    {
+        string img = Path.Combine(proj, "รูป ทดสอบ.png");
+        WritePng(img, 64, 48);
+        byte[] original = File.ReadAllBytes(img);
+        var textTab = edVm.ActiveTab;
+
+        await edVm.OpenPathAsync(img);
+        var host = await WaitFor(() => ed.MediaHosts.FirstOrDefault(), 10000);
+        bool loaded = host != null && await WaitUntil(() => host.PageState?.StartsWith("loaded") == true || host.ShowsMessage, 45000);
+        await Idle(300);
+        Check("MT1 an image (Thai name, space) opens as a media tab: the media page shows it at its size, AvalonEdit steps aside",
+            edVm.ActiveTab is MediaFileTab { Kind: CluadeX.Services.Media.MediaKind.Image } && loaded && host!.PageState!.Contains("\"w\":64") && host.PageState.Contains("\"h\":48")
+            && ed.ShowsMedia && te.Visibility != Visibility.Visible,
+            $"tab={edVm.ActiveTab?.GetType().Name} state={host?.PageState} message={host?.ShowsMessage} media={ed.ShowsMedia} editor={te.Visibility}");
+        if (host == null || !loaded || host.ShowsMessage) return;
+        var mediaTab = (MediaFileTab)edVm.ActiveTab!;
+
+        edVm.ActiveTab = textTab;
+        await Idle(300);
+        Check("MT2 a text tab still shows AvalonEdit (the media page hides)", !ed.ShowsMedia && te.Visibility == Visibility.Visible && te.Text.Contains("class Hello"),
+            $"media={ed.ShowsMedia} editor={te.Visibility}");
+        edVm.ActiveTab = mediaTab;
+        await Idle(300);
+
+        // the editor floats with the picture open: the same page moves with it and still answers
+        PagePopOut.PopOutCommand.Execute(edVm, ebutton);
+        await Idle(1200);
+        var web = (Microsoft.Web.WebView2.Wpf.WebView2)GetField(host, "_web")!;
+        async Task<string> Js(string script) => await web.ExecuteScriptAsync(script);
+        string alive = pops.WindowOf(edVm) != null ? await Js("1+1") : "";
+        Check("MT3 popped out with the picture open: the same media page, still alive and showing the file",
+            pops.WindowOf(edVm) != null && ed.MediaHosts.SingleOrDefault() == host && alive == "2" && ed.ShowsMedia,
+            $"window={pops.WindowOf(edVm) != null} hosts={ed.MediaHosts.Count} js={alive}");
+        PagePopOut.BringBackCommand.Execute(edVm, ebutton);
+        await Idle(600);
+        Invoke(MainVm, "NavigateTo", "Code");
+        await Idle(600);
+
+        // an edit (rotate right), then Ctrl+S → a copy beside the original, the original untouched, the copy opens
+        await Js("document.querySelector('[data-tip=\"media.page.rotateRight\"]').click()");
+        bool dirty = await WaitUntil(() => mediaTab.IsDirty, 5000);
+        Task<bool> save = mediaTab.Session!.SaveCopyAsync();
+        string copy = Path.Combine(proj, "รูป ทดสอบ-edit.png");
+        bool saved = await save.WaitAsync(TimeSpan.FromSeconds(30));
+        bool opened = await WaitUntil(() => edVm.Tabs.Any(t => string.Equals(t.FullPath, copy, StringComparison.OrdinalIgnoreCase)), 10000);
+        var size = File.Exists(copy) ? PngSize(copy) : (0, 0);
+        Check("MT4 rotate + Ctrl+S: the edit goes to 'รูป ทดสอบ-edit.png' (rotated 48×64), the original is untouched, the copy opens, no temp file left",
+            dirty && saved && size == (48, 64) && File.ReadAllBytes(img).SequenceEqual(original) && opened && !mediaTab.IsDirty
+            && Directory.GetFiles(proj, "*.cxpart.*").Length == 0,
+            $"dirty={dirty} saved={saved} size={size} opened={opened} stillDirty={mediaTab.IsDirty}");
+
+        // overwrite asks first; Cancel keeps the original byte for byte
+        edVm.ActiveTab = mediaTab;
+        await Idle(400);
+        await Js("document.querySelector('[data-tip=\"media.page.flipH\"]').click()");
+        await WaitUntil(() => mediaTab.IsDirty, 5000);
+        int asked = 0;
+        var prior = CluadeX.Views.Editor.ChoiceDialog.Override;
+        CluadeX.Views.Editor.ChoiceDialog.Override = (_, _, _) => { asked++; return 1; };
+        try
+        {
+            await Js("document.querySelector('[data-tip=\"media.page.overwriteTip\"]').click()");
+            await WaitUntil(() => asked > 0 && !mediaTab.IsBusy, 15000);
+            await Idle(500);
+        }
+        finally { CluadeX.Views.Editor.ChoiceDialog.Override = prior; }
+        Check("MT5 'overwrite' asks first, and Cancel leaves the original as it was (the edit stays in the tab)",
+            asked == 1 && File.ReadAllBytes(img).SequenceEqual(original) && mediaTab.IsDirty && !mediaTab.IsBusy,
+            $"asked={asked} dirty={mediaTab.IsDirty} busy={mediaTab.IsBusy}");
+
+        // …and Yes replaces it in place while the page is showing it (the page lets go of the file first), then shows the new file
+        asked = 0;
+        string before = host.PageState ?? "";
+        CluadeX.Views.Editor.ChoiceDialog.Override = (_, _, _) => { asked++; return 0; };
+        try
+        {
+            await Js("document.querySelector('[data-tip=\"media.page.overwriteTip\"]').click()");
+            await WaitUntil(() => asked > 0 && !mediaTab.IsBusy && !mediaTab.IsDirty, 20000);
+            await Idle(800);
+        }
+        finally { CluadeX.Views.Editor.ChoiceDialog.Override = prior; }
+        byte[] now = File.ReadAllBytes(img);
+        Check("MT5b 'overwrite' + Yes: the original is replaced by every edit so far (rotated + flipped, 48×64), the page shows the new file, the tab is clean, nothing left over",
+            asked == 1 && !now.SequenceEqual(original) && PngSize(img) == (48, 64) && !mediaTab.IsDirty && !mediaTab.IsBusy
+            && Directory.GetFiles(proj, "*.cxpart.*").Length == 0 && host.PageState != before && host.PageState?.Contains("\"w\":48") == true,
+            $"asked={asked} changed={!now.SequenceEqual(original)} dirty={mediaTab.IsDirty} state={host.PageState}");
+
+        // audio: a WAV plays and is decoded for editing (waveform), not play-only
+        string wav = Path.Combine(proj, "เสียง ทดสอบ.wav");
+        WriteWav(wav, seconds: 2);
+        await edVm.OpenPathAsync(wav);
+        var audioTab = edVm.ActiveTab as MediaFileTab;
+        var audioHost = await WaitFor(() => audioTab == null ? null : ed.MediaHosts.FirstOrDefault(h => h.Tab == audioTab), 10000);
+        bool audioLoaded = audioHost != null && await WaitUntil(() => audioHost.PageState?.StartsWith("loaded") == true || audioHost.PageState?.StartsWith("error") == true, 30000);
+        Check("MT7 a WAV opens as audio: decoded for editing (channels, rate, ~2 s), not play-only",
+            audioTab is { Kind: CluadeX.Services.Media.MediaKind.Audio } && audioLoaded && audioHost!.PageState!.Contains("\"channels\":1")
+            && !audioHost.PageState.Contains("playOnly") && System.Text.RegularExpressions.Regex.IsMatch(audioHost.PageState, "\"duration\":(1\\.9|2)"),
+            $"state={audioHost?.PageState}");
+
+        // video (when this machine has ffmpeg to make one): it loads with its size
+        string? ff = CluadeX.Services.Media.Ffmpeg.Locate();
+        if (ff != null)
+        {
+            string clip = Path.Combine(proj, "คลิป ทดสอบ.webm");
+            var psi = new System.Diagnostics.ProcessStartInfo(ff) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+            foreach (var a in new[] { "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=3:size=320x240:rate=25", "-c:v", "libvpx-vp9", "-b:v", "200k", "-y", clip })
+                psi.ArgumentList.Add(a);
+            using (var p = System.Diagnostics.Process.Start(psi)!) { await p.StandardError.ReadToEndAsync(); await p.WaitForExitAsync(); }
+            await edVm.OpenPathAsync(clip);
+            var videoTab = edVm.ActiveTab as MediaFileTab;
+            var videoHost = await WaitFor(() => videoTab == null ? null : ed.MediaHosts.FirstOrDefault(h => h.Tab == videoTab), 10000);
+            bool videoLoaded = videoHost != null && await WaitUntil(() => videoHost.PageState?.StartsWith("loaded") == true || videoHost.PageState?.StartsWith("error") == true, 30000);
+            Check("MT8 a WebM clip opens as video at its size (320×240, ~3 s)",
+                videoTab is { Kind: CluadeX.Services.Media.MediaKind.Video } && videoLoaded && videoHost!.PageState!.Contains("\"w\":320") && videoHost.PageState.Contains("\"h\":240"),
+                $"state={videoHost?.PageState}");
+        }
+        else Log("SKIP  MT8 no ffmpeg on this machine to make a test clip");
+
+        // close the media tabs (the edited one is dirty: the close question says "don't save")
+        CluadeX.Views.Editor.ChoiceDialog.Override = (_, _, buttons) => buttons.Count > 1 ? 1 : 0;
+        try
+        {
+            foreach (var t in edVm.Tabs.OfType<MediaFileTab>().ToList()) edVm.CloseTabCommand.Execute(t);
+            await WaitUntil(() => !edVm.Tabs.OfType<MediaFileTab>().Any(), 5000);
+        }
+        finally { CluadeX.Views.Editor.ChoiceDialog.Override = prior; }
+        await Idle(300);
+        Check("MT6 closing the media tabs closes their pages; the text tab is back in AvalonEdit",
+            !edVm.Tabs.OfType<MediaFileTab>().Any() && ed.MediaHosts.Count == 0 && !ed.ShowsMedia && host.Session_IsClosed(),
+            $"tabs={edVm.Tabs.OfType<MediaFileTab>().Count()} hosts={ed.MediaHosts.Count} media={ed.ShowsMedia}");
+    }
+
+    static bool Session_IsClosed(this CluadeX.Views.Editor.MediaEditorHost host) => GetField(host, "_web") == null;
+
+    static void WritePng(string path, int w, int h)
+    {
+        var px = new byte[w * h * 4];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int i = (y * w + x) * 4;
+                if (x < w / 2) { px[i + 2] = 230; px[i + 1] = 40; px[i] = 40; } else { px[i] = 220; px[i + 1] = 90; px[i + 2] = 30; }
+                px[i + 3] = 255;
+            }
+        var bmp = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, px, w * 4);
+        var enc = new PngBitmapEncoder();
+        enc.Frames.Add(BitmapFrame.Create(bmp));
+        using var f = File.Create(path);
+        enc.Save(f);
+    }
+
+    /// <summary>A mono 16-bit 22.05 kHz WAV: a 440 Hz tone.</summary>
+    static void WriteWav(string path, int seconds)
+    {
+        const int rate = 22050;
+        int n = rate * seconds;
+        using var w = new BinaryWriter(File.Create(path));
+        w.Write("RIFF"u8); w.Write(36 + n * 2); w.Write("WAVE"u8);
+        w.Write("fmt "u8); w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(rate); w.Write(rate * 2); w.Write((short)2); w.Write((short)16);
+        w.Write("data"u8); w.Write(n * 2);
+        for (int i = 0; i < n; i++) w.Write((short)(Math.Sin(2 * Math.PI * 440 * i / rate) * 12000));
+    }
+
+    static (int, int) PngSize(string path)
+    {
+        using var f = File.OpenRead(path);
+        var d = BitmapDecoder.Create(f, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+        return (d.Frames[0].PixelWidth, d.Frames[0].PixelHeight);
     }
 
     /// <summary>A window as it looks: its WPF content, with each WebView2's real page (a native window, which a WPF

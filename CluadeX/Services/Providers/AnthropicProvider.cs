@@ -668,6 +668,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                                 && cbd.ValueKind == JsonValueKind.Object
                                 && cbd.TryGetProperty("ephemeral_1h_input_tokens", out var c1) && c1.TryGetInt32(out var c1v) ? c1v : 0;
                             promptTokens = inTokens + cacheRead + cacheCreate;
+                            AgentRunScope.ReportPromptSize(promptTokens);
                             if (_costTracker != null && (inTokens > 0 || cacheRead > 0 || cacheCreate > 0))
                                 _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate, cacheWrite1hTokens: cache1h);
                         }
@@ -986,6 +987,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                             result.InputTokens = inTokens;
                             result.CacheReadTokens = cacheRead;
                             result.CacheWriteTokens = cacheCreate;
+                            AgentRunScope.ReportPromptSize(inTokens + cacheRead + cacheCreate);
                             if (_costTracker != null && (inTokens > 0 || cacheRead > 0 || cacheCreate > 0))
                                 _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate, cacheWrite1hTokens: cache1h);
                         }

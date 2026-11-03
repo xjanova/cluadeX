@@ -346,13 +346,14 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             RaiseError(string.Format(LocalizedResources.Instance["api.err.blocked"], "Gemini", blockReason));
 
         // usageMetadata is cumulative per chunk — the last one is the whole request.
-        if (_costTracker != null && lastUsage is { } u)
+        if (lastUsage is { } u)
         {
             int Get(string name) => u.TryGetProperty(name, out var v) && v.TryGetInt32(out var i) ? i : 0;
+            AgentRunScope.ReportPromptSize(Get("promptTokenCount"));   // the cached part included
             int cached = Get("cachedContentTokenCount");
             int input = Get("promptTokenCount") - cached;
             int output = Get("candidatesTokenCount") + Get("thoughtsTokenCount");
-            if (input > 0 || output > 0)
+            if (_costTracker != null && (input > 0 || output > 0))
                 _costTracker.RecordUsage(model, Math.Max(0, input), output, cached, 0, thinkingTokens: Get("thoughtsTokenCount"));
         }
     }
@@ -604,6 +605,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
         }
 
         var result = await ParseToolStreamAsync(response.Content, onTextDelta, ct);
+        AgentRunScope.ReportPromptSize(result.InputTokens + result.CacheReadTokens);
         // Cached prompt tokens are billed at the cached rate — they were left out here, so a cached step read as free input.
         if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0 || result.CacheReadTokens > 0))
             _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, 0, thinkingTokens: result.ThinkingTokens);

@@ -159,7 +159,7 @@ public class OpenFileTab : System.ComponentModel.INotifyPropertyChanged
         }
     }
 
-    private void Raise(string p) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));
+    protected void Raise(string p) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));
 }
 
 /// <summary>

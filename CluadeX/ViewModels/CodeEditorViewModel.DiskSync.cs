@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.IO;
 using System.Windows.Threading;
+using CluadeX.Models;
 
 namespace CluadeX.ViewModels;
 
@@ -112,6 +113,7 @@ public partial class CodeEditorViewModel
             {
                 if (IsAgentTypingInto(tab)) continue;   // the reveal ends on the final text itself
                 if (!File.Exists(tab.FullPath)) continue;   // mid-replace, or deleted: the tab keeps what it shows
+                if (tab is MediaFileTab media) { NoteMediaChangedOnDisk(media); continue; }   // never read as text
                 var fresh = await _workspace.OpenFileAsync(tab.FullPath);   // read off the UI thread
                 if (fresh == null) continue;
                 if (!Tabs.Contains(tab) || IsAgentTypingInto(tab)) continue;
