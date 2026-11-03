@@ -243,6 +243,28 @@ public class MainViewModel : ViewModelBase
 
     public ICommand NavigateToCommand { get; }
 
+    // ── Pages in a window of their own (Views/PopOut, set by MainWindow) ──
+
+    /// <summary>Is this page (a view model) in a window of its own? Null = no page can float (a harness without the window).</summary>
+    public Func<object, bool>? IsPagePoppedOut { get; set; }
+    /// <summary>Bring a floating page's window forward (activate = give it the focus). False when it is not out.</summary>
+    public Func<object, bool, bool>? ShowPoppedOutPage { get; set; }
+    /// <summary>A floating page asked for a page of the main window: the main window should come forward.</summary>
+    public event Action? ShowMainWindowRequested;
+
+    private bool PoppedOut(string target) => IsPagePoppedOut != null && PageFor(target) is { } page && IsPagePoppedOut(page);
+
+    /// <summary>A page asked for by the app rather than the activity bar (a file double-clicked in the chat, the graph's
+    /// "open the code", the Studio's "open the chat"). A page in its own window comes forward there — the main window keeps
+    /// the page it shows (the placeholder would only say "it's over there"). <paramref name="from"/>: the page that asked;
+    /// when that one floats, the main window comes forward with the page it asked for.</summary>
+    private void OpenPage(string target, string? from = null)
+    {
+        if (PoppedOut(target) && PageFor(target) is { } page && ShowPoppedOutPage?.Invoke(page, true) == true) return;
+        NavigateTo(target);
+        if (from != null && PoppedOut(from)) ShowMainWindowRequested?.Invoke();
+    }
+
     // ── Command palette (Ctrl+K) ──
     public CommandPaletteViewModel Palette { get; private set; } = null!;
     public ICommand OpenPaletteCommand { get; private set; } = null!;
@@ -324,7 +346,7 @@ public class MainViewModel : ViewModelBase
                 ChatVM.WorkingDirectory,
                 path =>
                 {
-                    NavigateTo("Code");
+                    OpenPage("Code");   // (in the editor's own window when it floats)
                     _ = CodeEditorVM.OpenPathAsync(path);
                 }));
         }
@@ -409,7 +431,7 @@ public class MainViewModel : ViewModelBase
         UiStudioVM = uiStudioVM;
         NodeGraphVM = nodeGraphVM;
         // The Studio and the Graph ask for other pages (open the code at a line, the chat, each other).
-        if (uiStudioVM != null) uiStudioVM.OpenPageRequested += NavigateTo;
+        if (uiStudioVM != null) uiStudioVM.OpenPageRequested += t => OpenPage(t!, from: "UiStudio");
         // Design mode: the owner's design turn brings the UI Studio forward to watch the real screen — once it can show
         // the chat's project (a brand-new site: when its first page is written). Not if the user went to another page
         // since sending: that page is theirs.
@@ -420,10 +442,11 @@ public class MainViewModel : ViewModelBase
             {
                 string? from = _designFromPage;
                 _designFromPage = null;
+                if (PoppedOut("UiStudio")) return;   // already on screen in its own window: the chat here stays
                 if (from == null || SelectedNavItem == from) NavigateTo("UiStudio");
             });
         }
-        if (nodeGraphVM != null) nodeGraphVM.OpenPageRequested += NavigateTo;
+        if (nodeGraphVM != null) nodeGraphVM.OpenPageRequested += t => OpenPage(t!, from: "NodeGraph");
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
         SetupVM = setupVM;
@@ -491,12 +514,13 @@ public class MainViewModel : ViewModelBase
         chatVM.NavigateToChatRequested += () => NavigateTo("Chat");
 
         // Opening/cloning a project lands the user in the workbench (Code page) — the IDE moment.
-        chatVM.NavigateToEditorRequested += () => NavigateTo("Code");
+        // (An editor in its own window shows the project there: the chat stays here.)
+        chatVM.NavigateToEditorRequested += () => { if (!PoppedOut("Code")) NavigateTo("Code"); };
 
-        // The chat's project panel: a double-clicked file opens in the code editor.
+        // The chat's project panel: a double-clicked file opens in the code editor (in its own window when it floats).
         chatVM.OpenFileRequested += path =>
         {
-            NavigateTo("Code");
+            OpenPage("Code");
             _ = CodeEditorVM.OpenPathAsync(path);
         };
         // Cowork follow: the chat's "ตามดูโค้ด" tick is on and its agent just changed a file —
@@ -859,6 +883,9 @@ public class MainViewModel : ViewModelBase
     private void FollowEditToCode()
     {
         var now = DateTime.Now;
+        // The editor floats in its own window: the edit is already on screen there (the editor opened the file), and
+        // this window keeps the chat the owner is typing in.
+        if (PoppedOut("Code")) return;
         if (SelectedNavItem != "Code")
         {
             _followNavigating = true;
@@ -893,35 +920,38 @@ public class MainViewModel : ViewModelBase
         }
     }
 
+    /// <summary>The page (view model) a navigation target names; the chat for anything unknown.</summary>
+    private ViewModelBase? PageFor(string target) => target switch
+    {
+        "Chat" => ChatVM,
+        "Models" => ModelManagerVM,
+        "Settings" => SettingsVM,
+        "Plugins" => PluginManagerVM,
+        "Permissions" => PermissionsVM,
+        "Tasks" => TaskManagerVM,
+        "Watch" => (ViewModelBase?)WatchVM ?? ChatVM,
+        "Billing" => (ViewModelBase?)BillingVM ?? ChatVM,
+        "UiStudio" => (ViewModelBase?)UiStudioVM ?? ChatVM,
+        "NodeGraph" => (ViewModelBase?)NodeGraphVM ?? ChatVM,
+        "Features" => FeaturesVM,
+        "McpServers" => McpServersVM,
+        "Setup" => (ViewModelBase?)SetupVM ?? ChatVM,
+        "TimeMachine" => TimeMachineVM,
+        "HexEditor" => HexEditorVM,
+        "Code" => CodeEditorVM,
+        "SubAgents" => SubAgentsVM,
+        "Skills" => SkillsVM,
+        "Instincts" => InstinctsVM,
+        "DebugLog" => DebugLogVM,
+        "SecurityShield" => SecurityShieldVM,
+        "HookLibrary" => HookLibraryVM,
+        _ => ChatVM,
+    };
+
     private void NavigateTo(string? target)
     {
         if (target == null) return;
-        ViewModelBase? view = target switch
-        {
-            "Chat" => ChatVM,
-            "Models" => ModelManagerVM,
-            "Settings" => SettingsVM,
-            "Plugins" => PluginManagerVM,
-            "Permissions" => PermissionsVM,
-            "Tasks" => TaskManagerVM,
-            "Watch" => (ViewModelBase?)WatchVM ?? ChatVM,
-            "Billing" => (ViewModelBase?)BillingVM ?? ChatVM,
-            "UiStudio" => (ViewModelBase?)UiStudioVM ?? ChatVM,
-            "NodeGraph" => (ViewModelBase?)NodeGraphVM ?? ChatVM,
-            "Features" => FeaturesVM,
-            "McpServers" => McpServersVM,
-            "Setup" => (ViewModelBase?)SetupVM ?? ChatVM,
-            "TimeMachine" => TimeMachineVM,
-            "HexEditor" => HexEditorVM,
-            "Code" => CodeEditorVM,
-            "SubAgents" => SubAgentsVM,
-            "Skills" => SkillsVM,
-            "Instincts" => InstinctsVM,
-            "DebugLog" => DebugLogVM,
-            "SecurityShield" => SecurityShieldVM,
-            "HookLibrary" => HookLibraryVM,
-            _ => ChatVM,
-        };
+        ViewModelBase? view = PageFor(target);
         // Already there: every chat opened from the sidebar asks for the page it is on, and "opening" it again is not free.
         if (target == SelectedNavItem && ReferenceEquals(view, CurrentView)) return;
         if (!_followNavigating) _followBrought = false;   // the user (or anything else) chose the page: it is theirs

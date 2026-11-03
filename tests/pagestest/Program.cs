@@ -268,7 +268,7 @@ internal static partial class Program
         await PageLoading(vm, view, fx);
         await EngineChecks(vm, view);
         await DesignChecks(vm, fx);
-        if (WebOnly) return Finish();
+        if (WebOnly) { await PopOutChecks(vm, view, fx); return Finish(); }   // (last: it closes the main window)
         await LaravelSite(vm, view, fx);
         await FlutterApp(vm, view, fx);
         await FlutterReal(vm, view, fx);
@@ -278,6 +278,7 @@ internal static partial class Program
         await FlutterSampleScreens(vm, view, fx);
         await FlutterTranslations(vm, view, fx);
         await WpfApp(vm, view, fx);
+        await PopOutChecks(vm, view, fx);   // (last: it closes the main window)
 
         return Finish();
     }

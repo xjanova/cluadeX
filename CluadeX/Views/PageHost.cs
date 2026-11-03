@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using CluadeX.ViewModels;
 
 namespace CluadeX.Views;
@@ -26,6 +27,9 @@ public sealed class PageHost : Grid
 
     private readonly Dictionary<Type, FrameworkElement> _kept = new();
     private readonly ContentPresenter _rebuilt = new();
+    /// <summary>Pages in a window of their own (Views/PopOut): their view is there, this host shows the placeholder.</summary>
+    private readonly HashSet<Type> _away = new();
+    private PopOut.PoppedOutPlaceholder? _placeholder;
 
     public PageHost() => Children.Add(_rebuilt);
 
@@ -35,8 +39,79 @@ public sealed class PageHost : Grid
     /// <summary>The views kept so far (for the harness).</summary>
     public IReadOnlyCollection<FrameworkElement> KeptViews => _kept.Values;
 
+    // ─── a page in its own window (PagePopOutManager) ───
+
+    /// <summary>Is this page's view in a window of its own?</summary>
+    public bool IsAway(object? page) => page != null && _away.Contains(page.GetType());
+
+    /// <summary>The placeholder shown for a page that is away (null until one was needed).</summary>
+    public FrameworkElement? Placeholder => _placeholder;
+
+    /// <summary>The page leaves for its own window: its kept view is taken out of this host and returned (made visible);
+    /// a page this host rebuilds on every visit is let go (null: the caller builds its own). From now on the page shows
+    /// the placeholder here, and is not built here again until <see cref="Adopt"/>.</summary>
+    public FrameworkElement? Release(object page)
+    {
+        _away.Add(page.GetType());
+        FrameworkElement? view = null;
+        if (_kept.Remove(page.GetType(), out var kept))
+        {
+            Children.Remove(kept);
+            kept.Visibility = Visibility.Visible;
+            view = kept;
+        }
+        else if (ReferenceEquals(_rebuilt.Content, page))
+            ClearRebuilt();   // its view unloads before the window's one loads (NodeGraphView sets IsVisible on both)
+        Show(Page);
+        return view;
+    }
+
+    /// <summary>The page is back from its own window, with its view (null if it had none). A kept page keeps that very
+    /// view (the editor's tabs, the Studio's running browser); a rebuilt page is rebuilt here when it is shown.</summary>
+    public void Adopt(object page, FrameworkElement? view)
+    {
+        _away.Remove(page.GetType());
+        if (view != null && Keeps(page) && !_kept.ContainsKey(page.GetType()) && view.Parent == null)
+        {
+            view.DataContext = page;
+            view.Visibility = Visibility.Collapsed;
+            _kept[page.GetType()] = view;
+            Children.Add(view);
+        }
+        Show(Page);
+    }
+
+    /// <summary>The rebuilt page's view goes now. A ContentPresenter swaps its child only when it is measured, and a
+    /// collapsed one never is: setting Content to null alone left the last rebuilt page (a Node Graph) loaded, hidden
+    /// and still subscribed to its view model until that presenter was shown again.</summary>
+    private void ClearRebuilt()
+    {
+        if (_rebuilt.Content == null && VisualTreeHelper.GetChildrenCount(_rebuilt) == 0) return;
+        _rebuilt.Content = null;
+        _rebuilt.ApplyTemplate();
+    }
+
+    /// <summary>A fresh view of the page from its DataTemplate (for its own window), or null.</summary>
+    public FrameworkElement? BuildView(object page) => Build(page);
+
+    private void ShowPlaceholder(object page)
+    {
+        foreach (var view in _kept.Values) view.Visibility = Visibility.Collapsed;
+        ClearRebuilt();
+        _rebuilt.Visibility = Visibility.Collapsed;
+        if (_placeholder == null)
+        {
+            _placeholder = new PopOut.PoppedOutPlaceholder();
+            Children.Add(_placeholder);
+        }
+        _placeholder.DataContext = page;
+        _placeholder.Visibility = Visibility.Visible;
+    }
+
     private void Show(object? page)
     {
+        if (page != null && _away.Contains(page.GetType())) { ShowPlaceholder(page); return; }
+        if (_placeholder != null) { _placeholder.Visibility = Visibility.Collapsed; _placeholder.DataContext = null; }
         FrameworkElement? kept = null;
         if (page != null && Keeps(page) && !_kept.TryGetValue(page.GetType(), out kept))
         {
@@ -60,7 +135,7 @@ public sealed class PageHost : Grid
         if (kept != null)
         {
             kept.DataContext = page;   // the same singleton VM; set again in case it was ever replaced
-            _rebuilt.Content = null;   // the previous rebuilt page goes away, as it always did
+            ClearRebuilt();            // the previous rebuilt page goes away, as it always did
             _rebuilt.Visibility = Visibility.Collapsed;
         }
         else
@@ -75,7 +150,7 @@ public sealed class PageHost : Grid
     /// real size, so a native child window (WebView2) is created and the page renders at the size it will be seen at.</summary>
     public void Prewarm(object page)
     {
-        if (!IsLoaded || !Keeps(page) || _kept.ContainsKey(page.GetType())) return;
+        if (!IsLoaded || !Keeps(page) || _kept.ContainsKey(page.GetType()) || IsAway(page)) return;   // (away: it is in its own window)
         var view = Build(page);
         if (view == null) return;
         view.Visibility = Visibility.Hidden;

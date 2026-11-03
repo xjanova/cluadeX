@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:services="clr-namespace:CluadeX.Services"
+             xmlns:popout="clr-namespace:CluadeX.Views.PopOut"
              xmlns:vm="clr-namespace:CluadeX.ViewModels"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              xmlns:sk="clr-namespace:CluadeX.Views.UiStudio">
@@ -251,6 +252,8 @@
                     <Button Style="{StaticResource StudioToolBtn}" Command="{Binding OpenGraphCommand}" ToolTip="{services:Loc studio.graphTip}">
                         <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc graph.title}"/></StackPanel>
                     </Button>
+                    <!-- its own window (another screen; the chat stays in the main window) — there, put it back. Views/PopOut -->
+                    <popout:PopOutButton x:Name="PopOutButton" Style="{StaticResource StudioToolBtn}"/>
                 </StackPanel>
 
                 <!-- address -->

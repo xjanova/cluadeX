@@ -51,6 +51,21 @@ public partial class MainWindow : Window
         // with the main window, or the app would keep running with only the pet on screen.
         Closed += (_, _) => _viewModel.Pet.Shutdown();
 
+        // Node Graph, UI Studio and Code Editor can each float in a window of their own (Views/PopOut); the chat stays
+        // here. Those windows are not owned either (own taskbar button, on screen while this one is minimised): they
+        // close with this one, after its Closing was answered (unsaved tabs, a Spark download).
+        PopOuts = new Views.PopOut.PagePopOutManager(this, PageArea);
+        viewModel.IsPagePoppedOut = PopOuts.IsPoppedOut;
+        viewModel.ShowPoppedOutPage = (page, activate) => PopOuts.Show(page, activate);
+        viewModel.ShowMainWindowRequested += BringToFront;
+        Closed += (_, _) =>
+        {
+            viewModel.ShowMainWindowRequested -= BringToFront;
+            viewModel.IsPagePoppedOut = null;
+            viewModel.ShowPoppedOutPage = null;
+            PopOuts.CloseAll();
+        };
+
         // Focus the palette box as soon as it opens — a palette you have to click into first
         // is not a keyboard palette.
         viewModel.Palette.PropertyChanged += (_, e) =>
@@ -108,6 +123,18 @@ public partial class MainWindow : Window
             : $"CluadeX {chip}";
         // Keyboard shortcuts (Ctrl+N = new chat and show it, …) live in MainWindow.xaml's InputBindings only — a
         // second binding added here took precedence and pointed Ctrl+N at a different command.
+    }
+
+    /// <summary>The pages that can float in a window of their own, and those windows.</summary>
+    public Views.PopOut.PagePopOutManager PopOuts { get; }
+
+    /// <summary>A page in its own window asked for a page shown here (the graph's "UI Studio", the Studio's "open the
+    /// chat"): this window comes forward with it.</summary>
+    private void BringToFront()
+    {
+        if (!IsLoaded) return;
+        if (WindowState == WindowState.Minimized) SystemCommands.RestoreWindow(this);   // (maximised again if it was)
+        Activate();
     }
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)

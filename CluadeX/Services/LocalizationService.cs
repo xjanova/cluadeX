@@ -29,7 +29,8 @@ public class LocalizationService
                                       Localization.DesignKeys.Keys,
                                       Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
                                       Localization.AggregatorKeys.Keys,
-                                      Localization.LspKeys.Keys })
+                                      Localization.LspKeys.Keys,
+                                      Localization.PopOutKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

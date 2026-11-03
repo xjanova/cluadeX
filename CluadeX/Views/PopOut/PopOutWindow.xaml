@@ -1,0 +1,15 @@
+<Window x:Class="CluadeX.Views.PopOut.PopOutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:popout="clr-namespace:CluadeX.Views.PopOut"
+        Width="1100" Height="760" MinWidth="520" MinHeight="360"
+        WindowStartupLocation="Manual"
+        ShowInTaskbar="True"
+        Icon="/CluadeX;component/Assets/app.ico"
+        Background="{DynamicResource Bg.Window}"
+        FontFamily="{DynamicResource Font.Ui.Display}"
+        popout:PagePopOut.IsFloating="True">
+    <!-- One page of the main window, moved here (PagePopOutManager). Not owned by the main window: it keeps its own
+         taskbar button and stays on screen when the main window is minimised. -->
+    <Border x:Name="Slot" Background="{DynamicResource Page.Background}"/>
+</Window>
