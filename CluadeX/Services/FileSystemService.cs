@@ -46,6 +46,18 @@ public class FileSystemService
 
     public bool HasWorkingDirectory => !string.IsNullOrEmpty(Root) && Directory.Exists(Root);
 
+    /// <summary>True when the project folder exists and holds nothing but dot-entries (.git, .vscode …): there is no
+    /// file to read or edit yet. Any error (no access) says false — an unknown folder is never called empty.</summary>
+    public bool IsWorkingDirectoryEmpty()
+    {
+        try
+        {
+            return HasWorkingDirectory
+                && !Directory.EnumerateFileSystemEntries(Root).Any(e => !Path.GetFileName(e).StartsWith('.'));
+        }
+        catch { return false; }
+    }
+
     // ─── Read File ───
     public string ReadFile(string relativePath)
     {

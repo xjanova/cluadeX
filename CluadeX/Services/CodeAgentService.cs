@@ -1212,6 +1212,49 @@ public partial class CodeAgentService
         return "";
     }
 
+    /// <summary>A text-loop tool result as the loop guard sees it (the native loop builds its own from the wire).</summary>
+    private static Agents.AgentLoopGuard.Call GuardCallOf(ToolResult r)
+    {
+        string args = r.Arguments is { Count: > 0 } a ? System.Text.Json.JsonSerializer.Serialize(a) : "{}";
+        string images = r.Images is { Count: > 0 } shots
+            ? string.Join("|", shots.Select(i => $"{i.FilePath}:{i.Base64?.Length}"))
+            : "";
+        return new Agents.AgentLoopGuard.Call(r.ToolName, args, r.Success, r.Success ? "" : (r.Error ?? ""),
+            r.Success && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit,
+            r.Success ? (r.Output ?? "") + images : "");
+    }
+
+    private static bool IsLocalProvider(Services.Providers.IAiProvider? p)
+        => p?.ProviderId is "Local" or "Ollama" or "LlamaServer";
+
+    /// <summary>The name of the model a local provider runs — its configured id, else the loaded GGUF — so its size can
+    /// be read from it ("llama3.2:3b", "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"). "" when nothing names it.</summary>
+    private string LocalModelNameFor(Services.Providers.IAiProvider? p)
+    {
+        string id = ModelIdFor(p);
+        if (id.Length > 0) return id;
+        var s = _settingsService.Settings;
+        return !string.IsNullOrWhiteSpace(s.SelectedModelName) ? s.SelectedModelName
+             : !string.IsNullOrWhiteSpace(s.SelectedModelPath) ? s.SelectedModelPath : "";
+    }
+
+    /// <summary>"Ollama · llama3.2:3b" — the provider and the model, for a message the user reads.</summary>
+    private string ModelLabelFor(Services.Providers.IAiProvider? p)
+    {
+        if (p == null) return "?";
+        string name = string.IsNullOrWhiteSpace(p.DisplayName) ? p.ProviderId : p.DisplayName;
+        string model = IsLocalProvider(p) ? LocalModelNameFor(p) : ModelIdFor(p);
+        if (model.Length > 0 && (model.Contains('\\') || model.Contains('/'))) model = System.IO.Path.GetFileName(model);
+        return model.Length > 0 ? $"{name} · {model}" : name;
+    }
+
+    /// <summary>Told to the model with the request when the project folder holds no files yet.</summary>
+    public static string EmptyProjectNote(string? folder)
+        => $"[project] The project folder {folder} is EMPTY — there are no files to read or edit yet. Create every file "
+         + "with write_file (path + the COMPLETE content); do not read_file or edit_file a file you have not created. "
+         + "Choose the file type the request asks for: a web page or web game is index.html (HTML + CSS + JavaScript, "
+         + "opens in a browser, needs no build).";
+
     /// <summary>What a model that cannot see is told about the images the user attached — with their paths, so it can
     /// still use them (copy one into the project as the page's picture) without looking at them.</summary>
     public static string AttachedImagesNote(IEnumerable<string> paths)
@@ -2785,6 +2828,7 @@ public partial class CodeAgentService
         const int MaxOutputTokenRecoveries = 3;
         int unknownToolFeedbackCount = 0;          // legacy-path "unknown tool — did you mean" nudges (bounded)
         const int MaxUnknownToolFeedbacks = 3;
+        var textLoopGuard = new Agents.AgentLoopGuard();   // same guard as the native loop: nudge, then stop and say why
 
         for (int iteration = 0; iteration < MaxAgentIterations; iteration++)
         {
@@ -2943,6 +2987,22 @@ public partial class CodeAgentService
 
             string toolFeedback = FormatToolResultsWithBudget(toolResults);
             if (AgentRunScope.Current?.TakeUserNotes() is { } typedMidRun) toolFeedback += "\n\n" + typedMidRun;
+
+            var textVerdict = textLoopGuard.Observe(toolResults.Select(GuardCallOf).ToList());
+            if (textVerdict.Action == Agents.LoopGuardAction.Nudge)
+                toolFeedback += "\n\n" + Agents.AgentLoopGuard.NudgeText(textVerdict);
+            else if (textVerdict.Action == Agents.LoopGuardAction.Stop)
+            {
+                var p = _providerManager.ActiveProvider;
+                result.StopReason = "loop";
+                result.Success = false;
+                result.FinalResponse = Agents.AgentLoopGuard.StopMessage(textVerdict, ModelLabelFor(p), IsLocalProvider(p),
+                    IsLocalProvider(p) ? Agents.ModelCapability.ForLocal(LocalModelNameFor(p)) : null, false,
+                    result.Steps.Count, isThai);
+                _debugLog?.Warn("Agent", $"text loop stopped by the loop guard at step {iteration + 1} · {textVerdict.Kind} · {textVerdict.Tool} ×{textVerdict.Repeats}");
+                break;
+            }
+
             // This loop never sends pixels (the note above says so): keep only the files' paths and sizes.
             StripImagePixels(toolResults);
             workingHistory.Add(new ChatMessage
@@ -2954,8 +3014,9 @@ public partial class CodeAgentService
             currentMessage = toolFeedback;
         }
 
-        // If we exhausted iterations
-        if (!result.Success)
+        // If we exhausted iterations — not a run that already ended with its own reason (the loop guard's stop, the
+        // context-too-long error): overwriting those left the user the last tool call's text instead of the why.
+        if (!result.Success && result.StopReason is not ("loop" or "error"))
         {
             result.StopReason = "max_iterations";
             result.FinalResponse = result.Steps.LastOrDefault()?.ResponseText ?? "Agent reached maximum iterations.";
@@ -3286,12 +3347,29 @@ public partial class CodeAgentService
         string? lastErrorSig = null;
         int repeatErrorCount = 0;
 
+        // ─── Loop guard (every provider, escalation on or off) ───
+        // The repeated-error check above only runs when escalation is configured; with it off and no step limit a
+        // weak model re-read a missing file forever (Sudoku on llama3.2:3b, 2026-11-04). The guard nudges, then stops
+        // the run and tells the user why — and what model to use instead.
+        var loopGuard = new Agents.AgentLoopGuard();
+        Agents.LoopGuardVerdict? loopGuardStop = null;
+        Agents.ModelCapability.Estimate? localCapability = loopIsLocal
+            ? Agents.ModelCapability.ForLocal(LocalModelNameFor(loopProvider))
+            : null;
+
         // ─── Smart effort (effort "auto", API models) ───
         // One effort for every step was either waste (high on a file read) or too little (medium on the third red
         // build). "Auto" starts from the kind of task and climbs when the run shows it is hard; it never drops within
         // a turn — each change re-writes the conversation's cache once.
         bool smartEffortOn = !loopIsLocal && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto;
         bool taskNonTrivial = LooksNonTrivialTask(userMessage ?? "");
+        // Say what this model can be trusted with BEFORE the run, not after it fails (owner 2026-11-04).
+        if (taskNonTrivial && localCapability != null
+            && Agents.ModelCapability.PreRunWarning(localCapability, escalationProvider != null, isThai) is { } capWarning)
+        {
+            OnAgentStatus?.Invoke(capWarning);
+            _debugLog?.Info("Agent", $"capability: {localCapability.Tier} ({localCapability.Billions}B) — warned before the run");
+        }
         // A long, multi-part brief earns a careful first (planning) step.
         bool bigSpec = taskNonTrivial && AutoEffortPolicy.OwnWords(userMessage).Length >= 1500;
         // Where "auto" starts: read from the task (a bug, a plan, several files, a long brief, a retry, a picture, a long
@@ -3432,6 +3510,13 @@ public partial class CodeAgentService
 
         // Add current user message
         var currentUserBlock = new Services.Providers.ContentBlock { Type = "text", Text = userMessage };
+        // An empty project has nothing to read or edit. Without being told, a small model guessed a file name, read it
+        // ("File not found") and read it again until the run was killed (Sudoku, 2026-11-04).
+        if (_fileSystemService.IsWorkingDirectoryEmpty())
+        {
+            currentUserBlock.Text += "\n\n" + EmptyProjectNote(_fileSystemService.WorkingDirectory);
+            _debugLog?.Info("Agent", "project folder is empty — told the model to create files with write_file");
+        }
         nativeMessages.Add(new Services.Providers.NativeMessage
         {
             Role = "user",
@@ -4232,6 +4317,7 @@ public partial class CodeAgentService
             // Partition into read-only (safe for parallel) and write tools
             var userResultMsg = new Services.Providers.NativeMessage { Role = "user" };
             var toolResults = new List<ToolResult>();
+            var guardCalls = new List<Agents.AgentLoopGuard.Call>();   // what the loop guard sees of this step
 
             var readOnlyCalls = response.ToolCalls.Where(tc =>
             {
@@ -4262,6 +4348,8 @@ public partial class CodeAgentService
 
                 string resultContent;
                 bool isError;
+                bool mutatedFile = false;
+                string imageSig = "";   // the loop guard compares results: two screenshots with the same text differ here
                 List<ToolImage>? resultImages = null;
                 try
                 {
@@ -4316,6 +4404,10 @@ public partial class CodeAgentService
                     }
 
                     lock (toolResults) { toolResults.Add(toolResult); }
+                    mutatedFile = toolResult.Success && call.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit;
+                    if (toolResult.Images is { Count: > 0 } shots)
+                        imageSig = string.Join("|", shots.Select(i => $"{i.FilePath}:{i.Base64?.Length}:"
+                            + (i.Base64 is { Length: > 256 } b ? b.Substring(b.Length / 2, 64) : i.Base64)));
                     OnToolExecuted?.Invoke(toolResult);
                     if (_debugLog != null)
                     {
@@ -4390,6 +4482,10 @@ public partial class CodeAgentService
                         Images = resultImages,
                     });
                 }
+                lock (guardCalls)
+                    guardCalls.Add(new Agents.AgentLoopGuard.Call(toolCall.Name,
+                        toolCall.Input.ValueKind == System.Text.Json.JsonValueKind.Undefined ? "" : toolCall.Input.GetRawText(),
+                        !isError, isError ? resultContent : "", mutatedFile, isError ? "" : resultContent + imageSig));
             }
 
             // Run read-only tools in parallel
@@ -4640,6 +4736,11 @@ public partial class CodeAgentService
             // Smart effort: a step with a failed tool call is one more sign the run is hard.
             if (toolResults.Any(r => !r.Success)) failedStepsInARow++; else failedStepsInARow = 0;
 
+            // ─── Loop guard verdict for this step (acted on after escalation has had its chance) ───
+            var guardVerdict = loopGuard.Observe(guardCalls);
+            if (guardVerdict.Action != Agents.LoopGuardAction.None)
+                _debugLog?.Warn("Agent", $"loop guard: {guardVerdict.Action} · {guardVerdict.Kind} · {guardVerdict.Tool} ×{guardVerdict.Repeats} · {guardVerdict.Error}");
+
             // ─── Escalation trigger (local model stuck → hand off to a stronger API model) ───
             if (escalationProvider != null && !hasEscalated)
             {
@@ -4660,9 +4761,13 @@ public partial class CodeAgentService
                     lastErrorSig = "";
                 }
                 bool nearExhaustion = !result.Success && iteration >= iterationBudget - 1;
+                // A loop the guard would stop (a cycle, not only three errors in a row) is handed over first.
+                if (guardVerdict.Action == Agents.LoopGuardAction.Stop) stagnating = true;
                 if (stagnating || nearExhaustion)
                 {
                     hasEscalated = true;
+                    loopGuard.Reset();                         // the stronger model starts with a clean slate
+                    guardVerdict = Agents.LoopGuardVerdict.None;
                     _debugLog?.Warn("Agent", $"escalating to {escalationProvider.ProviderId} · reason={(stagnating ? "repeated error" : "near exhaustion")} · errSig={lastErrorSig[..Math.Min(120, lastErrorSig.Length)]}");
                     loopProvider = escalationProvider;
                     toolSchemas = _agentToolService.BuildNativeToolSchemas(); // full catalogue for the strong model
@@ -4689,6 +4794,20 @@ public partial class CodeAgentService
                              + "finish the task correctly.",
                     });
                 }
+            }
+
+            // ─── Loop guard: nudge once, then stop and tell the user why ───
+            if (guardVerdict.Action == Agents.LoopGuardAction.Nudge)
+            {
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = Agents.AgentLoopGuard.NudgeText(guardVerdict),
+                });
+            }
+            else if (guardVerdict.Action == Agents.LoopGuardAction.Stop)
+            {
+                loopGuardStop = guardVerdict;
             }
 
             // The step keeps each result's image FILES (path, size), not its pixels: the model's copy rides on the
@@ -4743,6 +4862,19 @@ public partial class CodeAgentService
                 _debugLog?.Info("Agent", "plan-first: no plan by step 3 — reminder sent with the tool results");
             }
             nativeMessages.Add(userResultMsg);
+
+            // The guard said stop: more steps cannot help. End here with the reason and what to change, instead of
+            // spinning until the user notices (no step limit and a free local model = nothing else ever ends it).
+            if (loopGuardStop is { } looped)
+            {
+                result.StopReason = "loop";
+                result.Success = false;
+                result.FinalResponse = Agents.AgentLoopGuard.StopMessage(looped, ModelLabelFor(loopProvider),
+                    IsLocalProvider(loopProvider), hasEscalated ? null : localCapability, hasEscalated,
+                    result.Steps.Count, isThai);
+                _debugLog?.Warn("Agent", $"stopped by the loop guard at step {iteration + 1} · {looped.Kind} · {looped.Tool} ×{looped.Repeats}");
+                break;
+            }
         }
 
         if (!result.Success)
