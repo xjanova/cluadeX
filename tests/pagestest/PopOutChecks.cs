@@ -390,6 +390,17 @@ internal static partial class Program
         WritePng(img, 64, 48);
         byte[] original = File.ReadAllBytes(img);
         var textTab = edVm.ActiveTab;
+        var findBar = (FrameworkElement)ed.FindName("FindBar");
+        string[] textTools = { "TbUndo", "TbRedo", "TbCut", "TbCopy", "TbPaste", "TbFind", "TbReplace", "TbGoTo", "TbComment", "TbTools",
+                               "TbWrap", "TbWhitespace", "TbZoomOut", "TbZoomIn", "TbAiComments", "TbAutoComment" };
+        string[] fileTools = { "TbNew", "TbOpen", "TbSave", "TbSaveAs", "TbSaveAll" };
+        string ToolsShown() => string.Join(" ", textTools.Concat(fileTools).Where(n => ((FrameworkElement)ed.FindName(n)).Visibility == Visibility.Visible));
+        bool TextToolsHidden() => textTools.All(n => ((FrameworkElement)ed.FindName(n)).Visibility != Visibility.Visible);
+        bool TextToolsShown() => textTools.All(n => ((FrameworkElement)ed.FindName(n)).Visibility == Visibility.Visible);
+        bool FileToolsShown() => fileTools.All(n => ((FrameworkElement)ed.FindName(n)).Visibility == Visibility.Visible);
+        ed.OpenFindBar(replace: false);   // open on the text tab: it must step aside for the picture and come back after
+        await Idle(200);
+        bool findWasOpen = findBar.Visibility == Visibility.Visible;
 
         await edVm.OpenPathAsync(img);
         var host = await WaitFor(() => ed.MediaHosts.FirstOrDefault(), 10000);
@@ -399,6 +410,9 @@ internal static partial class Program
             edVm.ActiveTab is MediaFileTab { Kind: CluadeX.Services.Media.MediaKind.Image } && loaded && host!.PageState!.Contains("\"w\":64") && host.PageState.Contains("\"h\":48")
             && ed.ShowsMedia && te.Visibility != Visibility.Visible,
             $"tab={edVm.ActiveTab?.GetType().Name} state={host?.PageState} message={host?.ShowsMessage} media={ed.ShowsMedia} editor={te.Visibility}");
+        Check("MT9 a media tab hides the text tools (undo … find … comment … wrap … zoom … AI comments) and the find bar; Save / Save As / New / Open stay",
+            TextToolsHidden() && FileToolsShown() && findWasOpen && findBar.Visibility != Visibility.Visible,
+            $"shown: {ToolsShown()} | find was {findWasOpen}, now {findBar.Visibility}");
         if (host == null || !loaded || host.ShowsMessage) return;
         var mediaTab = (MediaFileTab)edVm.ActiveTab!;
 
@@ -406,6 +420,9 @@ internal static partial class Program
         await Idle(300);
         Check("MT2 a text tab still shows AvalonEdit (the media page hides)", !ed.ShowsMedia && te.Visibility == Visibility.Visible && te.Text.Contains("class Hello"),
             $"media={ed.ShowsMedia} editor={te.Visibility}");
+        Check("MT9b …and the next text tab brings every text tool back, the find bar too",
+            TextToolsShown() && FileToolsShown() && findBar.Visibility == Visibility.Visible, $"shown: {ToolsShown()} | find {findBar.Visibility}");
+        ed.CloseFindBar();
         edVm.ActiveTab = mediaTab;
         await Idle(300);
 
@@ -472,6 +489,8 @@ internal static partial class Program
             && Directory.GetFiles(proj, "*.cxpart.*").Length == 0 && host.PageState != before && host.PageState?.Contains("\"w\":48") == true,
             $"asked={asked} changed={!now.SequenceEqual(original)} dirty={mediaTab.IsDirty} state={host.PageState}");
 
+        await TextOnPictureCheck(ed, edVm, proj);
+
         // audio: a WAV plays and is decoded for editing (waveform), not play-only
         string wav = Path.Combine(proj, "เสียง ทดสอบ.wav");
         WriteWav(wav, seconds: 2);
@@ -500,6 +519,7 @@ internal static partial class Program
             Check("MT8 a WebM clip opens as video at its size (320×240, ~3 s)",
                 videoTab is { Kind: CluadeX.Services.Media.MediaKind.Video } && videoLoaded && videoHost!.PageState!.Contains("\"w\":320") && videoHost.PageState.Contains("\"h\":240"),
                 $"state={videoHost?.PageState}");
+            if (videoLoaded && videoHost != null) await TextOnVideoCheck(videoHost, videoTab!, clip, ff);
         }
         else Log("SKIP  MT8 no ffmpeg on this machine to make a test clip");
 
@@ -518,6 +538,145 @@ internal static partial class Program
     }
 
     static bool Session_IsClosed(this CluadeX.Views.Editor.MediaEditorHost host) => GetField(host, "_web") == null;
+
+    /// <summary>The page's answer to a script that returns JSON.stringify(...): the JSON inside.</summary>
+    static System.Text.Json.JsonElement JsJson(string raw)
+    {
+        try
+        {
+            string inner = System.Text.Json.JsonSerializer.Deserialize<string>(raw) ?? "null";
+            return System.Text.Json.JsonDocument.Parse(inner).RootElement.Clone();
+        }
+        catch { return System.Text.Json.JsonDocument.Parse("null").RootElement.Clone(); }
+    }
+
+    /// <summary>
+    /// MT10: text on a picture (owner 2026-11-04: "อยากให้ใส่ข้อความลงในไฟล์ภาพ … เลือกฟ้อน สี"). The text tool opens, a
+    /// click on the picture adds a layer, Thai with tone marks + an emoji is typed, Tahoma / green / a blue outline are
+    /// picked in the panel; Save copy writes a new file whose pixels changed where the text is and nowhere else, the
+    /// original is untouched and the layer stays editable.
+    /// </summary>
+    static async Task TextOnPictureCheck(CodeEditorView ed, CodeEditorViewModel edVm, string proj)
+    {
+        string pic = Path.Combine(proj, "ข้อความ ทดสอบ.png");
+        WritePng(pic, 240, 120);
+        byte[] before = File.ReadAllBytes(pic);
+        await edVm.OpenPathAsync(pic);
+        var tab = edVm.ActiveTab as MediaFileTab;
+        var host = await WaitFor(() => tab == null ? null : ed.MediaHosts.FirstOrDefault(h => h.Tab == tab), 10000);
+        bool loaded = host != null && await WaitUntil(() => host.PageState?.StartsWith("loaded") == true, 30000);
+        await Idle(500);
+        if (!loaded || host == null || tab == null) { Check("MT10 a picture for the text test opens", false, host?.PageState ?? "no host"); return; }
+        var web = (Microsoft.Web.WebView2.Wpf.WebView2)GetField(host, "_web")!;
+        await WaitUntilAsync(async () => await web.ExecuteScriptAsync("FONTS.length") is string n && int.TryParse(n, out int c) && c > 0, 10000);
+        var set = JsJson(await web.ExecuteScriptAsync(@"(() => { try {
+          document.querySelector('[data-tip=""media.page.textTip""]').click();
+          const c = document.querySelector('#imgwrap canvas'), r = c.getBoundingClientRect();
+          c.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, pointerId: 1 }));
+          const p = document.getElementById('tpanel'); if (!p) return JSON.stringify({ error: 'no panel' });
+          const fire = (e, v, ev = 'input') => { e.value = v; e.dispatchEvent(new Event(ev)); };
+          fire(p.querySelector('textarea'), 'ที่นี่ ผู้ใหญ่ น้ำ 👍');
+          const font = p.querySelector('.fontpick input'); font.focus(); fire(font, 'tahoma'); font.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+          const nums = p.querySelectorAll('input[type=number]'), cols = p.querySelectorAll('input[type=color]');
+          fire(nums[0], '30'); fire(nums[2], '3'); fire(cols[0], '#00ff00'); fire(cols[1], '#0000ff');
+          const Ly = ED.text.layers[0];
+          return JSON.stringify({ n: ED.text.layers.length, font: Ly.font, color: Ly.color, stroke: Ly.stroke, size: Ly.size, text: Ly.text, b: layerBounds(Ly),
+            m: Ly.shadow.blur * 2 + Math.abs(Ly.shadow.dy) + Ly.stroke.width + 3, sel: document.querySelector('[data-tip=""media.page.saveCopyTip""]').disabled });
+        } catch (e) { return JSON.stringify({ error: String(e && e.stack || e) }); } })()"));
+        await Idle(300);
+        if (set.ValueKind != System.Text.Json.JsonValueKind.Object || set.TryGetProperty("error", out _))
+        { Check("MT10 text on a picture: the text tool adds and styles a layer", false, set.ToString()); return; }
+        bool dirty = await WaitUntil(() => tab.IsDirty, 5000);
+        bool saved = await tab.Session!.SaveCopyAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        string copy = Path.Combine(proj, "ข้อความ ทดสอบ-edit.png");
+        await WaitUntil(() => File.Exists(copy), 5000);
+        string still = await web.ExecuteScriptAsync("ED.text.layers.length");
+
+        int inside = 0, outside = 0, green = 0;
+        string detail = set.ToString();
+        if (File.Exists(copy) && set.ValueKind == System.Text.Json.JsonValueKind.Object && set.TryGetProperty("b", out var b))
+        {
+            double m = set.GetProperty("m").GetDouble();
+            double x0 = b.GetProperty("x0").GetDouble() - m, y0 = b.GetProperty("y0").GetDouble() - m, x1 = b.GetProperty("x1").GetDouble() + m, y1 = b.GetProperty("y1").GetDouble() + m;
+            byte[] A = Pixels(pic), B = Pixels(copy);
+            for (int y = 0; y < 120; y++)
+                for (int x = 0; x < 240; x++)
+                {
+                    int i = (y * 240 + x) * 4;
+                    bool diff = Math.Abs(A[i] - B[i]) + Math.Abs(A[i + 1] - B[i + 1]) + Math.Abs(A[i + 2] - B[i + 2]) > 6;
+                    bool inBox = x >= x0 && x <= x1 && y >= y0 && y <= y1;
+                    if (diff && inBox) inside++;
+                    if (diff && !inBox) outside++;
+                    if (B[i + 1] > 200 && B[i + 2] < 90 && B[i] < 90) green++;   // BGRA
+                }
+            detail += $" | changed inside {inside}, outside {outside}, green {green}";
+        }
+        Check("MT10 text on a picture: Thai + emoji in Tahoma, green with a blue outline, saved into a copy — pixels change only where the text is, the original is untouched, the layer stays editable",
+            dirty && saved && set.TryGetProperty("n", out var n1) && n1.GetInt32() == 1
+            && set.GetProperty("font").GetString() == "Tahoma" && set.GetProperty("color").GetString() == "#00ff00"
+            && set.GetProperty("stroke").GetProperty("width").GetDouble() == 3 && set.GetProperty("text").GetString() == "ที่นี่ ผู้ใหญ่ น้ำ 👍"
+            && inside > 150 && outside == 0 && green > 20 && File.ReadAllBytes(pic).SequenceEqual(before) && still == "1" && !tab.IsDirty,
+            $"dirty={dirty} saved={saved} still={still} {detail}");
+
+        // an empty layer saves nothing (the save button goes back to "nothing to save" once the text is cleared)
+        string emptied = await web.ExecuteScriptAsync(@"(() => { const ta = document.querySelector('#tpanel textarea'); ta.value = '  '; ta.dispatchEvent(new Event('input'));
+          return document.querySelector('[data-tip=""media.page.overwriteTip""]').disabled; })()");
+        Check("MT10b …a layer emptied of its text counts as nothing to save (overwrite off)", emptied == "true", emptied);
+    }
+
+    static byte[] Pixels(string path)
+    {
+        using var f = File.OpenRead(path);
+        var d = BitmapDecoder.Create(f, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+        var bgra = new FormatConvertedBitmap(d.Frames[0], PixelFormats.Bgra32, null, 0);
+        var px = new byte[bgra.PixelWidth * bgra.PixelHeight * 4];
+        bgra.CopyPixels(px, bgra.PixelWidth * 4, 0);
+        return px;
+    }
+
+    /// <summary>MT11: text burned into a video with ffmpeg (the page draws the layer to a PNG at the video's size,
+    /// ffmpeg overlays it, VP9 for WebM, sound copied): the copy exists, same length (±1 frame) and size.</summary>
+    static async Task TextOnVideoCheck(CluadeX.Views.Editor.MediaEditorHost host, MediaFileTab tab, string clip, string ff)
+    {
+        var web = (Microsoft.Web.WebView2.Wpf.WebView2)GetField(host, "_web")!;
+        await Idle(400);
+        var set = JsJson(await web.ExecuteScriptAsync(@"(() => { try {
+          document.querySelector('[data-tip=""media.page.textTip""]').click();
+          const v = document.querySelector('#vidbox video'), r = v.getBoundingClientRect();
+          v.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height * .8, button: 0, pointerId: 1 }));
+          const p = document.getElementById('tpanel'); if (!p) return JSON.stringify({ error: 'no panel' });
+          const ta = p.querySelector('textarea'); ta.value = 'คำบรรยาย ทดสอบ'; ta.dispatchEvent(new Event('input'));
+          const Ly = ED.text.layers[0];
+          return JSON.stringify({ n: ED.text.layers.length, t0: Ly.t0, t1: Ly.t1, dur: document.querySelector('#vidbox video').duration,
+            label: document.querySelector('[data-tip=""media.page.saveCopyTip""] span').dataset.s });
+        } catch (e) { return JSON.stringify({ error: String(e && e.stack || e) }); } })()"));
+        await Idle(300);
+        if (set.ValueKind != System.Text.Json.JsonValueKind.Object || set.TryGetProperty("error", out _))
+        { Check("MT11 text on a video: the text tool adds a layer", false, set.ToString()); return; }
+        bool saved = await tab.Session!.SaveCopyAsync().WaitAsync(TimeSpan.FromSeconds(180));
+        string copy = Path.Combine(Path.GetDirectoryName(clip)!, Path.GetFileNameWithoutExtension(clip) + "-edit.webm");
+        (double secs, string size) Probe(string file)
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(ff) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
+            foreach (var a in new[] { "-hide_banner", "-i", file }) psi.ArgumentList.Add(a);
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            string err = p.StandardError.ReadToEnd(); p.WaitForExit();
+            var d = System.Text.RegularExpressions.Regex.Match(err, @"Duration: 00:00:(\d+\.\d+)");
+            var s = System.Text.RegularExpressions.Regex.Match(err, @"Video: .*?(\d{2,5}x\d{2,5})");
+            return (d.Success ? double.Parse(d.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : -1, s.Success ? s.Groups[1].Value : "");
+        }
+        string temp = Path.Combine(Path.GetTempPath(), "cluadex-media");
+        bool tempClean = await WaitUntil(() => !Directory.Exists(temp) || Directory.GetDirectories(temp).Length == 0, 5000);
+        var src = Probe(clip);
+        var outp = File.Exists(copy) ? Probe(copy) : (-1, "");
+        Check("MT11 text burned into a WebM with ffmpeg: whole-clip layer by default, the copy exists with the same length (±1 frame) and size, nothing left in %TEMP%",
+            saved && set.ValueKind == System.Text.Json.JsonValueKind.Object && set.TryGetProperty("n", out var n) && n.GetInt32() == 1
+            && set.GetProperty("t0").GetDouble() == 0 && Math.Abs(set.GetProperty("t1").GetDouble() - set.GetProperty("dur").GetDouble()) < 0.01
+            && set.GetProperty("label").GetString() == "media.page.saveBurn"
+            && outp.secs > 0 && Math.Abs(outp.secs - src.secs) <= 0.041 && outp.size == src.size && outp.size == "320x240"
+            && !tab.IsBusy && tempClean,
+            $"saved={saved} {set} | src {src.secs}s {src.size} → copy {outp.secs}s {outp.size}");
+    }
 
     static void WritePng(string path, int w, int h)
     {

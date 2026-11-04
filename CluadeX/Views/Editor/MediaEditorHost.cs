@@ -52,7 +52,7 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
     // a save is being set up: the overwrite question (a modal loop that still delivers page messages) or the temp file
     // being made — a second Save arriving then is refused, not started alongside
     private bool _claiming;
-    private bool Occupied => _upload != null || _claiming || Tab.IsBusy;
+    private bool Occupied => _upload != null || _burn != null || _claiming || Tab.IsBusy;
     private readonly Dictionary<int, TaskCompletionSource<bool>> _exports = new();
     private string? _exportPath;
     private TaskCompletionSource<bool>? _released;
@@ -110,7 +110,7 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
     }
 
     private void OnThemeChanged(string _) => Dispatcher.BeginInvoke(SendTheme);
-    private void OnLanguageChanged() => Dispatcher.BeginInvoke(SendStrings);
+    private void OnLanguageChanged() => Dispatcher.BeginInvoke(() => { SendStrings(); _ = SendFontsAsync(); });   // (the default font follows the language)
 
     private async void Start()
     {
@@ -314,6 +314,7 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
                     SendTheme();
                     SendStrings();
                     SendInit(reload: false);
+                    _ = SendFontsAsync();
                     break;
                 case "dirty":
                     Tab.IsDirty = m.TryGetProperty("on", out var on) && on.ValueKind == JsonValueKind.True;
@@ -331,9 +332,15 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
                 case "begin": await BeginUploadAsync(m); break;
                 case "chunk": await ChunkAsync(m); break;
                 case "end": await EndUploadAsync(m); break;
-                case "abort": if (Int(m, "id") == _uploadId) EndWork(); break;
+                case "abort": if (Int(m, "id") == _uploadId && !_cutRunning) EndWork(); break;
                 case "cut": await CutAsync(m); break;
-                case "cancel": _work?.Cancel(); break;
+                case "burn": await BurnBeginAsync(m); break;
+                case "burnChunk": await BurnChunkAsync(m); break;
+                case "burnEnd": await BurnEndAsync(m); break;
+                case "cancel":
+                    _work?.Cancel();
+                    if (_burn != null && !_cutRunning && Int(m, "id") == _uploadId) AbortWork();   // still sending pictures
+                    break;
                 case "exported":
                     if (_exports.Remove(Int(m, "id"), out var tcs)) tcs.TrySetResult(m.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True);
                     _exportPath = null;
@@ -530,6 +537,12 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
         _cutRunning = true;
         try { result = await Task.Run(() => Ffmpeg.CutAsync(input, up.TempPath, start, end, Ffmpeg.TimeoutFor(Tab.ByteLength), ct)); }
         finally { _cutRunning = false; }
+        await FinishFfmpegAsync(id, up, target, result, "cut", "cut");
+    }
+
+    /// <summary>An ffmpeg run is over: commit its file, or say why not. The temp files go either way.</summary>
+    private async Task FinishFfmpegAsync(int id, MediaUpload up, string? target, FfmpegResult result, string purpose, string what)
+    {
         if (_closed || !ReferenceEquals(up, _upload))
         {
             if (ReferenceEquals(up, _upload)) EndWork(); else up.Dispose();
@@ -538,24 +551,175 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
         switch (result.Outcome)
         {
             case FfmpegOutcome.Done:
-                await CommitAsync(id, up, target, "cut");
+                await CommitAsync(id, up, target, purpose);
                 return;
             case FfmpegOutcome.Cancelled:
                 Result(id, ok: false, textKey: null, cancelled: true);
                 break;
             case FfmpegOutcome.TimedOut:
-                _vm.LogMedia($"ffmpeg cut of {input} timed out: {result.Detail}");
+                _vm.LogMedia($"ffmpeg {what} of {Tab.FullPath} timed out: {result.Detail}");
                 Result(id, ok: false, textKey: "media.status.ffmpegTimeout");
                 break;
             case FfmpegOutcome.Missing:
                 Result(id, ok: false, textKey: "media.status.ffmpegMissing");
                 break;
             default:
-                _vm.LogMedia($"ffmpeg cut of {input} failed: {result.Detail}");
+                _vm.LogMedia($"ffmpeg {what} of {Tab.FullPath} failed: {result.Detail}");
                 Result(id, ok: false, textKey: "media.status.ffmpegFailed");
                 break;
         }
         EndWork();
+    }
+
+    // ───────────────────────────── text burned into a video ─────────────────────────────
+
+    /// <summary>A text burn in flight: the layers' pictures arriving (one temp PNG each, in a folder of its own under
+    /// %TEMP%), then ffmpeg laying them over the frames.</summary>
+    private sealed class Burn
+    {
+        public required string Dir { get; init; }
+        public required MediaUpload[] Parts { get; init; }
+        public required double[] From { get; init; }
+        public required double[] To { get; init; }
+        public double Start { get; init; }
+        public double End { get; init; }
+        public long Pixels { get; init; }
+        public string? Target { get; init; }
+
+        /// <summary>The pictures and their folder go (best effort: an antivirus may hold one a moment longer).</summary>
+        public void Cleanup()
+        {
+            foreach (var p in Parts) { try { p.Dispose(); } catch { } }
+            try { if (Directory.Exists(Dir)) Directory.Delete(Dir, recursive: true); } catch { }
+        }
+    }
+
+    private Burn? _burn;
+
+    /// <summary>"burn": the page will send <c>overlays.length</c> PNGs, then "burnEnd". Checked here: ffmpeg is there, the
+    /// times are numbers and inside the clip, the counts and sizes are sane, an overwrite was confirmed.</summary>
+    private async Task BurnBeginAsync(JsonElement m)
+    {
+        int id = Int(m, "id");
+        if (Occupied) { Result(id, ok: false, textKey: "media.status.busy"); return; }
+        if (Ffmpeg.Locate() == null)
+        {
+            Post(new { t = "ffmpeg", on = false });
+            Result(id, ok: false, textKey: "media.status.ffmpegMissing");
+            return;
+        }
+        double start = Dbl(m, "start"), end = Dbl(m, "end");
+        int w = Int(m, "w"), h = Int(m, "h");
+        var spans = new List<(long Size, double From, double To)>();
+        if (m.TryGetProperty("overlays", out var list) && list.ValueKind == JsonValueKind.Array)
+            foreach (var o in list.EnumerateArray())
+                spans.Add((o.TryGetProperty("size", out var s) && s.TryGetInt64(out long n) ? n : -1, Dbl(o, "t0"), Dbl(o, "t1")));
+        bool sane = double.IsFinite(start) && double.IsFinite(end) && start >= 0 && end > start
+                    && w is > 0 and <= 16384 && h is > 0 and <= 16384
+                    && spans.Count is > 0 and <= MediaOverlay.MaxLayers
+                    && spans.All(s => s.Size is > 0 and <= MediaOverlay.MaxPngBytes && double.IsFinite(s.From) && double.IsFinite(s.To));
+        if (!sane) { Result(id, ok: false, textKey: "media.status.saveFailed"); return; }
+
+        string ext = MediaFiles.ExtOf(Tab.FullPath);
+        string mode = Str(m, "mode") ?? "copy";
+        string? target;
+        Burn burn;
+        _claiming = true;
+        try
+        {
+            target = PlanTarget(mode, ext, out string? refuse);
+            if (refuse != null) { Result(id, ok: false, textKey: refuse.Length == 0 ? null : refuse, cancelled: refuse.Length == 0); return; }
+            if (_closed) return;
+            string dir = Path.Combine(Path.GetTempPath(), "cluadex-media", Guid.NewGuid().ToString("N"));
+            burn = await Task.Run(() =>
+            {
+                Directory.CreateDirectory(dir);
+                try
+                {
+                    return new Burn
+                    {
+                        Dir = dir,
+                        Parts = spans.Select((s, i) => new MediaUpload(Path.Combine(dir, $"text{i}.png"), "png", s.Size)).ToArray(),
+                        From = spans.Select(s => s.From).ToArray(),
+                        To = spans.Select(s => s.To).ToArray(),
+                        Start = start, End = end, Pixels = (long)w * h, Target = target,
+                    };
+                }
+                catch { try { Directory.Delete(dir, true); } catch { } throw; }
+            });
+        }
+        catch (Exception ex)
+        {
+            _vm.LogMedia($"Could not start the text render for {Tab.FullPath}", ex);
+            Result(id, ok: false, textKey: "media.status.saveFailed");
+            return;
+        }
+        finally { _claiming = false; }
+        if (_closed) { _ = Task.Run(burn.Cleanup); return; }
+        _burn = burn;
+        _uploadId = id;
+        _work = new CancellationTokenSource();
+        Tab.IsBusy = true;
+        Post(new { t = "go", id });
+    }
+
+    private async Task BurnChunkAsync(JsonElement m)
+    {
+        int id = Int(m, "id"), n = Int(m, "n"), seq = Int(m, "seq");
+        var burn = _burn;
+        if (burn == null || id != _uploadId || n < 0 || n >= burn.Parts.Length) { Result(id, ok: false, textKey: "media.status.saveCancelled", cancelled: true); return; }
+        await burn.Parts[n].AppendBase64Async(seq, Str(m, "data") ?? "", _work?.Token ?? default);
+        if (_closed || !ReferenceEquals(burn, _burn)) return;
+        Post(new { t = "ack", id, n, seq });
+    }
+
+    /// <summary>"burnEnd": every picture is here — ffmpeg cuts [start, end), lays them over their windows and re-encodes
+    /// the picture (the sound is copied), into a temp file committed like any save. Progress goes to the page.</summary>
+    private async Task BurnEndAsync(JsonElement m)
+    {
+        int id = Int(m, "id");
+        var burn = _burn;
+        if (burn == null || id != _uploadId) return;
+        foreach (var part in burn.Parts)
+            if (!await part.FinishAsync()) { Result(id, ok: false, textKey: "media.status.saveFailed"); EndWork(); return; }
+        if (_closed || !ReferenceEquals(burn, _burn)) return;
+        string? exe = Ffmpeg.Locate();
+        if (exe == null) { Result(id, ok: false, textKey: "media.status.ffmpegMissing"); EndWork(); return; }
+
+        string ext = MediaFiles.ExtOf(Tab.FullPath), input = Tab.FullPath;
+        var up = new MediaUpload(burn.Target ?? Tab.FullPath, ext, 0, openStream: false);
+        _upload = up;
+        var spans = burn.Parts.Select((p, i) => new OverlaySpan(p.TempPath, burn.From[i], burn.To[i])).ToList();
+        double length = burn.End - burn.Start;
+        var timeout = MediaOverlay.TimeoutForEncode(length, burn.Pixels);
+        var ct = _work?.Token ?? CancellationToken.None;
+
+        // progress: ffmpeg's "-progress" lines on a pool thread → at most a few posts a second to the page
+        double shown = -1;
+        long lastTick = 0;
+        void OnLine(string line)
+        {
+            if (MediaOverlay.ProgressOf(line, length) is not { } f) return;
+            long now = Environment.TickCount64;
+            if (f < 1 && (f - shown < 0.01 || now - lastTick < 250)) return;
+            shown = f; lastTick = now;
+            Dispatcher.BeginInvoke(() => { if (ReferenceEquals(burn, _burn)) Post(new { t = "progress", id, f }); });
+        }
+
+        FfmpegResult result = new(FfmpegOutcome.Failed, "not run");
+        _cutRunning = true;
+        try
+        {
+            for (int attempt = 0; attempt < MediaOverlay.EncoderAttempts(ext); attempt++)
+            {
+                var args = MediaOverlay.BurnArguments(input, spans, up.TempPath, burn.Start, burn.End, burn.Pixels, attempt);
+                result = await Task.Run(() => Ffmpeg.RunAsync(exe, args, up.TempPath, timeout, ct, OnLine));
+                if (result.Outcome != FfmpegOutcome.Failed || !MediaOverlay.IsMissingEncoder(result.Detail)) break;
+                _vm.LogMedia($"ffmpeg has no first-choice encoder for .{ext}; trying the next: {result.Detail}");
+            }
+        }
+        finally { _cutRunning = false; }
+        await FinishFfmpegAsync(id, up, burn.Target, result, "edit", "text render");
     }
 
     /// <summary>Tell the page how its save ended (and the status line, when it did not happen).</summary>
@@ -581,6 +745,9 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
         try { _work?.Dispose(); } catch { }
         _work = null;
         if (up != null) _ = Task.Run(up.Dispose);
+        var burn = _burn;
+        _burn = null;
+        if (burn != null) _ = Task.Run(burn.Cleanup);
         Tab.IsBusy = false;
     }
 
@@ -589,7 +756,7 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
     private void AbortWork()
     {
         try { _work?.Cancel(); } catch { }
-        if (_upload == null || _cutRunning) return;
+        if (_upload == null && _burn == null || _cutRunning) return;
         int id = _uploadId;
         EndWork();
         if (id != 0) Result(id, ok: false, textKey: null, cancelled: true);
@@ -639,6 +806,17 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
             maxAudioBytes = MediaFiles.MaxAudioEditBytes,
             maxAudioSeconds = MediaFiles.MaxAudioEditSeconds,
         });
+    }
+
+    /// <summary>The fonts on this PC for the text layers (the page cannot list them), and the one a new layer starts
+    /// with: a font with Thai letters when the app speaks Thai.</summary>
+    private async Task SendFontsAsync()
+    {
+        IReadOnlyList<string> list;
+        try { list = await MediaFonts.InstalledAsync(); }
+        catch (Exception ex) { _vm.LogMedia("Could not list the installed fonts", ex); list = Array.Empty<string>(); }
+        if (!_ready || _closed) return;
+        Post(new { t = "fonts", list, def = MediaFonts.DefaultFont(list, _vm.Localization.CurrentLanguage) });
     }
 
     private void SendGone() => Post(new { t = "fail", title = _vm.Loc("media.gone.title"), body = _vm.Loc("media.gone.body", Tab.FileName) });

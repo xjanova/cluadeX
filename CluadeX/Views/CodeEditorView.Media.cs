@@ -88,6 +88,43 @@ public partial class CodeEditorView
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, new Action(shown.Activate));
         }
         UpdateMediaVisibility();
+        UpdateTextOnlyPanels(shown != null);
+    }
+
+    private bool _findHiddenForMedia;
+
+    /// <summary>
+    /// The panels that work on the text in AvalonEdit step aside while a media tab is active and come back on the next
+    /// text tab (owner 2026-11-04: "ในเครื่องมือภาพ/วีดีโอ ยังเห็นเครื่องมือของ editor อยู่ … ควรซ่อนไหม"). The find /
+    /// replace / go-to bar would search the emptied editor; the Problems panel lists the bound buffer's diagnostics.
+    /// The toolbar's text tools hide by binding (IsMediaTabActive), the status bar and minimap by IsTextTabActive.
+    /// </summary>
+    private void UpdateTextOnlyPanels(bool media)
+    {
+        if (media)
+        {
+            if (FindBar.Visibility == Visibility.Visible)
+            {
+                _findHiddenForMedia = true;
+                FindBar.Visibility = Visibility.Collapsed;
+                _countTimer?.Stop();
+            }
+            ProblemsPanel.Visibility = Visibility.Collapsed;   // s_problemsOpen keeps the user's choice
+            CloseHoverTip();
+            return;
+        }
+        if (_findHiddenForMedia && _boundTab != null)
+        {
+            _findHiddenForMedia = false;
+            FindBar.Visibility = Visibility.Visible;
+            RefreshFind(jump: false);
+        }
+        bool problems = s_problemsOpen;
+        if ((ProblemsPanel.Visibility == Visibility.Visible) != problems)
+        {
+            ProblemsPanel.Visibility = problems ? Visibility.Visible : Visibility.Collapsed;
+            if (problems) RefreshLsp();
+        }
     }
 
     /// <summary>The media area is shown for a media tab, unless the diff covers the code area or a main-window overlay

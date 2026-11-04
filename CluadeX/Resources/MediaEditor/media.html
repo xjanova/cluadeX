@@ -78,6 +78,28 @@ label.chk { display:inline-flex; align-items:center; gap:4px; cursor:pointer; co
 #vidbox video { max-width:100%; max-height:100%; }
 #timeline { display:block; width:100%; height:74px; cursor:pointer; }
 .kbd { color:var(--faint); font-size:11px; }
+/* text layers (image + video) */
+canvas.tov { position:absolute; left:0; top:0; pointer-events:none; z-index:5; }
+#tpanel { position:absolute; top:10px; right:10px; bottom:10px; width:308px; z-index:25; overflow:auto; padding:10px 12px; display:flex; flex-direction:column; gap:7px;
+  background:var(--raised); border:1px solid var(--border); border-radius:8px; box-shadow:0 8px 28px rgba(0,0,0,.35); }
+#tpanel .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+#tpanel .lbl { color:var(--muted); min-width:58px; }
+#tpanel h4 { margin:6px 0 0; font-size:11px; font-weight:600; color:var(--faint); letter-spacing:.03em; }
+#tpanel textarea { width:100%; min-height:62px; max-height:180px; resize:vertical; padding:6px 7px; border:1px solid var(--border); border-radius:5px; background:var(--bg); color:var(--text);
+  font:14px/1.4 "Leelawadee UI", Tahoma, "Segoe UI", "Segoe UI Emoji", sans-serif; user-select:text; }
+#tpanel input[type=color] { width:30px; height:24px; padding:0 1px; border:1px solid var(--border); border-radius:4px; background:var(--bg); cursor:pointer; }
+#tpanel input[type=number] { width:62px; }
+#tpanel input[type=range] { width:96px; }
+#tpanel .note { color:var(--warn); font-size:11px; }
+#tpanel .note:empty { display:none; }
+input[type=text] { height:26px; background:var(--raised); border:1px solid var(--border); border-radius:5px; padding:0 6px; }
+.fontpick { position:relative; flex:1; min-width:150px; }
+.fontpick input { width:100%; }
+.fontlist { position:absolute; left:0; right:0; top:28px; max-height:260px; overflow:auto; z-index:30; display:none; background:var(--panel); border:1px solid var(--border); border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,.35); }
+.fontlist.show { display:block; }
+.fontlist div { padding:4px 8px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:15px; }
+.fontlist div:hover, .fontlist div.on { background:var(--hover); }
+.fontlist .none { color:var(--muted); font-size:12px; cursor:default; }
 </style>
 </head>
 <body>
@@ -97,6 +119,7 @@ let S = {};                    // localized strings (media.page.* → text)
 let INFO = null;               // what the host told us about the file
 let ED = null;                 // the active editor (image / audio / video)
 let busy = null;               // { cancel() } while a save runs
+let burnProgress = null;       // { id, fn(f) } while ffmpeg renders a video's text
 let nextId = 1;
 const waiters = new Map();
 
@@ -130,6 +153,8 @@ const ICON = {
   prev:'M19 20 9 12l10-8zM5 19V5', next:'M5 4l10 8-10 8zM19 5v14', inpt:'M4 4v16M8 12h12M14 6l6 6-6 6', outpt:'M20 4v16M16 12H4M10 6l-6 6 6 6',
   save:'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8', over:'M12 3v12M7 10l5 5 5-5M5 21h14',
   code:'M16 18l6-6-6-6M8 6l-6 6 6 6', check:'M20 6 9 17l-5-5', x:'M18 6 6 18M6 6l12 12', zsel:'M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4M8 12h8',
+  text:'M4 7V4h16v3M9 20h6M12 4v16', plus:'M12 5v14M5 12h14', bold:'M6 4h7a4 4 0 0 1 0 8H6zM6 12h8a4 4 0 0 1 0 8H6z', italic:'M19 4h-9M14 20H5M15 4 9 20',
+  aleft:'M3 6h18M3 12h12M3 18h16', acenter:'M3 6h18M6 12h12M4 18h16', aright:'M3 6h18M9 12h12M5 18h16', layers:'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
 };
 function svg(name) { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', ICON[name] || ''); s.append(p); return s; }
 function btn(icon, key, fn, opts = {}) {
@@ -189,12 +214,16 @@ const CHUNK = 768 * 1024;
 /** Send blob to the host as a new file. mode: copy | overwrite | path. Resolves to the host's saveResult. */
 async function upload(blob, mode, ext, purpose, savePath) {
   const id = nextId++;
-  let cancelled = false;
-  setBusy(L('media.page.saving'), () => { cancelled = true; post({ t: 'abort', id }); resolveWaiter({ t: 'saveResult', id, ok: false, cancelled: true }); }, false);
+  let cancelled = false, started = false;
+  // before the host's "go" it may still be making the temp file (or asking about an overwrite): an abort then would
+  // find nothing to stop — wait for the "go" and abort after it
+  setBusy(L('media.page.saving'), () => { cancelled = true; if (started) { post({ t: 'abort', id }); resolveWaiter({ t: 'saveResult', id, ok: false, cancelled: true }); } }, false);
   try {
     post({ t: 'begin', id, mode, ext, size: blob.size, purpose, path: savePath || null });
     const go = await waitFor(id, ['go', 'saveResult']);
     if (go.t !== 'go') return go;
+    started = true;
+    if (cancelled) { post({ t: 'abort', id }); return { ok: false, cancelled: true }; }
     for (let off = 0, seq = 0; off < blob.size; off += CHUNK, seq++) {
       if (cancelled) return { ok: false, cancelled: true };
       const data = await blobToBase64(blob.slice(off, off + CHUNK));
@@ -260,18 +289,357 @@ function refreshSaveButtons() {
  *  (a reload after the file changed on disk starts a new editor on the same page). */
 function Bag() { const fns = []; return { on(t, ev, fn, o) { t.addEventListener(ev, fn, o); fns.push(() => t.removeEventListener(ev, fn, o)); }, observe(t, fn) { const r = new ResizeObserver(fn); r.observe(t); fns.push(() => r.disconnect()); }, clear() { fns.splice(0).forEach(f => { try { f(); } catch (e) { } }); } }; }
 
+// ───────────────────────────── undo: whole-state snapshots ─────────────────────────────
+/** Undo / redo over snapshots of an editor's state. A burst of small edits (typing, a slider drag) becomes ONE step:
+ *  begin() before each change, the step closes 600 ms after the last one (or at the next mark / undo). */
+function History(get, set) {
+  let past = [], fut = [], pending = null, timer = 0;
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const h = {
+    begin() { if (!pending) pending = get(); clearTimeout(timer); timer = setTimeout(h.flush, 600); },
+    flush() { clearTimeout(timer); if (pending) { if (!same(pending, get())) { past.push(pending); fut = []; } pending = null; } },
+    mark(prev) { h.flush(); if (!same(prev, get())) { past.push(prev); fut = []; } },
+    undo() { h.flush(); if (!past.length) return false; fut.push(get()); set(past.pop()); return true; },
+    redo() { h.flush(); if (!fut.length) return false; past.push(get()); set(fut.pop()); return true; },
+    canUndo: () => past.length > 0 || !!pending, canRedo: () => fut.length > 0,
+  };
+  return h;
+}
+
+// ───────────────────────────── TEXT LAYERS (image + video) ─────────────────────────────
+// Owner 2026-11-04: "อยากให้ใส่ข้อความลงในไฟล์ภาพและวีดีโอได้ เลือกฟ้อน สี และอื่นๆ". Layers stay editable until the save
+// (or "Apply to picture") draws them in. One renderer for everything — the live view, the saved picture, each video
+// layer's PNG for ffmpeg, the real-time recording — so what is seen is what is written, Thai shaped by Chromium.
+let FONTS = [];                       // the PC's fonts (the host lists them; a page cannot)
+let DEF_FONT = 'Leelawadee UI';       // a font with Thai letters when the app speaks Thai
+const FALLBACK = '"Leelawadee UI", Tahoma, "Segoe UI", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif';
+const cleanFont = n => String(n || '').replace(/["'\\;{}<>]/g, '').trim().slice(0, 100);
+const fontStack = n => { const f = cleanFont(n); return (f ? `"${f}", ` : '') + FALLBACK; };
+const fontCss = Ly => `${Ly.italic ? 'italic ' : ''}${Ly.bold ? 700 : 400} ${Math.max(1, Ly.size)}px ${fontStack(Ly.font)}`;
+const fontKnown = n => !FONTS.length || FONTS.some(f => f.toLowerCase() === cleanFont(n).toLowerCase());
+const hasText = Ly => String(Ly.text || '').trim().length > 0;
+const MEAS = document.createElement('canvas').getContext('2d');
+/** Lines, widths and line height of a layer, in the frame's pixels. The ascent / descent come from the font itself
+ *  (with a floor), so Thai marks above (ที่ ผู้) and below (ฤ ฎ) stay inside the box. */
+function textMetrics(Ly) {
+  MEAS.font = fontCss(Ly);
+  const lines = String(Ly.text || '').replace(/\r/g, '').split('\n');
+  const ws = lines.map(s => MEAS.measureText(s).width);
+  const m = MEAS.measureText('Hgที่ผู้ญู');
+  const asc = Math.max(m.fontBoundingBoxAscent || 0, m.actualBoundingBoxAscent || 0, Ly.size * .8);
+  const desc = Math.max(m.fontBoundingBoxDescent || 0, m.actualBoundingBoxDescent || 0, Ly.size * .22);
+  const lh = (asc + desc) * 1.06;
+  return { lines, ws, asc, desc, lh, W: Math.max(1, ...ws), H: lh * lines.length };
+}
+function layerBox(Ly) {
+  const M = textMetrics(Ly), pad = Ly.box.on ? Math.max(0, Ly.box.pad) : 0;
+  return { M, x: -M.W / 2 - pad, y: -M.H / 2 - pad, w: M.W + 2 * pad, h: M.H + 2 * pad };
+}
+/** The layer's corners in frame pixels (rotation applied) → its bounds. */
+function layerBounds(Ly) {
+  const b = layerBox(Ly), r = Ly.rot * Math.PI / 180, c = Math.cos(r), s = Math.sin(r), e = Math.max(0, Ly.stroke.width);
+  const pts = [[b.x - e, b.y - e], [b.x + b.w + e, b.y - e], [b.x + b.w + e, b.y + b.h + e], [b.x - e, b.y + b.h + e]]
+    .map(([x, y]) => [Ly.x + x * c - y * s, Ly.y + x * s + y * c]);
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+}
+/** Where a layer is against a frame of w × h: 'in', 'partly' or 'out'. */
+function layerPlace(Ly, w, h) {
+  const b = layerBounds(Ly);
+  if (b.x1 <= 0 || b.y1 <= 0 || b.x0 >= w || b.y0 >= h) return 'out';
+  return b.x0 < 0 || b.y0 < 0 || b.x1 > w || b.y1 > h ? 'partly' : 'in';
+}
+/** Draw one layer on g, the frame scaled by s and moved by (ox, oy) canvas pixels (g's own transform is replaced).
+ *  sel: the editing outline; faint: a layer shown outside its time (video). */
+function drawLayer(g, Ly, s, sel, faint, ox = 0, oy = 0) {
+  if (!hasText(Ly) && !sel) return;
+  const B = layerBox(Ly), M = B.M;
+  g.save();
+  g.setTransform(s, 0, 0, s, ox, oy);
+  g.translate(Ly.x, Ly.y); g.rotate(Ly.rot * Math.PI / 180);
+  const alpha = clamp(+Ly.opacity, 0, 1) * (faint ? .35 : 1);
+  if (Ly.box.on && hasText(Ly)) {
+    g.globalAlpha = alpha * clamp(+Ly.box.opacity, 0, 1); g.fillStyle = Ly.box.color;
+    g.beginPath(); g.roundRect(B.x, B.y, B.w, B.h, clamp(+Ly.box.radius, 0, Math.min(B.w, B.h) / 2)); g.fill();
+  }
+  g.globalAlpha = alpha;
+  g.font = fontCss(Ly); g.textBaseline = 'alphabetic'; g.textAlign = Ly.align; g.lineJoin = 'round'; g.miterLimit = 2;
+  const ax = Ly.align === 'left' ? -M.W / 2 : Ly.align === 'right' ? M.W / 2 : 0;
+  const ys = M.lines.map((_, i) => -M.H / 2 + i * M.lh + (M.lh - (M.asc + M.desc)) / 2 + M.asc);
+  const sh = Ly.shadow, shOn = sh.on && (sh.blur > 0 || sh.dx || sh.dy);
+  // shadow offset / blur are in the canvas's own pixels, outside the transform: scaled by s, not rotated (the light stays put)
+  const shadow = on => { g.shadowColor = on ? sh.color : 'transparent'; g.shadowBlur = on ? Math.max(0, sh.blur) * s : 0; g.shadowOffsetX = on ? sh.dx * s : 0; g.shadowOffsetY = on ? sh.dy * s : 0; };
+  if (Ly.stroke.width > 0) {   // outline first (twice as wide: half is covered by the fill), then the letters on top
+    shadow(shOn); g.strokeStyle = Ly.stroke.color; g.lineWidth = Ly.stroke.width * 2;
+    M.lines.forEach((t, i) => g.strokeText(t, ax, ys[i]));
+    shadow(false); g.fillStyle = Ly.color; M.lines.forEach((t, i) => g.fillText(t, ax, ys[i]));
+  } else {
+    shadow(shOn); g.fillStyle = Ly.color; M.lines.forEach((t, i) => g.fillText(t, ax, ys[i]));
+  }
+  if (sel) {
+    shadow(false); g.globalAlpha = 1; g.setLineDash([6 / s, 4 / s]); g.lineWidth = 1.5 / s;
+    g.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4CDFFF';
+    const m = 4 / s; g.strokeRect(B.x - m, B.y - m, B.w + 2 * m, B.h + 2 * m);
+  }
+  g.restore();
+}
+/** A layer's start / end made usable: numbers, inside [0, D], at least 0.05 s long; null when it cannot be. */
+function fixTimes(t0, t1, D) {
+  t0 = +t0; t1 = +t1;
+  if (!isFinite(t0) || !isFinite(t1) || !(D > 0)) return null;
+  t0 = clamp(t0, 0, D); t1 = clamp(t1, 0, D);
+  return t1 - t0 >= 0.05 ? [t0, t1] : null;
+}
+
+/** The text tool of one editor. o: { video, frame() → {w,h}, now(), dur(), range() → [in, out], changed(), begin(), mark(prev), state() } */
+function TextLayers(o) {
+  const tl = { layers: [], sel: -1, open: false };
+  let panel = null, ui = {};
+  const cur = () => tl.layers[tl.sel] || null;
+  const visibleAt = (Ly, t) => !o.video || (t >= Ly.t0 - 1e-6 && t <= Ly.t1 + 1e-6);
+  tl.hasText = () => tl.layers.some(hasText);
+  tl.get = () => JSON.parse(JSON.stringify(tl.layers));
+  tl.set = arr => { tl.layers = JSON.parse(JSON.stringify(arr || [])); if (tl.sel >= tl.layers.length) tl.sel = tl.layers.length - 1; fill(); };
+  tl.sig = () => JSON.stringify(tl.layers.filter(hasText));   // what a save would write (an empty layer writes nothing)
+  tl.forSave = () => tl.layers.filter(hasText);
+  tl.visibleAt = visibleAt;
+
+  tl.draw = (g, s, t, withSel, ox = 0, oy = 0) => {
+    tl.layers.forEach((Ly, i) => {
+      const isSel = withSel && i === tl.sel, vis = visibleAt(Ly, t);
+      if (vis || isSel) drawLayer(g, Ly, s, isSel, !vis, ox, oy);
+    });
+  };
+  /** The topmost layer under (x, y) in frame pixels (m: extra margin, frame pixels), shown at time t. */
+  tl.hit = (x, y, m, t) => {
+    for (let i = tl.layers.length - 1; i >= 0; i--) {
+      const Ly = tl.layers[i]; if (!visibleAt(Ly, t) && i !== tl.sel) continue;
+      const b = layerBox(Ly), r = -Ly.rot * Math.PI / 180, dx = x - Ly.x, dy = y - Ly.y;
+      const lx = dx * Math.cos(r) - dy * Math.sin(r), ly = dx * Math.sin(r) + dy * Math.cos(r), e = m + Math.max(0, Ly.stroke.width);
+      if (lx >= b.x - e && lx <= b.x + b.w + e && ly >= b.y - e && ly <= b.y + b.h + e) return i;
+    }
+    return -1;
+  };
+  /** One layer alone on a transparent frame-sized canvas → PNG (a video's text for ffmpeg). */
+  tl.png = (Ly, w, h) => new Promise(ok => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d'); if (!g) return ok(null);
+    drawLayer(g, Ly, 1, false); c.toBlob(b => ok(b), 'image/png');
+  });
+
+  function make(x, y) {
+    const { w, h } = o.frame(), size = Math.max(10, Math.round(Math.min(w, h) * .07));
+    const [a, b] = o.range ? o.range() : [0, 0];
+    return {
+      text: L('media.page.textSample'), font: DEF_FONT, size, bold: true, italic: false, color: '#ffffff', opacity: 1,
+      stroke: { color: '#000000', width: Math.max(1, Math.round(size * .06)) },
+      shadow: { on: true, color: '#000000', blur: Math.round(size * .15), dx: 0, dy: Math.round(size * .04) },
+      box: { on: false, color: '#000000', opacity: .55, pad: Math.round(size * .3), radius: Math.round(size * .18) },
+      align: 'center', rot: 0, x: Math.round(x), y: Math.round(y), t0: a, t1: b,
+    };
+  }
+  tl.add = (x, y) => {
+    if (tl.layers.length >= 64) { say(L('media.page.textTooMany'), 'err'); return; }
+    const prev = o.state();
+    tl.layers.push(make(x, y)); tl.sel = tl.layers.length - 1;
+    o.mark(prev); if (!tl.open) tl.show(); else fill(); o.changed();
+    if (ui.text) { ui.text.focus(); ui.text.select(); }
+  };
+  tl.remove = () => {
+    if (!cur()) return;
+    const prev = o.state();
+    tl.layers.splice(tl.sel, 1); tl.sel = Math.min(tl.sel, tl.layers.length - 1);
+    o.mark(prev); fill(); o.changed();
+  };
+  tl.select = i => { tl.sel = i; fill(); o.changed(); };
+  /** Drag the selected layer: (dx, dy) of the pointer in frame pixels comes from toFrame(ev). */
+  tl.drag = (e, toFrame) => {
+    const Ly = cur(); if (!Ly) return;
+    const p0 = toFrame(e), x0 = Ly.x, y0 = Ly.y, prev = o.state();
+    const tgt = e.target; try { tgt.setPointerCapture(e.pointerId); } catch (_) { }
+    const mv = ev => { const p = toFrame(ev); Ly.x = Math.round(x0 + p.x - p0.x); Ly.y = Math.round(y0 + p.y - p0.y); o.changed(); };
+    const up = () => { tgt.removeEventListener('pointermove', mv); tgt.removeEventListener('pointerup', up); tgt.removeEventListener('pointercancel', up); o.mark(prev); fill(); };
+    tgt.addEventListener('pointermove', mv); tgt.addEventListener('pointerup', up); tgt.addEventListener('pointercancel', up);
+  };
+
+  // ── presets: a caption bar, a bold outlined title, a quiet watermark ──
+  function preset(kind) {
+    if (!cur()) { const { w, h } = o.frame(); tl.add(w / 2, h / 2); }
+    const Ly = cur(); if (!Ly) return;
+    const { w, h } = o.frame(), m = Math.min(w, h);
+    o.begin();
+    if (kind === 'caption') Object.assign(Ly, { size: Math.round(m * .05), bold: false, italic: false, color: '#ffffff', opacity: 1, align: 'center', rot: 0, x: Math.round(w / 2), y: Math.round(h * .88),
+      stroke: { color: '#000000', width: 0 }, shadow: { on: false, color: '#000000', blur: 0, dx: 0, dy: 0 }, box: { on: true, color: '#000000', opacity: .6, pad: Math.round(m * .02), radius: Math.round(m * .01) } });
+    if (kind === 'title') Object.assign(Ly, { size: Math.round(m * .11), bold: true, italic: false, color: '#ffffff', opacity: 1, align: 'center', rot: 0, x: Math.round(w / 2), y: Math.round(h * .22),
+      stroke: { color: '#000000', width: Math.max(2, Math.round(m * .008)) }, shadow: { on: true, color: '#000000', blur: Math.round(m * .02), dx: 0, dy: Math.round(m * .006) }, box: { ...Ly.box, on: false } });
+    if (kind === 'mark') { Object.assign(Ly, { size: Math.round(m * .035), bold: false, italic: false, color: '#ffffff', opacity: .45, align: 'right', rot: 0,
+      stroke: { color: '#000000', width: 0 }, shadow: { on: true, color: '#000000', blur: Math.round(m * .006), dx: 0, dy: 0 }, box: { ...Ly.box, on: false } });
+      const b = layerBox(Ly); Ly.x = Math.round(w - m * .03 - b.w / 2); Ly.y = Math.round(h - m * .03 - b.h / 2); }
+    fill(); o.changed();
+  }
+
+  // ── the panel ──
+  const num = (v, a, b, d) => { v = +v; return isFinite(v) ? clamp(v, a, b) : d; };
+  function field(build) { const r = el('div', { cls: 'row' }); build(r); return r; }
+  /** An input that edits the selected layer: read(Ly) → value shown, write(Ly, value). */
+  function bind(input, read, write, ev = 'input') {
+    input.addEventListener(ev, () => { const Ly = cur(); if (!Ly) return; o.begin(); write(Ly, input.type === 'checkbox' ? input.checked : input.value); note(); o.changed(); });
+    ui.binds.push(() => { const Ly = cur(); if (!Ly) return; const v = read(Ly); if (input.type === 'checkbox') input.checked = !!v; else if (document.activeElement !== input) input.value = v; });
+    return input;
+  }
+  function fontPicker() {
+    const inp = el('input', { type: 'text', spellcheck: false, tip: 'media.page.textFontSearch' });
+    const list = el('div', { cls: 'fontlist' });
+    const pick = name => { const Ly = cur(); if (!Ly) return; o.begin(); Ly.font = cleanFont(name); inp.value = Ly.font; list.classList.remove('show'); note(); o.changed(); };
+    const render = () => {
+      const q = inp.value.trim().toLowerCase(), Ly = cur();
+      const hits = (FONTS.length ? FONTS : [DEF_FONT]).filter(f => !q || f.toLowerCase().includes(q) || Ly && f === Ly.font).slice(0, 250);
+      list.replaceChildren(...(hits.length ? hits.map(f => el('div', { cls: Ly && f === Ly.font ? 'on' : '', style: `font-family:${fontStack(f)}`, title: f, on: { pointerdown: e => { e.preventDefault(); pick(f); } } }, f))
+        : [el('div', { cls: 'none' }, L('media.page.textFontNone'))]));
+    };
+    inp.addEventListener('focus', () => { inp.select(); render(); list.classList.add('show'); });
+    inp.addEventListener('input', () => { render(); list.classList.add('show'); });
+    inp.addEventListener('blur', () => { list.classList.remove('show'); const Ly = cur(); if (Ly && inp.value.trim() && cleanFont(inp.value) !== Ly.font) pick(FONTS.find(f => f.toLowerCase() === inp.value.trim().toLowerCase()) || inp.value); else if (Ly) inp.value = Ly.font; });
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { const first = list.querySelector('div:not(.none)'); pick(FONTS.find(f => f.toLowerCase() === inp.value.trim().toLowerCase()) || (first ? first.title : inp.value)); inp.blur(); }
+      if (e.key === 'Escape') { list.classList.remove('show'); inp.blur(); }
+    });
+    ui.binds.push(() => { const Ly = cur(); if (Ly && document.activeElement !== inp) { inp.value = Ly.font; inp.style.fontFamily = fontStack(Ly.font); } });
+    ui.fontList = () => { if (list.classList.contains('show')) render(); };
+    return el('div', { cls: 'fontpick' }, inp, list);
+  }
+  function timeRow() {
+    const t0 = el('input', { type: 'number', step: .1, min: 0 }), t1 = el('input', { type: 'number', step: .1, min: 0 });
+    const setT = (a, b) => { const Ly = cur(); if (!Ly) return; const f = fixTimes(a, b, o.dur()); if (!f) { say(L('media.page.textBadTime'), 'err'); fill(); return; } o.begin(); [Ly.t0, Ly.t1] = f; fill(); o.changed(); };
+    t0.addEventListener('change', () => { const Ly = cur(); Ly && setT(t0.value, Ly.t1); });
+    t1.addEventListener('change', () => { const Ly = cur(); Ly && setT(Ly.t0, t1.value); });
+    ui.binds.push(() => { const Ly = cur(); if (!Ly) return; if (document.activeElement !== t0) t0.value = Ly.t0.toFixed(2); if (document.activeElement !== t1) t1.value = Ly.t1.toFixed(2); });
+    return [el('h4', { s: 'media.page.textTime' }),
+      field(r => r.append(el('span', { cls: 'lbl', s: 'media.page.textFrom' }), t0, el('span', { cls: 'lbl', s: 'media.page.textTo' }), t1)),
+      field(r => r.append(
+        el('button', { cls: 'btn', s: 'media.page.textFromPlayhead', on: { click: () => { const Ly = cur(); Ly && setT(o.now(), Math.max(Ly.t1, o.now() + .05)); } } }),
+        el('button', { cls: 'btn', s: 'media.page.textToPlayhead', on: { click: () => { const Ly = cur(); Ly && setT(Math.min(Ly.t0, o.now() - .05), o.now()); } } }))),
+      field(r => r.append(
+        el('button', { cls: 'btn', s: 'media.page.textWholeClip', on: { click: () => setT(0, o.dur()) } }),
+        el('button', { cls: 'btn', s: 'media.page.textInOut', on: { click: () => { const [a, b] = o.range(); setT(a, b); } } })))];
+  }
+  function note() {
+    if (!ui.note) return;
+    const Ly = cur(), msgs = [];
+    if (Ly) {
+      if (!fontKnown(Ly.font)) msgs.push(L('media.page.textFontMissing', cleanFont(Ly.font)));
+      if (!hasText(Ly)) msgs.push(L('media.page.textEmpty'));
+      else { const { w, h } = o.frame(), p = layerPlace(Ly, w, h); if (p === 'out') msgs.push(L('media.page.textOutside')); else if (p === 'partly') msgs.push(L('media.page.textPartly')); }
+      if (o.video && o.range) { const [a, b] = o.range(); if (Ly.t1 <= a + 1e-3 || Ly.t0 >= b - 1e-3) msgs.push(L('media.page.textOutsideCut')); }
+    }
+    if (o.extraNote) { const x = o.extraNote(); if (x) msgs.push(x); }
+    ui.note.textContent = msgs.join(' · ');
+  }
+  function fill() {
+    if (!panel) return;
+    const Ly = cur();
+    ui.edit.style.display = Ly ? '' : 'none';
+    ui.empty.style.display = Ly ? 'none' : '';
+    ui.count.textContent = tl.layers.length ? L('media.page.textLayerN', tl.sel + 1, tl.layers.length) : '';
+    ui.prev.disabled = tl.sel <= 0; ui.next.disabled = tl.sel < 0 || tl.sel >= tl.layers.length - 1; ui.del.disabled = !Ly;
+    if (Ly) { ui.binds.forEach(f => f()); for (const a of ['left', 'center', 'right']) ui['al' + a].classList.toggle('on', Ly.align === a); ui.bold.classList.toggle('on', !!Ly.bold); ui.italic.classList.toggle('on', !!Ly.italic); }
+    note();
+  }
+  tl.show = () => {
+    if (panel) return;
+    tl.open = true; ui = { binds: [] };
+    ui.text = bind(el('textarea', { spellcheck: false }), Ly => Ly.text, (Ly, v) => { Ly.text = v; });
+    const color = (read, write) => bind(el('input', { type: 'color' }), read, write);
+    const n = (a, b, step, read, write) => bind(el('input', { type: 'number', min: a, max: b, step }), read, (Ly, v) => write(Ly, num(v, a, b, a)));
+    const rng = (a, b, step, read, write) => bind(el('input', { type: 'range', min: a, max: b, step }), read, (Ly, v) => write(Ly, num(v, a, b, a)));
+    const chk = (read, write) => bind(el('input', { type: 'checkbox' }), read, write, 'change');
+    const tog = (icon, key, fn) => btn(icon, key, () => { const Ly = cur(); if (!Ly) return; o.begin(); fn(Ly); fill(); o.changed(); });
+    ui.bold = tog('bold', 'media.page.textBold', Ly => Ly.bold = !Ly.bold); ui.italic = tog('italic', 'media.page.textItalic', Ly => Ly.italic = !Ly.italic);
+    for (const [a, key] of [['left', 'media.page.textAlignLeft'], ['center', 'media.page.textAlignCenter'], ['right', 'media.page.textAlignRight']]) ui['al' + a] = tog('a' + a, key, Ly => Ly.align = a);
+    ui.prev = btn('prev', 'media.page.textPrev', () => tl.select(tl.sel - 1)); ui.next = btn('next', 'media.page.textNext', () => tl.select(tl.sel + 1));
+    ui.del = btn('trash', 'media.page.textDelete', tl.remove, { label: true, cls: 'danger' });
+    ui.count = el('span', { cls: 'kbd' }); ui.note = el('div', { cls: 'note' });
+    ui.empty = el('div', { cls: 'kbd', s: 'media.page.textHint' });
+    ui.edit = el('div', { style: 'display:flex;flex-direction:column;gap:7px' },
+      field(r => r.append(el('span', { cls: 'lbl', s: 'media.page.textPresets' }),
+        el('button', { cls: 'btn', s: 'media.page.presetCaption', on: { click: () => preset('caption') } }),
+        el('button', { cls: 'btn', s: 'media.page.presetTitle', on: { click: () => preset('title') } }),
+        el('button', { cls: 'btn', s: 'media.page.presetMark', on: { click: () => preset('mark') } }))),
+      ui.text, ui.note,
+      field(r => r.append(el('span', { cls: 'lbl', s: 'media.page.textFont' }), fontPicker())),
+      field(r => r.append(el('span', { cls: 'lbl', s: 'media.page.textSize' }), n(4, 2000, 1, Ly => Ly.size, (Ly, v) => Ly.size = v), ui.bold, ui.italic)),
+      field(r => r.append(el('span', { cls: 'lbl', s: 'media.page.textColor' }), color(Ly => Ly.color, (Ly, v) => Ly.color = v),
+        el('span', { cls: 'kbd', s: 'media.page.textOpacity' }), rng(0, 1, .01, Ly => Ly.opacity, (Ly, v) => Ly.opacity = v))),
+      field(r => r.append(el('span', { cls: 'lbl', s: 'media.page.textAlign' }), ui.alleft, ui.alcenter, ui.alright,
+        el('span', { cls: 'kbd', s: 'media.page.textRotate' }), n(-180, 180, 1, Ly => Ly.rot, (Ly, v) => Ly.rot = v))),
+      el('h4', { s: 'media.page.textOutline' }),
+      field(r => r.append(color(Ly => Ly.stroke.color, (Ly, v) => Ly.stroke.color = v), el('span', { cls: 'kbd', s: 'media.page.textWidth' }),
+        n(0, 200, 1, Ly => Ly.stroke.width, (Ly, v) => Ly.stroke.width = v))),
+      el('h4', { s: 'media.page.textShadow' }),
+      field(r => r.append(chk(Ly => Ly.shadow.on, (Ly, v) => Ly.shadow.on = v), color(Ly => Ly.shadow.color, (Ly, v) => Ly.shadow.color = v),
+        el('span', { cls: 'kbd', s: 'media.page.textBlur' }), n(0, 400, 1, Ly => Ly.shadow.blur, (Ly, v) => Ly.shadow.blur = v))),
+      field(r => r.append(el('span', { cls: 'lbl', s: 'media.page.textOffset' }), n(-500, 500, 1, Ly => Ly.shadow.dx, (Ly, v) => Ly.shadow.dx = v),
+        n(-500, 500, 1, Ly => Ly.shadow.dy, (Ly, v) => Ly.shadow.dy = v))),
+      el('h4', { s: 'media.page.textBox' }),
+      field(r => r.append(chk(Ly => Ly.box.on, (Ly, v) => Ly.box.on = v), color(Ly => Ly.box.color, (Ly, v) => Ly.box.color = v),
+        el('span', { cls: 'kbd', s: 'media.page.textOpacity' }), rng(0, 1, .01, Ly => Ly.box.opacity, (Ly, v) => Ly.box.opacity = v))),
+      field(r => r.append(el('span', { cls: 'lbl', s: 'media.page.textPad' }), n(0, 1000, 1, Ly => Ly.box.pad, (Ly, v) => Ly.box.pad = v),
+        el('span', { cls: 'kbd', s: 'media.page.textRadius' }), n(0, 1000, 1, Ly => Ly.box.radius, (Ly, v) => Ly.box.radius = v))),
+      ...(o.video ? timeRow() : []));
+    const head = field(r => r.append(svg('text'), el('b', { s: 'media.page.textTitle' }), el('span', { style: 'flex:1' }), ui.count, ui.prev, ui.next,
+      btn('x', 'media.page.textClose', tl.hide)));
+    const actions = field(r => r.append(btn('plus', 'media.page.textAdd', () => { const { w, h } = o.frame(); tl.add(w / 2, h / 2); }, { label: true }), ui.del,
+      ...(o.applyBtn ? [btn('check', 'media.page.textApply', o.applyBtn, { label: true, tip: 'media.page.textApplyTip' })] : [])));
+    panel = el('div', { id: 'tpanel', on: { pointerdown: e => e.stopPropagation(), wheel: e => e.stopPropagation() } }, head, actions, ui.empty, ui.edit);
+    stage.append(panel); applyStrings(panel); fill(); o.changed();
+  };
+  tl.hide = () => { if (panel) panel.remove(); panel = null; ui = {}; tl.open = false; o.changed(); };
+  tl.refresh = () => { if (panel) { applyStrings(panel); fill(); if (ui.fontList) ui.fontList(); } };
+  /** Keys while the text tool is open (none of them while typing in its fields). */
+  tl.key = e => {
+    if (!tl.open) return false;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && cur()) { tl.remove(); return true; }
+    if (e.key === 'Escape') { if (tl.sel >= 0) tl.select(-1); else tl.hide(); return true; }
+    const Ly = cur();
+    if (Ly && e.key.startsWith('Arrow') && !e.altKey) {
+      const d = e.shiftKey ? 10 : 1; o.begin();
+      if (e.key === 'ArrowLeft') Ly.x -= d; if (e.key === 'ArrowRight') Ly.x += d; if (e.key === 'ArrowUp') Ly.y -= d; if (e.key === 'ArrowDown') Ly.y += d;
+      note(); o.changed(); return true;
+    }
+    return false;
+  };
+  tl.note = note;
+  return tl;
+}
+
 // ───────────────────────────── IMAGE ─────────────────────────────
 function ImageEditor() {
   const me = { kind: 'image' }, bag = Bag();
   let orig = null;            // canvas with the file's pixels
   let cur = null;             // canvas shown now (orig + ops)
-  let ops = [], redo = [], savedLen = 0;
+  let ops = [], savedSig = '[]|[]';
   let zoom = 1, fit = true, panX = 0, panY = 0;
   let tool = null, panel = null, cropBox = null, ratio = 0;
   const viewOnly = !!INFO.viewOnly;
   const wrap = el('div', { id: 'imgwrap' });
   let shown = null;           // the canvas / img inside wrap
   const MAXPX = 16384 * 16384;
+  const ov = el('canvas', { cls: 'tov' });   // the text layers, over the stage (not the picture: an 8000 px picture at 100 % would need an 8000 px canvas)
+  // text layers: editable until "Apply to picture" or a crop / rotate / … draws them into the pixels; a save writes them
+  // into the file and keeps them editable
+  const T = TextLayers({
+    video: false, frame: () => ({ w: cur ? cur.width : me.w || 1, h: cur ? cur.height : me.h || 1 }),
+    changed: () => { drawOv(); refresh(); }, begin: () => H.begin(), mark: prev => H.mark(prev), state: () => getState(),
+    applyBtn: () => { if (T.hasText()) push({ t: 'text', layers: T.forSave() }); },
+  });
+  const getState = () => ({ ops: JSON.parse(JSON.stringify(ops)), layers: T.get() });
+  function setState(st) {
+    const same = JSON.stringify(st.ops) === JSON.stringify(ops);
+    ops = st.ops; T.set(st.layers);
+    if (!same) { closeTool(); rebuild(); } else { drawOv(); refresh(); }
+  }
+  const H = History(getState, setState);
+  const sig = () => JSON.stringify(ops) + '|' + T.sig();
 
   const tb = {};
   function buildBar() {
@@ -281,11 +649,12 @@ function ImageEditor() {
       tb.crop = btn('crop', 'media.page.crop', () => openTool('crop'), { label: true });
       tb.resize = btn('resize', 'media.page.resize', () => openTool('resize'), { label: true });
       tb.adjust = btn('sun', 'media.page.adjust', () => openTool('adjust'), { label: true });
+      tb.text = btn('text', 'media.page.text', toggleText, { label: true, tip: 'media.page.textTip' });
       bar.append(el('div', { cls: 'grp' }, tb.undo, tb.redo), el('div', { cls: 'sep' }),
         el('div', { cls: 'grp' }, tb.crop, tb.resize,
           btn('rotl', 'media.page.rotateLeft', () => push({ t: 'rot', d: -90 })), btn('rotr', 'media.page.rotateRight', () => push({ t: 'rot', d: 90 })),
           btn('fliph', 'media.page.flipH', () => push({ t: 'flip', a: 'h' })), btn('flipv', 'media.page.flipV', () => push({ t: 'flip', a: 'v' })),
-          tb.adjust), el('div', { cls: 'sep' }));
+          tb.adjust), el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.text), el('div', { cls: 'sep' }));
     }
     bar.append(el('div', { cls: 'grp' }, btn('fit', 'media.page.fit', () => { fit = true; layout(); }), btn('zout', 'media.page.zoomOut', () => zoomBy(1 / 1.25)),
       tb.zoomLbl = el('button', { cls: 'btn', tip: 'media.page.actualSize', on: { click: () => { fit = false; zoomTo(1); } } }, '100%'), btn('zin', 'media.page.zoomIn', () => zoomBy(1.25))));
@@ -300,7 +669,7 @@ function ImageEditor() {
   me.start = () => {
     buildBar();
     foot.replaceChildren();
-    stage.append(wrap);
+    stage.append(wrap, ov);
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.decoding = 'async';
@@ -341,6 +710,21 @@ function ImageEditor() {
     wrap.classList.toggle('pixel', zoom >= 3);
     if (tb.zoomLbl) tb.zoomLbl.textContent = Math.round(zoom * 100) + '%';
     if (cropBox) drawCrop();
+    drawOv();
+  }
+  function drawOv() {
+    const d = devicePixelRatio || 1, W = stage.clientWidth, Hh = stage.clientHeight, pw = Math.max(1, Math.round(W * d)), ph = Math.max(1, Math.round(Hh * d));
+    if (ov.width !== pw || ov.height !== ph) { ov.width = pw; ov.height = ph; ov.style.width = W + 'px'; ov.style.height = Hh + 'px'; }
+    const g = ov.getContext('2d'); if (!g) return;
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, pw, ph);
+    if (me.w && cur && T.layers.length) T.draw(g, zoom * d, 0, T.open, panX * d, panY * d);
+  }
+  /** Where the pointer is, in picture pixels. */
+  const toPic = e => { const r = stage.getBoundingClientRect(); return { x: (e.clientX - r.left - panX) / zoom, y: (e.clientY - r.top - panY) / zoom }; };
+  function toggleText() {
+    if (!cur || me.readOnly || busy) return;
+    if (T.open) T.hide(); else { closeTool(); T.show(); }
+    refresh();
   }
   function zoomTo(z, cx, cy) {
     const sw = stage.clientWidth, sh = stage.clientHeight;
@@ -354,7 +738,14 @@ function ImageEditor() {
   function onStageDown(e) {
     if (tool === 'crop' && e.target === shown || tool === 'crop' && e.target === wrap) return startNewCrop(e);
     if (e.button !== 0 && e.button !== 1) return;
-    if (e.target.closest('.panel') || e.target.closest('#crop')) return;
+    if (e.target.closest('.panel') || e.target.closest('#crop') || e.target.closest('#tpanel')) return;
+    if (e.button === 0 && cur && !me.readOnly && !busy && !tool) {
+      // text: a click on a layer selects it (and opens the text tool), a drag moves it; with the tool open, a click on
+      // the picture away from every layer adds one (or first drops the selection)
+      const p = toPic(e), hit = T.hit(p.x, p.y, 4 / zoom, 0);
+      if (hit >= 0) { if (!T.open) T.show(); T.select(hit); T.drag(e, toPic); refresh(); return; }
+      if (T.open && p.x >= 0 && p.y >= 0 && p.x < cur.width && p.y < cur.height) { if (T.sel >= 0) T.select(-1); else T.add(p.x, p.y); return; }
+    }
     const sx = e.clientX, sy = e.clientY, px = panX, py = panY;
     stage.setPointerCapture(e.pointerId); stage.style.cursor = 'grabbing';
     const mv = ev => { fit = false; panX = px + ev.clientX - sx; panY = py + ev.clientY - sy; layout(); };
@@ -384,20 +775,36 @@ function ImageEditor() {
         x.drawImage(src, 0, 0); return c;
       case 'adjust': c.width = src.width; c.height = src.height; x = c.getContext('2d');
         x.filter = `brightness(${1 + op.b / 100}) contrast(${1 + op.c / 100})`; x.drawImage(src, 0, 0); return c;
+      case 'text': c.width = src.width; c.height = src.height; x = c.getContext('2d');
+        x.drawImage(src, 0, 0); for (const Ly of op.layers || []) drawLayer(x, Ly, 1, false); return c;
     }
     return src;
   }
+  /** A change to the pixels. Text layers still floating are drawn in first: a crop / rotate / resize would leave
+   *  them in the wrong place (undo brings them back as layers). */
   function push(op) {
     if (!cur || me.readOnly || busy) return;
-    try { cur = apply(cur, op); } catch (e) { say(L('media.page.editFailed'), 'err'); return; }
-    ops.push(op); redo = []; showCanvas(); fit = true; layout(); refresh();
+    const prev = getState(), steps = [];
+    const bake = op.t !== 'text' && T.hasText();
+    if (bake) steps.push({ t: 'text', layers: T.forSave() });
+    steps.push(op);
+    let c = cur;
+    try { for (const st of steps) c = apply(c, st); } catch (e) { say(L('media.page.editFailed'), 'err'); return; }
+    cur = c; ops.push(...steps);
+    if (bake || op.t === 'text') { T.set([]); say(L('media.page.textApplied')); }
+    H.mark(prev); showCanvas(); fit = true; layout(); refresh();
   }
-  function rebuild() { let c = orig; for (const op of ops) c = apply(c, op); cur = c; showCanvas(); fit = true; layout(); refresh(); }
-  function undo() { if (!ops.length || busy) return; redo.push(ops.pop()); closeTool(); rebuild(); }
-  function redoOp() { if (!redo.length || busy) return; ops.push(redo.pop()); closeTool(); rebuild(); }
+  function rebuild() {
+    let c = orig;
+    try { for (const op of ops) c = apply(c, op); } catch (e) { say(L('media.page.editFailed'), 'err'); }
+    cur = c; showCanvas(); fit = true; layout(); refresh();
+  }
+  function undo() { if (busy) return; H.undo(); refresh(); }
+  function redoOp() { if (busy) return; H.redo(); refresh(); }
   function refresh() {
-    if (tb.undo) { tb.undo.disabled = !ops.length; tb.redo.disabled = !redo.length; }
-    const edited = ops.length !== savedLen;
+    if (tb.undo) { tb.undo.disabled = !H.canUndo(); tb.redo.disabled = !H.canRedo(); }
+    if (tb.text) tb.text.classList.toggle('on', T.open);
+    const edited = sig() !== savedSig;
     setDirty(edited);
     const ow = orig ? orig.width : me.w, oh = orig ? orig.height : me.h;
     let info = (ow ? `${ow} × ${oh} px` : '') + ' · ' + fmtSize(INFO.size) + ' · ' + INFO.ext.toUpperCase();
@@ -409,8 +816,8 @@ function ImageEditor() {
   me.saveState = () => {
     if (viewOnly || me.readOnly || !cur) return { copy: false, over: false, overHidden: viewOnly };
     const f = saveUi.fmt ? saveUi.fmt.value : 'png';
-    const same = canon(INFO.ext) === f;
-    return { copy: ops.length > 0 || f !== canon(INFO.ext), over: ops.length > 0 && same, overTip: same ? 'media.page.overwriteTip' : 'media.page.overwriteSameFormat' };
+    const same = canon(INFO.ext) === f, has = ops.length > 0 || T.hasText();
+    return { copy: has || f !== canon(INFO.ext), over: has && same, overTip: same ? 'media.page.overwriteTip' : 'media.page.overwriteSameFormat' };
   };
 
   // ── tools ──
@@ -424,6 +831,7 @@ function ImageEditor() {
   function openTool(t) {
     if (!cur || me.readOnly || busy) return;
     const was = tool; closeTool(); if (was === t) return;
+    if (T.open) T.hide();
     tool = t; tb[t].classList.add('on');
     if (t === 'crop') openCrop(); else if (t === 'resize') openResize(); else openAdjust();
   }
@@ -522,10 +930,10 @@ function ImageEditor() {
   // ── save ──
   function encode(fmt) {
     return new Promise(ok => {
-      let src = cur;
+      let src = T.hasText() ? apply(cur, { t: 'text', layers: T.forSave() }) : cur;   // the floating text goes into the file; the layers stay editable
       if (fmt === 'jpg') {   // JPEG has no transparency: a transparent pixel would turn black — put the picture on white
         const c = document.createElement('canvas'); c.width = cur.width; c.height = cur.height;
-        const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(cur, 0, 0); src = c;
+        const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(src, 0, 0); src = c;
       }
       const type = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' }[fmt];
       src.toBlob(b => ok(b), type, saveUi.q ? saveUi.q.value / 100 : .92);
@@ -538,17 +946,21 @@ function ImageEditor() {
     if (mode === 'overwrite' && !st.over) { say(L('media.page.overwriteSameFormat'), 'err'); return false; }
     let fmt = wantExt ? canon(wantExt) : saveUi.fmt.value;
     if (!['png', 'jpg', 'webp'].includes(fmt)) { say(L('media.page.cantWriteFormat', (wantExt || '').toUpperCase()), 'err'); return false; }
-    closeTool();
-    const blob = await encode(fmt);
+    closeTool(); H.flush();
+    let blob = null;
+    try { blob = await encode(fmt); } catch (e) { post({ t: 'log', text: 'encode: ' + e }); }
     if (!blob) { say(L('media.page.saveFailed'), 'err'); return false; }
+    const saving = sig();
     const r = await upload(blob, path ? 'path' : mode, fmt, 'edit', path);
-    if (r.ok) { savedLen = ops.length; refresh(); }
+    if (r.ok) { savedSig = saving; refresh(); }
     return report(r);
   };
   me.key = e => {
     if (e.ctrlKey && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) { undo(); return true; }
     if (e.ctrlKey && (e.key === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { redoOp(); return true; }
     if (e.key === 'Escape' && tool) { closeTool(); return true; }
+    if (!tool && !e.ctrlKey && T.key(e)) return true;
+    if ((e.key === 't' || e.key === 'T') && !e.ctrlKey && !e.altKey && !tool) { toggleText(); return true; }
     if (e.key === 'Enter' && tool === 'crop') { applyCrop(); return true; }
     if (e.key === '+' || e.key === '=') { zoomBy(1.25); return true; }
     if (e.key === '-') { zoomBy(1 / 1.25); return true; }
@@ -557,9 +969,11 @@ function ImageEditor() {
   };
   me.release = () => { };
   me.pause = () => { };
-  me.refresh = refresh;
-  me.redraw = () => { };
-  me.dispose = () => { closeTool(); bag.clear(); };
+  me.refresh = () => { refresh(); T.refresh(); drawOv(); };
+  me.redraw = drawOv;
+  me.fontsChanged = () => { T.refresh(); drawOv(); };
+  me.text = T;   // (the harness reads the layers)
+  me.dispose = () => { closeTool(); T.hide(); H.flush(); bag.clear(); };
   return me;
 }
 
@@ -988,6 +1402,43 @@ function VideoEditor() {
   let inT = 0, outT = 0, savedIn = 0, savedOut = 0, fps = 30, thumbs = null, thumbJob = 0, hoverX = -1, recording = null;
   const tb = {}; let timeEl, cutEl, raf = 0;
   const D = () => isFinite(v.duration) ? v.duration : 0;
+  // text layers over the picture, each with its own start / end on the clip's clock (shown live, burned in on save)
+  const vov = el('canvas', { cls: 'tov' });
+  let savedText = '[]', swallowClick = false;
+  const T = TextLayers({
+    video: true, frame: () => ({ w: v.videoWidth || 1, h: v.videoHeight || 1 }), now: () => v.currentTime, dur: D,
+    range: () => isCut() ? [inT, outT] : [0, D()],
+    changed: () => { drawVov(); refresh(); }, begin: () => H.begin(), mark: prev => H.mark(prev), state: () => getState(),
+    extraNote: () => INFO.ffmpeg ? '' : L('media.page.textNoFfmpeg'),
+  });
+  const getState = () => ({ layers: T.get() });
+  const H = History(getState, st => { T.set(st.layers); drawVov(); refresh(); });
+  /** The picture's place inside the box (letterboxed), in box pixels, and its scale; null before it is known. */
+  function frameRect() {
+    const vw = v.videoWidth, vh = v.videoHeight; if (!vw || !vh) return null;
+    const vr = v.getBoundingClientRect(), br = vb.getBoundingClientRect(), s = Math.min(vr.width / vw, vr.height / vh);
+    if (!(s > 0)) return null;
+    const x = vr.left - br.left + (vr.width - vw * s) / 2, y = vr.top - br.top + (vr.height - vh * s) / 2;
+    return { x, y, s, cx: br.left + x, cy: br.top + y };
+  }
+  function drawVov() {
+    const d = devicePixelRatio || 1, W = vb.clientWidth, Hh = vb.clientHeight, pw = Math.max(1, Math.round(W * d)), ph = Math.max(1, Math.round(Hh * d));
+    if (vov.width !== pw || vov.height !== ph) { vov.width = pw; vov.height = ph; vov.style.width = W + 'px'; vov.style.height = Hh + 'px'; }
+    const g = vov.getContext('2d'); if (!g) return;
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, pw, ph);
+    const r = frameRect();
+    if (r && T.layers.length) T.draw(g, r.s * d, v.currentTime, T.open && v.paused, r.x * d, r.y * d);
+  }
+  const toFrame = e => { const r = frameRect() || { cx: 0, cy: 0, s: 1 }; return { x: (e.clientX - r.cx) / r.s, y: (e.clientY - r.cy) / r.s }; };
+  function onBoxDown(e) {
+    swallowClick = false;
+    if (e.button !== 0 || busy || recording || !v.videoWidth) return;
+    const r = frameRect(); if (!r) return;
+    const p = toFrame(e), hit = T.hit(p.x, p.y, 4 / r.s, v.currentTime);
+    if (hit >= 0) { swallowClick = true; v.pause(); if (!T.open) T.show(); T.select(hit); T.drag(e, toFrame); refresh(); return; }
+    if (T.open && p.x >= 0 && p.y >= 0 && p.x < v.videoWidth && p.y < v.videoHeight) { swallowClick = true; v.pause(); if (T.sel >= 0) T.select(-1); else T.add(p.x, p.y); }
+  }
+  function toggleText() { if (busy || recording || !v.videoWidth) return; if (T.open) T.hide(); else { v.pause(); T.show(); } refresh(); }
 
   function buildBar() {
     bar.replaceChildren();
@@ -996,8 +1447,11 @@ function VideoEditor() {
     tb.playCut = btn('play', 'media.page.playCut', playCut, { label: true });
     tb.clear = btn('x', 'media.page.clearCut', () => { inT = 0; outT = D(); refresh(); });
     tb.snap = btn('camera', 'media.page.snapshot', snapshot, { label: true, tip: 'media.page.snapshotTip' });
-    bar.append(el('div', { cls: 'grp' }, tb.in, tb.out, tb.playCut, tb.clear), el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.snap),
-      el('div', { cls: 'spacer' }), saveGroup(false));
+    tb.text = btn('text', 'media.page.text', toggleText, { label: true, tip: 'media.page.textTip' });
+    tb.undo = btn('undo', 'media.page.undo', () => { if (!busy && !recording) H.undo(); refresh(); });
+    tb.redo = btn('redo', 'media.page.redo', () => { if (!busy && !recording) H.redo(); refresh(); });
+    bar.append(el('div', { cls: 'grp' }, tb.in, tb.out, tb.playCut, tb.clear), el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.text, tb.undo, tb.redo),
+      el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.snap), el('div', { cls: 'spacer' }), saveGroup(false));
     applyStrings(bar);
     timeEl = el('span', { cls: 'time' }); cutEl = el('span', { cls: 'sel' });
     tb.play = btn('play', 'media.page.play', toggle, { tip: 'media.page.playTip' });
@@ -1010,7 +1464,10 @@ function VideoEditor() {
   }
   me.start = () => {
     buildBar();
+    vb.append(vov);
     stage.append(vb);
+    bag.on(vb, 'pointerdown', onBoxDown);
+    bag.observe(vb, () => drawVov());
     v.addEventListener('loadedmetadata', () => {
       if (reattaching) { reattaching = false; refresh(); return; }   // the same file again after a failed overwrite: keep the cut
       inT = savedIn = 0; outT = savedOut = D();
@@ -1020,7 +1477,7 @@ function VideoEditor() {
     });
     v.addEventListener('error', () => loadFailed(v.error && v.error.code === 4 ? 'codec' : 'decode'));
     v.addEventListener('play', tick); v.addEventListener('pause', tick); v.addEventListener('seeked', tick); v.addEventListener('timeupdate', () => { if (!raf) tick(); });
-    v.addEventListener('click', toggle);
+    v.addEventListener('click', () => { if (swallowClick) { swallowClick = false; return; } toggle(); });
     if (v.requestVideoFrameCallback) {
       // the frame rate for the frame-step buttons: the shortest gap between two frames seen while it plays
       let last = -1, minDt = 1;
@@ -1028,7 +1485,7 @@ function VideoEditor() {
       v.requestVideoFrameCallback(cb);
     }
     tl.addEventListener('pointerdown', onTl);
-    tl.addEventListener('pointermove', e => { hoverX = e.offsetX; drawTl(); tl.style.cursor = handleAt(e.offsetX) ? 'ew-resize' : 'pointer'; });
+    tl.addEventListener('pointermove', e => { hoverX = e.offsetX; drawTl(); const lane = e.offsetY >= LANE ? laneAt(e.offsetX) : null; tl.style.cursor = handleAt(e.offsetX) || lane && lane.part !== 'move' ? 'ew-resize' : lane ? 'grab' : 'pointer'; });
     tl.addEventListener('pointerleave', () => { hoverX = -1; drawTl(); });
     bag.observe(foot, () => { drawTl(); clearTimeout(me._rt); me._rt = setTimeout(makeThumbs, 400); });
     v.src = INFO.url;
@@ -1045,7 +1502,7 @@ function VideoEditor() {
     if (recording && v.currentTime >= outT - 0.01) recording.finish();
     timeEl.textContent = fmtTime(v.currentTime) + ' / ' + fmtTime(D());
     tb.play.replaceChildren(svg(v.paused ? 'play' : 'pause'));
-    drawTl();
+    drawTl(); drawVov();
     if (!v.paused) raf = requestAnimationFrame(tick);
   }
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'; }
@@ -1087,10 +1544,54 @@ function VideoEditor() {
     const step = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600].find(s => s * w / Dd >= 90 * d) || 3600;
     for (let t = 0; t <= Dd; t += step) { const x = t / Dd * w; g.fillRect(x, top - 5 * d, d, 5 * d); g.fillText(fmtTime(t, false), x + 3 * d, 11 * d); }
     if (hoverX >= 0) { g.fillStyle = css('--text'); g.globalAlpha = .35; g.fillRect(hoverX * d, top, d, th); g.globalAlpha = 1; }
+    // the text layers' times: a lane under the pictures (the selected one bright, with handles)
+    const ly = top + th + 2 * d, lh = Math.max(2 * d, h - ly - d);
+    T.layers.forEach((Ly, i) => {
+      if (i === T.sel || !hasText(Ly)) return;
+      g.globalAlpha = .5; g.fillStyle = css('--muted'); g.fillRect(Ly.t0 / Dd * w, ly, Math.max(2 * d, (Ly.t1 - Ly.t0) / Dd * w), lh);
+    });
+    const SL = T.layers[T.sel];
+    if (SL) {
+      const a = SL.t0 / Dd * w, b = SL.t1 / Dd * w;
+      g.globalAlpha = 1; g.fillStyle = css('--accent'); g.fillRect(a, ly, Math.max(2 * d, b - a), lh);
+      g.fillStyle = css('--text'); g.fillRect(a, ly - d, 2 * d, lh + 2 * d); g.fillRect(b - 2 * d, ly - d, 2 * d, lh + 2 * d);
+    }
+    g.globalAlpha = 1;
     g.fillStyle = css('--text'); g.fillRect(ph - d, 0, 2 * d, h);
+  }
+  const LANE = 62;   // css px from the top of the timeline: the text lane below the pictures
+  /** In the text lane: which layer and what part (t0 / t1 edge, or the whole span) is under x. */
+  function laneAt(x) {
+    const Dd = D(), w = tl.clientWidth; if (!Dd || !T.layers.length) return null;
+    const SL = T.layers[T.sel];
+    if (SL) { if (Math.abs(SL.t0 / Dd * w - x) < 7) return { i: T.sel, part: 't0' }; if (Math.abs(SL.t1 / Dd * w - x) < 7) return { i: T.sel, part: 't1' }; }
+    if (SL && x >= SL.t0 / Dd * w && x <= SL.t1 / Dd * w) return { i: T.sel, part: 'move' };
+    for (let i = T.layers.length - 1; i >= 0; i--) { const Ly = T.layers[i]; if (x >= Ly.t0 / Dd * w - 3 && x <= Ly.t1 / Dd * w + 3) return { i, part: 'move' }; }
+    return null;
+  }
+  function dragLane(e, hit) {
+    const Dd = D(), w = tl.clientWidth;
+    const at = ev => clamp((ev.clientX - tl.getBoundingClientRect().left) / w * Dd, 0, Dd);
+    v.pause();
+    if (!T.open) T.show();
+    if (hit.i !== T.sel) T.select(hit.i);
+    const Ly = T.layers[hit.i]; if (!Ly) return;
+    const prev = getState(), a0 = Ly.t0, a1 = Ly.t1, x0 = at(e);
+    const go = ev => {
+      const t = at(ev);
+      if (hit.part === 't0') Ly.t0 = clamp(t, 0, Ly.t1 - 0.05);
+      else if (hit.part === 't1') Ly.t1 = clamp(t, Ly.t0 + 0.05, Dd);
+      else { const dt = clamp(t - x0, -a0, Dd - a1); Ly.t0 = a0 + dt; Ly.t1 = a1 + dt; }
+      v.currentTime = hit.part === 't1' ? Ly.t1 : Ly.t0;
+      T.refresh(); drawTl(); drawVov();
+    };
+    tl.setPointerCapture(e.pointerId);
+    const up = () => { tl.removeEventListener('pointermove', go); tl.removeEventListener('pointerup', up); tl.removeEventListener('pointercancel', up); H.mark(prev); refresh(); };
+    tl.addEventListener('pointermove', go); tl.addEventListener('pointerup', up); tl.addEventListener('pointercancel', up);
   }
   function onTl(e) {
     if (!D() || recording) return;
+    if (e.offsetY >= LANE && !busy) { const hit = laneAt(e.offsetX); if (hit) { dragLane(e, hit); return; } }
     const h = handleAt(e.offsetX), w = tl.clientWidth;
     const at = ev => clamp((ev.clientX - tl.getBoundingClientRect().left) / w * D(), 0, D());
     const go = ev => { const t = at(ev); if (h === 'in') inT = Math.min(t, outT - 0.05); else if (h === 'out') outT = Math.max(t, inT + 0.05); else v.currentTime = t; if (h) { v.currentTime = h === 'in' ? inT : outT; refresh(); } drawTl(); };
@@ -1100,8 +1601,10 @@ function VideoEditor() {
   }
   const isCut = () => D() > 0 && (inT > 0.0005 || outT < D() - 0.0005);
   function refresh() {
-    const edited = Math.abs(inT - savedIn) > 0.0005 || Math.abs(outT - savedOut) > 0.0005;
+    const edited = Math.abs(inT - savedIn) > 0.0005 || Math.abs(outT - savedOut) > 0.0005 || T.sig() !== savedText;
     setDirty(D() > 0 && edited);
+    if (tb.text) { tb.text.classList.toggle('on', T.open); tb.text.disabled = !v.videoWidth; }
+    if (tb.undo) { tb.undo.disabled = !H.canUndo(); tb.redo.disabled = !H.canRedo(); }
     if (cutEl) cutEl.textContent = isCut() ? L('media.page.cutRange', fmtTime(inT), fmtTime(outT), (outT - inT).toFixed(2)) : '';
     if (tb.clear) tb.clear.disabled = !isCut();
     if (tb.playCut) tb.playCut.disabled = !isCut();
@@ -1111,56 +1614,135 @@ function VideoEditor() {
     $('info').textContent = info;
     drawTl(); refreshSaveButtons();
   }
+  /** The layers a save writes: with text, on screen somewhere in the saved part, inside the frame at least partly. */
+  function textToBurn() {
+    const [a, b] = isCut() ? [inT, outT] : [0, D()], w = v.videoWidth, h = v.videoHeight;
+    return T.forSave().filter(Ly => Ly.t1 > a + 1e-3 && Ly.t0 < b - 1e-3 && layerPlace(Ly, w, h) !== 'out');
+  }
   me.saveState = () => {
-    const cut = isCut();
-    if (INFO.ffmpeg) return { copy: cut, over: cut, copyKey: 'media.page.saveCutLossless', overTip: 'media.page.overwriteTip' };
-    return { copy: cut && typeof MediaRecorder !== 'undefined', over: false, overHidden: true, copyKey: 'media.page.saveCutRecord' };
+    const cut = isCut(), text = !!v.videoWidth && textToBurn().length > 0;
+    if (INFO.ffmpeg) return { copy: cut || text, over: cut || text, copyKey: text ? 'media.page.saveBurn' : 'media.page.saveCutLossless', overTip: 'media.page.overwriteTip' };
+    return { copy: (cut || text) && typeof MediaRecorder !== 'undefined', over: false, overHidden: true, copyKey: 'media.page.saveCutRecord' };
   };
   async function snapshot() {
     if (!v.videoWidth || busy) return;
     v.pause();
     const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
-    c.getContext('2d').drawImage(v, 0, 0);
+    const g = c.getContext('2d'); g.drawImage(v, 0, 0); T.draw(g, 1, v.currentTime, false);   // the frame as it is shown, text included
     const blob = await new Promise(ok => c.toBlob(ok, 'image/png'));
     if (!blob) { say(L('media.page.saveFailed'), 'err'); return; }
     report(await upload(blob, 'copy', 'png', 'frame'));
   }
-  async function record() {
+  /** No ffmpeg: the page records the part as it plays (real time, WebM). With text, each frame is drawn on a canvas
+   *  with the layers over it and that canvas is recorded, with the video's own sound. */
+  async function record(layers) {
     const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
     if (!mime || !v.captureStream) return null;
     v.pause(); v.currentTime = inT; await new Promise(ok => { v.onseeked = ok; setTimeout(ok, 3000); }); v.onseeked = null;
-    const stream = v.captureStream(), rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 }), chunks = [];
+    const src = v.captureStream();
+    let stream = src, paint = null, painted = null;
+    if (layers && layers.length) {
+      const cv = document.createElement('canvas'); cv.width = v.videoWidth; cv.height = v.videoHeight;
+      const g = cv.getContext('2d');
+      if (!g) return null;
+      paint = () => { g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(v, 0, 0, cv.width, cv.height); for (const Ly of layers) if (T.visibleAt(Ly, v.currentTime)) drawLayer(g, Ly, 1, false); };
+      paint();
+      painted = cv.captureStream(clamp(Math.round(fps || 30), 1, 60));
+      stream = new MediaStream([...painted.getVideoTracks(), ...src.getAudioTracks()]);
+    }
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 }), chunks = [];
     rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
     return await new Promise(resolve => {
       let done = false;
-      const finish = (keep) => { if (done) return; done = true; v.pause(); recording = null; rec.onstop = () => resolve(keep ? new Blob(chunks, { type: 'video/webm' }) : null); try { rec.stop(); } catch (e) { resolve(null); } };
+      const finish = (keep) => {
+        if (done) return; done = true; v.pause(); recording = null;
+        rec.onstop = () => { if (painted) painted.getTracks().forEach(t => t.stop()); resolve(keep ? new Blob(chunks, { type: 'video/webm' }) : null); };
+        try { rec.stop(); } catch (e) { if (painted) painted.getTracks().forEach(t => t.stop()); resolve(null); }
+      };
       recording = { finish: () => finish(true), cancel: () => finish(false) };
       setBusy(L('media.page.recording', (outT - inT).toFixed(1)), () => recording && recording.cancel(), false);
       const prog = () => { if (recording) { setProgress((v.currentTime - inT) / (outT - inT)); requestAnimationFrame(prog); } };
-      rec.start(1000); v.play().then(prog).catch(() => finish(false));
+      const frame = () => { if (!recording || !paint) return; paint(); if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(frame); else requestAnimationFrame(frame); };
+      rec.start(1000); v.play().then(() => { prog(); frame(); }).catch(() => finish(false));
       v.addEventListener('ended', () => finish(true), { once: true });
     });
+  }
+  /** ffmpeg: each layer is drawn here, alone, on a transparent picture at the video's own size; the host has ffmpeg
+   *  lay them over their time windows (cutting [start, end) too) and re-encode the picture, the sound copied. */
+  async function burnWithFfmpeg(mode, start, end, savePath, layers) {
+    const id = nextId++, w = v.videoWidth, h = v.videoHeight;
+    let cancelled = false, phase = 'render';
+    setBusy(L('media.page.renderingText'), () => {
+      cancelled = true; post({ t: 'cancel', id });
+      // while pictures are being sent the host stops at once; before its "go" it may still be asking (overwrite?), and
+      // once ffmpeg runs it answers when the process is gone — wait for those
+      if (phase === 'send') resolveWaiter({ t: 'saveResult', id, ok: false, cancelled: true });
+    }, false);
+    try {
+      const pngs = [];
+      for (let i = 0; i < layers.length; i++) {
+        if (cancelled) return { ok: false, cancelled: true };
+        const b = await T.png(layers[i], w, h);
+        if (!b) return { ok: false };
+        pngs.push(b); setProgress((i + 1) / layers.length * .05);
+      }
+      if (cancelled) return { ok: false, cancelled: true };
+      phase = 'begin';
+      post({ t: 'burn', id, mode, start, end, w, h, path: savePath || null, overlays: layers.map((Ly, n) => ({ n, t0: Ly.t0, t1: Ly.t1, size: pngs[n].size })) });
+      const go = await waitFor(id, ['go', 'saveResult']);
+      if (go.t !== 'go') return go;
+      if (cancelled) { post({ t: 'cancel', id }); return { ok: false, cancelled: true }; }
+      phase = 'send';
+      const total = pngs.reduce((s, b) => s + b.size, 0); let sent = 0;
+      for (let n = 0; n < pngs.length; n++) {
+        for (let off = 0, seq = 0; off < pngs[n].size; off += CHUNK, seq++) {
+          if (cancelled) return { ok: false, cancelled: true };
+          const data = await blobToBase64(pngs[n].slice(off, off + CHUNK));
+          post({ t: 'burnChunk', id, n, seq, data });
+          const a = await waitFor(id, ['ack', 'saveResult']);
+          if (a.t !== 'ack') return a;
+          sent += Math.min(CHUNK, pngs[n].size - off); setProgress(.05 + sent / total * .05);
+        }
+      }
+      if (cancelled) return { ok: false, cancelled: true };
+      phase = 'encode';
+      $('coverText').textContent = L('media.page.encoding', '0'); setProgress(0);
+      burnProgress = { id, fn: f => { setProgress(f); $('coverText').textContent = L('media.page.encoding', String(Math.round(f * 100))); } };
+      post({ t: 'burnEnd', id });
+      return await waitFor(id, ['saveResult']);
+    } catch (e) {
+      post({ t: 'cancel', id });
+      post({ t: 'log', text: 'text render failed: ' + e });
+      return { ok: false };
+    } finally { burnProgress = null; clearBusy(); }
   }
   me.save = async (mode, path, wantExt) => {
     if (busy || recording) return false;
     const st = me.saveState();
     if (mode === 'copy' && !st.copy && !path) return !isCut();
     if (mode === 'overwrite' && !st.over) return false;
-    v.pause();
+    v.pause(); H.flush();
+    const layers = v.videoWidth ? textToBurn().map(Ly => { const f = fixTimes(Ly.t0, Ly.t1, D()); return f ? { ...Ly, t0: f[0], t1: f[1] } : null; }).filter(Boolean) : [];
+    const savingText = T.sig();
     let r;
     if (INFO.ffmpeg) {
       if (wantExt && canon(wantExt) !== canon(INFO.ext)) { say(L('media.page.cantWriteFormat', wantExt.toUpperCase()), 'err'); return false; }
-      r = await cutWithFfmpeg(path ? 'path' : mode, inT, outT, path);
+      r = layers.length ? await burnWithFfmpeg(path ? 'path' : mode, inT, outT, path, layers) : await cutWithFfmpeg(path ? 'path' : mode, inT, outT, path);
     } else {
       if (mode === 'overwrite' || (wantExt && canon(wantExt) !== 'webm')) { say(L('media.page.needsFfmpeg'), 'err'); return false; }
-      const blob = await record(); clearBusy();
+      const blob = await record(layers); clearBusy();
       if (!blob) { say(L('media.page.saveCancelled')); return false; }
-      r = await upload(blob, path ? 'path' : 'copy', 'webm', 'cut', path);
+      r = await upload(blob, path ? 'path' : 'copy', 'webm', layers.length ? 'edit' : 'cut', path);
     }
-    if (r.ok) { savedIn = inT; savedOut = outT; refresh(); }
+    if (r.ok) { savedIn = inT; savedOut = outT; savedText = savingText; refresh(); }
     return report(r);
   };
   me.key = e => {
+    if (recording) return false;
+    if (e.ctrlKey && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) { H.undo(); refresh(); return true; }
+    if (e.ctrlKey && (e.key === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { H.redo(); refresh(); return true; }
+    if (!e.ctrlKey && T.key(e)) return true;
+    if ((e.key === 't' || e.key === 'T') && !e.ctrlKey && !e.altKey) { toggleText(); return true; }
     if (e.key === ' ') { toggle(); return true; }
     if (e.key === 'i' || e.key === 'I') { setIn(v.currentTime); return true; }
     if (e.key === 'o' || e.key === 'O') { setOut(v.currentTime); return true; }
@@ -1176,9 +1758,11 @@ function VideoEditor() {
   me.pause = () => { stopAt = null; if (recording) recording.cancel(); v.pause(); };
   me.release = () => { me.pause(); thumbJob++; v.removeAttribute('src'); v.load(); };
   me.reattach = () => { reattaching = true; v.src = INFO.url; };
-  me.dispose = () => { me.release(); cancelAnimationFrame(raf); clearTimeout(me._rt); bag.clear(); };
-  me.refresh = () => { refresh(); tick(); };
-  me.redraw = drawTl;
+  me.dispose = () => { me.release(); cancelAnimationFrame(raf); clearTimeout(me._rt); T.hide(); H.flush(); bag.clear(); };
+  me.refresh = () => { refresh(); tick(); T.refresh(); };
+  me.redraw = () => { drawTl(); drawVov(); };
+  me.fontsChanged = () => { T.refresh(); drawVov(); };
+  me.text = T;
   return me;
 }
 
@@ -1204,7 +1788,7 @@ function start(info) {
 }
 
 document.addEventListener('keydown', e => {
-  const t = e.target; if (t && (t.tagName === 'INPUT' && t.type !== 'range' || t.tagName === 'SELECT')) { if (e.key === 'Escape') t.blur(); return; }
+  const t = e.target; if (t && (t.tagName === 'INPUT' && t.type !== 'range' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) { if (e.key === 'Escape') t.blur(); return; }
   if (busy) { if (e.key === 'Escape' && busy.cancel) busy.cancel(); e.preventDefault(); return; }
   if (ED && ED.key && ED.key(e)) e.preventDefault();
 });
@@ -1220,6 +1804,12 @@ if (HOST) HOST.addEventListener('message', e => {
     case 'init': start(m); break;
     case 'reload': if (INFO) start({ ...INFO, url: m.url, size: m.size ?? INFO.size }); break;
     case 'ffmpeg': if (INFO) { INFO.ffmpeg = !!m.on; refreshSaveButtons(); } break;
+    case 'fonts':
+      FONTS = Array.isArray(m.list) ? m.list.map(cleanFont).filter(Boolean) : [];
+      if (m.def) DEF_FONT = cleanFont(m.def) || DEF_FONT;
+      if (ED && ED.fontsChanged) ED.fontsChanged();
+      break;
+    case 'progress': if (burnProgress && burnProgress.id === m.id && isFinite(m.f)) burnProgress.fn(clamp(+m.f, 0, 1)); break;
     case 'pause': ED && ED.pause && ED.pause(); break;
     case 'release': ED && ED.release && ED.release(); post({ t: 'released', id: m.id }); break;
     case 'reattach': ED && ED.reattach && ED.reattach(); break;

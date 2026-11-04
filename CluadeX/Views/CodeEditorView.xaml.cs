@@ -736,30 +736,6 @@ public partial class CodeEditorView : UserControl
         }
     }
 
-    // ── Branch switcher: commit the choice deliberately ──
-
-    private static void CommitBranchChoice(object sender)
-    {
-        if (sender is ComboBox box)
-            BindingOperations.GetBindingExpression(box, System.Windows.Controls.Primitives.Selector.SelectedItemProperty)?.UpdateSource();
-    }
-
-    private void OnBranchDropDownClosed(object? sender, EventArgs e) => CommitBranchChoice(sender!);
-
-    private void OnBranchKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter) return;
-        CommitBranchChoice(sender);
-        e.Handled = true;
-    }
-
-    /// <summary>Walked away after arrowing to another branch without committing: show the real one again.</summary>
-    private void OnBranchLostFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        if (sender is ComboBox { IsDropDownOpen: false } box)
-            BindingOperations.GetBindingExpression(box, System.Windows.Controls.Primitives.Selector.SelectedItemProperty)?.UpdateTarget();
-    }
-
     // ── Embedded terminal ──
 
     private void OnTerminalOutputChanged(object sender, TextChangedEventArgs e)

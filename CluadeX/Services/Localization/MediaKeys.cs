@@ -27,13 +27,13 @@ internal static class MediaKeys
         ["media.status.saveCancelled"] = new() { ["en"] = "Saving {0} was stopped — nothing was written.", ["th"] = "หยุดบันทึก {0} แล้ว — ไม่มีไฟล์ใดถูกเขียน" },
         ["media.status.ffmpegFailed"] = new()
         {
-            ["en"] = "ffmpeg could not cut {0}. Nothing was written — the Debug Log has ffmpeg's message.",
-            ["th"] = "ffmpeg ตัด {0} ไม่สำเร็จ ไม่มีไฟล์ใดถูกเขียน — ดูข้อความของ ffmpeg ได้ใน Debug Log",
+            ["en"] = "ffmpeg could not save {0}. Nothing was written — the Debug Log has ffmpeg's message.",
+            ["th"] = "ffmpeg บันทึก {0} ไม่สำเร็จ ไม่มีไฟล์ใดถูกเขียน — ดูข้อความของ ffmpeg ได้ใน Debug Log",
         },
         ["media.status.ffmpegTimeout"] = new()
         {
-            ["en"] = "Cutting {0} took too long and was stopped. Nothing was written.",
-            ["th"] = "การตัด {0} ใช้เวลานานเกินไปจึงถูกหยุด ไม่มีไฟล์ใดถูกเขียน",
+            ["en"] = "Saving {0} with ffmpeg took too long and was stopped. Nothing was written.",
+            ["th"] = "การบันทึก {0} ด้วย ffmpeg ใช้เวลานานเกินไปจึงถูกหยุด ไม่มีไฟล์ใดถูกเขียน",
         },
         ["media.status.ffmpegMissing"] = new()
         {
@@ -191,5 +191,85 @@ internal static class MediaKeys
             ["en"] = "It may be damaged, or not really the format its name says.",
             ["th"] = "ไฟล์อาจเสียหาย หรือไม่ได้เป็นรูปแบบตามนามสกุลจริง ๆ",
         },
+
+        // ── text layers (pictures and videos) ──
+        ["media.status.notText"] = new()
+        {
+            ["en"] = "{0} is a picture / sound / video, not text — text tools do not apply to it.",
+            ["th"] = "{0} เป็นไฟล์ภาพ / เสียง / วิดีโอ ไม่ใช่ข้อความ — เครื่องมือข้อความใช้กับไฟล์นี้ไม่ได้",
+        },
+        ["media.page.text"] = new() { ["en"] = "Text", ["th"] = "ข้อความ" },
+        ["media.page.textTip"] = new() { ["en"] = "Add text on top (T)", ["th"] = "ใส่ข้อความทับภาพ (T)" },
+        ["media.page.textTitle"] = new() { ["en"] = "Text", ["th"] = "ข้อความ" },
+        ["media.page.textClose"] = new() { ["en"] = "Close the text tool (the layers stay)", ["th"] = "ปิดเครื่องมือข้อความ (เลเยอร์ยังอยู่)" },
+        ["media.page.textHint"] = new()
+        {
+            ["en"] = "Click on the picture where the text should go, or press Add. Drag a text to move it; Delete removes the selected one.",
+            ["th"] = "คลิกบนภาพตรงที่ต้องการวางข้อความ หรือกด เพิ่ม — ลากข้อความเพื่อย้าย กด Delete เพื่อลบอันที่เลือก",
+        },
+        ["media.page.textAdd"] = new() { ["en"] = "Add", ["th"] = "เพิ่ม" },
+        ["media.page.textDelete"] = new() { ["en"] = "Delete", ["th"] = "ลบ" },
+        ["media.page.textPrev"] = new() { ["en"] = "Previous text layer", ["th"] = "เลเยอร์ข้อความก่อนหน้า" },
+        ["media.page.textNext"] = new() { ["en"] = "Next text layer", ["th"] = "เลเยอร์ข้อความถัดไป" },
+        ["media.page.textLayerN"] = new() { ["en"] = "{0} of {1}", ["th"] = "{0} จาก {1}" },
+        ["media.page.textSample"] = new() { ["en"] = "Your text", ["th"] = "ข้อความของคุณ" },
+        ["media.page.textPresets"] = new() { ["en"] = "Style", ["th"] = "สไตล์" },
+        ["media.page.presetCaption"] = new() { ["en"] = "Caption", ["th"] = "คำบรรยาย" },
+        ["media.page.presetTitle"] = new() { ["en"] = "Title", ["th"] = "หัวเรื่อง" },
+        ["media.page.presetMark"] = new() { ["en"] = "Watermark", ["th"] = "ลายน้ำ" },
+        ["media.page.textFont"] = new() { ["en"] = "Font", ["th"] = "ฟอนต์" },
+        ["media.page.textFontSearch"] = new() { ["en"] = "Type to search the fonts on this PC", ["th"] = "พิมพ์เพื่อค้นหาฟอนต์ในเครื่องนี้" },
+        ["media.page.textFontNone"] = new() { ["en"] = "No font with that name", ["th"] = "ไม่พบฟอนต์ชื่อนี้" },
+        ["media.page.textFontMissing"] = new()
+        {
+            ["en"] = "\"{0}\" is not installed on this PC — a similar font is used instead.",
+            ["th"] = "ไม่มีฟอนต์ \"{0}\" ในเครื่องนี้ — ใช้ฟอนต์ที่ใกล้เคียงแทน",
+        },
+        ["media.page.textSize"] = new() { ["en"] = "Size", ["th"] = "ขนาด" },
+        ["media.page.textBold"] = new() { ["en"] = "Bold", ["th"] = "ตัวหนา" },
+        ["media.page.textItalic"] = new() { ["en"] = "Italic", ["th"] = "ตัวเอียง" },
+        ["media.page.textColor"] = new() { ["en"] = "Colour", ["th"] = "สี" },
+        ["media.page.textOpacity"] = new() { ["en"] = "Opacity", ["th"] = "ความทึบ" },
+        ["media.page.textAlign"] = new() { ["en"] = "Align", ["th"] = "จัดวาง" },
+        ["media.page.textAlignLeft"] = new() { ["en"] = "Align left", ["th"] = "ชิดซ้าย" },
+        ["media.page.textAlignCenter"] = new() { ["en"] = "Centre", ["th"] = "กึ่งกลาง" },
+        ["media.page.textAlignRight"] = new() { ["en"] = "Align right", ["th"] = "ชิดขวา" },
+        ["media.page.textRotate"] = new() { ["en"] = "Rotate °", ["th"] = "หมุน °" },
+        ["media.page.textOutline"] = new() { ["en"] = "OUTLINE", ["th"] = "เส้นขอบตัวอักษร" },
+        ["media.page.textWidth"] = new() { ["en"] = "Width", ["th"] = "ความหนา" },
+        ["media.page.textShadow"] = new() { ["en"] = "SHADOW", ["th"] = "เงา" },
+        ["media.page.textBlur"] = new() { ["en"] = "Blur", ["th"] = "ความเบลอ" },
+        ["media.page.textOffset"] = new() { ["en"] = "Offset x / y", ["th"] = "ระยะเลื่อน x / y" },
+        ["media.page.textBox"] = new() { ["en"] = "BACKGROUND BOX", ["th"] = "กล่องพื้นหลัง" },
+        ["media.page.textPad"] = new() { ["en"] = "Padding", ["th"] = "ระยะขอบใน" },
+        ["media.page.textRadius"] = new() { ["en"] = "Corners", ["th"] = "มุมโค้ง" },
+        ["media.page.textApply"] = new() { ["en"] = "Apply to picture", ["th"] = "ใส่ลงในภาพ" },
+        ["media.page.textApplyTip"] = new()
+        {
+            ["en"] = "Draw the text into the picture now (Ctrl+Z brings the layers back). Saving does this by itself.",
+            ["th"] = "วาดข้อความลงในภาพเลย (Ctrl+Z เพื่อเอาเลเยอร์กลับมา) — การบันทึกจะทำให้เองอยู่แล้ว",
+        },
+        ["media.page.textApplied"] = new() { ["en"] = "The text is now part of the picture (Ctrl+Z to undo).", ["th"] = "ข้อความถูกวาดลงในภาพแล้ว (Ctrl+Z เพื่อย้อนกลับ)" },
+        ["media.page.textEmpty"] = new() { ["en"] = "This layer has no text — it will not be saved.", ["th"] = "เลเยอร์นี้ไม่มีข้อความ — จะไม่ถูกบันทึก" },
+        ["media.page.textOutside"] = new() { ["en"] = "This text is outside the picture — it will not show.", ["th"] = "ข้อความนี้อยู่นอกภาพ — จะไม่ปรากฏ" },
+        ["media.page.textPartly"] = new() { ["en"] = "Part of this text is outside the picture and will be cut off.", ["th"] = "ข้อความบางส่วนอยู่นอกภาพและจะถูกตัดออก" },
+        ["media.page.textTooMany"] = new() { ["en"] = "At most 64 text layers per file.", ["th"] = "ใส่ข้อความได้สูงสุด 64 เลเยอร์ต่อไฟล์" },
+        ["media.page.textTime"] = new() { ["en"] = "SHOWN", ["th"] = "ช่วงเวลาที่แสดง" },
+        ["media.page.textFrom"] = new() { ["en"] = "From", ["th"] = "ตั้งแต่" },
+        ["media.page.textTo"] = new() { ["en"] = "to (s)", ["th"] = "ถึง (วินาที)" },
+        ["media.page.textFromPlayhead"] = new() { ["en"] = "Start here", ["th"] = "เริ่มตรงนี้" },
+        ["media.page.textToPlayhead"] = new() { ["en"] = "End here", ["th"] = "จบตรงนี้" },
+        ["media.page.textWholeClip"] = new() { ["en"] = "Whole clip", ["th"] = "ทั้งคลิป" },
+        ["media.page.textInOut"] = new() { ["en"] = "The cut", ["th"] = "ช่วงที่ตัด" },
+        ["media.page.textBadTime"] = new() { ["en"] = "The end must be after the start, inside the clip.", ["th"] = "เวลาจบต้องอยู่หลังเวลาเริ่ม และอยู่ภายในคลิป" },
+        ["media.page.textOutsideCut"] = new() { ["en"] = "This text is not shown in the part being saved.", ["th"] = "ข้อความนี้ไม่ได้แสดงในช่วงที่จะบันทึก" },
+        ["media.page.textNoFfmpeg"] = new()
+        {
+            ["en"] = "Without ffmpeg the video is recorded as it plays (real time, WebM).",
+            ["th"] = "หากไม่มี ffmpeg วิดีโอจะถูกอัดขณะเล่น (ใช้เวลาเท่าความยาวคลิป ได้ไฟล์ WebM)",
+        },
+        ["media.page.saveBurn"] = new() { ["en"] = "Save copy with text", ["th"] = "บันทึกสำเนาพร้อมข้อความ" },
+        ["media.page.renderingText"] = new() { ["en"] = "Preparing the text…", ["th"] = "กำลังเตรียมข้อความ…" },
+        ["media.page.encoding"] = new() { ["en"] = "Rendering the video with text… {0}%", ["th"] = "กำลังสร้างวิดีโอพร้อมข้อความ… {0}%" },
     };
 }

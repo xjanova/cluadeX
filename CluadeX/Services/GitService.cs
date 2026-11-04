@@ -8,7 +8,7 @@ namespace CluadeX.Services;
 /// Provides Git operations for the coding agent.
 /// Wraps the git CLI for status, commit, push, pull, branch, diff, log, clone.
 /// </summary>
-public class GitService
+public partial class GitService
 {
     private readonly FileSystemService _fileSystem;
 
@@ -148,10 +148,34 @@ public class GitService
             return;
         }
         int dots = b.IndexOf("...", StringComparison.Ordinal);
-        if (dots >= 0) b = b[..dots];
+        string tracking = "";
+        if (dots >= 0) { tracking = b[(dots + 3)..]; b = b[..dots]; }
         int space = b.IndexOf(' ');
         if (space >= 0) b = b[..space];
         snap.Branch = b.Trim();
+        ParseTracking(tracking, snap);
+    }
+
+    /// <summary>
+    /// The part after "..." in the branch line: "origin/main [ahead 2, behind 1]", "origin/main [gone]" or just
+    /// "origin/main". No "..." at all means the branch has no upstream. The Source Control panel shows this as
+    /// ↑2 ↓1 so "do I need to push or pull?" is answered without running anything.
+    /// </summary>
+    private static void ParseTracking(string tracking, GitStatusSnapshot snap)
+    {
+        tracking = tracking.Trim();
+        if (tracking.Length == 0) return;
+        int bracket = tracking.IndexOf(" [", StringComparison.Ordinal);
+        snap.Upstream = (bracket >= 0 ? tracking[..bracket] : tracking).Trim();
+        if (bracket < 0) return;
+        int close = tracking.IndexOf(']', bracket);
+        string inner = close > bracket ? tracking[(bracket + 2)..close] : tracking[(bracket + 2)..];
+        foreach (var part in inner.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (part == "gone") snap.UpstreamGone = true;
+            else if (part.StartsWith("ahead ", StringComparison.Ordinal) && int.TryParse(part[6..], out int a)) snap.Ahead = a;
+            else if (part.StartsWith("behind ", StringComparison.Ordinal) && int.TryParse(part[7..], out int b)) snap.Behind = b;
+        }
     }
 
     /// <summary>git status (full / long format)</summary>
@@ -682,6 +706,8 @@ public sealed class GitStatusEntry
     }
     public bool IsUntracked => XY == "??";
     public bool IsDeleted => XY.Contains('D');
+    /// <summary>An unmerged path (a merge / rebase / stash pop stopped on it): DD, AU, UD, UA, DU, AA, UU.</summary>
+    public bool IsConflict => XY is "DD" or "AU" or "UD" or "UA" or "DU" or "AA" or "UU";
 }
 
 public sealed class GitStatusSnapshot
@@ -693,6 +719,13 @@ public sealed class GitStatusSnapshot
     public bool IsDetached { get; set; }
     /// <summary>A freshly initialised repo — the branch exists but has no commit yet.</summary>
     public bool NoCommits { get; set; }
+    /// <summary>The branch's upstream ("origin/main"); empty when it has none.</summary>
+    public string Upstream { get; set; } = "";
+    /// <summary>The upstream is configured but no longer exists on the remote ("[gone]").</summary>
+    public bool UpstreamGone { get; set; }
+    /// <summary>Commits on the branch the upstream does not have (to push) / the other way round (to pull).</summary>
+    public int Ahead { get; set; }
+    public int Behind { get; set; }
     public List<GitStatusEntry> Entries { get; } = new();
 }
 

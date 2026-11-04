@@ -150,8 +150,11 @@ public static class Ffmpeg
 
     /// <summary>Run ffmpeg with <paramref name="args"/>; <paramref name="output"/> is removed unless it succeeded.
     /// An <paramref name="output"/> that already exists is refused before ffmpeg starts: it is someone's file, and
-    /// ffmpeg 9 answers "-n" on an existing name with exit code 0 — "done" would then report their file as the cut.</summary>
-    public static async Task<FfmpegResult> RunAsync(string exe, IReadOnlyList<string> args, string? output, TimeSpan timeout, CancellationToken ct)
+    /// ffmpeg 9 answers "-n" on an existing name with exit code 0 — "done" would then report their file as the cut.
+    /// <paramref name="onOutput"/> sees each stdout line (where "-progress pipe:1" writes) on a pool thread; the
+    /// error tail keeps stderr only then, so the progress chatter does not push the real message out.</summary>
+    public static async Task<FfmpegResult> RunAsync(string exe, IReadOnlyList<string> args, string? output, TimeSpan timeout, CancellationToken ct,
+        Action<string>? onOutput = null)
     {
         if (output != null && (File.Exists(output) || Directory.Exists(output)))
             return new FfmpegResult(FfmpegOutcome.Failed, "output already exists: " + Path.GetFileName(output));
@@ -186,7 +189,12 @@ public static class Ffmpeg
         {
             p = new Process { StartInfo = psi, EnableRaisingEvents = true };
             p.ErrorDataReceived += (_, e) => Keep(e.Data);
-            p.OutputDataReceived += (_, e) => Keep(e.Data);
+            p.OutputDataReceived += (_, e) =>
+            {
+                if (onOutput == null) { Keep(e.Data); return; }
+                if (e.Data == null) return;
+                try { onOutput(e.Data); } catch { /* a progress listener must not stop the encode */ }
+            };
             if (!p.Start()) return Fail(FfmpegOutcome.Failed, "did not start");
             p.BeginErrorReadLine();
             p.BeginOutputReadLine();

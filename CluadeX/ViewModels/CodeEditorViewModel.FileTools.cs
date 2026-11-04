@@ -103,6 +103,7 @@ public partial class CodeEditorViewModel
     public void SetActiveEncoding(int codePage, bool utf8Bom)
     {
         if (_activeTab == null) return;
+        if (_activeTab is MediaFileTab) { StatusMessage = T("media.status.notText", _activeTab.FileName); return; }   // its bytes are never re-encoded as text
         if (!_activeTab.DecodedFaithfully)
         {
             StatusMessage = T("ide.notUtf8", _activeTab.FileName);

@@ -162,7 +162,7 @@ public partial class CodeEditorViewModel
     public void RefreshAutoCommentEstimate((int First, int Last)? selection)
     {
         var tab = ActiveTab;
-        if (tab == null || CommentLanguage.For(tab.FullPath) == null || !File.Exists(tab.FullPath))
+        if (tab == null || tab is MediaFileTab || CommentLanguage.For(tab.FullPath) == null || !File.Exists(tab.FullPath))
         { AutoCommentEstimate = T("edt.acm.estimateNone"); return; }
         try
         {
@@ -183,6 +183,7 @@ public partial class CodeEditorViewModel
         if (!CanStartAutoComment) { StatusMessage = T("edt.acm.busy"); return; }
         var tab = ActiveTab;
         if (tab == null) { StatusMessage = T("edt.acm.noFile"); return; }
+        if (tab is MediaFileTab) { StatusMessage = T("media.status.notText", tab.FileName); return; }   // a picture has no code to comment
         if (tab.IsDirty)
         {
             ChoiceDialog.Show(T("edt.acm.saveFirstTitle"), T("edt.acm.saveFirstBody", tab.FileName), new[] { T("ide.ok") });
