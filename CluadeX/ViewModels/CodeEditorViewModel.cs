@@ -131,7 +131,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     public bool HasGitRepo => !string.IsNullOrEmpty(_gitBranch);
 
     private string _commitMessage = "";
-    public string CommitMessage { get => _commitMessage; set => SetProperty(ref _commitMessage, value); }
+    public string CommitMessage { get => _commitMessage; set { if (SetProperty(ref _commitMessage, value)) RaiseCommitHint(); } }
 
     private bool _isCommitting;
     public bool IsCommitting { get => _isCommitting; set => SetProperty(ref _isCommitting, value); }
@@ -294,8 +294,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         OpenFolderCommand = ChatVM.OpenFolderCommand;
         CloneRepoCommand = ChatVM.CloneRepoCommand;
         // No CanExecute predicate — GitChanges mutates outside the focus cycle so a predicate would go
-        // stale; CommitAsync self-guards (empty message / already committing) with a clear status line.
-        CommitCommand = new AsyncRelayCommand(CommitAsync);
+        // stale; CommitCoreAsync self-guards (empty message / already committing) with a clear status line.
+        CommitCommand = new AsyncRelayCommand(() => CommitCoreAsync(thenPush: false));
         RefreshGitCommand = new AsyncRelayCommand(RefreshGitAsync);
         OpenChangeCommand = new AsyncRelayCommand<GitChangeItem>(OpenChangeAsync);
         ShowDiffCommand = new AsyncRelayCommand<GitChangeItem>(ShowDiffAsync);
@@ -321,6 +321,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         ChatVM.FileMutatedByAgent += OnAgentFileMutated;
         // Open tabs follow the files on disk; the editor is read-only while an AI run works in this project.
         HookDiskSync();
+        HookGitPanel();
 
         _terminal.OutputReceived += AppendTerminal;
         _terminal.Exited += () => AppendTerminal(T("ide.termExited"));
@@ -345,63 +346,12 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         try { _conflictDebounce?.Stop(); } catch { }
         try { _searchDebounce?.Stop(); } catch { }
         try { _searchCts?.Cancel(); } catch { }
+        try { _draftCts?.Cancel(); } catch { }
     }
 
     // ═══════════════ Source control ═══════════════
 
-    /// <summary>Reload branch + changed-file list (porcelain -z status) + local branches.</summary>
-    public async Task RefreshGitAsync()
-    {
-        if (!_workspace.HasWorkingDirectory)
-        {
-            OnUi(() => { GitBranch = ""; GitChanges.Clear(); OnPropertyChanged(nameof(GitChangeCount)); });
-            return;
-        }
-        try
-        {
-            var r = await _git.StatusEntriesAsync();
-            var branches = await _git.ListBranchesAsync(includeRemote: false);
-            App.Current?.Dispatcher.Invoke(() =>
-            {
-                GitChanges.Clear();
-                if (!r.Success) { GitBranch = ""; OnPropertyChanged(nameof(GitChangeCount)); return; }
-
-                GitBranch = r.IsDetached ? T("ide.detachedHead") : r.Branch;
-                foreach (var e in r.Entries)
-                {
-                    GitChanges.Add(new GitChangeItem
-                    {
-                        Status = e.Code,
-                        RepoPath = e.RepoPath,
-                        FullPath = e.FullPath,
-                        // Shown relative to the opened folder (which may be a repo subfolder).
-                        Path = DisplayPath(e.FullPath, e.RepoPath),
-                    });
-                }
-                OnPropertyChanged(nameof(GitChangeCount));
-
-                // Local branches → switcher dropdown; keep the selection synced WITHOUT
-                // re-triggering a checkout.
-                _suppressBranchSwitch = true;
-                try
-                {
-                    GitBranches.Clear();
-                    if (branches.Success)
-                    {
-                        foreach (var bl in (branches.Output ?? "").Split('\n'))
-                        {
-                            string name = bl.TrimEnd('\r').TrimStart('*', '+', ' ').Trim();
-                            if (name.Length == 0 || name.Contains("HEAD")) continue;
-                            GitBranches.Add(name);
-                        }
-                    }
-                    SelectedBranch = GitBranch;
-                }
-                finally { _suppressBranchSwitch = false; }
-            });
-        }
-        catch (Exception ex) { _log?.Debug("Git", $"git panel refresh failed: {ex.GetType().Name}"); /* best-effort */ }
-    }
+    // RefreshGitAsync, the panel's operations and the commit live in CodeEditorViewModel.GitPanel.cs.
 
     /// <summary>Path for display: relative to the opened folder when the file is inside it.</summary>
     private string DisplayPath(string fullPath, string repoPath)
@@ -428,83 +378,6 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             || name.EndsWith(".pem") || name.EndsWith(".key") || name.EndsWith(".pfx") || name.EndsWith(".p12")
             || name is "id_rsa" or "id_ed25519" or "id_ecdsa" or "credentials.json" or "service-account.json"
             || name.Contains("secret");
-    }
-
-    /// <summary>
-    /// Stage everything and commit with the panel's message — the IDE-style commit. It runs
-    /// `git add .`, so the exact list of what will be staged is shown and confirmed first; it used
-    /// to commit silently, sweeping in whatever untracked file happened to be there (a fresh .env
-    /// included). Secret-looking files get a separate, explicit warning.
-    /// </summary>
-    private async Task CommitAsync()
-    {
-        string msg = CommitMessage?.Trim() ?? "";
-        if (string.IsNullOrEmpty(msg)) { StatusMessage = T("ide.commitNeedsMessage"); return; }
-        if (IsCommitting) return;
-
-        IsCommitting = true;
-        try
-        {
-            var status = await _git.StatusEntriesAsync();
-            if (!status.Success) { StatusMessage = T("ide.commitStatusFailed"); return; }
-            if (status.Entries.Count == 0) { StatusMessage = T("ide.commitNothing"); return; }
-
-            // Unsaved editor tabs are not on disk — they would not be in the commit.
-            var dirty = Tabs.Where(t => t.IsDirty).Select(t => t.FileName).ToList();
-
-            const int maxListed = 25;
-            var lines = status.Entries.Take(maxListed)
-                .Select(e => $"  {e.Code,-2}  {DisplayPath(e.FullPath, e.RepoPath)}").ToList();
-            if (status.Entries.Count > maxListed) lines.Add("  " + T("ide.commitMore", status.Entries.Count - maxListed));
-            var secrets = status.Entries.Where(e => !e.IsDeleted && LooksSecret(e.RepoPath))
-                .Select(e => DisplayPath(e.FullPath, e.RepoPath)).ToList();
-
-            var body = new StringBuilder();
-            body.AppendLine(T("ide.commitConfirmHeader", status.Entries.Count, GitBranch));
-            body.AppendLine();
-            foreach (var l in lines) body.AppendLine(l);
-            if (secrets.Count > 0)
-            {
-                body.AppendLine();
-                body.AppendLine(T("ide.commitSecretsWarning", string.Join(", ", secrets)));
-            }
-            if (dirty.Count > 0)
-            {
-                body.AppendLine();
-                body.AppendLine(T("ide.commitUnsavedWarning", string.Join(", ", dirty)));
-            }
-
-            int choice = ChoiceDialog.Show(T("ide.commitConfirmTitle"), body.ToString().TrimEnd(),
-                new[] { T("ide.commitConfirmButton", status.Entries.Count), T("ide.cancel") },
-                defaultIndex: secrets.Count > 0 ? 1 : 0);   // a secret in the list: Enter must not commit it
-            if (choice != 0) { StatusMessage = T("ide.commitCancelled"); return; }
-
-            var add = await _git.AddAsync(".");
-            if (!add.Success) { StatusMessage = T("ide.stageFailed", FirstLine(add.Error)); return; }
-            var commit = await _git.CommitAsync(msg);
-            if (commit.Success)
-            {
-                CommitMessage = "";
-                // "[dev 537804b] update readme" → surface the first line
-                string first = FirstLine(commit.Output);
-                StatusMessage = $"✓ {(first.Length > 0 ? first : T("ide.committed"))}";
-            }
-            else
-            {
-                StatusMessage = T("ide.commitFailed", FirstLine(string.IsNullOrWhiteSpace(commit.Error) ? commit.Output : commit.Error));
-            }
-        }
-        catch (Exception ex)
-        {
-            _log?.Warn("Git", "Commit failed", ex);
-            StatusMessage = T("ide.commitFailed", ex.GetType().Name);
-        }
-        finally
-        {
-            IsCommitting = false;
-            await RefreshGitAsync();
-            _ = _workspace.EnrichGitStatusAsync(Tree);
-        }
     }
 
     private static string FirstLine(string? text)
@@ -608,8 +481,18 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
                 ? item.FullPath
                 : Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, item.Path));
 
+            // Source Control panel rows (owner 2026-11-04): a STAGED row shows HEAD → index (what the commit takes); a
+            // Changes row of a file that is also staged shows index → working tree (what is not staged yet).
+            const string Index = ":0";
             string working = "";
-            if (File.Exists(full))
+            if (item.IsStaged)
+            {
+                var staged = await _git.ReadBlobAsync(Index, item.RepoPath, CodeWorkspaceService.MaxEditableBytes);
+                if (staged.TooLarge) { StatusMessage = T("ide.diffTooLarge", item.FileName); return; }
+                if (staged.Binary) { StatusMessage = T("ide.diffBinary", item.FileName); return; }
+                working = staged.Exists ? staged.Text : "";   // a staged deletion: nothing on the right
+            }
+            else if (File.Exists(full))
             {
                 var fi = new FileInfo(full);
                 if (fi.Length > CodeWorkspaceService.MaxEditableBytes) { StatusMessage = T("ide.diffTooLarge", item.FileName); return; }
@@ -623,7 +506,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             string baseline = "";
             if (!item.Status.StartsWith("?") && !string.IsNullOrEmpty(item.RepoPath))
             {
-                var head = await _git.ReadBlobAsync("HEAD", item.RepoPath, CodeWorkspaceService.MaxEditableBytes);
+                bool vsIndex = !item.IsStaged && item.HasStagedPart;
+                var head = await _git.ReadBlobAsync(vsIndex ? Index : "HEAD", item.RepoPath, CodeWorkspaceService.MaxEditableBytes);
                 if (head.TooLarge) { StatusMessage = T("ide.diffTooLarge", item.FileName); return; }
                 if (head.Binary) { StatusMessage = T("ide.diffBinary", item.FileName); return; }
                 // Not in HEAD is normal for a newly added file; treat it as "no baseline".
@@ -639,7 +523,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
                 DiffTitle = item.Path;
                 DiffSummary = diff.HasChanges
                     ? $"+{diff.Added:N0} −{diff.Removed:N0}"
-                      + (item.Status.StartsWith("?") ? T("ide.diffUntrackedSuffix") : T("ide.diffVsHeadSuffix"))
+                      + (item.Status.StartsWith("?") ? T("ide.diffUntrackedSuffix")
+                         : item.IsStaged ? T("scm.diffStagedSuffix")
+                         : item.HasStagedPart ? T("scm.diffVsStagedSuffix") : T("ide.diffVsHeadSuffix"))
                       + (diff.Truncated ? $" · ⚠ {diff.Note}" : "")
                     : diff.Note ?? T("ide.diffNoChanges");
                 IsDiffViewActive = true;
@@ -902,6 +788,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     private async Task SwitchBranchAsync(string branch)
     {
         if (_switchingBranch) return;
+        // A fetch / pull / commit in flight would land on whichever branch this checkout leaves behind.
+        if (!TryBeginGitOp("scm.busy.switch")) { RevertBranchSelection(); return; }
         _switchingBranch = true;
         try
         {
@@ -938,7 +826,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             StatusMessage = T("ide.checkoutFailed", ex.GetType().Name);
             RevertBranchSelection();
         }
-        finally { _switchingBranch = false; }
+        finally { _switchingBranch = false; EndGitOp(); }
     }
 
     /// <summary>After the files changed underneath the editor (checkout): reload every CLEAN tab from
@@ -2632,8 +2520,34 @@ public class GitChangeItem
     public string Path { get; set; } = "";
     /// <summary>Repository-root relative (what `git show HEAD:path` needs).</summary>
     public string RepoPath { get; set; } = "";
+    /// <summary>A rename's old path (repository-root relative).</summary>
+    public string? OrigRepoPath { get; set; }
     public string FullPath { get; set; } = "";
-    public string FileName => System.IO.Path.GetFileName(Path);
+    public string FileName => System.IO.Path.GetFileName(Path.TrimEnd('/'));
+    /// <summary>The folder part of <see cref="Path"/>, shown dim after the name ("src/app"); empty at the top.</summary>
+    public string Folder
+    {
+        get
+        {
+            string p = Path.TrimEnd('/');
+            int slash = p.LastIndexOf('/');
+            return slash > 0 ? p[..slash] : "";
+        }
+    }
+    /// <summary>The row is in the Staged group (index side); false = the Changes group (working tree).</summary>
+    public bool IsStaged { get; set; }
+    /// <summary>The file also has staged changes (a Changes row then diffs against the index, not HEAD).</summary>
+    public bool HasStagedPart { get; set; }
+    public GitChangeKind Kind { get; set; } = GitChangeKind.Modified;
+    /// <summary>The badge letter: M A D R C T, U (untracked), ! (conflict).</summary>
+    public string Letter { get; set; } = "M";
+    /// <summary>The badge's localized tooltip ("Modified", "Untracked" …).</summary>
+    public string KindLabel { get; set; } = "";
+    public bool IsDeletedKind => Kind == GitChangeKind.Deleted;
+    public bool IsConflictKind => Kind == GitChangeKind.Conflict;
+    /// <summary>Only working-tree edits can be discarded; a conflict is resolved, not thrown away.</summary>
+    public bool CanDiscard => !IsStaged && Kind != GitChangeKind.Conflict;
+    public string RowTooltip => string.IsNullOrEmpty(OrigRepoPath) ? $"{Path} — {KindLabel}" : $"{OrigRepoPath} → {Path} — {KindLabel}";
     /// <summary>VS Code-style status color: modified=amber, added/untracked=green, deleted=red.</summary>
     public string StatusColor => Status switch
     {

@@ -19,10 +19,16 @@ public static class ChoiceDialog
     /// Receives (title, message, button labels) and returns the chosen index.</summary>
     public static Func<string, string, IReadOnlyList<string>, int>? Override { get; set; }
 
+    /// <summary>Test seam that also receives the default button (title, message, labels, defaultIndex), so a harness
+    /// can "press Enter" and prove that the default of a destructive question is the safe answer. Wins over
+    /// <see cref="Override"/>.</summary>
+    public static Func<string, string, IReadOnlyList<string>, int, int>? OverrideWithDefault { get; set; }
+
     /// <returns>The index of the clicked button; the last index on Escape / close.</returns>
     public static int Show(string title, string message, IReadOnlyList<string> buttons, int defaultIndex = 0)
     {
         if (buttons.Count == 0) throw new ArgumentException("at least one button", nameof(buttons));
+        if (OverrideWithDefault != null) return OverrideWithDefault(title, message, buttons, defaultIndex);
         if (Override != null) return Override(title, message, buttons);
 
         int cancelIndex = buttons.Count - 1;

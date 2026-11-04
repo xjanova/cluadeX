@@ -31,7 +31,7 @@ namespace EditorTest;
 ///       (arguments, cancel, timeout), overwriting asks first, text saves refuse a media tab, Thai + English keys
 /// Run: build CluadeX, then `dotnet run -p:CluadeXBin=&lt;OutDir&gt;\`.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly List<string> Problems = new();
@@ -2143,6 +2143,140 @@ internal static class Program
                 && !page.Contains("eval("), "");
             return Task.CompletedTask;
         });
+
+        await Case("M9", () =>
+        {
+            // Text burned into a video: the ffmpeg arguments for overlays shown in their own time windows.
+            var spans = new List<CluadeX.Services.Media.OverlaySpan>
+            {
+                new(@"C:\Temp\ข้อความ a\text0.png", 0, 10),     // whole clip → clamped to the cut [2, 6) → 0..4
+                new(@"C:\Temp\ข้อความ a\text1.png", 3.25, 4.5), // inside → shifted by 2
+                new(@"C:\Temp\ข้อความ a\text2.png", 7, 9),      // after the cut → dropped
+                new(@"C:\Temp\ข้อความ a\text3.png", 5, double.NaN), // not a number → dropped
+            };
+            var prev = System.Globalization.CultureInfo.CurrentCulture;
+            List<string> a, webm, fallback, whole;
+            try
+            {
+                System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+                a = CluadeX.Services.Media.MediaOverlay.BurnArguments(@"D:\งาน\clip a.mp4", spans, @"D:\งาน\.clip a.x.cxpart.mp4", 2, 6, 1920L * 1080).ToList();
+                webm = CluadeX.Services.Media.MediaOverlay.BurnArguments(@"D:\v.webm", spans, @"D:\.v.cxpart.webm", 2, 6, 3840L * 2160).ToList();
+                fallback = CluadeX.Services.Media.MediaOverlay.BurnArguments(@"D:\v.mp4", spans, @"D:\.v.cxpart.mp4", 2, 6, 1920L * 1080, attempt: 1).ToList();
+                whole = CluadeX.Services.Media.MediaOverlay.BurnArguments(@"D:\v.mp4", spans.Take(1).ToList(), @"D:\.v.cxpart.mp4", 0, 8, 640L * 480).ToList();
+            }
+            finally { System.Globalization.CultureInfo.CurrentCulture = prev; }
+            string graph = a[a.IndexOf("-filter_complex") + 1];
+            var inputs = a.Select((x, i) => (x, i)).Where(p => p.x == "-i").Select(p => a[p.i + 1]).ToList();
+            string Opt(List<string> l, string k) => l.IndexOf(k) is int i and >= 0 && i + 1 < l.Count ? l[i + 1] : "";
+            Check("M9", "burn arguments: overlays only in their windows on the cut's clock (clamped, shifted, outside / NaN dropped), invariant seconds, no drawtext",
+                inputs.SequenceEqual(new[] { @"D:\งาน\clip a.mp4", @"C:\Temp\ข้อความ a\text0.png", @"C:\Temp\ข้อความ a\text1.png" })
+                && graph.Contains("[0:v][1:v]overlay=0:0:format=auto:enable='between(t,0.000,4.000)'[v1]")
+                && graph.Contains("[v1][2:v]overlay=0:0:format=auto:enable='between(t,1.250,2.500)'[v2]")
+                && graph.EndsWith("[v2]crop=trunc(iw/2)*2:trunc(ih/2)*2[vout]") && !graph.Contains("drawtext") && !graph.Contains(",000"),
+                string.Join(" ", inputs) + " || " + graph);
+            Check("M9b", "…the cut is frame exact (-ss before -i, -t length), picture re-encoded (libx264 + yuv420p), sound copied, never overwrites, progress on stdout",
+                Opt(a, "-ss") == "2.000" && Opt(a, "-t") == "4.000" && a.IndexOf("-ss") < a.IndexOf("-i")
+                && Opt(a, "-c:v") == "libx264" && Opt(a, "-pix_fmt") == "yuv420p" && Opt(a, "-c:a") == "copy" && Opt(a, "-map") == "[vout]"
+                && a.Contains("0:a?") && a[^2] == "-n" && a[^1] == @"D:\งาน\.clip a.x.cxpart.mp4" && !a.Contains("-y")
+                && Opt(a, "-progress") == "pipe:1" && a.Contains("-nostdin") && Opt(a, "-movflags") == "+faststart",
+                string.Join(" ", a));
+            Check("M9c", "…WebM gets VP9 (faster above 1080p) and no faststart; the fallback is mpeg4; from 0 there is no -ss",
+                Opt(webm, "-c:v") == "libvpx-vp9" && Opt(webm, "-cpu-used") == "5" && !webm.Contains("-movflags")
+                && Opt(fallback, "-c:v") == "mpeg4" && !whole.Contains("-ss") && Opt(whole, "-t") == "8.000"
+                && whole[whole.IndexOf("-filter_complex") + 1].Contains("between(t,0.000,8.000)")
+                && CluadeX.Services.Media.MediaOverlay.EncoderAttempts("ogv") == 1 && CluadeX.Services.Media.MediaOverlay.EncoderAttempts("webm") == 2,
+                string.Join(" ", webm) + " || " + string.Join(" ", fallback));
+
+            var W = CluadeX.Services.Media.MediaOverlay.WindowInCut;
+            Check("M9d", "layer timing: inside / clamped / outside / backwards / NaN / under 1 ms",
+                W(1, 3, 0, 10) == (1, 3) && W(0, 20, 5, 8) == (0, 3) && W(9, 12, 5, 10) == (4, 5)
+                && W(11, 12, 0, 10) == null && W(3, 1, 0, 10) == null && W(double.NaN, 1, 0, 10) == null
+                && W(1, double.PositiveInfinity, 0, 10) == null && W(1, 2, 5, 5) == null && W(4.9995, 5.0004, 0, 5) == null);
+
+            var P = CluadeX.Services.Media.MediaOverlay.ProgressOf;
+            Check("M9e", "progress lines → fraction: out_time_us / out_time_ms (µs) / out_time, end = 1, clamped; N/A, garbage, other keys → none",
+                P("out_time_us=1500000", 3) == 0.5 && P("out_time_ms=750000", 3) == 0.25 && P("out_time=00:00:01.500000", 3) == 0.5
+                && P("progress=end", 0) == 1 && P("progress=continue", 3) == null && P("out_time_us=9000000", 3) == 1
+                && P("out_time_us=N/A", 3) == null && P("out_time_us=-5", 3) == null && P("frame=12", 3) == null
+                && P("garbage", 3) == null && P("", 3) == null && P(null, 3) == null && P("out_time_us=100", 0) == null);
+            var To = CluadeX.Services.Media.MediaOverlay.TimeoutForEncode;
+            Check("M9f", "encode time limit: 5 min + 4 min per clip minute (12 above 1080p), at most 6 h; NaN counts as 0",
+                To(0, 1920L * 1080) == TimeSpan.FromMinutes(5) && To(60, 1920L * 1080) == TimeSpan.FromMinutes(9)
+                && To(60, 3840L * 2160) == TimeSpan.FromMinutes(17) && To(1e9, 100) == TimeSpan.FromMinutes(360) && To(double.NaN, 100) == TimeSpan.FromMinutes(5));
+            Check("M9g", "a build without the first-choice encoder is recognised (then the fallback runs)",
+                CluadeX.Services.Media.MediaOverlay.IsMissingEncoder("Unknown encoder 'libx264'") && CluadeX.Services.Media.MediaOverlay.IsMissingEncoder("encoder not found for output stream")
+                && !CluadeX.Services.Media.MediaOverlay.IsMissingEncoder("Invalid data found when processing input"));
+            return Task.CompletedTask;
+        });
+
+        await Case("M10", async () =>
+        {
+            // The fonts a text layer may use: the PC's, cleaned for CSS, and a default with Thai letters when the UI is Thai.
+            var D = CluadeX.Services.Media.MediaFonts.DefaultFont;
+            Check("M10", "default font: Leelawadee UI for Thai (installed casing), else Tahoma …; Segoe UI for English; Tahoma when none is known",
+                D(new[] { "Arial", "leelawadee ui", "Tahoma" }, "th") == "leelawadee ui" && D(new[] { "Arial", "Tahoma" }, "th") == "Tahoma"
+                && D(new[] { "Arial", "Segoe UI", "Leelawadee UI" }, "en") == "Segoe UI" && D(new[] { "Calibri" }, "th") == "Calibri"
+                && D(Array.Empty<string>(), "th") == "Tahoma" && D(new[] { "Wingdings" }, null) == "Tahoma");
+            var C = CluadeX.Services.Media.MediaFonts.Clean;
+            Check("M10b", "font names are safe in a CSS font list: quotes, ; \\ { } < > and control characters go, file paths and #names are refused, 100 chars at most",
+                C("Leelawadee UI") == "Leelawadee UI" && C("A\"; } body{x:y") == "A  bodyx:y" && C("x\u0001y") == "xy"
+                && C("file:///C:/f.ttf#F") == null && C("#Global User Interface") == null && C("  ") == null && C(null) == null
+                && C(new string('ก', 150))!.Length == 100,
+                C("A\"; } body{x:y") ?? "null");
+            var norm = CluadeX.Services.Media.MediaFonts.Normalize(new[] { "tahoma", "Arial", "Tahoma", null, "\"Bad\"", "" });
+            Check("M10c", "…the list is unique ignoring case and sorted", norm.SequenceEqual(new[] { "Arial", "Bad", "tahoma" }), string.Join(", ", norm));
+            var installed = await CluadeX.Services.Media.MediaFonts.InstalledAsync();
+            Check("M10d", "this PC's fonts are listed (Tahoma among them), and the Thai default is one of them",
+                installed.Count > 10 && installed.Contains("Tahoma", StringComparer.OrdinalIgnoreCase)
+                && installed.Contains(D(installed, "th"), StringComparer.OrdinalIgnoreCase), installed.Count + " fonts");
+        });
+
+        await Case("M11", async () =>
+        {
+            // A real burn with the ffmpeg on this machine: a text picture over [1, 2) of a 3 s clip, sound copied.
+            string? exe = CluadeX.Services.Media.Ffmpeg.Locate();
+            if (exe == null) { Console.WriteLine("  SKIP M11   no ffmpeg on this machine"); return; }
+            string dir = Dir("media", "เผา ข้อความ");
+            string src = Path.Combine(dir, "คลิป b.mp4"), png = Path.Combine(dir, "text0.png");
+            var (c1, o1) = RunProcess(exe, new[] { "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=3:size=320x240:rate=25",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-shortest", "-c:v", "mpeg4", "-c:a", "aac", "-y", src }, dir);
+            var (c2, o2) = RunProcess(exe, new[] { "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=320x240,format=rgba",
+                "-frames:v", "1", "-y", png }, dir);
+            if (c1 != 0 || c2 != 0) { Check("M11", "make a test clip and picture", false, o1 + o2); return; }
+            string outFile = Path.Combine(dir, ".คลิป b.test.cxpart.mp4");
+            var spans = new[] { new CluadeX.Services.Media.OverlaySpan(png, 1, 2) };
+            var seen = new List<double>();
+            CluadeX.Services.Media.FfmpegResult r = new(CluadeX.Services.Media.FfmpegOutcome.Failed);
+            for (int attempt = 0; attempt < CluadeX.Services.Media.MediaOverlay.EncoderAttempts("mp4"); attempt++)
+            {
+                var args = CluadeX.Services.Media.MediaOverlay.BurnArguments(src, spans, outFile, 0, 3, 320 * 240, attempt);
+                r = await CluadeX.Services.Media.Ffmpeg.RunAsync(exe, args, outFile, TimeSpan.FromMinutes(2), CancellationToken.None,
+                    line => { if (CluadeX.Services.Media.MediaOverlay.ProgressOf(line, 3) is { } f) lock (seen) seen.Add(f); });
+                if (r.Outcome != CluadeX.Services.Media.FfmpegOutcome.Failed || !CluadeX.Services.Media.MediaOverlay.IsMissingEncoder(r.Detail)) break;
+            }
+            var (_, probe) = RunProcess(exe, new[] { "-hide_banner", "-i", outFile }, dir);
+            var dur = System.Text.RegularExpressions.Regex.Match(probe, @"Duration: 00:00:(\d+\.\d+)");
+            double secs = dur.Success ? double.Parse(dur.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : -1;
+            // the frame at 1.5 s is red (the picture covers it), the one at 0.5 s is not
+            string FrameAt(double t)
+            {
+                string f = Path.Combine(dir, $"f{t:0.0}.rgb".Replace(',', '.'));
+                RunProcess(exe, new[] { "-hide_banner", "-loglevel", "error", "-ss", t.ToString(System.Globalization.CultureInfo.InvariantCulture), "-i", outFile,
+                    "-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-y", f }, dir);
+                return File.Exists(f) ? string.Join(",", File.ReadAllBytes(f).Take(3)) : "none";
+            }
+            string at05 = FrameAt(0.5), at15 = FrameAt(1.5);
+            bool red15 = at15.Split(',') is { Length: 3 } p15 && int.Parse(p15[0]) > 200 && int.Parse(p15[1]) < 60 && int.Parse(p15[2]) < 60;
+            bool red05 = at05.Split(',') is { Length: 3 } p05 && int.Parse(p05[0]) > 200 && int.Parse(p05[1]) < 60 && int.Parse(p05[2]) < 60;
+            Check("M11", "ffmpeg burns a text picture into a Thai-named clip: done, same length (±1 frame) and size, sound kept, progress reported up to the end",
+                r.Outcome == CluadeX.Services.Media.FfmpegOutcome.Done && Math.Abs(secs - 3) <= 0.04 + 0.001 && probe.Contains("320x240") && probe.Contains("Audio:")
+                && seen.Count > 0 && seen.Max() >= 0.99,
+                $"{r.Outcome} {r.Detail} | {secs}s | progress {string.Join(" ", seen.Select(x => x.ToString("0.00")))}");
+            Check("M11b", "…the picture shows only inside its window (red at 1.5 s, not at 0.5 s)", red15 && !red05, $"0.5s {at05} · 1.5s {at15}");
+            try { File.Delete(outFile); } catch { }
+        });
+
+        await GitPanelChecks(provider, fs, loc, RepoRoot());   // SC*: GitPanelChecks.cs
 
         Console.WriteLine($"\n═══ {Pass} pass · {Fail} FAIL ═══");
         foreach (var p in Problems) Console.WriteLine("   " + p);

@@ -22,6 +22,7 @@ public partial class CodeEditorViewModel
     private async Task PushAllAsync()
     {
         if (!_workspace.HasWorkingDirectory || IsPushing) return;
+        if (!TryBeginGitOp("scm.busy.pushAll")) return;   // one git operation at a time (CodeEditorViewModel.GitPanel)
         IsPushing = true;
         try
         {
@@ -70,8 +71,8 @@ public partial class CodeEditorViewModel
         catch (Exception ex)
         {
             _log?.Warn("Editor", "push all failed", ex);
-            StatusMessage = T("ide.pushError", ex.Message);
+            StatusMessage = T("ide.pushError", ex.GetType().Name);   // never the raw exception text
         }
-        finally { IsPushing = false; }
+        finally { IsPushing = false; EndGitOp(); }
     }
 }

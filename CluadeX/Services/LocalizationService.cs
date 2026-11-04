@@ -25,6 +25,7 @@ public class LocalizationService
                                       Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys,
                                       Localization.StarterKeys.Keys,
                                       Localization.AutoCommentKeys.Keys,
+                                      Localization.GitPanelKeys.Keys,
                                       Localization.OrchestrationKeys.Keys,
                                       Localization.DesignKeys.Keys,
                                       Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
