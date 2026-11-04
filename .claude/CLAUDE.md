@@ -257,6 +257,11 @@ its hidden `--fake-responses` recording (no account, no network, no model). It n
 `-p:OutDir=` (the test wants a `CluadeX.exe` of the linked DLL's version). To try a newer CLI without installing it,
 put a folder with `gemini.cmd` and `node_modules\@google\gemini-cli\bundle` first on PATH — and read the
 `(Ready · <path>)` line, because that is the only proof which CLI ran.
+Which llama.cpp can load a GGUF is read from the llama.dll files themselves (`LlamaBackendInfo`): LLamaSharp's
+`runtimes\win-x64\native\<variant>\llama.dll` (always shipped; 0.26 has no `qwen35`) and the one beside llama-server
+(often absent from an installed copy). `LocalBackendRouter.Decide` routes in-process / llama-server, or refuses at once
+with a TH/EN message naming the ways out (`ModelArchitectureNotSupportedException`). Proven by `tests/archtest`
+(synthetic GGUF + fake dll files, no model, no process, no GPU).
 The older IDE harness `navtest` (132 assertions: search, navigation, rename, completion, diff, merge
 conflicts, live debugpy) lived in a session scratchpad and its source is gone — **harnesses belong in
 `tests/`, never in a scratchpad.** These harnesses have repeatedly caught bugs the compiler could not:

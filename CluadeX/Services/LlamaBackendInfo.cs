@@ -4,54 +4,115 @@ using System.Text;
 namespace CluadeX.Services;
 
 /// <summary>
-/// Which model architectures the llama.cpp that CluadeX runs (llama-backend\llama.dll, or the custom backend folder
-/// from Settings) can load. llama.cpp keeps every architecture name ("qwen35", "gemma4", …) as a NUL-terminated string
-/// in llama.dll, so the answer comes straight from the binary — no process started, no model loaded. A catalog model
-/// whose architecture is missing gets "needs a newer llama.cpp" instead of a Download button that ends in a load error.
+/// Which model architectures the llama.cpp builds CluadeX can run a model with are able to load. There are two:
+///   • the in-process one — LLamaSharp's runtimes\win-x64\native\&lt;variant&gt;\llama.dll, always shipped;
+///   • the llama-server one — llama-backend\llama.dll (or the custom backend folder from Settings), often absent
+///     from an installed copy.
+/// llama.cpp keeps every architecture name ("qwen35", "gemma4", …) as a NUL-terminated string in llama.dll, so the
+/// answer comes straight from the binary — no process started, no model loaded. A catalog model whose architecture
+/// neither build knows gets "needs a newer llama.cpp" instead of a Download button that ends in a load error.
 /// </summary>
 public static class LlamaBackendInfo
 {
     private static readonly object Gate = new();
-    private static string? _cachedPath;
-    private static DateTime _cachedStamp;
-    private static byte[]? _cachedBytes;
+    // Two dlls are asked in turn for every catalog model, so one slot per path (each llama.dll is ~2 MB).
+    private static readonly Dictionary<string, (DateTime Stamp, long Length, byte[] Bytes)> DllCache = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>llama.dll of the backend that would run a model, or null when there is none.</summary>
-    public static string? FindLlamaDll(string? customBackendDir)
+    /// <summary>
+    /// LLamaSharp's CPU/GPU variants of one release. All are built from the same llama.cpp commit, so their
+    /// architecture tables are identical and any one of them answers for the variant LLamaSharp picks at run time.
+    /// </summary>
+    private static readonly string[] InProcessVariants = { "avx2", "avx", "avx512", "noavx", "cuda12", "cuda11", "vulkan" };
+
+    /// <summary>
+    /// llama.dll of the llama-server backend (custom folder from Settings, else llama-backend\ next to the app), or
+    /// null when there is none. This is the build that reads vision projectors.
+    /// </summary>
+    public static string? FindServerLlamaDll(string? customBackendDir, string? appDir = null)
     {
         if (!string.IsNullOrEmpty(customBackendDir))
         {
             string custom = Path.Combine(customBackendDir, "llama.dll");
             if (File.Exists(custom)) return custom;
         }
-        string bundled = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "llama-backend", "llama.dll");
+        string bundled = Path.Combine(appDir ?? AppDomain.CurrentDomain.BaseDirectory, "llama-backend", "llama.dll");
         return File.Exists(bundled) ? bundled : null;
     }
 
-    /// <summary>True / false when the backend was found and read, null when it could not be checked.</summary>
-    public static bool? SupportsArchitecture(string? architecture, string? customBackendDir)
+    /// <summary>
+    /// llama.dll the in-process LLamaSharp backend loads (runtimes\win-x64\native\&lt;variant&gt;\, or a flat llama.dll
+    /// next to the app), or null when none ships with this copy.
+    /// </summary>
+    public static string? FindInProcessLlamaDll(string? appDir = null)
+    {
+        string root = appDir ?? AppDomain.CurrentDomain.BaseDirectory;
+        string native = Path.Combine(root, "runtimes", "win-x64", "native");
+        foreach (var variant in InProcessVariants)
+        {
+            string p = Path.Combine(native, variant, "llama.dll");
+            if (File.Exists(p)) return p;
+        }
+        string flat = Path.Combine(native, "llama.dll");
+        if (File.Exists(flat)) return flat;
+        flat = Path.Combine(root, "llama.dll");
+        return File.Exists(flat) ? flat : null;
+    }
+
+    /// <summary>llama.dll of the backend that would run a model: the llama-server one, else the in-process one.</summary>
+    public static string? FindLlamaDll(string? customBackendDir)
+        => FindServerLlamaDll(customBackendDir) ?? FindInProcessLlamaDll();
+
+    /// <summary>
+    /// Can this copy of CluadeX load the architecture with either of its llama.cpp builds? The llama-server build
+    /// only counts when its llama-server.exe sits next to it. True when one of them knows it, false when every build
+    /// that could be read lacks it, null when neither could be checked.
+    /// </summary>
+    public static bool? SupportsArchitecture(string? architecture, string? customBackendDir, string? appDir = null)
     {
         if (string.IsNullOrWhiteSpace(architecture)) return null;
-        string? dll = FindLlamaDll(customBackendDir);
+        string? serverDll = FindServerLlamaDll(customBackendDir, appDir);
+        bool? server = serverDll != null && File.Exists(Path.Combine(Path.GetDirectoryName(serverDll)!, "llama-server.exe"))
+            ? SupportsArchitectureIn(serverDll, architecture)
+            : null;
+        bool? inProcess = SupportsArchitectureInProcess(architecture, appDir);
+        if (server == true || inProcess == true) return true;
+        if (server == false || inProcess == false) return false;
+        return null;
+    }
+
+    /// <summary>Does the in-process (LLamaSharp) llama.dll know the architecture? Null when it could not be read.</summary>
+    public static bool? SupportsArchitectureInProcess(string? architecture, string? appDir = null)
+    {
+        if (string.IsNullOrWhiteSpace(architecture)) return null;
+        string? dll = FindInProcessLlamaDll(appDir);
         return dll == null ? null : SupportsArchitectureIn(dll, architecture);
     }
 
-    /// <summary>Look for "\0&lt;arch&gt;\0" in the given llama.dll (read once, re-read when the file changes).</summary>
+    /// <summary>Forget every dll read so far (the next question reads the files again).</summary>
+    public static void ClearCache()
+    {
+        lock (Gate) { DllCache.Clear(); _mtmdBytes = null; _mtmdPath = null; }
+    }
+
+    /// <summary>Look for "&lt;arch&gt;\0" in the given llama.dll (read once, re-read when the file changes).</summary>
     public static bool? SupportsArchitectureIn(string llamaDllPath, string architecture)
     {
+        if (string.IsNullOrWhiteSpace(architecture)) return null;
         byte[]? bytes;
         try
         {
             lock (Gate)
             {
-                var stamp = File.GetLastWriteTimeUtc(llamaDllPath);
-                if (_cachedBytes == null || _cachedPath != llamaDllPath || _cachedStamp != stamp)
+                var info = new FileInfo(llamaDllPath);
+                if (!info.Exists) return null;
+                var stamp = info.LastWriteTimeUtc;
+                long length = info.Length;
+                if (!DllCache.TryGetValue(llamaDllPath, out var hit) || hit.Stamp != stamp || hit.Length != length)
                 {
-                    _cachedBytes = File.ReadAllBytes(llamaDllPath);
-                    _cachedPath = llamaDllPath;
-                    _cachedStamp = stamp;
+                    hit = (stamp, length, File.ReadAllBytes(llamaDllPath));
+                    DllCache[llamaDllPath] = hit;
                 }
-                bytes = _cachedBytes;
+                bytes = hit.Bytes;
             }
         }
         catch { return null; }
@@ -88,7 +149,8 @@ public static class LlamaBackendInfo
     public static bool? SupportsProjectorType(string? projectorType, string? customBackendDir)
     {
         if (string.IsNullOrWhiteSpace(projectorType)) return null;
-        string? llama = FindLlamaDll(customBackendDir);
+        // Only llama-server reads images (--mmproj); the in-process backend's mtmd.dll never gets a projector.
+        string? llama = FindServerLlamaDll(customBackendDir);
         string? mtmd = llama == null ? null : Path.Combine(Path.GetDirectoryName(llama)!, "mtmd.dll");
         if (mtmd == null || !File.Exists(mtmd)) return null;
         byte[] bytes;

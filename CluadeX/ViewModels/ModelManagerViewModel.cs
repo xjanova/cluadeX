@@ -652,6 +652,8 @@ public class ModelManagerViewModel : ViewModelBase
             _log?.Error("Models", $"Loading {path} failed", ex);
             ModelLoadStatus = ex switch
             {
+                // Already localized, and it names the ways out (Ollama, a custom backend folder, the update script).
+                ModelArchitectureNotSupportedException arch => arch.Message,
                 FileNotFoundException => _loc.T("modelsm.loadFailedMissing", name),
                 OutOfMemoryException or InsufficientMemoryException => _loc.T("modelsm.loadFailedMemory", name),
                 _ => _loc.T("modelsm.loadFailed", name),

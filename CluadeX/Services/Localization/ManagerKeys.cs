@@ -285,7 +285,19 @@ internal static class ManagerKeys
         ["modelsm.why.chat"] = new() { ["en"] = "natural conversation", ["th"] = "สนทนาเป็นธรรมชาติ" },
         ["modelsm.why.new"] = new() { ["en"] = "new ({0})", ["th"] = "รุ่นใหม่ ({0})" },
         ["modelsm.why.longContext"] = new() { ["en"] = "{0} context", ["th"] = "รองรับ context {0}" },
-        ["modelsm.why.newerBackend"] = new() { ["en"] = "Architecture '{0}' needs a newer llama.cpp than the bundled one", ["th"] = "สถาปัตยกรรม '{0}' ต้องใช้ llama.cpp ใหม่กว่าตัวที่มากับแอพ" },
+        // ── Load refused: no llama.cpp of this copy knows the GGUF's architecture (LocalBackendRouter.Refusal) ──
+        ["local.archUnsupported"] = new()
+        {
+            ["en"] = "Cannot load {1}: its architecture '{0}' needs a newer llama.cpp than the one bundled with CluadeX (the file itself is fine). Ways out: use an Ollama model instead · or Settings ▸ Custom llama.cpp backend folder → a folder with a newer llama-server.exe · or run Scripts/update-llama-backend.ps1 to download a newer llama-backend.",
+            ["th"] = "โหลด {1} ไม่ได้: สถาปัตยกรรม '{0}' ของโมเดลนี้ต้องใช้ llama.cpp ที่ใหม่กว่าตัวที่มากับ CluadeX (ตัวไฟล์ไม่ได้เสีย) ทางเลือก: ใช้โมเดลผ่าน Ollama แทน · หรือไปที่ Settings ▸ โฟลเดอร์ llama.cpp ที่สร้างเอง → เลือกโฟลเดอร์ที่มี llama-server.exe รุ่นใหม่ · หรือรัน Scripts/update-llama-backend.ps1 เพื่อดาวน์โหลด llama-backend รุ่นใหม่",
+        },
+        ["local.archUnsupportedServer"] = new()
+        {
+            ["en"] = "Cannot load {1}: its architecture '{0}' is newer than both the bundled llama.cpp and the llama-server at {2} (the file itself is fine). Ways out: use an Ollama model instead · or Settings ▸ Custom llama.cpp backend folder → a newer llama-server build · or run Scripts/update-llama-backend.ps1 to update llama-backend.",
+            ["th"] = "โหลด {1} ไม่ได้: สถาปัตยกรรม '{0}' ของโมเดลนี้ใหม่กว่าทั้ง llama.cpp ที่มากับแอพ และ llama-server ที่ {2} (ตัวไฟล์ไม่ได้เสีย) ทางเลือก: ใช้โมเดลผ่าน Ollama แทน · หรือไปที่ Settings ▸ โฟลเดอร์ llama.cpp ที่สร้างเอง → เลือก llama-server รุ่นใหม่ · หรือรัน Scripts/update-llama-backend.ps1 เพื่ออัปเดต llama-backend",
+        },
+        ["local.archUnsupportedShort"] = new() { ["en"] = "'{0}' needs a newer llama.cpp — see the Models page", ["th"] = "'{0}' ต้องใช้ llama.cpp ใหม่กว่า — ดูหน้าโมเดล" },
+        ["modelsm.why.newerBackend"] =new() { ["en"] = "Architecture '{0}' needs a newer llama.cpp than the bundled one", ["th"] = "สถาปัตยกรรม '{0}' ต้องใช้ llama.cpp ใหม่กว่าตัวที่มากับแอพ" },
         ["modelsm.localHint"] = new() { ["en"] = "Every .gguf in your model folders, with how it runs on this PC.", ["th"] = "ไฟล์ .gguf ทั้งหมดในโฟลเดอร์โมเดล พร้อมบอกว่ารันบนเครื่องนี้ได้แค่ไหน" },
         ["modelsm.tipMoeTitle"] = new() { ["en"] = "MoE models: ", ["th"] = "โมเดล MoE: " },
         ["modelsm.tipMoe"] = new() { ["en"] = "\"35B-A3B\" means 35B parameters of knowledge but only 3B used per token. They need memory for all 35B, yet run nearly as fast as a 3B model — great when part of the model has to sit in system RAM.", ["th"] = "\"35B-A3B\" หมายถึงมีความรู้ 35B แต่ใช้จริงแค่ 3B ต่อโทเคน ต้องมีหน่วยความจำพอสำหรับ 35B แต่รันเร็วเกือบเท่าโมเดล 3B — เหมาะเมื่อต้องวางบางส่วนไว้ใน RAM" },

@@ -1692,7 +1692,7 @@ public partial class ChatViewModel : ViewModelBase
                     App.Current?.Dispatcher.Invoke(() =>
                     {
                         LoadedModelName = Loc("chat.model.autoLoadFailedShort");
-                        StatusText = Loc("chat.model.autoLoadFailed");
+                        StatusText = ex is ModelArchitectureNotSupportedException arch ? arch.ShortMessage : Loc("chat.model.autoLoadFailed");
                     });
                 }
             });
@@ -5684,7 +5684,7 @@ public partial class ChatViewModel : ViewModelBase
         catch (Exception ex)
         {
             _debugLog?.Error("Chat", $"Loading {path} from the chat picker failed", ex);
-            StatusText = Loc("chat.model.loadFailed");
+            StatusText = ex is ModelArchitectureNotSupportedException arch ? arch.ShortMessage : Loc("chat.model.loadFailed");
             Revert();
         }
         finally

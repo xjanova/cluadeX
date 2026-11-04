@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.CompilerServices;
 using CluadeX.Models;
 
@@ -96,10 +97,20 @@ public class LocalGgufProvider : IAiProvider
         // Pre-inspect the GGUF so we can pick the backend BEFORE doing any expensive work
         // (memory mapping, GPU upload, etc.). If inspection returns null we assume the file
         // is loadable by LLamaSharp and let it fail naturally.
-        var (needsFallback, arch) = GgufMetadataReader.InspectModel(modelPath);
+        string? arch = GgufMetadataReader.TryReadArchitecture(modelPath);
+        // Asked of the llama.dll files themselves: LLamaSharp's (runtimes\…\llama.dll) and the one next to the
+        // llama-server that would run. A hardcoded list missed Qwen 3.5, which then failed deep in native code with
+        // "format / memory / corrupt file" while the real reason was a llama.cpp older than the model.
+        bool? inProcessSupports = string.IsNullOrEmpty(arch) ? null : LlamaBackendInfo.SupportsArchitectureInProcess(arch);
+        string? serverExe = _serverProvider.ServerExePath;
+        string? serverDll = serverExe == null ? null : Path.Combine(Path.GetDirectoryName(serverExe)!, "llama.dll");
+        bool? serverSupports = serverDll != null && File.Exists(serverDll) && !string.IsNullOrEmpty(arch)
+            ? LlamaBackendInfo.SupportsArchitectureIn(serverDll, arch)
+            : null;
 
-        // Backend decision:
-        //   • Unsupported architecture → MUST use llama-server.
+        // Backend decision (LocalBackendRouter.Decide):
+        //   • Architecture the in-process llama.cpp lacks → MUST use llama-server; no server that knows it →
+        //     refuse now, with the way out, instead of a generic load error.
         //   • GPU requested → PREFER llama-server. The in-process LLamaSharp backend only uses CUDA when the
         //     CUDA Toolkit is installed (it gates detection on CUDA_PATH); the vast majority of users have
         //     just the NVIDIA driver, so LLamaSharp silently runs everything on CPU — brutally slow for a
@@ -109,13 +120,22 @@ public class LocalGgufProvider : IAiProvider
         //     GTX 1070 Ti; in-process LLamaSharp leaves the GPU idle on the same machine.
         //   • A vision projector next to the model → llama-server too: only it reads images (--mmproj); the
         //     in-process backend would load the same model blind.
-        bool hasProjector = _serverProvider.IsServerBackendAvailable && VisionProjector.FindFor(modelPath) != null;
-        bool preferServer = needsFallback || hasProjector || (wantGpu && _serverProvider.IsServerBackendAvailable);
+        bool hasProjector = serverExe != null && VisionProjector.FindFor(modelPath) != null;
+        var route = LocalBackendRouter.Decide(arch, inProcessSupports, serverExe != null, serverSupports, wantGpu, hasProjector);
 
-        if (preferServer)
+        if (route == LocalBackendRoute.Unsupported)
+        {
+            var refusal = LocalBackendRouter.Refusal(arch!, modelPath, serverExe, settings.Language);
+            OnStatusChanged?.Invoke(refusal.ShortMessage);
+            OnError?.Invoke(refusal.Message);
+            throw refusal;
+        }
+
+        bool needsFallback = route == LocalBackendRoute.Server;
+        if (route is LocalBackendRoute.Server or LocalBackendRoute.PreferServer)
         {
             progress?.Report(needsFallback
-                ? $"Detected '{arch}' architecture — using llama-server backend."
+                ? $"Architecture '{arch}' is newer than the bundled llama.cpp — using the llama-server backend."
                 : hasProjector && !wantGpu
                     ? "Vision projector found — using llama-server backend so the model can see images."
                     : "GPU requested — using llama-server backend for reliable CUDA offload.");
@@ -158,6 +178,10 @@ public class LocalGgufProvider : IAiProvider
         }
         catch (UnsupportedModelArchitectureException ex)
         {
+            // The service's own check disagreed with the one above (the dll changed in between). Same rule: a
+            // server that can run it, or the clear refusal — never llama-server's "exe not found".
+            if (serverExe == null || serverSupports == false)
+                throw LocalBackendRouter.Refusal(ex.Architecture, modelPath, serverExe, settings.Language);
             progress?.Report($"LLamaSharp can't handle '{ex.Architecture}'. Falling back to llama-server...");
             await SwitchToServerBackendAsync(modelPath, progress, ct);
         }

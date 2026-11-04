@@ -31,9 +31,9 @@ public static class GgufMetadataReader
 
     /// <summary>Architectures known to require a newer llama.cpp than what LLamaSharp bundles.</summary>
     /// <remarks>
-    /// Keep this list conservative — adding an arch here forces the llama-server fallback.
-    /// Gemma 3 was added to llama.cpp in March 2025; Gemma 4 in late 2025 / early 2026.
-    /// LLamaSharp pins to an older snapshot, so anything past Gemma 2 is unsafe.
+    /// Only consulted when the in-process llama.dll cannot be read (<see cref="LlamaBackendInfo.SupportsArchitectureInProcess"/>
+    /// is the real answer — this list went stale the moment Qwen 3.5 shipped). Keep it conservative: an arch here
+    /// forces the llama-server fallback.
     /// </remarks>
     private static readonly HashSet<string> RequiresFallback = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -41,9 +41,14 @@ public static class GgufMetadataReader
         "gemma4", "gemma4n",
         "llama4",
         "qwen3", // Qwen 3 (Sep 2025) also post-dates the bundled snapshot
+        "qwen35", "qwen35moe",
         "deepseek-v3", "deepseek-r1",
         "phi4",
     };
+
+    /// <summary>The hardcoded guess, for when no llama.dll can be scanned.</summary>
+    public static bool IsOnFallbackList(string? architecture)
+        => !string.IsNullOrEmpty(architecture) && RequiresFallback.Contains(architecture);
 
     /// <summary>
     /// Read <c>general.architecture</c> from a GGUF file. Returns null on any error
@@ -95,9 +100,20 @@ public static class GgufMetadataReader
         }
     }
 
-    /// <summary>True if the architecture is known to be unsupported by the bundled LLamaSharp build.</summary>
+    /// <summary>
+    /// True if the in-process LLamaSharp llama.dll does not know the architecture. Read from the dll itself; the
+    /// hardcoded list decides only when that dll is missing or unreadable.
+    /// </summary>
     public static bool RequiresLlamaServerFallback(string? architecture)
-        => !string.IsNullOrEmpty(architecture) && RequiresFallback.Contains(architecture);
+    {
+        if (string.IsNullOrEmpty(architecture)) return false;
+        return LlamaBackendInfo.SupportsArchitectureInProcess(architecture) switch
+        {
+            true => false,
+            false => true,
+            null => IsOnFallbackList(architecture),
+        };
+    }
 
     /// <summary>Convenience: open the file, read the arch, decide if fallback is needed.</summary>
     public static (bool NeedsFallback, string? Architecture) InspectModel(string path)
