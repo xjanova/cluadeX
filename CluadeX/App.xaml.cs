@@ -549,6 +549,12 @@ public partial class App : Application
         if (skill == null)
             return ErrorResult($"Skill '/{skillName}' not found. Run tools/list to see available tools, " +
                                "and check ~/.cluadex/skills/ for installed skills.");
+        if (!skillService.IsEnabled(skill.Name))
+        {
+            skillService.RecordUse(skill.Name, Services.SkillService.UseKind.Refused);
+            return ErrorResult($"Skill '/{skill.Name}' is switched off on the Skills page.");
+        }
+        skillService.RecordUse(skill.Name, Services.SkillService.UseKind.Pipe);
 
         // Build a synthetic spec out of the skill template so we can reuse
         // RunMcpTaskAsync. The skill prompt is treated as the spec; the
@@ -1076,6 +1082,7 @@ public partial class App : Application
         services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<AutoUpdateService>());
         services.AddSingleton<LspClientService>();
         services.AddSingleton<SkillService>();
+        services.AddSingleton<SkillInstaller>();
         services.AddSingleton<CostTrackingService>();
         services.AddSingleton<MemoryService>();
         // BatchService — half-price batch API jobs (Anthropic / OpenAI), kept in batches.json and polled until done.

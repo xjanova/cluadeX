@@ -60,13 +60,16 @@ public class AgentToolService : IDisposable
     }
 
     /// <summary>Returns list of available skill names + descriptions for system prompt injection.</summary>
-    public List<(string Name, string Description)> GetAvailableSkillNames()
+    public List<(string Name, string Description)> GetAvailableSkillNames() =>
+        GetAdvertisedSkills().Select(s => (s.Name, s.Description)).ToList();
+
+    /// <summary>The skills worth offering: switched on, user-invocable, and at least one of their tools can run.</summary>
+    public List<SkillDefinition> GetAdvertisedSkills()
     {
         try
         {
             return _skillService.GetAllSkills()
-                .Where(s => s.UserInvocable && SkillToolsAreUsable(s))
-                .Select(s => (s.Name, s.Description))
+                .Where(s => s.UserInvocable && _skillService.IsEnabled(s.Name) && SkillToolsAreUsable(s))
                 .ToList();
         }
         catch { return []; }
@@ -4807,7 +4810,7 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(skillName))
         {
             // If no skill specified, list available skills
-            var allSkills = _skillService.GetAllSkills();
+            var allSkills = _skillService.GetEnabledSkills();
             if (allSkills.Count == 0)
                 return Fail(call, "No skills available.");
 
@@ -4823,13 +4826,19 @@ public class AgentToolService : IDisposable
             };
         }
 
+        // GetSkillByName rescans the disk once on a miss: a skill saved seconds ago is found.
         var skill = _skillService.GetSkillByName(skillName);
         if (skill == null)
         {
-            var allSkills = _skillService.GetAllSkills();
-            var names = string.Join(", ", allSkills.Select(s => s.Name));
+            var names = string.Join(", ", _skillService.GetEnabledSkills().Select(s => s.Name));
             return Fail(call, $"Skill '{skillName}' not found. Available: {names}");
         }
+        if (!_skillService.IsEnabled(skill.Name))
+        {
+            _skillService.RecordUse(skill.Name, SkillService.UseKind.Refused);
+            return Fail(call, $"Skill '{skill.Name}' is switched off by the user (Skills page). Do the task without it, or ask the user to switch it on.");
+        }
+        _skillService.RecordUse(skill.Name, SkillService.UseKind.Tool);
 
         string args = call.GetArg("args", "");
 

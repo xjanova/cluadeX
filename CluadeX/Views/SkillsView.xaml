@@ -11,8 +11,32 @@
              Background="{DynamicResource Bg.Window}"
              FontFamily="{DynamicResource Font.Ui.Display}">
     <UserControl.Resources>
-        <DataTemplate x:Key="SkillCardTemplate" DataType="{x:Type m:SkillDefinition}">
-            <Button Click="OnSkillClick" Tag="{Binding}" Cursor="Hand"
+        <!-- Toggle Switch (same look as the Features page) -->
+        <Style x:Key="ToggleSwitch" TargetType="CheckBox">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Cursor="Hand" Background="Transparent">
+                            <Border x:Name="Track" Width="40" Height="22" CornerRadius="11"
+                                    Background="{DynamicResource Surface.Raised}"
+                                    HorizontalAlignment="Left">
+                                <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="{DynamicResource Text.OnAccent}"
+                                         HorizontalAlignment="Left" Margin="3,0,0,0"/>
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource Status.Success}"/>
+                                <Setter TargetName="Thumb" Property="Margin" Value="21,0,0,0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <DataTemplate x:Key="SkillCardTemplate" DataType="{x:Type vm:SkillItem}">
+            <Button Click="OnSkillClick" Tag="{Binding}" Cursor="Hand" Opacity="{Binding CardOpacity}"
                     Background="Transparent" BorderThickness="0" Padding="0" Margin="0,0,0,10"
                     HorizontalContentAlignment="Stretch">
                 <Button.Template>
@@ -53,9 +77,8 @@
                                        Foreground="{DynamicResource Text.Primary}"/>
                             <Border Margin="10,0,0,0" Padding="5,1" CornerRadius="3"
                                     Background="{DynamicResource Status.Success.Tint}"
-                                    BorderThickness="1" BorderBrush="{DynamicResource Status.Success}"
-                                    Visibility="{Binding IsBuiltIn, Converter={StaticResource BoolVis}}">
-                                <TextBlock Text="{services:Loc skills.builtInBadge}" FontSize="9"
+                                    BorderThickness="1" BorderBrush="{DynamicResource Status.Success}">
+                                <TextBlock Text="{Binding SourceTag}" FontSize="9"
                                            FontFamily="{DynamicResource Font.Mono.Display}"
                                            Foreground="{DynamicResource Status.Success}"/>
                             </Border>
@@ -63,10 +86,14 @@
                         <TextBlock Text="{Binding Description}" FontSize="11"
                                    Foreground="{DynamicResource Text.Muted}" Margin="0,4,0,0"
                                    TextWrapping="Wrap" MaxHeight="40" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding UsageText}" FontSize="9" Margin="0,4,0,0"
+                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                   Foreground="{DynamicResource Text.Faint}" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
 
-                    <TextBlock Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                               Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                    <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                              Margin="10,0,0,0" IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                              ToolTip="{services:Loc skills.enabledLabel}"/>
                 </Grid>
             </Button>
         </DataTemplate>
@@ -173,6 +200,20 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Command="{Binding ToggleInstallModeCommand}" Style="{StaticResource NeonAction}"
+                                Visibility="{Binding CanInstallSkills, Converter={StaticResource BoolVis}}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <Grid>
+                                    <TextBlock Text="{services:Loc skills.getMore}" Visibility="{Binding IsBrowseMode, Converter={StaticResource BoolVis}}"/>
+                                    <TextBlock Text="{services:Loc skills.backToList}" Visibility="{Binding IsInstallMode, Converter={StaticResource BoolVis}}"/>
+                                </Grid>
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding EnableAllCommand}" Style="{StaticResource NeonAction}"
+                                Visibility="{Binding IsBrowseMode, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{services:Loc skills.enableAll}"/>
+                        </Button>
                         <Button Command="{Binding OpenUserSkillsFolderCommand}" Style="{StaticResource NeonAction}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
@@ -190,7 +231,7 @@
             </Border>
 
             <!-- Body: list + detail -->
-            <Grid Grid.Row="1" Margin="20,16,20,16">
+            <Grid Grid.Row="1" Margin="20,16,20,16" Visibility="{Binding IsBrowseMode, Converter={StaticResource BoolVis}}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="380"/>
                     <ColumnDefinition Width="20"/>
@@ -232,7 +273,40 @@
 
                             <TextBlock Text="{Binding Selected.Description}" FontSize="13"
                                        Foreground="{DynamicResource Text.Secondary}"
-                                       TextWrapping="Wrap" Margin="0,0,0,16"/>
+                                       TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <CheckBox Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                                          IsChecked="{Binding Selected.IsEnabled, Mode=TwoWay}"/>
+                                <TextBlock Text="{services:Loc skills.enabledLabel}" Margin="8,0,0,0" FontSize="12"
+                                           VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
+                            </StackPanel>
+
+                            <Border Padding="12" CornerRadius="6" Margin="0,0,0,12"
+                                    Background="{DynamicResource State.Fill.Faint}"
+                                    BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
+                                    Visibility="{Binding Selected.HasWhenToUse, Converter={StaticResource BoolVis}}">
+                                <StackPanel>
+                                    <TextBlock Text="{services:Loc skills.whenToUse}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                               FontSize="9" FontWeight="Bold"
+                                               Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,6"/>
+                                    <TextBlock Text="{Binding Selected.WhenToUse}" FontSize="12" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource Text.Secondary}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Padding="12" CornerRadius="6" Margin="0,0,0,12"
+                                    Background="{DynamicResource State.Fill.Faint}"
+                                    BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1">
+                                <StackPanel>
+                                    <TextBlock Text="{services:Loc skills.usageHeader}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                               FontSize="9" FontWeight="Bold"
+                                               Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,6"/>
+                                    <TextBlock Text="{Binding Selected.UsageText}" FontSize="11" TextWrapping="Wrap"
+                                               FontFamily="{DynamicResource Font.Mono.Display}"
+                                               Foreground="{DynamicResource Text.Secondary}"/>
+                                </StackPanel>
+                            </Border>
 
                             <Border Padding="12" CornerRadius="6"
                                     Background="{DynamicResource State.Fill.Faint}"
@@ -292,6 +366,155 @@
                             </Border>
                         </StackPanel>
                     </ScrollViewer>
+                </Border>
+            </Grid>
+
+            <!-- Install: trusted source → list → preview → Install -->
+            <Grid Grid.Row="1" Margin="20,16,20,16" Visibility="{Binding IsInstallMode, Converter={StaticResource BoolVis}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="380"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="{DynamicResource Surface.Panel}"
+                        BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1" CornerRadius="10"
+                        Effect="{DynamicResource Shadow.Panel.Soft}">
+                    <Grid Margin="14">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                            <TextBlock Text="{services:Loc skills.source}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                       FontSize="9" FontWeight="Bold" Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,6"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ComboBox ItemsSource="{Binding TrustedSources}" SelectedItem="{Binding SelectedSourceUrl}"
+                                          FontSize="11" Margin="0,0,6,0"/>
+                                <Button Grid.Column="1" Command="{Binding LoadRemoteCommand}" Style="{StaticResource NeonAction}"
+                                        Content="{services:Loc skills.load}"/>
+                                <Button Grid.Column="2" Command="{Binding RemoveSourceCommand}" Style="{StaticResource NeonAction}"
+                                        Content="{services:Loc skills.removeSource}" Margin="0"/>
+                            </Grid>
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Text="{Binding NewSourceUrl, UpdateSourceTrigger=PropertyChanged}" FontSize="11"
+                                         ToolTip="{services:Loc skills.addSourceHint}" Margin="0,0,6,0" Padding="4,3"/>
+                                <Button Grid.Column="1" Command="{Binding AddSourceCommand}" Style="{StaticResource NeonAction}"
+                                        Content="{services:Loc skills.addSource}" Margin="0"/>
+                            </Grid>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding RemoteSkills}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:RemoteSkillItem}">
+                                        <Button Cursor="Hand" Margin="0,0,0,6" HorizontalContentAlignment="Stretch"
+                                                Command="{Binding DataContext.PreviewRemoteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="bd" Padding="12,9" CornerRadius="8" BorderThickness="1"
+                                                            BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Surface.Card}">
+                                                        <ContentPresenter/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Name}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                                               FontSize="13" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"/>
+                                                    <TextBlock Text="{services:Loc skills.alreadyInstalled}" Margin="8,0,0,0" FontSize="9"
+                                                               VerticalAlignment="Center" Foreground="{DynamicResource Status.Success}"
+                                                               Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}"/>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding HtmlUrl}" FontSize="9" Foreground="{DynamicResource Text.Faint}"
+                                                           TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="2" Background="{DynamicResource Surface.Panel}"
+                        BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1" CornerRadius="10"
+                        Effect="{DynamicResource Shadow.Panel.Soft}">
+                    <Grid>
+                        <TextBlock Text="{services:Loc skills.pickRemote}" Margin="24" TextWrapping="Wrap" FontSize="13"
+                                   Foreground="{DynamicResource Text.Muted}"
+                                   Visibility="{Binding HasNoPreview, Converter={StaticResource BoolVis}}"/>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20"
+                                      Visibility="{Binding HasPreview, Converter={StaticResource BoolVis}}">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Preview.Skill.Name}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                           FontSize="20" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"/>
+                                <TextBlock Text="{Binding Preview.Remote.HtmlUrl}" FontSize="10" Margin="0,4,0,10"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Faint}"/>
+                                <TextBlock Text="{Binding Preview.Skill.Description}" FontSize="13" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,12"/>
+
+                                <TextBlock Text="{Binding PreviewProblems}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,8"
+                                           Foreground="{DynamicResource Status.Danger}"
+                                           Visibility="{Binding HasPreviewProblems, Converter={StaticResource BoolVis}}"/>
+                                <TextBlock Text="{Binding PreviewWarnings}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,12"
+                                           Foreground="{DynamicResource Status.Warning}"
+                                           Visibility="{Binding HasPreviewWarnings, Converter={StaticResource BoolVis}}"/>
+
+                                <Border Padding="12" CornerRadius="6" Margin="0,0,0,12"
+                                        Background="{DynamicResource State.Fill.Faint}"
+                                        BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc skills.allowedTools}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                                   FontSize="9" FontWeight="Bold" Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,6"/>
+                                        <TextBlock Text="{Binding PreviewTools}" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
+                                                   Foreground="{DynamicResource Accent.1}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                        <TextBlock Text="{services:Loc skills.license}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                                   FontSize="9" FontWeight="Bold" Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,6"/>
+                                        <TextBlock Text="{Binding PreviewLicense}" FontSize="11" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource Text.Secondary}"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock Text="{services:Loc skills.installNote}" TextWrapping="Wrap" FontSize="11" Margin="0,0,0,8"
+                                           Foreground="{DynamicResource Text.Muted}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                                    <Button Command="{Binding InstallCommand}" Style="{StaticResource NeonAction}"
+                                            IsEnabled="{Binding Preview.CanInstall}" Content="{services:Loc skills.install}"/>
+                                    <CheckBox IsChecked="{Binding ReplaceExisting}" VerticalAlignment="Center" Margin="8,0,0,0"
+                                              Content="{services:Loc skills.replaceExisting}" Foreground="{DynamicResource Text.Secondary}"
+                                              Visibility="{Binding Preview.AlreadyInstalled, Converter={StaticResource BoolVis}}"/>
+                                </StackPanel>
+
+                                <Border Padding="14" CornerRadius="6"
+                                        Background="{DynamicResource Surface.Input}"
+                                        BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc skills.promptBody}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                                   FontSize="9" FontWeight="Bold" Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,8"/>
+                                        <TextBox Text="{Binding Preview.RawText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True"
+                                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
+                                                 Background="Transparent" BorderThickness="0"
+                                                 Foreground="{DynamicResource Text.Secondary}" Padding="0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
                 </Border>
             </Grid>
 

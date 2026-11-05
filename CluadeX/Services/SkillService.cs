@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CluadeX.Models;
 
@@ -9,9 +10,13 @@ namespace CluadeX.Services;
 /// Skills are markdown files with YAML frontmatter that define reusable prompt templates.
 ///
 /// Discovery paths:
-///   - ~/.cluadex/skills/     (user-global skills)
-///   - {project}/.cluadex/skills/  (project-specific skills)
-///   - Built-in skills (commit, review-pr, simplify)
+///   - Built-in skills (commit, review-pr, simplify, …)
+///   - ~/.cluadex/skills/     (user-global skills: name.md or name/SKILL.md — the Anthropic layout)
+///   - {project}/.cluadex/skills/  (project-specific skills, same layouts)
+///
+/// The list is cached, but the cache follows the disk: it is rebuilt when either folder's write time or the
+/// project changes, and a name that is not found triggers one rescan before "not found" (a skill saved a few
+/// seconds earlier was refused: tool-precision, 2026-11-05 14:44:34 written, 14:44:38 "not found").
 /// </summary>
 public class SkillService
 {
@@ -19,46 +24,182 @@ public class SkillService
     private readonly FileSystemService _fileSystemService;
 
     private List<SkillDefinition>? _cachedSkills;
+    private string? _cacheStamp;
     private readonly object _cacheLock = new();
+
+    private readonly object _usageLock = new();
+    private Dictionary<string, SkillUsage>? _usage;
+
+    /// <summary>Raised (on any thread) after a use or refusal was recorded.</summary>
+    public event Action? UsageChanged;
+
+    /// <summary>Raised after a skill was switched on or off.</summary>
+    public event Action? EnabledChanged;
 
     // YAML frontmatter regex: ---\n...\n---
     private static readonly Regex FrontmatterRegex = new(
-        @"^---\s*\n(.*?)\n---\s*\n(.*)$",
+        @"^\uFEFF?---\s*\n(.*?)\n---\s*(?:\n(.*))?$",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
-    // Simple YAML key-value parser for frontmatter
+    // "key: value" at the start of a line; keys may use '-' or '_' (allowed-tools, when_to_use).
     private static readonly Regex YamlLineRegex = new(
-        @"^(\w+):\s*(.*)$",
+        @"^([A-Za-z][\w-]*):\s*(.*)$",
         RegexOptions.Compiled);
+
+    /// <summary>What an installable skill name may look like (also the file name it is saved under).</summary>
+    public static readonly Regex ValidNameRegex = new(@"^[a-z0-9][a-z0-9-]{0,63}$", RegexOptions.Compiled);
 
     public SkillService(SettingsService settingsService, FileSystemService fileSystemService)
     {
         _settingsService = settingsService;
         _fileSystemService = fileSystemService;
+        UserSkillsDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex", "skills");
     }
 
-    /// <summary>Get all available skills (cached).</summary>
+    /// <summary>~/.cluadex/skills. Settable so a test harness never touches the owner's real folder.</summary>
+    public string UserSkillsDirectory { get; set; }
+
+    public string? ProjectSkillsDirectory => _fileSystemService.HasWorkingDirectory
+        ? Path.Combine(_fileSystemService.WorkingDirectory, ".cluadex", "skills")
+        : null;
+
+    /// <summary>Get all available skills, switched off ones included (cached; follows the disk).</summary>
     public List<SkillDefinition> GetAllSkills()
     {
         lock (_cacheLock)
         {
-            if (_cachedSkills != null) return _cachedSkills;
+            string stamp = DiskStamp();
+            if (_cachedSkills != null && stamp == _cacheStamp) return _cachedSkills;
             _cachedSkills = DiscoverSkills();
+            _cacheStamp = stamp;
             return _cachedSkills;
         }
     }
 
-    /// <summary>Find a skill by name (case-insensitive).</summary>
+    /// <summary>The skills that are switched on.</summary>
+    public List<SkillDefinition> GetEnabledSkills() => GetAllSkills().Where(s => IsEnabled(s.Name)).ToList();
+
+    /// <summary>Find a skill by name (case-insensitive). A miss rescans the disk once before answering null.</summary>
     public SkillDefinition? GetSkillByName(string name)
     {
-        return GetAllSkills().FirstOrDefault(s =>
-            s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var hit = Find(GetAllSkills(), name);
+        if (hit != null) return hit;
+        ReloadSkills();
+        return Find(GetAllSkills(), name);
     }
+
+    private static SkillDefinition? Find(List<SkillDefinition> all, string name) =>
+        all.FirstOrDefault(s => s.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Clear the skill cache and rediscover.</summary>
     public void ReloadSkills()
     {
-        lock (_cacheLock) { _cachedSkills = null; }
+        lock (_cacheLock) { _cachedSkills = null; _cacheStamp = null; }
+    }
+
+    // ── on / off ────────────────────────────────────────────────────────────
+
+    public bool IsEnabled(string name) =>
+        !_settingsService.Settings.DisabledSkills.Any(d => d.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Switch a skill on or off and save settings. Returns false when settings could not be written.</summary>
+    public bool SetEnabled(string name, bool enabled)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        if (IsEnabled(name) == enabled) return true;
+        bool ok = _settingsService.UpdateSettings(s =>
+        {
+            s.DisabledSkills.RemoveAll(d => d.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (!enabled) s.DisabledSkills.Add(name);
+        });
+        EnabledChanged?.Invoke();
+        return ok;
+    }
+
+    // ── usage ───────────────────────────────────────────────────────────────
+
+    /// <summary>How a skill was started.</summary>
+    public enum UseKind { Slash, Tool, Pipe, Refused }
+
+    public class SkillUsage
+    {
+        public int Slash { get; set; }
+        public int Tool { get; set; }
+        public int Pipe { get; set; }
+        public int Refused { get; set; }
+        public DateTime? LastUsed { get; set; }
+        public int Total => Slash + Tool + Pipe;
+    }
+
+    private string UsagePath => Path.Combine(_settingsService.DataRoot, "skill-usage.json");
+
+    /// <summary>Count one start (or a refusal of a switched-off skill) — kept in skill-usage.json.</summary>
+    public void RecordUse(string name, UseKind kind)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return;
+        lock (_usageLock)
+        {
+            var all = LoadUsage();
+            string key = name.Trim().ToLowerInvariant();
+            if (!all.TryGetValue(key, out var u)) all[key] = u = new SkillUsage();
+            switch (kind)
+            {
+                case UseKind.Slash: u.Slash++; break;
+                case UseKind.Tool: u.Tool++; break;
+                case UseKind.Pipe: u.Pipe++; break;
+                case UseKind.Refused: u.Refused++; break;
+            }
+            if (kind != UseKind.Refused) u.LastUsed = DateTime.Now;
+            try
+            {
+                Directory.CreateDirectory(_settingsService.DataRoot);
+                string tmp = UsagePath + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }));
+                File.Move(tmp, UsagePath, overwrite: true);
+            }
+            catch { /* a count that is not saved must never break a run */ }
+        }
+        UsageChanged?.Invoke();
+    }
+
+    public SkillUsage GetUsage(string name)
+    {
+        lock (_usageLock)
+            return LoadUsage().TryGetValue(name.Trim().ToLowerInvariant(), out var u) ? u : new SkillUsage();
+    }
+
+    private Dictionary<string, SkillUsage> LoadUsage()
+    {
+        if (_usage != null) return _usage;
+        try
+        {
+            if (File.Exists(UsagePath))
+                _usage = JsonSerializer.Deserialize<Dictionary<string, SkillUsage>>(File.ReadAllText(UsagePath));
+        }
+        catch { /* damaged file: start counting again */ }
+        return _usage ??= new Dictionary<string, SkillUsage>();
+    }
+
+    // ── discovery ───────────────────────────────────────────────────────────
+
+    /// <summary>Changes when a skill file is added, removed or renamed in either folder, or the project changes.</summary>
+    private string DiskStamp()
+    {
+        static string Of(string? dir)
+        {
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return "-";
+            try
+            {
+                long t = Directory.GetLastWriteTimeUtc(dir).Ticks;
+                foreach (var sub in Directory.GetDirectories(dir))
+                    t ^= Directory.GetLastWriteTimeUtc(sub).Ticks;
+                return dir + ":" + t;
+            }
+            catch { return dir + ":?"; }
+        }
+        return Of(UserSkillsDirectory) + "|" + Of(ProjectSkillsDirectory);
     }
 
     /// <summary>Discover all skills from built-in + disk.</summary>
@@ -70,20 +211,12 @@ public class SkillService
         skills.AddRange(GetBuiltInSkills());
 
         // 2. User-global skills (~/.cluadex/skills/)
-        string userSkillsDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex", "skills");
-        if (Directory.Exists(userSkillsDir))
-            skills.AddRange(LoadSkillsFromDirectory(userSkillsDir));
+        if (Directory.Exists(UserSkillsDirectory))
+            skills.AddRange(LoadSkillsFromDirectory(UserSkillsDirectory, SkillSource.User));
 
         // 3. Project-specific skills ({project}/.cluadex/skills/)
-        if (_fileSystemService.HasWorkingDirectory)
-        {
-            string projectSkillsDir = Path.Combine(
-                _fileSystemService.WorkingDirectory, ".cluadex", "skills");
-            if (Directory.Exists(projectSkillsDir))
-                skills.AddRange(LoadSkillsFromDirectory(projectSkillsDir));
-        }
+        if (ProjectSkillsDirectory is { } projectDir && Directory.Exists(projectDir))
+            skills.AddRange(LoadSkillsFromDirectory(projectDir, SkillSource.Project));
 
         // Deduplicate by name (project overrides user, user overrides built-in)
         return skills
@@ -92,29 +225,53 @@ public class SkillService
             .ToList();
     }
 
-    /// <summary>Load all .md skill files from a directory.</summary>
-    private List<SkillDefinition> LoadSkillsFromDirectory(string directory)
+    /// <summary>Load name.md files and name/SKILL.md folders from a directory.</summary>
+    private static List<SkillDefinition> LoadSkillsFromDirectory(string directory, SkillSource source)
     {
-        var skills = new List<SkillDefinition>();
+        var files = new List<string>();
+        try
+        {
+            files.AddRange(Directory.GetFiles(directory, "*.md"));
+            foreach (var sub in Directory.GetDirectories(directory))
+            {
+                string skillMd = Path.Combine(sub, "SKILL.md");
+                if (File.Exists(skillMd)) files.Add(skillMd);
+            }
+        }
+        catch { return new(); }
 
-        foreach (var file in Directory.GetFiles(directory, "*.md"))
+        var skills = new List<SkillDefinition>();
+        foreach (var file in files)
         {
             try
             {
                 var skill = ParseSkillFile(file);
-                if (skill != null)
-                    skills.Add(skill);
+                if (skill == null) continue;
+                skill.Source = source;
+                skills.Add(skill);
             }
             catch { /* skip unparseable files */ }
         }
-
         return skills;
     }
 
     /// <summary>Parse a skill markdown file with YAML frontmatter.</summary>
     public static SkillDefinition? ParseSkillFile(string filePath)
     {
-        string content = File.ReadAllText(filePath);
+        string fallback = Path.GetFileName(filePath).Equals("SKILL.md", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileName(Path.GetDirectoryName(filePath)) ?? "skill"
+            : Path.GetFileNameWithoutExtension(filePath);
+        return ParseSkillContent(File.ReadAllText(filePath), fallback, filePath);
+    }
+
+    /// <summary>
+    /// Parse skill text. Accepts both CluadeX keys (whenToUse, allowedTools) and the Claude Code / Anthropic spelling
+    /// (when_to_use, allowed-tools, argument-hint, user-invocable), quoted values, block scalars (description: &gt;)
+    /// and YAML lists. Claude Code tool names in allowed-tools (Read, Bash(git:*), …) are mapped to CluadeX tools.
+    /// </summary>
+    public static SkillDefinition ParseSkillContent(string content, string fallbackName, string filePath = "")
+    {
+        content = content.Replace("\r\n", "\n");
         var match = FrontmatterRegex.Match(content);
 
         if (!match.Success)
@@ -122,64 +279,128 @@ public class SkillService
             // No frontmatter — treat entire file as prompt with filename as name
             return new SkillDefinition
             {
-                Name = Path.GetFileNameWithoutExtension(filePath),
+                Name = fallbackName,
                 Description = "Custom skill",
-                PromptContent = content,
+                PromptContent = content.TrimStart('\uFEFF'),
                 FilePath = filePath,
             };
         }
 
-        string yamlSection = match.Groups[1].Value;
-        string markdownBody = match.Groups[2].Value;
-
         var skill = new SkillDefinition
         {
-            PromptContent = markdownBody.Trim(),
+            PromptContent = match.Groups[2].Value.Trim(),
             FilePath = filePath,
-            Name = Path.GetFileNameWithoutExtension(filePath),
+            Name = fallbackName,
         };
 
-        // Parse YAML frontmatter (simple key: value format)
-        foreach (var line in yamlSection.Split('\n'))
+        foreach (var (key, value, list) in ReadYaml(match.Groups[1].Value))
         {
-            var kvMatch = YamlLineRegex.Match(line.Trim());
-            if (!kvMatch.Success) continue;
-
-            string key = kvMatch.Groups[1].Value.ToLowerInvariant();
-            string value = kvMatch.Groups[2].Value.Trim().Trim('"', '\'');
-
             switch (key)
             {
-                case "name":
-                    skill.Name = value;
-                    break;
-                case "description":
-                    skill.Description = value;
-                    break;
-                case "whentouse":
-                    skill.WhenToUse = value;
-                    break;
+                case "name": if (value.Length > 0) skill.Name = value; break;
+                case "description": skill.Description = value; break;
+                case "whentouse": skill.WhenToUse = value; break;
                 case "allowedtools":
-                    // Parse as comma-separated or YAML array
-                    skill.AllowedTools = value.TrimStart('[').TrimEnd(']')
-                        .Split(',')
-                        .Select(t => t.Trim().Trim('"', '\''))
-                        .Where(t => !string.IsNullOrEmpty(t))
-                        .ToList();
+                    var raw = list.Count > 0 ? list : SplitToolList(value);
+                    foreach (var t in raw)
+                    {
+                        string? mapped = MapToolName(t);
+                        if (mapped == null) skill.UnknownTools.Add(t);
+                        else if (!skill.AllowedTools.Contains(mapped, StringComparer.OrdinalIgnoreCase)) skill.AllowedTools.Add(mapped);
+                    }
                     break;
-                case "model":
-                    skill.Model = value;
-                    break;
-                case "userinvocable":
-                    skill.UserInvocable = value.ToLowerInvariant() is "true" or "yes" or "1";
-                    break;
-                case "argumenthint":
-                    skill.ArgumentHint = value;
-                    break;
+                case "model": skill.Model = value; break;
+                case "userinvocable": skill.UserInvocable = value.ToLowerInvariant() is "true" or "yes" or "1"; break;
+                case "argumenthint": skill.ArgumentHint = value; break;
+                case "license": skill.License = value; break;
+                case "source": skill.SourceUrl = value; break;
             }
         }
 
         return skill;
+    }
+
+    /// <summary>Flat YAML: key: value, key: [a, b], key:\n  - a, key: &gt;\n  folded text. Keys lower-cased, '-'/'_' dropped.</summary>
+    private static List<(string Key, string Value, List<string> List)> ReadYaml(string yaml)
+    {
+        var result = new List<(string, string, List<string>)>();
+        string? key = null; var scalar = new List<string>(); var list = new List<string>(); string value = ""; bool block = false;
+
+        void Flush()
+        {
+            if (key == null) return;
+            string v = block ? string.Join(" ", scalar).Trim() : value;
+            result.Add((key, Unquote(v), list.Select(Unquote).Where(x => x.Length > 0).ToList()));
+            key = null; scalar = new(); list = new(); value = ""; block = false;
+        }
+
+        foreach (var rawLine in yaml.Split('\n'))
+        {
+            string line = rawLine.TrimEnd();
+            if (line.Length == 0 || line.TrimStart().StartsWith('#')) continue;
+            bool indented = char.IsWhiteSpace(line[0]);
+            var kv = indented ? null : YamlLineRegex.Match(line);
+            if (kv is { Success: true })
+            {
+                Flush();
+                key = kv.Groups[1].Value.ToLowerInvariant().Replace("-", "").Replace("_", "");
+                value = kv.Groups[2].Value.Trim();
+                if (value is ">" or "|" or ">-" or "|-" or ">+" or "|+") { block = true; value = ""; }
+                continue;
+            }
+            if (key == null) continue;
+            string t = line.Trim();
+            if (t.StartsWith("- ")) list.Add(t[2..].Trim());
+            else if (block || value.Length == 0) { block = true; scalar.Add(t); }
+        }
+        Flush();
+        return result;
+    }
+
+    private static string Unquote(string v)
+    {
+        v = v.Trim();
+        if (v.Length >= 2 && ((v[0] == '"' && v[^1] == '"') || (v[0] == '\'' && v[^1] == '\''))) v = v[1..^1];
+        return v.Trim();
+    }
+
+    private static List<string> SplitToolList(string value)
+    {
+        value = value.Trim().TrimStart('[').TrimEnd(']');
+        // Commas when there are any; otherwise Claude Code's space-separated form ("Read Grep Bash(git:*)").
+        var parts = value.Contains(',') ? value.Split(',') : Regex.Split(value, @"\s+(?![^()]*\))");
+        return parts.Select(Unquote).Where(t => t.Length > 0).ToList();
+    }
+
+    /// <summary>Claude Code tool names → CluadeX tool names. Already-CluadeX names (lower-case) pass through;
+    /// a capitalised name that is not a known Claude Code tool returns null (reported as unknown).</summary>
+    public static string? MapToolName(string tool)
+    {
+        string t = tool.Trim();
+        int paren = t.IndexOf('(');
+        string head = paren > 0 ? t[..paren] : t;
+        string? mapped = head switch
+        {
+            "Read" => "read_file",
+            "Write" => "write_file",
+            "Edit" => "edit_file",
+            "MultiEdit" => "multi_edit",
+            "Bash" => "run_command",
+            "PowerShell" => "powershell",
+            "Glob" => "glob",
+            "Grep" => "grep",
+            "LS" => "list_files",
+            "WebFetch" => "web_fetch",
+            "WebSearch" => "web_search",
+            "NotebookEdit" => "notebook_edit",
+            "TodoWrite" => "todo_write",
+            "Task" => "agent_spawn",
+            "Skill" => "skill_invoke",
+            _ => null,
+        };
+        if (mapped != null) return mapped;
+        if (head.StartsWith("mcp__", StringComparison.Ordinal)) return head;
+        return head.Length > 0 && head.All(c => char.IsLower(c) || char.IsDigit(c) || c == '_') ? head : null;
     }
 
     /// <summary>Get built-in skill definitions.</summary>

@@ -397,6 +397,14 @@ public class AppSettings
     /// <summary>Chats pinned to the top of the sidebar, in the order they were pinned (owner 2026-11-02).</summary>
     public List<string> PinnedChatIds { get; set; } = new();
 
+    /// <summary>Skills switched off on the Skills page: not advertised in the system prompt, refused by skill_invoke,
+    /// /command and the pipe (owner 2026-11-05).</summary>
+    public List<string> DisabledSkills { get; set; } = new();
+
+    /// <summary>GitHub folders skills may be installed from (https://github.com/owner/repo[/tree/branch/path]).
+    /// Nothing outside this list is ever fetched.</summary>
+    public List<string> TrustedSkillSources { get; set; } = new() { "https://github.com/anthropics/skills" };
+
     // UI settings
     public double FontSize { get; set; } = 14;
     public bool StreamOutput { get; set; } = true;
