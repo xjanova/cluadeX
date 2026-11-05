@@ -14,7 +14,7 @@ public partial class SkillsView : UserControl
 
     private void OnSkillClick(object sender, RoutedEventArgs e)
     {
-        if (sender is Button btn && btn.Tag is SkillDefinition skill
+        if (sender is Button btn && btn.Tag is SkillItem skill
             && DataContext is SkillsViewModel vm)
         {
             vm.Selected = skill;

@@ -317,6 +317,7 @@ internal static class ChatKeys
         ["chat.follow.tip"] = new() { ["en"] = "On: when this chat's agent edits a file of the open project, the window switches to the editor with that file open at the edit (only while this chat is on screen). Off: the editor still updates in the background, the screen stays where you are.", ["th"] = "ติ๊กไว้: เมื่อแชทนี้แก้ไฟล์ในโปรเจคที่เปิดอยู่ จะสลับไปหน้า editor และเปิดไฟล์นั้นตรงจุดที่แก้ (เฉพาะตอนแชทนี้อยู่บนจอ) · เอาติ๊กออก: editor ยังอัปเดตตามอยู่เบื้องหลัง แค่ไม่สลับหน้าจอ" },
         ["chat.skill.notInvocable"] = new() { ["en"] = "Skill '/{0}' can't be run directly.", ["th"] = "สกิล '/{0}' เรียกใช้โดยตรงไม่ได้" },
         ["chat.skill.unknown"] = new() { ["en"] = "Unknown skill '/{0}'. Available: {1}", ["th"] = "ไม่รู้จักสกิล '/{0}' — ที่ใช้ได้: {1}" },
+        ["chat.skill.disabled"] = new() { ["en"] = "Skill '/{0}' is switched off — turn it on in the Skills page.", ["th"] = "สกิล '/{0}' ถูกปิดอยู่ — เปิดได้ที่หน้า Skill" },
         ["chat.skill.unknownNone"] = new() { ["en"] = "Unknown skill '/{0}'. No skills are available.", ["th"] = "ไม่รู้จักสกิล '/{0}' และยังไม่มีสกิลให้ใช้" },
         ["chat.review.needProject"] = new() { ["en"] = "Open a project folder first to review code.", ["th"] = "เปิดโฟลเดอร์โปรเจกต์ก่อนจึงจะรีวิวโค้ดได้" },
         ["chat.review.running"] = new() { ["en"] = "Reviewing code…", ["th"] = "กำลังรีวิวโค้ด…" },

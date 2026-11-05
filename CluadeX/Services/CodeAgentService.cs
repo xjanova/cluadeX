@@ -961,7 +961,7 @@ public partial class CodeAgentService
         // ═══════════════════════════════════════════
         try
         {
-            var allSkills = _agentToolService?.GetAvailableSkillNames();
+            var allSkills = _agentToolService?.GetAdvertisedSkills();
             if (allSkills is { Count: > 0 })
             {
                 sb.AppendLine();
@@ -969,8 +969,11 @@ public partial class CodeAgentService
                 sb.AppendLine(isThai
                     ? "คุณสามารถเรียกใช้ skill ผ่านเครื่องมือ `skill_invoke` เมื่อผู้ใช้พิมพ์ /command หรือเมื่อ skill เหมาะกับงาน:"
                     : "You can invoke skills via the `skill_invoke` tool when the user types /command or when a skill fits the task:");
-                foreach (var (name, desc) in allSkills)
-                    sb.AppendLine($"- `{name}`: {desc}");
+                // whenToUse is what lets the model pick a skill by itself, not only on /command.
+                foreach (var s in allSkills)
+                    sb.AppendLine(string.IsNullOrWhiteSpace(s.WhenToUse)
+                        ? $"- `{s.Name}`: {s.Description}"
+                        : $"- `{s.Name}`: {s.Description} ({(isThai ? "ใช้เมื่อ" : "use when")}: {s.WhenToUse})");
                 sb.AppendLine();
             }
         }

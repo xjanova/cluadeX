@@ -3635,9 +3635,16 @@ public partial class ChatViewModel : ViewModelBase
             string skillArgs = parts.Length > 1 ? parts[1] : "";
             var skill = _skillService.GetSkillByName(skillName);
 
+            if (skill != null && !_skillService.IsEnabled(skill.Name))
+            {
+                _skillService.RecordUse(skill.Name, SkillService.UseKind.Refused);
+                StatusText = LocF("chat.skill.disabled", skill.Name);
+                return;
+            }
             if (skill != null && skill.UserInvocable)
             {
                 activeSkill = skill;
+                _skillService.RecordUse(skill.Name, SkillService.UseKind.Slash);
                 // Replace input with skill prompt + user args
                 skillPromptOverride = skill.PromptContent;
                 if (!string.IsNullOrEmpty(skillArgs))
@@ -3653,7 +3660,7 @@ public partial class ChatViewModel : ViewModelBase
             else if (skill == null && skillName.Length > 0)
             {
                 // Skill not found — show available skills
-                var available = _skillService.GetAllSkills()
+                var available = _skillService.GetEnabledSkills()
                     .Where(s => s.UserInvocable)
                     .Select(s => $"/{s.Name}")
                     .ToList();

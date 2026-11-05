@@ -221,7 +221,7 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
 
 ## Build & Run
 ```bash
-cd E:\Code\ClaudeClient
+cd D:\Code\ClaudeClient   # the repo lives on D: — E:\Code\ClaudeClient is retired, do not build or edit there
 dotnet build CluadeX/CluadeX.csproj
 # Output: CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe
 ```
