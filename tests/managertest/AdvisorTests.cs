@@ -175,7 +175,7 @@ internal static partial class Program
             // with it — a catalog model it cannot load is a Download button that ends in an error.
             string? dll = new[]
             {
-                LlamaBackendInfo.FindLlamaDll(null),
+                LlamaBackendInfo.FindServerLlamaDll(null),
                 @"E:\Code\ClaudeClient\CluadeX\llama-backend\llama.dll",
             }.FirstOrDefault(p => p != null && File.Exists(p));
             if (dll == null) { Console.WriteLine("  SKIP C4     no llama-backend\\llama.dll on this machine"); return; }

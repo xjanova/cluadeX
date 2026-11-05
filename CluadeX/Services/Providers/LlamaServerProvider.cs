@@ -739,6 +739,9 @@ public class LlamaServerProvider : ApiProviderBase
     /// reliably — when the user wants GPU but in-process LLamaSharp can't use CUDA (no CUDA Toolkit).</summary>
     public bool IsServerBackendAvailable => FindServerExe() != null;
 
+    /// <summary>The llama-server.exe a load would start (custom folder, llama-backend\, then PATH), or null.</summary>
+    public string? ServerExePath => FindServerExe();
+
     private string? FindServerExe()
     {
         // Check custom path
