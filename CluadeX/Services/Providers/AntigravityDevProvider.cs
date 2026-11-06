@@ -193,7 +193,7 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
     /// agent about this chat (the grant, the folders, the language). Pure.</summary>
     /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
-        string transcript, string userMessage, string? codeComments = null, string? browserHint = null)
+        string transcript, string userMessage, string? codeComments = null, string? browserHint = null, bool noProject = false)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -209,11 +209,16 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
               "CluadeX's safety hook checks every tool call; when it refuses one, do not retry or work around it — tell the user. " +
               "Other agents on this machine are reachable through the brainx-brain MCP tools (task_queue, task_handoff, cowork_*). " +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
-            : "You are 'antigravity-dev', answering inside the CluadeX desktop app. " +
-              $"Project working directory: {cwd}. " +
-              "This chat is read-only: you may read files and search, but CluadeX's safety hook refuses writes and commands — " +
-              "propose file edits as diffs/snippets for the app to apply. " + folders +
-              "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+            : noProject
+                ? "You are 'antigravity-dev', answering inside the CluadeX desktop app. " +
+                  $"This turn runs read-only in {cwd}: CluadeX's safety hook refuses writes and commands. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
+                : "You are 'antigravity-dev', answering inside the CluadeX desktop app. " +
+                  $"Project working directory: {cwd}. " +
+                  "This chat is read-only: you may read files and search, but CluadeX's safety hook refuses writes and commands — " +
+                  "propose file edits as diffs/snippets for the app to apply. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(noProject);
         wrapper += " " + Tools.ChatToolBridge.AskHint;
         if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.AntigravityDev, false);
@@ -408,7 +413,8 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
             {
                 string prompt = BuildPrompt(cwd, grant, ClaudeDevProvider.TurnAddDirs(extras), ClaudeDevProvider.BuildTranscript(history),
                     userMessage, CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
-                    chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null);
+                    chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
+                    noProject: !_fileSystemService.HasWorkingDirectory);
                 await stdin.WriteLineAsync(StdinLine(prompt));
             }   // closing stdin ends the session after this one turn
 

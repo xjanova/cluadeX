@@ -839,8 +839,12 @@ internal static class Program
         string agyCall(string tool, string server) => JsonSerializer.Serialize(new { toolCall = new { name = "call_mcp_tool", args = new { ServerName = server, ToolName = tool } } });
         var readOnly = new CluadeX.Services.Safety.AntigravityGuard.Config(false, false, proj, proj);
         Check("card: Antigravity's guard lets a read-only chat ask", CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("ask_user", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Allow);
-        Check("card: ...and still refuses every other MCP tool there, or an ask_user of another server",
-            CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("new_chat", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny
+        Check("card: ...and the chat's own tools too (open_project, new_chat, close_chat, update_plan, wrap_up: each asks in CluadeX itself), as on the other CLIs",
+            new[] { "open_project", "new_chat", "close_chat", "update_plan", "wrap_up" }.All(t =>
+                CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall(t, "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Allow));
+        Check("card: ...and still refuses every other MCP tool there (a cluadex engineering tool, a chat tool of another server)",
+            CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("rename_symbol", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny
+            && CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("open_project", "other"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny
             && CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("ask_user", "other"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny);
         using var cliRow = JsonDocument.Parse("{\"questions\":[{\"question\":\"สีอะไรดีคะ?\"}]}");
         var row = CluadeX.Services.Providers.ClaudeDevToolMap.Map("AskUserQuestion", cliRow.RootElement, null);

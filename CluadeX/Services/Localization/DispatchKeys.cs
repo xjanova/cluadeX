@@ -57,6 +57,21 @@ internal static class DispatchKeys
             ["en"] = "{0} sub-agent worktree(s) still hold work, nothing was deleted: {1}",
             ["th"] = "มี worktree ของเอเจนต์ย่อย {0} ชุดที่ยังมีงานค้าง ฉันไม่ได้ลบ: {1}",
         },
+        ["agent.cliEditAsk"] = new()
+        {
+            ["en"] = "{0} opened {1} for this task. Let it create and edit files there in this chat?",
+            ["th"] = "{0} เปิดโฟลเดอร์ {1} สำหรับงานนี้ ให้สร้างและแก้ไฟล์ในโฟลเดอร์นี้ได้ตลอดแชทนี้ไหม",
+        },
+        ["agent.cliFolderCarryOn"] = new()
+        {
+            ["en"] = "📁 {0} opened {1} — carrying the task on there…",
+            ["th"] = "📁 {0} เปิดโฟลเดอร์ {1} แล้ว กำลังทำงานต่อในโฟลเดอร์นั้น…",
+        },
+        ["agent.cliEditDeclined"] = new()
+        {
+            ["en"] = "{0} opened {1}, but editing there was not allowed, so no files were made. Turn on Accept edits for that folder (or allow it when asked) and say \"continue\".",
+            ["th"] = "{0} เปิดโฟลเดอร์ {1} แล้ว แต่ยังไม่ได้รับอนุญาตให้แก้ไฟล์ จึงยังไม่ได้สร้างไฟล์ เปิด Accept edits ให้โฟลเดอร์นั้น (หรือกดอนุญาตตอนถาม) แล้วพิมพ์ \"ทำต่อ\"",
+        },
         ["agent.cliBudgetSpent"] = new()
         {
             ["en"] = "Today's budget for this CLI agent is used up (Settings ▸ Agent). Nothing was started.",

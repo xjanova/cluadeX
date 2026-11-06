@@ -171,7 +171,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>The CLI's arguments for one call (after the script path). Pure, so the harness checks them.</summary>
     /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, IReadOnlyList<string>? addDirs,
-        string? codeComments = null, string? browserHint = null, string? agentLine = null)
+        string? codeComments = null, string? browserHint = null, string? agentLine = null, bool noProject = false)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -186,10 +186,15 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               "Other agents on this machine are reachable through the brainx-brain tools (task_queue, task_handoff, cowork_*). " +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
-            : "You are 'gemini-dev', answering inside the CluadeX desktop app. " +
-              $"Project working directory: {cwd}. " +
-              "You have read-only tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " + folders +
-              "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+            : noProject
+                ? "You are 'gemini-dev', answering inside the CluadeX desktop app. " +
+                  $"This turn runs with read-only tools in {cwd}. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
+                : "You are 'gemini-dev', answering inside the CluadeX desktop app. " +
+                  $"Project working directory: {cwd}. " +
+                  "You have read-only tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(noProject);
         wrapper += " " + Tools.ChatToolBridge.AskHint;
         if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
         if (worker && !string.IsNullOrWhiteSpace(agentLine)) wrapper += " " + agentLine;
@@ -447,7 +452,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         foreach (var a in BuildArgs(cwd, grant, model, ClaudeDevProvider.TurnAddDirs(extras),
                      CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
                      chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
-                     Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GeminiDev))) psi.ArgumentList.Add(a);
+                     Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GeminiDev),
+                     noProject: !_fileSystemService.HasWorkingDirectory)) psi.ArgumentList.Add(a);
 #if DEBUG
         // Debug builds only: tests/safetytest drives this turn with the real CLI and a recorded model (--fake-responses).
         if (Environment.GetEnvironmentVariable("CLUADEX_GEMINI_TEST_ARGS") is { Length: > 0 } testArgs)

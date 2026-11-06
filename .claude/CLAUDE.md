@@ -233,6 +233,23 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   after xAI's API card. Locked while the chat's run works. Proven by `tests/chattest` PK/PR/PF/PKS.
 - Girls (owner 2026-11-06): a GGUF is CluadeX's purple girl, Ollama stays มายด์, Antigravity has her own, Grok = Grok.
 
+## A CLI agent in a chat with no project (2026-11-06)
+- A CLI agent (Codex, Gemini Dev, Antigravity, Claude Dev, Grok Dev) gets its sandbox from `DecideWorkerGrant`: no folder,
+  or a folder with no write Allow rule and Accept edits off = read-only (it cannot ask before each write). Codex answered
+  "read-only" for 13 turns because nothing told it about `open_project`.
+- Every CLI wrapper now carries `ChatToolBridge.OpenProjectHint(noProject)`: with nothing open, call open_project (create="true"
+  for a new folder) yourself, never answer "cannot".
+- A CLI turn that moves the run to another folder (`FolderOpenedDuringTurn`) is followed at once by a turn that starts there
+  (`CarryOnInOpenedFolderAsync`, once per turn). Before it, `AgentToolService.AskCliEditGrantAsync` asks once per folder per
+  chat (card "cli_edit_folder"; a Deny/Ask write rule or an unsafe root = no). The yes counts as Accept edits for that
+  folder in that chat (`DecideWorkerGrant(..., editsApprovedInChat)`). A no adds `agent.cliEditDeclined` and starts nothing.
+- Antigravity's guard now lets a read-only chat call CluadeX's chat tools (`AntigravityGuard.ReadOnlyChatTools`: open_project,
+  new_chat, close_chat, update_plan, wrap_up); Codex now gets `CliAgentPolicy.PromptLine` (it has no spawn hook).
+- The rest of the CLI parity gaps (new_chat/split guide/brain tools not named or wired on the non-Claude CLIs) are listed in
+  the brain note "CluadeX CLI agents tool parity audit" (77faca9ac76d).
+- Proven by `tests/chattest` COP0–COP4 (`CHATTEST_ONLY=COP`, scripted CLI through the real chat page) and safetytest's
+  Antigravity card checks. Not yet tried with a real Codex turn.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

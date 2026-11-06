@@ -198,7 +198,8 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
 
     /// <summary>The prompt file: CluadeX's wrapper, the conversation so far, then the request. Pure.</summary>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
-        string transcript, string userMessage, string? codeComments = null, string? toolsHint = null, string? agentLine = null)
+        string transcript, string userMessage, string? codeComments = null, string? toolsHint = null, string? agentLine = null,
+        bool noProject = false)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -213,11 +214,17 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
               (string.IsNullOrWhiteSpace(agentLine) ? "" : agentLine.Trim() + " ") + folders +
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
-            : "You are 'grok-dev', answering inside the CluadeX desktop app. " +
-              $"Project working directory: {cwd}. " +
-              "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
-              "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+            : noProject
+                ? "You are 'grok-dev', answering inside the CluadeX desktop app. " +
+                  $"This turn runs read-only in {cwd}. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
+                : "You are 'grok-dev', answering inside the CluadeX desktop app. " +
+                  $"Project working directory: {cwd}. " +
+                  "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
         if (!string.IsNullOrWhiteSpace(toolsHint)) wrapper += " " + toolsHint.Trim();
+        if (noProject && !string.IsNullOrWhiteSpace(toolsHint))
+            wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(true, Tools.ChatToolBridge.ServerName + "__open_project (through use_tool)");
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.GrokDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
         var sb = new StringBuilder();
@@ -300,7 +307,8 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
         PruneStalePrompts(promptDir);
         string promptText = BuildPrompt(cwd, grant, addDirs, ClaudeDevProvider.BuildTranscript(history), userMessage,
             CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), ChatToolsHint(extras, chatTools),
-            noSubAgents ? null : Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GrokDev));
+            noSubAgents ? null : Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GrokDev),
+            noProject: !_fileSystemService.HasWorkingDirectory);
 
         var psi = new ProcessStartInfo(exe)
         {

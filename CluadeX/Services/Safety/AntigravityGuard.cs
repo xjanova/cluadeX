@@ -59,6 +59,13 @@ public static class AntigravityGuard
 
     public const string McpTool = "call_mcp_tool";
 
+    /// <summary>CluadeX's chat tools a read-only Antigravity chat may still call: each runs through CluadeX's own gate.</summary>
+    public static readonly HashSet<string> ReadOnlyChatTools = new(StringComparer.Ordinal)
+    {
+        Tools.ProjectToolModule.ToolName, Tools.ProjectToolModule.NewChatToolName, Tools.ProjectToolModule.CloseChatToolName,
+        Tools.ChatToolBridge.PlanToolName, Tools.OrchestrationToolModule.WrapUpToolName,
+    };
+
     /// <summary>The decision for one hook input. Pure apart from the changed-files scan <see cref="GuardHook.Decide"/> makes
     /// for a command that runs project code.</summary>
     public static Decision Decide(string hookJson, Config cfg)
@@ -77,9 +84,12 @@ public static class AntigravityGuard
         // Asking the user changes nothing, so a read-only chat may ask too. CluadeX's browser and desktop tools pass in any chat like
         // on the other CLIs: each runs through CluadeX's own gate inside the call (Dev Preview, the site's permission card,
         // the user's rules) — the same answer a native call gets, so this hook adds no second question.
+        // The chat's own tools too: open_project / new_chat / close_chat ask the user inside the call where a native call
+        // would, and the plan / wrap-up only draw on the chat. A read-only chat with no project needs open_project most of
+        // all — the wrapper tells the model to call it (ChatToolBridge.OpenProjectHint), and this hook used to refuse it.
         if (tool == McpTool && IsCluadexServer(Str(args, "ServerName"))
             && (Str(args, "ToolName") is { } own && (own == Tools.ChatToolBridge.AskToolName || Browser.BrowserToolModule.ToolNames.Contains(own)
-                || Desktop.DesktopToolModule.ToolNames.Contains(own))))
+                || Desktop.DesktopToolModule.ToolNames.Contains(own) || ReadOnlyChatTools.Contains(own))))
             return new Decision(Verdict.Allow, null, who);
 
         if (tool == McpTool)

@@ -297,6 +297,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=COP: just a CLI agent opening a folder for the task (asked once, then it carries on there).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "COP")
+        {
+            await TestCliOpenProject();
+            Log($"\n## Result (CHATTEST_ONLY=COP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=ORCH: just the orchestration views (docs/agent-orchestration.md), and the narrow composer the
         // Ultra switch joined.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "ORCH")
@@ -370,6 +379,7 @@ internal static partial class Program
         await TestPipeRuns();                 // T5: pipe runs watched live, isError, project restored
         await TestPipeChats();                // T6: list_chats / continue_chat over the pipe
         await TestSupervision();              // SUP: late sub-agent results, consent wait, progress, who started, poll limit
+        await TestCliOpenProject();           // COP: a CLI agent opens a folder for the task → asked once, carries on there
         await TestAcceptEdits();              // T5: Accept edits switch
         await TestAutonomousBuildGate();      // T5: the Autonomous loop's build/test after unseen edits
         await TestThumbnail();                // T5: tool-row image thumbnail
