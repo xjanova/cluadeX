@@ -869,6 +869,7 @@ public partial class ChatViewModel : ViewModelBase
             AiProviderType.GeminiDev => configured is null or "default" or "auto" ? Loc("chat.usage.geminiCliDefault") : configured,
             AiProviderType.AntigravityDev => configured is null or "default" or "auto" ? Loc("chat.usage.agyDefault") : configured,
             AiProviderType.OpenAIDev => configured is null or "default" or "auto" ? Loc("chat.usage.codexDefault") : configured,
+            AiProviderType.GrokDev => configured is null or "default" or "auto" ? Loc("chat.usage.grokDefault") : configured,
             _ => configured ?? Loc("chat.usage.noModel"),
         };
         ThinkToggleVisible = type switch
@@ -885,6 +886,8 @@ public partial class ChatViewModel : ViewModelBase
             AiProviderType.Gemini => GeminiProvider.ThinkingOf(configured ?? GeminiProvider.DefaultModel) != GeminiProvider.ThinkingControl.None,
             AiProviderType.ClaudeDev => true,
             AiProviderType.OpenAIDev => true,   // -c model_reasoning_effort (Codex's models take low … max)
+            AiProviderType.GrokDev => GrokModels.MaxEffort(configured is null or "default" or "auto" ? GrokModels.DefaultModel : configured) != null,
+            AiProviderType.XAI => GrokModels.MaxEffort(configured ?? GrokModels.DefaultModel) != null,
             _ => false,
         };
         OnPropertyChanged(nameof(BillingUrl));
@@ -927,6 +930,7 @@ public partial class ChatViewModel : ViewModelBase
                 : type == AiProviderType.GeminiDev ? Loc("chat.usage.geminiCliTip")
                 : type == AiProviderType.AntigravityDev ? Loc("chat.usage.agyTip")
                 : type == AiProviderType.OpenAIDev ? Loc("chat.usage.codexTip")
+                : type == AiProviderType.GrokDev ? Loc("chat.usage.grokTip")
                 : Loc("chat.usage.unknownTip");
         }
 
@@ -3607,9 +3611,10 @@ public partial class ChatViewModel : ViewModelBase
                 AiProviderType.GeminiDev => _providerManager.GetProvider(AiProviderType.GeminiDev) is Services.Providers.GeminiDevProvider gd && gd.OpenLoginTerminal(),
                 AiProviderType.AntigravityDev => _providerManager.GetProvider(AiProviderType.AntigravityDev) is Services.Providers.AntigravityDevProvider agy && agy.OpenLoginTerminal(),
                 AiProviderType.OpenAIDev => _providerManager.GetProvider(AiProviderType.OpenAIDev) is Services.Providers.OpenAIDevProvider od && od.OpenLoginTerminal(),
+                AiProviderType.GrokDev => _providerManager.GetProvider(AiProviderType.GrokDev) is Services.Providers.GrokDevProvider gk && gk.OpenLoginTerminal(),
                 _ => Services.Providers.ClaudeDevProvider.OpenLoginTerminal(),
             };
-            string key = active switch { AiProviderType.GeminiDev => "gemini", AiProviderType.AntigravityDev => "agy", AiProviderType.OpenAIDev => "codex", _ => "" };
+            string key = active switch { AiProviderType.GeminiDev => "gemini", AiProviderType.AntigravityDev => "agy", AiProviderType.OpenAIDev => "codex", AiProviderType.GrokDev => "grok", _ => "" };
             Messages.Add(new ChatMessage
             {
                 Role = MessageRole.System,

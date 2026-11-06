@@ -52,7 +52,8 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         string.IsNullOrWhiteSpace(model) ? null : Known.GetValueOrDefault(InfoKey(type, model));
 
     /// <summary>The context window the service reported for the model, or null (the caller uses its default).</summary>
-    public static int? ContextWindowOf(AiProviderType type, string? model) => InfoOf(type, model)?.ContextWindow;
+    public static int? ContextWindowOf(AiProviderType type, string? model) =>
+        InfoOf(type, model)?.ContextWindow ?? (type == AiProviderType.XAI ? GrokModels.ContextWindow(model) : null);
 
     // ═══════════════════════════════════════════
     // Configuration
@@ -150,6 +151,11 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
             if (Preset.MaxOutputCap is int cap) budget = Math.Min(budget, cap);
             req[_maxCompletion.ContainsKey(model) ? "max_completion_tokens" : "max_tokens"] = budget;
         }
+        // xAI: Grok 4.5 and later take reasoning_effort (GrokModels). "auto" sends nothing — xAI's default is "high".
+        string? effort = null;
+        if (Preset.Type == AiProviderType.XAI && !Dropped(model, "reasoning_effort")
+            && GrokModels.EffortFor(model, EffortLevels.Effective(settings.ReasoningEffort)) is { } e)
+            req["reasoning_effort"] = effort = e;
         if (tools is { Count: > 0 })
         {
             req["tools"] = BuildOpenAiToolDefs(tools);
@@ -160,7 +166,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
             else if (pick is not ("" or "auto") && Preset.ToolChoice == ToolChoiceSupport.Full && !_forcedChoiceOff)
                 req["tool_choice"] = BuildOpenAiToolChoice(toolChoice);
         }
-        LiveModelReport.Sent(Preset.Type, model, null, false);
+        LiveModelReport.Sent(Preset.Type, model, effort, false);
         return req;
     }
 
@@ -234,6 +240,8 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
             return _dropped.TryAdd(model + "|max_tokens", 0);
         if (req.ContainsKey("temperature") && e.Contains("temperature"))
             return _dropped.TryAdd(model + "|temperature", 0);
+        if (req.ContainsKey("reasoning_effort") && (e.Contains("reasoning_effort") || e.Contains("reasoning effort")))
+            return _dropped.TryAdd(model + "|reasoning_effort", 0);
         if (req.ContainsKey("tool_choice") && e.Contains("tool_choice") && !_forcedChoiceOff)
             return _forcedChoiceOff = true;
         if (echoed && e.Contains("reasoning") && !_echoOff)
@@ -450,7 +458,8 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         catch (HttpRequestException ex) { throw new HttpRequestException(Redact(ex.Message, config), null); }
 
         if (result.InputTokens + result.OutputTokens + result.CacheReadTokens > 0)
-            Record(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, Stopwatch.GetElapsedTime(started).TotalSeconds);
+            Record(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, Stopwatch.GetElapsedTime(started).TotalSeconds,
+                result.ThinkingTokens);
         if (withTools) _toolsConfirmed.TryAdd(model, 0);
         return result;
     }
@@ -467,7 +476,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         public string ReasoningField = "reasoning_content";
         public readonly SortedDictionary<int, CallAcc> Calls = new();
         public string? Finish, ServedModel;
-        public int Prompt, Completion, Cached;
+        public int Prompt, Completion, Cached, Thinking;
     }
 
     private static bool TryData(string line, out string data)
@@ -545,6 +554,13 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         static int I(JsonElement e, string n) => e.TryGetProperty(n, out var v) && v.TryGetInt32(out var i) ? i : 0;
         int prompt = I(u, "prompt_tokens"), completion = I(u, "completion_tokens");
         if (prompt == 0 && completion == 0) return;
+        // xAI reports reasoning tokens beside completion_tokens, not inside them (total = prompt + completion +
+        // reasoning) and bills them as output. OpenAI-style services count them inside completion_tokens (total = prompt
+        // + completion), so they are added only when the total says they were left out.
+        int reasoning = u.TryGetProperty("completion_tokens_details", out var cd) && cd.ValueKind == JsonValueKind.Object
+            ? I(cd, "reasoning_tokens") : 0;
+        if (reasoning > 0 && I(u, "total_tokens") == prompt + completion + reasoning) completion += reasoning;
+        st.Thinking = Math.Min(reasoning, completion);
         st.Prompt = prompt;
         st.Completion = completion;
         st.Cached = u.TryGetProperty("prompt_tokens_details", out var pd) && pd.ValueKind == JsonValueKind.Object
@@ -560,6 +576,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
             InputTokens = Math.Max(0, st.Prompt - st.Cached),
             OutputTokens = st.Completion,
             CacheReadTokens = st.Cached,
+            ThinkingTokens = st.Thinking,
         };
         if (st.Reasoning.Length > 0)
             result.Blocks.Add(new ContentBlock { Type = "provider_item", Provider = ReasoningProvider + st.ReasoningField, Data = st.Reasoning.ToString() });
@@ -619,7 +636,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
 
     private void Record(string model, StreamState st, double seconds)
     {
-        if (st.Prompt + st.Completion > 0) Record(model, Math.Max(0, st.Prompt - st.Cached), st.Completion, st.Cached, seconds);
+        if (st.Prompt + st.Completion > 0) Record(model, Math.Max(0, st.Prompt - st.Cached), st.Completion, st.Cached, seconds, st.Thinking);
     }
 
     /// <summary>Tokens always. Dollars at the price the service itself reported (OpenRouter, Together and Hugging Face
@@ -629,7 +646,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
     /// is filed under this service's own Billing tab, never under the maker its model id names. <paramref name="seconds"/>
     /// is the request's wall time (send to last byte, the adapt retries included); only local use keeps it, so the
     /// Billing page can show LM Studio's and vLLM's time like Ollama's.</summary>
-    private void Record(string model, int input, int output, int cached, double seconds)
+    private void Record(string model, int input, int output, int cached, double seconds, int thinking = 0)
     {
         if (_costTracker == null) return;
         string provider = Preset.Type.ToString();
@@ -640,7 +657,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
         }
         if (!CostTrackingService.HasRegisteredPricing(model) && !BuiltInPriced(model))
             CostTrackingService.RegisterPricing(model, new ModelPricing(0m, 0m, 0m, 0m));
-        _costTracker.RecordUsage(model, input, output, cached, 0, provider: provider);
+        _costTracker.RecordUsage(model, input, output, cached, 0, thinkingTokens: thinking, provider: provider);
     }
 
     /// <summary>Does the built-in price table know this model, rather than falling back to its default row?</summary>
@@ -702,7 +719,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
 
     // Not chat models: embeddings, speech, images, rerankers, safety classifiers.
     private static readonly Regex NonChatId = new(
-        @"(embed|whisper|tts|orpheus|transcribe|speech|-audio|rerank|moderation|guard|safeguard|flux|stable-diffusion|sdxl|dall-e|playai|-image)",
+        @"(embed|whisper|tts|orpheus|transcribe|speech|-audio|rerank|moderation|guard|safeguard|flux|stable-diffusion|sdxl|dall-e|playai|-image|imagine|-video)",
         RegexOptions.IgnoreCase);
     private static readonly HashSet<string> NonChatTypes = new(StringComparer.OrdinalIgnoreCase)
         { "embedding", "embeddings", "image", "audio", "moderation", "rerank", "transcribe", "tts", "video" };

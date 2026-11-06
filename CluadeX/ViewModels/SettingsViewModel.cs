@@ -925,6 +925,7 @@ public partial class SettingsViewModel : ViewModelBase
                 AiProviderType.ClaudeDev => ClaudeDevProvider.KnownModels,
                 AiProviderType.GeminiDev => GeminiDevProvider.KnownModels,
                 AiProviderType.OpenAIDev => OpenAIDevProvider.KnownModels,
+                AiProviderType.GrokDev => GrokDevProvider.KnownModels,
                 AiProviderType.AntigravityDev => AntigravityDevProvider.KnownModels.Concat(AntigravityDevProvider.DiscoveredModels).Distinct(),
                 AiProviderType.Ollama => ollamaProvider?.AvailableModels ?? new List<string>(),
                 _ => CompatiblePresets.For(type)?.Models ?? Array.Empty<string>(),

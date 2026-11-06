@@ -110,6 +110,7 @@ public sealed class ChatCharacter
         AiProviderType.Anthropic or AiProviderType.ClaudeDev => Claude,
         AiProviderType.OpenAI or AiProviderType.OpenAIDev => Codex,
         AiProviderType.Gemini or AiProviderType.GeminiDev or AiProviderType.AntigravityDev => Gemini,
+        AiProviderType.XAI or AiProviderType.GrokDev => Grok,
         AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama => Mind,   // local = มายด์
         AiProviderType.BrainX => BrainX,   // the room itself, until someone in it answers
         _ => CluadeX,

@@ -42,11 +42,13 @@ public sealed record ProviderConnection(AiProviderType Provider, IReadOnlyList<C
 /// </summary>
 public static class ProviderConnections
 {
-    /// <summary>Every provider, in the order the page offers them: sign-ins first, then keys, then this PC.</summary>
+    /// <summary>Every provider, in the order the page offers them: sign-ins first, then keys, then this PC. Of the
+    /// OpenAI-compatible services only xAI's Grok is here (first-class, owner 2026-11-06); the others keep their key on
+    /// Settings ▸ AI Provider.</summary>
     public static readonly AiProviderType[] All =
     [
-        AiProviderType.ClaudeDev, AiProviderType.OpenAIDev, AiProviderType.AntigravityDev, AiProviderType.GeminiDev,
-        AiProviderType.Anthropic, AiProviderType.OpenAI, AiProviderType.Gemini,
+        AiProviderType.ClaudeDev, AiProviderType.OpenAIDev, AiProviderType.AntigravityDev, AiProviderType.GeminiDev, AiProviderType.GrokDev,
+        AiProviderType.Anthropic, AiProviderType.OpenAI, AiProviderType.Gemini, AiProviderType.XAI,
         AiProviderType.Ollama, AiProviderType.LlamaServer, AiProviderType.Local, AiProviderType.BrainX,
     ];
 
@@ -57,9 +59,11 @@ public static class ProviderConnections
         AiProviderType.OpenAIDev => "codexcli",
         AiProviderType.AntigravityDev => "agycli",
         AiProviderType.GeminiDev => "geminicli",
+        AiProviderType.GrokDev => "grokcli",
         AiProviderType.Anthropic => "anthropic",
         AiProviderType.OpenAI => "openai",
         AiProviderType.Gemini => "gemini",
+        AiProviderType.XAI => "xai",
         AiProviderType.Ollama => "ollama",
         AiProviderType.LlamaServer => "llamaserver",
         AiProviderType.Local => "localgguf",
@@ -74,7 +78,7 @@ public static class ProviderConnections
     public static bool HasTest(AiProviderType provider) => provider is not (AiProviderType.LlamaServer or AiProviderType.Local);
 
     public static bool IsApiKey(AiProviderType provider) =>
-        provider is AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini;
+        provider is AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini or AiProviderType.XAI;
 
     /// <summary>The steps for <paramref name="provider"/> on the machine <paramref name="facts"/> describes.</summary>
     /// <param name="tested">The provider's own test passed since the wizard opened.</param>
@@ -94,11 +98,11 @@ public static class ProviderConnections
 
         switch (provider)
         {
-            case AiProviderType.ClaudeDev or AiProviderType.OpenAIDev or AiProviderType.AntigravityDev or AiProviderType.GeminiDev:
+            case AiProviderType.ClaudeDev or AiProviderType.OpenAIDev or AiProviderType.AntigravityDev or AiProviderType.GeminiDev or AiProviderType.GrokDev:
                 steps.Add(Step(ConnectStepKind.Install, row.State != SetupState.Missing, row.Primary));
                 steps.Add(Step(ConnectStepKind.SignIn, row.IsReady, row.Primary));
                 break;
-            case AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini:
+            case AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini or AiProviderType.XAI:
                 steps.Add(Step(ConnectStepKind.ApiKey, row.IsReady,
                     new SetupAction(SetupActionKind.EnterKey, "setup.act.enterKey", Target: provider.ToString()), row.Primary));
                 break;

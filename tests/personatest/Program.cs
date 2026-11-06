@@ -20,11 +20,13 @@ try
         [AiProviderType.AntigravityDev] = "gemini", [AiProviderType.Local] = "mind",
         [AiProviderType.LlamaServer] = "mind", [AiProviderType.Ollama] = "mind",
         [AiProviderType.BrainX] = "cluadex",
+        [AiProviderType.XAI] = "grok", [AiProviderType.GrokDev] = "grok",
     };
     foreach (var type in Enum.GetValues<AiProviderType>())
     {
         var p = AgentPersona.For(type);
-        Check(p.Key == expected[type], type + " character mapping");
+        // The other OpenAI-compatible services have no character of their own: CluadeX speaks for them.
+        Check(p.Key == expected.GetValueOrDefault(type, "cluadex"), type + " character mapping");
         foreach (bool thai in new[] { false, true })
         {
             string section = AgentPersona.Section(type, thai);
@@ -157,7 +159,7 @@ try
     void WriteOverrides(string suffix)
     {
         var map = new Dictionary<string, object>();
-        foreach (var key in new[] { "claude", "codex", "gemini", "mind", "cluadex" })
+        foreach (var key in new[] { "claude", "codex", "gemini", "grok", "mind", "cluadex" })
             map[key] = new { name = "Owner-" + key + suffix, persona = "OWNER_PERSONA_" + suffix, style = "OWNER_STYLE_" + suffix };
         File.WriteAllText(file, JsonSerializer.Serialize(map));
         File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddSeconds(suffix == "A" ? 1 : 2));

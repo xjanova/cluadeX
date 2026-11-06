@@ -112,11 +112,12 @@ public static class CompatiblePresets
         },
         new()
         {
-            Type = AiProviderType.XAI, Name = "xAI (Grok)", Logo = "xai.png", Badge = "xAI",
+            // First-class beside the presets: its own wizard, prices, reasoning_effort and context windows (GrokModels).
+            Type = AiProviderType.XAI, Name = "Grok (xAI API)", Logo = "xai.png", Badge = "xAI",
             BaseUrl = "https://api.x.ai/v1",
             KeysUrl = "https://console.x.ai", BillingUrl = "https://console.x.ai",
-            DefaultModel = "grok-4.7",
-            Models = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning"],
+            DefaultModel = GrokModels.DefaultModel,
+            Models = GrokModels.Fallback,
         },
         new()
         {

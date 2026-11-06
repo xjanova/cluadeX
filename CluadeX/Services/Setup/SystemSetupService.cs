@@ -59,9 +59,12 @@ public sealed record SetupFacts
     public bool AgySignedIn { get; init; }
     public string? CodexCli { get; init; }
     public bool CodexSignedIn { get; init; }
+    public string? GrokCli { get; init; }
+    public bool GrokSignedIn { get; init; }
     public bool AnthropicKey { get; init; }
     public bool OpenAiKey { get; init; }
     public bool GeminiKey { get; init; }
+    public bool XaiKey { get; init; }
     public bool BrainConnected { get; init; }
     public string? BrainExe { get; init; }
     public bool Licensed { get; init; }
@@ -135,6 +138,7 @@ public sealed class SystemSetupService
         items.Add(KeyRow("anthropic", f.AnthropicKey, "https://platform.claude.com/settings/keys", nameof(AiProviderType.Anthropic)));
         items.Add(KeyRow("openai", f.OpenAiKey, "https://platform.openai.com/api-keys", nameof(AiProviderType.OpenAI)));
         items.Add(KeyRow("gemini", f.GeminiKey, "https://aistudio.google.com/apikey", nameof(AiProviderType.Gemini)));
+        items.Add(KeyRow("xai", f.XaiKey, "https://console.x.ai", nameof(AiProviderType.XAI)));
 
         if (f.ClaudeCli == null)
             items.Add(new SetupItem("claudecode", GroupChat, SetupState.Missing, "", true,
@@ -187,6 +191,17 @@ public sealed class SystemSetupService
                 new SetupAction(SetupActionKind.SignIn, "setup.act.signin", Target: "codex")));
         else
             items.Add(new SetupItem("codexcli", GroupChat, SetupState.Ready, f.CodexCli, true));
+
+        // Grok Dev: xAI's Grok Build CLI on the owner's grok.com / X sign-in. xAI's own Windows installer (docs.x.ai/build)
+        // puts grok.exe in %USERPROFILE%\.grok\bin; the command is shown before it runs.
+        if (f.GrokCli == null)
+            items.Add(new SetupItem("grokcli", GroupChat, SetupState.Missing, "", true,
+                new SetupAction(SetupActionKind.Install, "setup.act.install", new[] { GrokInstall }, SizeHint: "~180 MB")));
+        else if (!f.GrokSignedIn)
+            items.Add(new SetupItem("grokcli", GroupChat, SetupState.NeedsSignIn, f.GrokCli, true,
+                new SetupAction(SetupActionKind.SignIn, "setup.act.signin", Target: "grok")));
+        else
+            items.Add(new SetupItem("grokcli", GroupChat, SetupState.Ready, f.GrokCli, true));
 
         // ── AI on this PC ──
         if (f.Ollama == null)
@@ -260,6 +275,9 @@ public sealed class SystemSetupService
 
     public const string GroupConnect = "connect";
 
+    /// <summary>xAI's documented Windows install of the Grok Build CLI (docs.x.ai/build/overview).</summary>
+    public const string GrokInstall = "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://x.ai/cli/install.ps1 | iex\"";
+
     /// <summary>One connection's row. Detail codes ("place:…") are turned into words by the row's view model. Pure.</summary>
     public static SetupItem ConnectionRow(Connections.ConnectorFacts c)
     {
@@ -287,7 +305,7 @@ public sealed class SystemSetupService
 
     /// <summary>Can the chat be answered by anything at all right now? (The page says so at the top when not.)</summary>
     public static bool AnyChatModelReady(SetupFacts f) =>
-        (f.Licensed && (f.AnthropicKey || f.OpenAiKey || f.GeminiKey || f.ClaudeCli != null && f.ClaudeSignedIn || f.GeminiCli != null && f.GeminiSignedIn
+        (f.Licensed && (f.AnthropicKey || f.OpenAiKey || f.GeminiKey || f.XaiKey || f.GrokCli != null && f.GrokSignedIn || f.ClaudeCli != null && f.ClaudeSignedIn || f.GeminiCli != null && f.GeminiSignedIn
                          || f.AgyCli != null && f.AgySignedIn || f.CodexCli != null && f.CodexSignedIn))
         || f.OllamaRunning && f.OllamaModels > 0;
 
@@ -379,6 +397,8 @@ public sealed class SystemSetupService
             path.Split(';').SelectMany(d => new[] { SafeCombine(d, "codex.exe"), SafeCombine(d, "codex.cmd") }).Where(File.Exists),
             appData, local, File.Exists, NewestFirst);
 
+        string? grok = Providers.GrokDevProvider.FindCli(path.Split(';').Select(d => SafeCombine(d, "grok.exe")).Where(File.Exists),
+            Providers.GrokDevProvider.GrokHome(), File.Exists);
         string? agy = Providers.AntigravityDevProvider.FindCli(path.Split(';').Select(d => SafeCombine(d, "agy.exe")).Where(File.Exists), local, File.Exists);
 
         var nodeV = node != null ? RunAsync(node, "--version", ct) : Task.FromResult<RunResult?>(null);
@@ -422,7 +442,9 @@ public sealed class SystemSetupService
             GeminiCli = gemini?.Script, GeminiSignedIn = Providers.GeminiDevProvider.SignedIn(),
             AgyCli = agy, AgySignedIn = agySignedIn.Result,
             CodexCli = codex, CodexSignedIn = Providers.OpenAIDevProvider.SignedIn(),
+            GrokCli = grok, GrokSignedIn = grok != null && Providers.GrokDevProvider.SignedIn(),
             AnthropicKey = HasKey(AiProviderType.Anthropic), OpenAiKey = HasKey(AiProviderType.OpenAI), GeminiKey = HasKey(AiProviderType.Gemini),
+            XaiKey = HasKey(AiProviderType.XAI),
             BrainConnected = BrainSyncService.Current?.IsBrainAvailable == true,
             BrainExe = File.Exists(brainExe) ? brainExe : null,
             Licensed = _activation?.IsActivated == true,
@@ -542,6 +564,8 @@ public sealed class SystemSetupService
             return od.OpenLoginTerminal();
         if (which == "agy" && _providers?.GetProvider(AiProviderType.AntigravityDev) is Providers.AntigravityDevProvider ag)
             return ag.OpenLoginTerminal();
+        if (which == "grok" && _providers?.GetProvider(AiProviderType.GrokDev) is Providers.GrokDevProvider gk)
+            return gk.OpenLoginTerminal();
         return false;
     }
 

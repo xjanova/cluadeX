@@ -194,6 +194,10 @@ public class ContextMemoryService
             case AiProviderType.AntigravityDev:
                 return 1_048_576;   // agy's default is a Gemini 3.x model (1M); its Claude / GPT-OSS slugs are smaller
 
+            case AiProviderType.GrokDev:
+                // Grok Build's models are the API's ("default" = grok-4.7, 500K).
+                return Providers.GrokModels.ContextWindow(id is "" or "default" or "auto" ? Providers.GrokModels.DefaultModel : id) ?? 500_000;
+
             case AiProviderType.OpenAIDev:
                 // Codex's models are the API's: the same windows; "default" is Codex's own pick (a GPT-6, 1M+).
                 return ContextWindowFor(AiProviderType.OpenAI, id is "" or "default" or "auto" ? "gpt-6" : id, localContextSize);

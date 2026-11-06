@@ -116,7 +116,7 @@ public sealed class BillingAccountViewModel : ViewModelBase
             Providers.Add(new AccountChoice(key, key == "Other" ? L("usage.providerOther") : own ? brand.Name : key,
                 own ? BillingViewModel.BillingTab.LoadLogo(brand.LogoUri) : null));
         }
-        foreach (var key in new[] { "Anthropic", "OpenAI", "Google", "ClaudeDev", "OpenAIDev", "GeminiDev", "AntigravityDev", "BrainX" }) Add(key);
+        foreach (var key in new[] { "Anthropic", "OpenAI", "Google", "XAI", "ClaudeDev", "OpenAIDev", "GeminiDev", "AntigravityDev", "GrokDev", "BrainX" }) Add(key);
         foreach (var key in _cost.RecordedProviders.Union(_settings.Settings.ProviderSpending?.Keys.AsEnumerable() ?? Enumerable.Empty<string>())
                      .OrderBy(k => k, StringComparer.Ordinal))
             Add(key);
