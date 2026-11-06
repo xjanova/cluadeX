@@ -165,7 +165,7 @@ public class ContextMemoryService
 
             case AiProviderType.OpenAI:
                 if (id.StartsWith("openai/")) id = id["openai/".Length..];
-                if (id.StartsWith("gpt-6")) return 1_050_000;   // Astra, 6.1 Sol, 6 Sol, Luna (922K in + 128K out)
+                if (id.StartsWith("gpt-6")) return 1_050_000;   // Astra, 6.1 Sol, 6.1 Terra, 6 Sol, Luna (922K in + 128K out)
                 if (id.StartsWith("gpt-4.1")) return 1_047_576;
                 if (id.StartsWith("gpt-5")) return 400_000;
                 if (id.StartsWith("o1") || id.StartsWith("o3") || id.StartsWith("o4")) return 200_000;
@@ -193,6 +193,10 @@ public class ContextMemoryService
 
             case AiProviderType.AntigravityDev:
                 return 1_048_576;   // agy's default is a Gemini 3.x model (1M); its Claude / GPT-OSS slugs are smaller
+
+            case AiProviderType.GrokDev:
+                // Grok Build's models are the API's ("default" = grok-4.7, 500K).
+                return Providers.GrokModels.ContextWindow(id is "" or "default" or "auto" ? Providers.GrokModels.DefaultModel : id) ?? 500_000;
 
             case AiProviderType.OpenAIDev:
                 // Codex's models are the API's: the same windows; "default" is Codex's own pick (a GPT-6, 1M+).

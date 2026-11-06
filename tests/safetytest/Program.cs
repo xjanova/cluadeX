@@ -57,6 +57,7 @@ internal static class Program
             AgentControlChecks.Run(work, Check, MatchingExe);
             SupervisionChecks.Run(Check, MatchingExe);
             GeminiCliReal.Run(work, Check, MatchingExe);
+            GrokCliReal.Run(work, Check, MatchingExe);
             RunGates(work);
             DayApprovalChecks(work);
             DangerGate();

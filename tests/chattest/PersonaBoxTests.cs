@@ -33,9 +33,11 @@ internal static partial class Program
             Check("PB1 OpenAI = Codex, Gemini = Gemini, BrainX = the BrainX girl",
                 ChatCharacter.ForProvider(AiProviderType.OpenAI).Girl == "codex" && ChatCharacter.ForProvider(AiProviderType.Gemini).Girl == "gemini"
                 && ChatCharacter.ForProvider(AiProviderType.BrainX).Girl == "brainx");
-            Check("PB1 a model on this PC (GGUF, llama-server, Ollama) is มายด์ (mai.png)",
-                new[] { AiProviderType.Local, AiProviderType.LlamaServer, AiProviderType.Ollama }.All(p => ChatCharacter.ForProvider(p) == ChatCharacter.Mind)
-                && ChatCharacter.Mind.Girl == "mai");
+            Check("PB1 Ollama is มายด์ (mai.png); a GGUF on this PC (Local, llama-server) is CluadeX's purple girl (owner 2026-11-06)",
+                ChatCharacter.ForProvider(AiProviderType.Ollama) == ChatCharacter.Mind && ChatCharacter.Mind.Girl == "mai"
+                && new[] { AiProviderType.Local, AiProviderType.LlamaServer }.All(p => ChatCharacter.ForProvider(p) == ChatCharacter.CluadeX));
+            Check("PB1 Antigravity Dev has her own girl, not Gemini's",
+                ChatCharacter.ForProvider(AiProviderType.AntigravityDev) == ChatCharacter.Antigravity && ChatCharacter.Antigravity.Girl == "antigravity");
             Check("PB1 every provider's girl has her picture in the build",
                 Enum.GetValues<AiProviderType>().All(p => ChatCharacter.ForProvider(p).Image != null),
                 string.Join(",", Enum.GetValues<AiProviderType>().Where(p => ChatCharacter.ForProvider(p).Image == null)));

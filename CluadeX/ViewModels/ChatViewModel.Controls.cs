@@ -69,7 +69,7 @@ public partial class ChatViewModel
         AiProviderType.OpenAI => OpenAiProvider.DefaultModel,
         AiProviderType.Gemini => GeminiProvider.DefaultModel,
         AiProviderType.BrainX => BrainXRoomModel,
-        AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev => "default",
+        AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.GrokDev => "default",
         _ => CompatiblePresets.For(type)?.DefaultModel ?? "",
     };
 
@@ -84,6 +84,8 @@ public partial class ChatViewModel
     private bool _agyInstalled;
     /// <summary>Is OpenAI's Codex CLI installed (looked up with the Gemini CLI; the box lists OpenAI Dev then).</summary>
     private bool _codexInstalled;
+    /// <summary>Is xAI's Grok Build CLI installed (looked up with the Gemini CLI; the box lists Grok Dev then).</summary>
+    private bool _grokInstalled;
     private bool _geminiCliProbed;
 
     private async void ProbeGeminiCliForChatBox() => await ProbeCliForChatBoxAsync();
@@ -97,8 +99,10 @@ public partial class ChatViewModel
             bool found = await Task.Run(Services.Providers.GeminiDevProvider.IsInstalled);
             bool agy = await Task.Run(Services.Providers.AntigravityDevProvider.IsInstalled);
             bool codex = await Task.Run(Services.Providers.OpenAIDevProvider.IsInstalled);
-            if (found != _geminiCliInstalled || agy != _agyInstalled || codex != _codexInstalled)
+            bool grok = await Task.Run(Services.Providers.GrokDevProvider.IsInstalled);
+            if (found != _geminiCliInstalled || agy != _agyInstalled || codex != _codexInstalled || grok != _grokInstalled)
             {
+                _grokInstalled = grok;
                 _geminiCliInstalled = found;
                 _agyInstalled = agy;
                 _codexInstalled = codex;
@@ -201,6 +205,17 @@ public partial class ChatViewModel
             list.AddRange(odModels.Select(m => new ChatModelChoice(AiProviderType.OpenAIDev, m, odLabel, Loc("chat.model.codexPlan"))));
         }
         else list.Add(NotSetUp(AiProviderType.OpenAIDev));
+        // Grok Dev: xAI's Grok Build CLI on the owner's grok.com / X sign-in (owner 2026-11-06: "อย่าลืมเชื่อมกับ grok build").
+        if (_grokInstalled)
+        {
+            string gk = s.ProviderConfigs.TryGetValue(nameof(AiProviderType.GrokDev), out var gkCfg) && !string.IsNullOrWhiteSpace(gkCfg.EffectiveModelId)
+                ? gkCfg.EffectiveModelId!.Trim() : "default";
+            string gkLabel = _providerManager.GetProvider(AiProviderType.GrokDev).DisplayName;
+            var gkModels = Services.Providers.GrokDevProvider.KnownModels.ToList();
+            if (!gkModels.Contains(gk)) gkModels.Insert(0, gk);
+            list.AddRange(gkModels.Select(m => new ChatModelChoice(AiProviderType.GrokDev, m, gkLabel, Loc("chat.model.grokPlan"))));
+        }
+        else list.Add(NotSetUp(AiProviderType.GrokDev));
         // OpenAI-compatible services (OpenRouter, Groq, DeepSeek, …): only the ones set up — a key saved, or for a server
         // on this PC / a custom endpoint a configuration saved by Test Connection. Twenty services × their models would
         // bury the vendors above; the saved model plus the preset's short list is what the box needs.
@@ -314,7 +329,7 @@ public partial class ChatViewModel
     /// <summary>What the chat says when a provider cannot answer and nobody is at the keyboard to open its wizard.</summary>
     private static string NotReadyKey(AiProviderType type) => type switch
     {
-        AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev => "chat.err.notReady.cli",
+        AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.GrokDev => "chat.err.notReady.cli",
         AiProviderType.Ollama => "chat.err.notReady.ollama",
         AiProviderType.BrainX => "chat.err.notReady.brainx",
         _ => "chat.err.providerNotReady",
@@ -783,6 +798,7 @@ public partial class ChatViewModel
         _activation = activation;
         LocalizedResources.Instance.PropertyChanged += (_, _) => App.Current?.Dispatcher.BeginInvoke(RelabelControls);
         PropertyChanged += OnControlsSourceChanged;
+        InitModelButton();
         _costTracker.OnCostUpdated += _ => App.Current?.Dispatcher.BeginInvoke(RefreshSpend);
         _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(() =>
         {

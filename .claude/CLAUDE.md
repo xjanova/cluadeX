@@ -221,6 +221,18 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   GPU 999 layers + vision, ready in 5 s (35 s cold), ≈ 3.9 GB VRAM, answers. Its inline `<think>` block now goes to the
   Thinking block (`Helpers/ThinkTags.cs` in `LlamaServerProvider`, stream + tool loop) — it used to land in the reply.
 
+## Grok + the full-screen model picker (3.0.244, 2026-11-06)
+- Grok (xAI API) keeps `AiProviderType.XAI`; `Providers/Compatible/GrokModels.cs` owns its models, reasoning_effort per
+  model, context and prices. Grok Dev (`GrokDevProvider`) runs the Grok Build CLI on the owner's sign-in, with CluadeX's
+  guard hook, chat-tools MCP server and sub-agent gate through a per-turn GROK_HOME (`GrokTurnHome`). Proven offline by
+  `tests/apitest` (GrokDevWire), setuptest, billingtest, personatest. **No live xAI call and no signed-in Grok Dev turn yet.**
+- The model box is a button that opens `Views/ModelPickerOverlay.xaml`: provider cards with each girl, then that
+  provider's models (tools / vision / thinking / context / suits / price / status). Facts are read from the owning
+  services (`Services/ModelPicker/ModelFacts.cs`, `PickStatusRules`), never typed twice; a pick goes through
+  `SelectedChatModel` / `SelectedLocalModel` / the wizard. Grok Dev is a CLI card (plan price, sign-in looked at on open)
+  after xAI's API card. Locked while the chat's run works. Proven by `tests/chattest` PK/PR/PF/PKS.
+- Girls (owner 2026-11-06): a GGUF is CluadeX's purple girl, Ollama stays มายด์, Antigravity has her own, Grok = Grok.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

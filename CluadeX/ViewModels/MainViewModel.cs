@@ -469,7 +469,7 @@ public class MainViewModel : ViewModelBase
             {
                 // An OpenAI-compatible provider has no wizard (ProviderConnections only knows the built-in ones): its key
                 // and "get a key" link are on Settings ▸ AI Provider.
-                if (Services.Providers.CompatiblePresets.IsCompatible(provider))
+                if (Services.Providers.CompatiblePresets.IsCompatible(provider) && !Services.Setup.ProviderConnections.All.Contains(provider))
                 {
                     settingsVM.SelectedCategory = "provider";
                     settingsVM.SelectedProvider = provider;

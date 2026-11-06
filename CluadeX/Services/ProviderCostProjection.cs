@@ -5,7 +5,7 @@ namespace CluadeX.Services;
 /// <summary>Package fees and usage-equivalent estimates remain distinct from metered API charges.</summary>
 public static class ProviderCostProjection
 {
-    public static bool IsPackage(string key) => key is "ClaudeDev" or "OpenAIDev" or "GeminiDev" or "AntigravityDev" or "BrainX";
+    public static bool IsPackage(string key) => key is "ClaudeDev" or "OpenAIDev" or "GeminiDev" or "AntigravityDev" or "GrokDev" or "BrainX";
 
     public static IReadOnlyList<CostTrackingService.UsageDay> Project(string key, IReadOnlyList<CostTrackingService.UsageDay> days, ProviderSpendSettings? billing)
     {

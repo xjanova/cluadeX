@@ -78,6 +78,7 @@ public class CostTrackingService
         if (m.StartsWith("gpt") || m.StartsWith("chatgpt") || m.StartsWith("codex")
             || (m.Length > 1 && m[0] == 'o' && char.IsDigit(m[1]))) return "OpenAI";
         if (m.StartsWith("gemini") || m.StartsWith("gemma")) return "Google";
+        if (m.StartsWith("grok")) return "XAI";
         return "Other";
     }
 
@@ -579,6 +580,8 @@ public class CostTrackingService
     private static ModelPricing GetPricing(string model, int promptTokens = 0)
     {
         if (_reported.TryGetValue(model.Trim(), out var reported)) return reported;
+        // xAI Grok (docs.x.ai, 2026-11-06): a prompt of 200K tokens or more bills the whole request at 2x.
+        if (Providers.GrokModels.Pricing(model, promptTokens) is { } grok) return grok;
         string m = model.ToLowerInvariant();
         ModelPricing Gpt6(ModelPricing p) => promptTokens > Gpt6LongContextPromptTokens
             ? new(p.InputPerMToken * 2m, p.OutputPerMToken * 1.5m, p.CacheReadPerMToken * 2m, p.CacheWritePerMToken * 2m)
@@ -622,6 +625,8 @@ public class CostTrackingService
             // tokens bills the whole request at 2x input/cache and 1.5x output.
             _ when m.Contains("gpt-6-astra") => Gpt6(new(10.0m, 50.0m, 1.0m, 12.5m)),
             _ when m.Contains("gpt-6.1-sol") => Gpt6(new(2.0m, 10.0m, 0.10m, 2.5m)),
+            // GPT-6.1 Terra (2026-10-26): $1 / $5, cached $0.05, cache write $1.25; over 272K → $2 / $7.50 (the Gpt6 rule)
+            _ when m.Contains("gpt-6.1-terra") => Gpt6(new(1.0m, 5.0m, 0.05m, 1.25m)),
             _ when m.Contains("gpt-6-sol") => Gpt6(new(2.0m, 10.0m, 0.20m, 2.5m)),
             _ when m.Contains("gpt-6-luna") => Gpt6(new(0.10m, 0.50m, 0.01m, 0.125m)),
             _ when m.Contains("gpt-5.6-sol") => new(4.0m, 20.0m, 0.40m, 0m),

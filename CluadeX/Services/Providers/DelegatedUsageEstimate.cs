@@ -45,6 +45,7 @@ public sealed class DelegatedUsageEstimate
         {
             "ClaudeDev" => AnthropicProvider.DefaultModel,
             "OpenAIDev" => OpenAiProvider.DefaultModel,
+            "GrokDev" => GrokModels.DefaultModel,
             _ => GeminiProvider.DefaultModel,
         };
         decimal equivalent = ReportedEquivalentUsd ?? CostTrackingService.Price(model, i, o, CacheReadTokens, CacheWriteTokens).Actual;

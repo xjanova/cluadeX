@@ -182,6 +182,7 @@ public abstract class ApiProviderBase : IAiProvider
             status == 401 || Has("api key not valid") || Has("incorrect api key") || Has("API_KEY_INVALID")
                 ? string.Format(L("api.err.badKey"), provider, keysUrl)
             : Has("insufficient_quota") || Has("exceeded your current quota") || Has("billing") || Has("credit")
+              || Has("spending limit")   // xAI: "…used all available credits or reached its monthly spending limit"
                 ? string.Format(L("api.err.quota"), provider, billingUrl)
             : status == 404 || Has("model_not_found") || (Has("model") && Has("not found"))
                 ? string.Format(L("api.err.model"), provider, model)

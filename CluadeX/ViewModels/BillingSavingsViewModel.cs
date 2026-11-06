@@ -286,7 +286,7 @@ public sealed class BillingSavingsViewModel : ViewModelBase
     private static readonly (string Key, string Fallback)[] Known =
     {
         ("Anthropic", "#D97706"), ("OpenAI", "#0284C7"), ("Google", "#8B5CF6"), ("ClaudeDev", "#DB2777"), ("OpenAIDev", "#0D9488"),
-        ("GeminiDev", "#6366F1"), ("AntigravityDev", "#C026D3"), ("BrainX", "#A16207"), ("Local", "#65A30D"),
+        ("GeminiDev", "#6366F1"), ("AntigravityDev", "#C026D3"), ("XAI", ProviderBrand.XaiColor), ("GrokDev", ProviderBrand.GrokDevColor), ("BrainX", "#A16207"), ("Local", "#65A30D"),
         ("LlamaServer", "#EA580C"), ("Ollama", "#0891B2"),
     };
 
