@@ -303,8 +303,10 @@ internal static partial class Program
     }
 }
 
-/// <summary>One scripted CLI turn: lines before an optional gate, then the rest.</summary>
-internal sealed record CliTurn(string[] Lines, SemaphoreSlim? Gate = null, string[]? After = null);
+/// <summary>One scripted CLI turn: lines before an optional gate, then the rest. <paramref name="Before"/> runs first, on
+/// the turn's own flow (its run scope) — what a CLI's call to one of CluadeX's chat tools does (ChatToolBridge runs it
+/// through AgentToolService.ExecuteToolAsync in that scope).</summary>
+internal sealed record CliTurn(string[] Lines, SemaphoreSlim? Gate = null, string[]? After = null, Func<Task>? Before = null);
 
 /// <summary>A Claude Dev stand-in: each turn's stream-json lines go to the real stream reader (StreamSink), exactly the
 /// path the real provider takes when the turn is a worker turn. Records the message of every call.</summary>
@@ -312,8 +314,10 @@ internal sealed class ScriptedCli : IAiProvider
 {
     public readonly Queue<CliTurn> Turns = new();
     public readonly List<string> Messages = new();
+    /// <summary>The grant and the run's folder each call started with (ClaudeDevProvider.Grant, AgentRunScope).</summary>
+    public readonly List<(ClaudeDevProvider.WorkerGrant? Grant, string? Folder)> Starts = new();
     public volatile bool AtGate;
-    public void Reset() { lock (Turns) { Turns.Clear(); Messages.Clear(); AtGate = false; } }
+    public void Reset() { lock (Turns) { Turns.Clear(); Messages.Clear(); Starts.Clear(); AtGate = false; } }
     public string ProviderId => "ClaudeDev";
     public string DisplayName => "Scripted Claude Dev";
     public bool IsReady => true;
@@ -333,8 +337,10 @@ internal sealed class ScriptedCli : IAiProvider
         lock (Turns)
         {
             Messages.Add(userMessage);
+            Starts.Add((ClaudeDevProvider.Grant.Value, AgentRunScope.Current?.WorkingDirectory));
             turn = Turns.Count > 0 ? Turns.Dequeue() : new CliTurn([]);
         }
+        if (turn.Before != null) await turn.Before();
         var sink = ClaudeDevProvider.StreamSink.Value;
         foreach (var l in turn.Lines) { await Task.Delay(15, ct); sink?.Invoke(l); }
         if (turn.Gate != null)

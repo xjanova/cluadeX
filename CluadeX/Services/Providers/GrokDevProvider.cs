@@ -130,7 +130,8 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
     /// <param name="chatTools">CluadeX's MCP server is in the turn's config: its tools are allowed (the bridge asks the
     /// user itself where a native call would), else dontAsk / acceptEdits would refuse every one.</param>
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, string effort,
-        IReadOnlyList<string>? addDirs, string promptFile, bool guarded = true, bool noSubAgents = false, bool chatTools = false)
+        IReadOnlyList<string>? addDirs, string promptFile, bool guarded = true, bool noSubAgents = false, bool chatTools = false,
+        IReadOnlyList<string>? brainTools = null)
     {
         var args = new List<string>
         {
@@ -155,6 +156,12 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
         {
             args.Add("--allow");
             args.Add($"MCPTool({Tools.ChatToolBridge.ServerName}__*)");
+        }
+        // The brain tools this turn may call unasked (ClaudeDevProvider.BrainToolsFor) when its config has the brain.
+        foreach (var tool in brainTools ?? Array.Empty<string>())
+        {
+            args.Add("--allow");
+            args.Add($"MCPTool({GeminiDevProvider.BrainServerName}__{tool})");
         }
         bool chosen = !string.IsNullOrWhiteSpace(model) && model.Trim() is not ("default" or "auto");
         if (chosen)
@@ -193,12 +200,15 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
                $"To work in another project call {s}__open_project (CluadeX asks the user) or start a chat there with {s}__new_chat; " +
                $"a new, independent request that arrives mid-task goes to its own chat with {s}__new_chat too, and {s}__close_chat " +
                "lists the chats you split off and puts finished ones away. Never answer that you cannot open a chat or a folder. " +
-               Tools.ChatToolBridge.AskHint + " " + (ClaudeDevProvider.BrowserHintFor(extras) ?? "");
+               Tools.ChatToolBridge.AskHint + " " +
+               Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Grok, splitChats: false) + " " +
+               (ClaudeDevProvider.BrowserHintFor(extras) ?? "");
     }
 
     /// <summary>The prompt file: CluadeX's wrapper, the conversation so far, then the request. Pure.</summary>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
-        string transcript, string userMessage, string? codeComments = null, string? toolsHint = null, string? agentLine = null)
+        string transcript, string userMessage, string? codeComments = null, string? toolsHint = null, string? agentLine = null,
+        bool noProject = false, string? splitGuide = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -213,11 +223,18 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
               (string.IsNullOrWhiteSpace(agentLine) ? "" : agentLine.Trim() + " ") + folders +
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
-            : "You are 'grok-dev', answering inside the CluadeX desktop app. " +
-              $"Project working directory: {cwd}. " +
-              "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
-              "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+            : noProject
+                ? "You are 'grok-dev', answering inside the CluadeX desktop app. " +
+                  $"This turn runs read-only in {cwd}. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
+                : "You are 'grok-dev', answering inside the CluadeX desktop app. " +
+                  $"Project working directory: {cwd}. " +
+                  "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
         if (!string.IsNullOrWhiteSpace(toolsHint)) wrapper += " " + toolsHint.Trim();
+        if (worker && !string.IsNullOrWhiteSpace(toolsHint) && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();
+        if (noProject && !string.IsNullOrWhiteSpace(toolsHint))
+            wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(true, Tools.ChatToolBridge.ServerName + "__open_project (through use_tool)");
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.GrokDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
         var sb = new StringBuilder();
@@ -274,7 +291,10 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
             string? chatToolsJson = null;
             if (!string.IsNullOrWhiteSpace(extras?.ToolsConfig))
                 try { chatToolsJson = await File.ReadAllTextAsync(extras.ToolsConfig, ct); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            chatTools = home.WriteConfig(GrokHome(), chatToolsJson);
+            // The brain the user's Claude Code has, when Grok's own config has none. Not on a run-grant turn: its
+            // bypassPermissions would run every brain tool unasked (ssh_run, chrome…), not only the allowed ones.
+            chatTools = home.WriteConfig(GrokHome(), chatToolsJson,
+                grant is { Run: true } ? null : GeminiDevProvider.BrainServerFromClaude());
             if (worker)
             {
                 home.WriteHooks(AntigravityDevProvider.ShortPath(Safety.GuardHook.ExePath()), noEdit: grant is { Run: true, Edit: false });
@@ -300,7 +320,9 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
         PruneStalePrompts(promptDir);
         string promptText = BuildPrompt(cwd, grant, addDirs, ClaudeDevProvider.BuildTranscript(history), userMessage,
             CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), ChatToolsHint(extras, chatTools),
-            noSubAgents ? null : Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GrokDev));
+            noSubAgents ? null : Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GrokDev),
+            noProject: !_fileSystemService.HasWorkingDirectory,
+            splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.GrokDev));
 
         var psi = new ProcessStartInfo(exe)
         {
@@ -313,7 +335,8 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
-        foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, promptFile, guarded, noSubAgents, chatTools)) psi.ArgumentList.Add(a);
+        foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, promptFile, guarded, noSubAgents, chatTools,
+                     home?.HasBrain == true ? ClaudeDevProvider.BrainToolsFor(grant) : null)) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
         if (home != null)
         {

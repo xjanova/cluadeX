@@ -30,6 +30,7 @@ internal static class PermissionKeys
         ["perm.do.read"] = new() { ["en"] = "look at information ({0})", ["th"] = "ดูข้อมูล ({0})" },
         ["perm.do.writeFile"] = new() { ["en"] = "change the file {0}", ["th"] = "แก้ไขไฟล์ {0}" },
         ["perm.do.newFile"] = new() { ["en"] = "create the new file {0}", ["th"] = "สร้างไฟล์ใหม่ {0}" },
+        ["perm.do.cliEditFolder"] = new() { ["en"] = "create and edit files in {0} for the rest of this chat", ["th"] = "สร้างและแก้ไฟล์ในโฟลเดอร์ {0} ตลอดแชทนี้" },
         ["perm.do.overwrite"] = new() { ["en"] = "rewrite the whole file {0}", ["th"] = "เขียนทับไฟล์ {0} ทั้งไฟล์" },
         ["perm.do.notebook"] = new() { ["en"] = "change the notebook {0}", ["th"] = "แก้ไข notebook {0}" },
         ["perm.do.gitPush"] = new() { ["en"] = "send the code up to the git server (push)", ["th"] = "ส่งโค้ดขึ้นเซิร์ฟเวอร์ git (push)" },

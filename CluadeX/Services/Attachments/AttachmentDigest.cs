@@ -45,11 +45,39 @@ public static class AttachmentDigest
     public const int MaxScanPages = 4;
     private const int MaxListedArchiveFiles = 150;
 
+    /// <summary>What ends a CLI agent's image line: "N. name — image, size — path" + this.</summary>
+    public const string CliImageNote = " (open it with Read to see it)";
+
+    /// <summary>
+    /// The image paths a CLI agent's digest names, read back from the message text — for a CLI that takes pictures on its
+    /// command line (Codex's --image), which the plain turn text could not give it: Codex has no Read tool that shows an
+    /// image, so a picture the user dropped in reached it as a path only (parity audit 2026-11-06). Pure.
+    /// </summary>
+    public static List<string> CliImagePaths(string? message)
+    {
+        var list = new List<string>();
+        if (string.IsNullOrEmpty(message)) return list;
+        foreach (var raw in message.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            if (!line.EndsWith(CliImageNote, StringComparison.Ordinal) || !line.Contains(" — image, ", StringComparison.Ordinal)) continue;
+            string body = line[..^CliImageNote.Length];
+            int at = body.LastIndexOf(" — ", StringComparison.Ordinal);
+            if (at < 0) continue;
+            string path = body[(at + 3)..].Trim();
+            // Pictures only: the path goes on a command line that uploads the file with the prompt.
+            if (Path.IsPathFullyQualified(path) && Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".bmp"
+                && !list.Contains(path, StringComparer.OrdinalIgnoreCase)) list.Add(path);
+        }
+        return list;
+    }
+
     public static AttachmentDigestResult Build(IReadOnlyList<string> images, IReadOnlyList<string> files,
         AttachmentAudience audience, DigestBudget budget, ArchiveLimits? limits = null, CancellationToken ct = default)
     {
         var result = new AttachmentDigestResult();
         images ??= Array.Empty<string>();
+        // (CliImagePaths reads these lines back for a CLI that takes pictures on its command line.)
         files ??= Array.Empty<string>();
         if (images.Count == 0 && files.Count == 0) return result;
 
@@ -75,7 +103,7 @@ public static class AttachmentDigest
             sb.Append(audience switch
             {
                 AttachmentAudience.LoopSeesImages => " (you can see it: it is attached to this message)\n",
-                AttachmentAudience.CliAgent => " (open it with Read to see it)\n",
+                AttachmentAudience.CliAgent => CliImageNote + "\n",
                 _ => " (this model cannot see images — use the file by its path)\n",
             });
         }

@@ -256,6 +256,53 @@ public class AgentToolService : IDisposable
         lock (_onceLock) _onceApprovals.Add(SessionKey + "|" + onceKey);
     }
 
+    // ── Edits for a CLI agent in a folder it opened ──
+    // A CLI agent (Codex, Gemini Dev…) runs headless: it cannot stop at each write for a prompt, so with no Allow rule and
+    // Accept edits off it gets a read-only sandbox (CodeAgentService.DecideWorkerGrant). When it opens or creates a folder
+    // for the task with open_project, the user is asked ONCE for that folder in this chat instead — then its turns there
+    // may create and edit files (owner 2026-11-06: Codex was asked for a new folder and answered "read-only" 13 times).
+
+    private static string CliEditKey(string folder)
+    {
+        string full;
+        try { full = Path.GetFullPath(folder).TrimEnd('\\', '/'); }
+        catch { full = folder; }
+        return "cli-edit|" + full.ToLowerInvariant();
+    }
+
+    /// <summary>The user allowed CLI agents to edit in <paramref name="folder"/> in this chat (<see cref="AskCliEditGrantAsync"/>).</summary>
+    public bool CliEditApproved(string folder) =>
+        !string.IsNullOrWhiteSpace(folder) && IsOnceApproved(CliEditKey(folder));
+
+    /// <summary>
+    /// Ask the user once whether <paramref name="agentName"/> may create and edit files in <paramref name="folder"/> for
+    /// this chat. No prompt and false for a folder Accept edits may never cover (a drive root, the profile, a system
+    /// folder) or one a Deny / Ask rule names for write_file; true at once with the permission system off (as every
+    /// write is then). A yes is remembered for this chat only.
+    /// </summary>
+    public async Task<bool> AskCliEditGrantAsync(string agentName, string folder, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return false;
+        if (PermissionService.IsUnsafeAcceptEditsRoot(folder, _settingsService.DataRoot)) return false;
+        string probe = Path.Combine(folder, "file.txt");
+        var rule = _permissionService.FindRule(probe, "write", "write_file");
+        if (rule is PermAction.Deny or PermAction.Ask) return false;
+        if (rule == PermAction.Allow || CliEditApproved(folder)) return true;
+        // Remembered too, so the turn that starts there (it decides its own grant) gets the edit rights.
+        if (!_settingsService.Settings.Features.PermissionSystem) { RememberOnceApproval(CliEditKey(folder)); return true; }
+        if (OnPermissionRequired == null) return false;
+        ct.ThrowIfCancellationRequested();
+        bool allowed = await OnPermissionRequired.Invoke(new PermissionRequestInfo
+        {
+            ToolName = agentName + " cli_edit_folder",
+            Detail = "write: " + folder + "\n" + string.Format(L("agent.cliEditAsk"), agentName, folder),
+            Args = new Dictionary<string, string> { ["path"] = folder },
+            GivenUp = ct,
+        });
+        if (allowed) RememberOnceApproval(CliEditKey(folder));
+        return allowed;
+    }
+
     // ── "Accept edits" and the automatic build check ──
     // Every file edit "Accept edits" let through without a prompt bumps _acceptedEditSeq. The automatic build check
     // after an edit runs the project's build — and a build runs whatever the project's scripts/targets say — so while

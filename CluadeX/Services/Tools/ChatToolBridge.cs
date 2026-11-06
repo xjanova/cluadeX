@@ -408,7 +408,9 @@ public static class ChatToolBridge
         // ExecuteToolAsync turns a cancellation into a failed result ("The operation was canceled."): say what it means.
         if (!result.Success && ct.IsCancellationRequested) return (false, Stopped(tool, hungUp));
         string text = TextOf(result);
-        if (result.Success && type == ToolType.OpenProject) text += "\n\n" + OpenProjectNote(reg.Cwd);
+        if (result.Success && type == ToolType.OpenProject)
+            text += "\n\n" + OpenProjectNote(reg.Cwd, result.FilePath,
+                added: call.GetArg("add").Trim().Equals("true", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(reg.Cwd));
         text += NotesFor(reg);
         // An error result carries no image (Claude Code keeps only its first text block; Gemini turns it into text).
         if (!result.Success || result.Images is not { Count: > 0 } shots) return new Reply(result.Success, text);
@@ -690,11 +692,108 @@ public static class ChatToolBridge
         }, Json)
         : JsonSerializer.Serialize(new { behavior = "deny", message = message ?? "Denied by CluadeX." }, Json);
 
-    /// <summary>What open_project means for a CLI that keeps the folder it started in.</summary>
-    public static string OpenProjectNote(string? cwd) =>
-        "(Claude Dev: this run keeps working in " + (cwd ?? "the folder it started in") + ". The folder is now allowed for "
-        + "this chat: read it by absolute path now; this chat's next turn starts with it added (--add-dir), so edits and "
-        + "builds there work from then. To work in it right away, start a chat there with new_chat.)";
+    /// <summary>What open_project means for a CLI that keeps the folder it started in: this process cannot write there,
+    /// so it ends its turn and CluadeX carries the task on in a new turn that starts in the folder
+    /// (CodeAgentService.CarryOnInOpenedFolderAsync).</summary>
+    /// <param name="opened">The folder open_project opened (its result's FilePath).</param>
+    /// <param name="added">open_project add="true": the folder sits beside the project, the run stays where it is.</param>
+    public static string OpenProjectNote(string? cwd, string? opened = null, bool added = false)
+    {
+        string here = cwd ?? "the folder it started in";
+        if (added)
+            return "(This CLI process keeps working in " + here + ". The folder is now allowed for this chat: read it by "
+                + "absolute path now; this chat's next turn starts with it added (--add-dir), so edits and builds there work "
+                + "from then.)";
+        if (cwd != null && opened != null && SameFolder(cwd, opened))
+            return "(That is the folder this turn already works in: nothing changes.)";
+        return "(This CLI process stays in " + here + " until this turn ends, so it cannot write in the folder just opened. "
+            + "Do not write the files anywhere else and do not ask the user to open or allow anything: read the folder by "
+            + "absolute path if you need to, then end your turn with one short line. CluadeX carries the task on at once in "
+            + "a new turn that starts in that folder — asking the user for edit rights there if they are needed.)";
+
+        static bool SameFolder(string a, string b)
+        {
+            try
+            {
+                return string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+    }
+
+    /// <summary>
+    /// The wrapper line about CluadeX's open_project for a CLI agent. With no project open the CLI runs read-only in the
+    /// profile folder, and it used to answer "this session is read-only, open a folder for me" over and over (Codex,
+    /// 2026-11-06: 13 turns, "เปิดโฟลเดอร์ใหม่เลย" and it still could not) — the tool that creates the folder was never
+    /// named to it. <paramref name="toolRef"/> is the name this CLI calls it by. Pure.
+    /// </summary>
+    public static string OpenProjectHint(bool noProject, string toolRef = "open_project")
+    {
+        string call = toolRef == "open_project" ? "CluadeX's open_project tool (MCP server " + ServerName + ")" : toolRef;
+        return noProject
+            ? "No project folder is open in this chat, so nothing can be written yet. When the request needs files — a new "
+              + $"project, documents or outputs to save — call {call} yourself: create=\"true\" with a short folder name (or the "
+              + "full path the user gave) for a new folder, or the name / path of an existing project. CluadeX asks the user "
+              + "where it must, then carries the task on in that folder right away. Never answer that you cannot create files "
+              + "or open a folder, and do not ask the user to open one."
+            : $"To work in another project folder, or to start a new one, call {call} (create=\"true\" for a new folder).";
+    }
+
+    /// <summary>How a CLI names CluadeX's MCP tools in its wrapper.</summary>
+    public enum CliToolNames
+    {
+        /// <summary>Codex, Gemini, Antigravity: the bare tool name "on MCP server cluadex".</summary>
+        Plain,
+        /// <summary>Claude Code: mcp__cluadex__tool.</summary>
+        Claude,
+        /// <summary>Grok Build: cluadex__tool, reached through use_tool.</summary>
+        Grok,
+    }
+
+    /// <summary>A tool of the cluadex server as <paramref name="naming"/>'s CLI calls it. Pure.</summary>
+    public static string ToolRef(CliToolNames naming, string tool) => naming switch
+    {
+        CliToolNames.Claude => $"mcp__{ServerName}__{tool}",
+        CliToolNames.Grok => $"{ServerName}__{tool}",
+        _ => tool,
+    };
+
+    /// <summary>
+    /// The wrapper line naming the rest of the cluadex server's tools, so every CLI knows them — the 2026-11-06 parity audit
+    /// found Codex, Gemini and Antigravity were never told new_chat / close_chat existed, and no CLI was told about wrap_up,
+    /// the engineering tools or add_code_comments, so they answered "I can't" for things CluadeX hands them.
+    /// <paramref name="splitChats"/>: name new_chat / close_chat (Claude Dev and Grok Dev already have their own line).
+    /// <paramref name="plan"/>: name update_plan (Antigravity has no plan tool of its own). One line. Pure.
+    /// </summary>
+    public static string ChatToolsHint(CliToolNames naming, bool splitChats, bool plan = false)
+    {
+        string T(string tool) => ToolRef(naming, tool);
+        string server = naming switch
+        {
+            CliToolNames.Plain => $" (MCP server {ServerName})",
+            CliToolNames.Grok => " (through use_tool)",
+            _ => "",
+        };
+        var sb = new StringBuilder("CluadeX's chat tools" + server + ": ");
+        if (splitChats)
+            sb.Append($"{T(ProjectToolModule.NewChatToolName)} opens a new chat that runs beside this one — for a separate task, ")
+              .Append("or a new, independent request that arrives mid-task; give it the whole brief, it does not see this chat — ")
+              .Append($"and {T(ProjectToolModule.CloseChatToolName)} lists the chats you split off and puts finished ones away. ")
+              .Append("Never answer that you cannot open a chat. ");
+        if (plan)
+            sb.Append($"{T(PlanToolName)} keeps the plan card under your reply: send the whole plan when a task has several ")
+              .Append("steps, then advance as each step finishes. ");
+        sb.Append($"{T(OrchestrationToolModule.WrapUpToolName)} ends a turn of multi-step work with a short recap and, only ")
+          .Append("when the user must decide, one question with 1-2 answer buttons — call it once, last. ")
+          .Append($"In a project: {T("verify_change")} proves a change (build, tests and the problems it left); ")
+          .Append($"{T("find_references")}, {T("rename_symbol")} and {T("impact_of")} work on a symbol across the project; ")
+          .Append($"{T("checkpoint_list")}, {T("checkpoint_diff")} and {T("checkpoint_restore")} show or undo what the AI changed ")
+          .Append($"in this chat; {T("git_blame")}, {T("git_show")}, {T("gh_pr_view")}, {T("gh_pr_checks")} and {T("gh_run_log")} ")
+          .Append($"read history, pull requests and CI; {T("debug")} runs a debugger; {T(AutoComment.AutoCommentToolModule.ToolName)} ")
+          .Append("adds comments to existing code without changing the code.");
+        return sb.ToString();
+    }
 
     // ─── CLI side: CluadeX.exe --cx-tools (an MCP stdio server) ───
 
