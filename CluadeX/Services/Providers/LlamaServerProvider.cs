@@ -739,49 +739,12 @@ public class LlamaServerProvider : ApiProviderBase
     /// reliably — when the user wants GPU but in-process LLamaSharp can't use CUDA (no CUDA Toolkit).</summary>
     public bool IsServerBackendAvailable => FindServerExe() != null;
 
-    /// <summary>The llama-server.exe a load would start (custom folder, llama-backend\, then PATH), or null.</summary>
+    /// <summary>The llama-server.exe a load would start (custom folder, downloaded, llama-backend\, then PATH), or null.</summary>
     public string? ServerExePath => FindServerExe();
 
-    private string? FindServerExe()
-    {
-        // Check custom path
-        string? customPath = _settingsService.Settings.CustomLlamaCppBackendPath;
-        if (!string.IsNullOrEmpty(customPath))
-        {
-            string custom = Path.Combine(customPath, "llama-server.exe");
-            if (File.Exists(custom)) return custom;
-        }
-
-        // Check llama-backend/ next to app
-        string appDir = AppDomain.CurrentDomain.BaseDirectory;
-        string auto = Path.Combine(appDir, "llama-backend", "llama-server.exe");
-        if (File.Exists(auto)) return auto;
-
-        // Check PATH
-        try
-        {
-            var psi = new ProcessStartInfo("where", "llama-server.exe")
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true,
-            };
-            using var proc = Process.Start(psi);
-            if (proc != null)
-            {
-                string? result = proc.StandardOutput.ReadLine()?.Trim();
-                if (!proc.WaitForExit(3000))
-                {
-                    // `where` hung (rare, but a stuck handle blocks the using-dispose) — don't orphan it.
-                    try { proc.Kill(entireProcessTree: true); } catch { }
-                }
-                if (!string.IsNullOrEmpty(result) && File.Exists(result)) return result;
-            }
-        }
-        catch { }
-
-        return null;
-    }
+    // Custom folder, the llama.cpp CluadeX downloaded, llama-backend\ next to the app, then PATH — the same search
+    // the Setup page and the architecture check use (LlamaBackendInfo.FindServerDir). A PATH scan, not `where`.
+    private string? FindServerExe() => LlamaBackendInfo.FindServerExe(_settingsService.Settings.CustomLlamaCppBackendPath);
 
     /// <summary>
     /// Pick an available loopback TCP port starting from <paramref name="preferred"/>. llama-server

@@ -36,7 +36,7 @@ internal static class Program
     {
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
-        try { return Run(); }
+        try { return args.Length == 2 && args[0] == "--real-install" ? InstallerTests.RealInstall(args[1]) : Run(); }
         catch (Exception ex) { Console.WriteLine("FATAL " + ex); return 2; }
         finally { try { if (Tmp.Length > 0) Directory.Delete(Tmp, true); } catch { } }
     }
@@ -187,7 +187,8 @@ internal static class Program
             var en = LocalBackendRouter.Refusal("qwen35", @"D:\m\Qwen3.5-4B-Q6_K.gguf", null, "en");
             var th = LocalBackendRouter.Refusal("qwen35", @"D:\m\Qwen3.5-4B-Q6_K.gguf", null, "th");
             var sv = LocalBackendRouter.Refusal("qwen35", @"D:\m\Qwen3.5-4B-Q6_K.gguf", @"C:\llama\llama-server.exe", "en");
-            bool Ways(string m) => m.Contains("Ollama") && m.Contains("update-llama-backend.ps1") && m.Contains("llama-server");
+            bool Ways(string m) => m.Contains("Ollama") && m.Contains("update-llama-backend.ps1") && m.Contains("llama-server")
+                && (m.Contains("Get the latest llama.cpp") || m.Contains("ดาวน์โหลด llama.cpp ล่าสุด"));   // the one-click way first
             bool enOk = en.Message.Contains("'qwen35'") && en.Message.Contains("Qwen3.5-4B-Q6_K.gguf") && Ways(en.Message)
                         && en.Message.Contains("newer llama.cpp") && en.Message.Contains("Custom llama.cpp backend folder")
                         && !en.Message.Contains("corrupt") && !en.Message.Contains("{");
@@ -280,6 +281,8 @@ internal static class Program
             string? a = GgufMetadataReader.TryReadArchitecture(real);
             Check("X2", "the owner's real Qwen3.5-4B-Q6_K.gguf header reads 'qwen35'", a == "qwen35", $"arch={a}");
         });
+
+        InstallerTests.Run((id, name, ok, detail) => Check(id, name, ok, detail), SkipCase, Case, Dir, WriteFakeDll, NewServerArchs);
 
         Console.WriteLine();
         Console.WriteLine($"archtest: {Pass} passed, {Fail} failed, {Skip} skipped");

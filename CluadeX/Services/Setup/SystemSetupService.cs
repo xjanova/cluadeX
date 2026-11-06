@@ -12,7 +12,7 @@ namespace CluadeX.Services.Setup;
 public enum SetupState { Ready, Missing, NeedsKey, NeedsSignIn, NotRunning, NoModel }
 
 /// <summary>What a row's button does.</summary>
-public enum SetupActionKind { Install, SignIn, OpenUrl, OpenSettings, OpenPage, StartOllama, Run, Connect, Guide, Disconnect, InstallBrainX, EnterKey }
+public enum SetupActionKind { Install, SignIn, OpenUrl, OpenSettings, OpenPage, StartOllama, Run, Connect, Guide, Disconnect, InstallBrainX, EnterKey, GetLlamaCpp }
 
 /// <summary>One button on a row. <paramref name="Commands"/>: the lines an Install/Run runs, shown to the user before
 /// they agree; <paramref name="Target"/>: a URL, a page, or the provider for OpenSettings.</summary>
@@ -205,7 +205,9 @@ public sealed class SystemSetupService
         items.Add(f.LlamaServer != null
             ? new SetupItem("llamaserver", GroupLocal, SetupState.Ready, f.LlamaServer, true)
             : new SetupItem("llamaserver", GroupLocal, SetupState.Missing, "", true,
-                new SetupAction(SetupActionKind.Install, "setup.act.install", new[] { WingetInstall("ggml.llamacpp") }, SizeHint: "~300 MB")));
+                // In-app download of the newest build for this GPU (LlamaCppInstaller): winget's ggml.llamacpp lags
+                // behind, and the arch a model needs is only in the newest builds.
+                new SetupAction(SetupActionKind.GetLlamaCpp, "setup.act.install", SizeHint: "~40–700 MB")));
 
         // A GGUF on this PC. Loading one takes the GPU, so it is the Models page's job and the owner's click.
         items.Add(f.LocalLoaded
@@ -369,8 +371,9 @@ public sealed class SystemSetupService
         string? python = Find(new[] { "python.exe" }, Path.Combine(local, "Programs", "Python", "Python312", "python.exe"),
             Path.Combine(local, "Programs", "Python", "Python313", "python.exe"));
         string? ollama = Find(new[] { "ollama.exe" }, Path.Combine(local, "Programs", "Ollama", "ollama.exe"));
-        string? llama = Find(new[] { "llama-server.exe" }, Path.Combine(AppContext.BaseDirectory, "llama-backend", "llama-server.exe"),
-            string.IsNullOrWhiteSpace(_settings.Settings.CustomLlamaCppBackendPath) ? "" : Path.Combine(_settings.Settings.CustomLlamaCppBackendPath!, "llama-server.exe"));
+        // The provider's own search (custom, downloaded by CluadeX, llama-backend\, PATH): the row says Ready only for a
+        // server a load would really start.
+        string? llama = LlamaBackendInfo.FindServerExe(_settings.Settings.CustomLlamaCppBackendPath, pathEnv: path);
         string? claude = Providers.ClaudeDevProvider.FindCli(string.Join("\n", path.Split(';').Select(d => SafeCombine(d, "claude.exe"))),
             appData, home, File.Exists, Directory.Exists, d => Directory.GetDirectories(d));
         var gemini = Providers.GeminiDevProvider.FindCli(path.Split(';').Select(d => SafeCombine(d, "gemini.cmd")).Where(File.Exists),

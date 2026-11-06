@@ -203,6 +203,7 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand RefreshLocalModelsCommand { get; }
     public ICommand RefreshHardwareCommand { get; }
     public ICommand LoadModelCommand { get; }
+    public ICommand GetLlamaCppCommand { get; }
     public ICommand UnloadModelCommand { get; }
     public ICommand DownloadRecommendedCommand { get; }
     public ICommand DownloadProjectorCommand { get; }
@@ -256,6 +257,12 @@ public class ModelManagerViewModel : ViewModelBase
         RefreshLocalModelsCommand = new RelayCommand(RefreshLocalModels);
         RefreshHardwareCommand = new RelayCommand(() => DetectHardwareAsync(clearCache: true), () => !IsDetecting);
         LoadModelCommand = new AsyncRelayCommand<string>(LoadModel);
+        // One button: get / update, and cancel while it downloads.
+        GetLlamaCppCommand = new AsyncRelayCommand(() =>
+        {
+            if (IsInstallingLlamaCpp) { _llamaCts?.Cancel(); return Task.CompletedTask; }
+            return GetLlamaCppAsync(null);
+        });
         UnloadModelCommand = new AsyncRelayCommand(UnloadModel);
         DownloadRecommendedCommand = new AsyncRelayCommand<RecommendedModel>(DownloadRecommended);
         DownloadProjectorCommand = new AsyncRelayCommand<RecommendedModel>(DownloadProjector);
@@ -613,10 +620,17 @@ public class ModelManagerViewModel : ViewModelBase
             _log?.Warn("Models", "Scanning model folders failed", ex);
             return new List<ModelInfo>();
         }
+        string? customBackend = _settingsService.Settings.CustomLlamaCppBackendPath;
         foreach (var model in models)
         {
             try { model.HasVision = VisionProjector.FindFor(model.LocalPath) != null; }
             catch { model.HasVision = false; }
+            try
+            {
+                model.Architecture = GgufMetadataReader.TryReadArchitecture(model.LocalPath);
+                model.ArchSupported = LlamaBackendInfo.SupportsArchitecture(model.Architecture, customBackend);
+            }
+            catch { model.ArchSupported = null; }
         }
         return models;
     }
@@ -635,6 +649,7 @@ public class ModelManagerViewModel : ViewModelBase
 
         // Re-evaluate the catalog: installed state, fit badges.
         RebuildCatalog();
+        RefreshLlamaCppCard();
     }
 
     private async Task LoadModel(string? path)
@@ -669,6 +684,10 @@ public class ModelManagerViewModel : ViewModelBase
         catch (Exception ex)
         {
             _log?.Error("Models", $"Loading {path} failed", ex);
+            // The one thing missing is a newer llama.cpp: offer it right here (once per model, with its size), and load
+            // the model again once it is in. The refusal text stays on the page whatever the answer.
+            if (ex is ModelArchitectureNotSupportedException refused && !LlamaCppInstaller.IsBusy && _llamaOfferedFor.Add(path))
+                _ = GetLlamaCppAsync(path, refused.ShortMessage);
             ModelLoadStatus = ex switch
             {
                 // Already localized, and it names the ways out (Ollama, a custom backend folder, the update script).
@@ -683,6 +702,110 @@ public class ModelManagerViewModel : ViewModelBase
             IsLoadingModel = false;
             RefreshLocalModels();
         }
+    }
+
+    // ═══ llama.cpp download (LlamaCppInstaller) ═══
+
+    private readonly HashSet<string> _llamaOfferedFor = new(StringComparer.OrdinalIgnoreCase);
+    private LlamaCppInstaller? _llamaInstaller;
+    private LlamaCppInstaller LlamaInstaller => _llamaInstaller ??= new LlamaCppInstaller(_log);
+
+    /// <summary>Installed and catalog models whose architecture no llama.cpp here knows.</summary>
+    public int ModelsNeedingNewerLlama { get; private set; }
+    /// <summary>The card shows when a model needs it, while it runs, and with its last result.</summary>
+    public bool ShowLlamaCppCard => ModelsNeedingNewerLlama > 0 || IsInstallingLlamaCpp || LlamaCppStatus.Length > 0;
+    public string LlamaCppHeadline => LlamaCppStatus.Length > 0 ? LlamaCppStatus
+        : ModelsNeedingNewerLlama > 0 ? _loc.T("llamacpp.banner", ModelsNeedingNewerLlama)
+        : LlamaCppInstaller.ReadInstalled() is { } i ? _loc.T("llamacpp.installed", i.Tag, i.Variant) : "";
+    public string LlamaCppButtonText => IsInstallingLlamaCpp ? _loc.T("llamacpp.confirm.cancel")
+        : LlamaCppInstaller.ReadInstalled() != null ? _loc.T("llamacpp.update") : _loc.T("llamacpp.get");
+    private CancellationTokenSource? _llamaCts;
+
+    private bool _isInstallingLlamaCpp;
+    public bool IsInstallingLlamaCpp
+    {
+        get => _isInstallingLlamaCpp;
+        private set { if (SetProperty(ref _isInstallingLlamaCpp, value)) RefreshLlamaCppCard(); }
+    }
+    private string _llamaCppStatus = "";
+    public string LlamaCppStatus
+    {
+        get => _llamaCppStatus;
+        private set { if (SetProperty(ref _llamaCppStatus, value)) RefreshLlamaCppCard(); }
+    }
+    private double _llamaCppProgress;
+    public double LlamaCppProgress { get => _llamaCppProgress; private set => SetProperty(ref _llamaCppProgress, value); }
+
+    private void RefreshLlamaCppCard()
+    {
+        ModelsNeedingNewerLlama = LocalModels.Count(m => m.NeedsNewerBackend)
+            + _allRecommended.Count(m => m.NeedsNewerBackend && !m.IsInstalled);
+        OnPropertyChanged(nameof(ModelsNeedingNewerLlama));
+        OnPropertyChanged(nameof(ShowLlamaCppCard));
+        OnPropertyChanged(nameof(LlamaCppHeadline));
+        OnPropertyChanged(nameof(LlamaCppButtonText));
+    }
+
+    /// <summary>
+    /// Download the newest llama.cpp (asks first, with the size), then re-check every model; <paramref name="thenLoad"/>
+    /// is the model whose load was refused, loaded again once the new backend is in.
+    /// </summary>
+    private async Task GetLlamaCppAsync(string? thenLoad, string? why = null)
+    {
+        if (IsInstallingLlamaCpp || LlamaCppInstaller.IsBusy) { LlamaCppStatus = _loc.T("llamacpp.err.busy"); return; }
+        using var cts = new CancellationTokenSource();
+        _llamaCts = cts;
+        IsInstallingLlamaCpp = true;
+        LlamaCppProgress = 0;
+        LlamaCppStatus = _loc.T("llamacpp.stage.find");
+        bool installed = false;
+        try
+        {
+            var installer = LlamaInstaller;
+            var variant = await Task.Run(installer.AutoVariant);
+            var release = await installer.FindReleaseAsync(variant, cts.Token);
+            string body = _loc.T("llamacpp.confirm.body", release.Tag, variant, release.TotalBytes / 1048576, installer.TargetDir);
+            if (Views.Editor.ChoiceDialog.Show(_loc.T("llamacpp.confirm.title"), why != null ? why + "\n\n" + body : body,
+                    new[] { _loc.T("llamacpp.confirm.go"), _loc.T("llamacpp.confirm.cancel") }) != 0)
+            {
+                LlamaCppStatus = "";
+                return;
+            }
+            var progress = new Progress<LlamaCppProgress>(p =>
+            {
+                LlamaCppProgress = p.Total > 0 ? p.Done * 100.0 / p.Total : 0;
+                LlamaCppStatus = p.Stage == "download"
+                    ? _loc.T("llamacpp.stage.download", p.Done / 1048576, p.Total / 1048576)
+                    : _loc.T("llamacpp.stage." + p.Stage);
+            });
+            // Variant null: the installer picks it again and may fall back to Vulkan when CUDA finds no device.
+            var info = await Task.Run(() => installer.InstallAsync(null, progress, cts.Token));
+            LlamaCppStatus = _loc.T("llamacpp.done", info.Tag, info.Variant);
+            installed = true;
+        }
+        catch (OperationCanceledException)
+        {
+            LlamaCppStatus = _loc.T("llamacpp.cancelled");
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("llamacpp.", StringComparison.Ordinal))
+        {
+            LlamaCppStatus = _loc.T(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Models", "llama.cpp download failed", ex);
+            LlamaCppStatus = _loc.T("llamacpp.err.failed");
+        }
+        finally
+        {
+            _llamaCts = null;
+            IsInstallingLlamaCpp = false;
+        }
+        if (!installed) return;
+        await Task.Run(LlamaBackendInfo.ClearCache);
+        var scanned = await Task.Run(ScanLocalModelFiles);
+        ShowLocalModels(scanned);
+        if (thenLoad != null) await LoadModel(thenLoad);
     }
 
     private async Task UnloadModel()

@@ -206,6 +206,18 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   refusal names it and `open_project add="true"`. `CheckpointService` follows portable.txt like the other data.
 - Proven by `tests/loopguardtest` F1–F9.
 
+## llama.cpp download in the app (2026-11-06)
+- `Services/LlamaCppInstaller.cs`: newest llama.cpp Windows build → `<data root>\llama-backend` (`LlamaBackendInfo.ManagedBackendDir`,
+  survives app updates). GitHub's "latest" is a source-only tag (v0.9.0); the b#### builds with zips are prereleases, so
+  the releases list is read. GPU cc ≥ 7.5 → CUDA 13, older NVIDIA (GTX 10xx) → CUDA 12 + cudart, other GPU → Vulkan,
+  none → CPU; a CUDA build whose `--list-devices` shows no CUDA falls back to Vulkan. sha256 from GitHub, size cap,
+  zip-slip guard, `--version` must answer, old folder swapped aside (never while its llama-server runs). One at a time.
+- `LlamaBackendInfo.FindServerDir` is the one search (custom → downloaded → app\llama-backend → PATH, links followed)
+  for the provider, the Setup row and the arch badge. Models page: card + button, badge on installed files, and a
+  refused load offers the download (with size) and loads again. Setup ▸ llama-server row downloads in-app (was winget).
+- Proven by `tests/archtest` I1–I10 (localhost GitHub, fake zips, nothing started). `dotnet run -- --real-install <dir>`
+  does the real thing: 2026-11-06 b12144 CUDA 12, 648 MB, qwen35 known, CUDA0 = GTX 1070 Ti. No model was loaded.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

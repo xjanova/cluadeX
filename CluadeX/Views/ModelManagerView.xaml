@@ -722,6 +722,28 @@
                             <TextBlock Text="{Binding ModelLoadStatus}" Foreground="{DynamicResource Text.Primary}" FontSize="12.5" TextWrapping="Wrap"/>
                         </StackPanel>
                     </Border>
+                    <!-- llama.cpp: a model needs a newer one, it is downloading, or the last result -->
+                    <Border Style="{StaticResource ModelCard}" Padding="14,12"
+                            Visibility="{Binding ShowLlamaCppCard, Converter={StaticResource BoolVis}}">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" FontSize="15"
+                                           Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Grid.Column="1" Text="{Binding LlamaCppHeadline}" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Text.Primary}" FontSize="12.5" VerticalAlignment="Center"/>
+                                <Button Grid.Column="2" Content="{Binding LlamaCppButtonText}" Style="{StaticResource ActionButton}"
+                                        Command="{Binding GetLlamaCppCommand}" Padding="12,4" FontSize="12" Margin="8,0,0,0"/>
+                            </Grid>
+                            <ProgressBar Value="{Binding LlamaCppProgress, Mode=OneWay}" Maximum="100" Margin="0,10,0,0"
+                                         Style="{StaticResource ModernProgressBar}"
+                                         Visibility="{Binding IsInstallingLlamaCpp, Converter={StaticResource BoolVis}}"/>
+                        </StackPanel>
+                    </Border>
                     <!-- Last download / delete result -->
                     <TextBlock Text="{Binding DownloadStatus}" FontSize="12" Margin="2,0,0,8">
                         <TextBlock.Style>
@@ -966,6 +988,10 @@
                                                     </Border>
                                                     <Border Style="{StaticResource FitPill}">
                                                         <TextBlock Text="{Binding FitLabel}" FontSize="11" FontWeight="SemiBold" Style="{StaticResource FitColored}"/>
+                                                    </Border>
+                                                    <Border Style="{StaticResource DangerPill}" Visibility="{Binding NeedsNewerBackend, Converter={StaticResource BoolVis}}"
+                                                            ToolTip="{services:Loc modelsm.newerBackendTip}">
+                                                        <TextBlock Text="{services:Loc modelsm.newerBackend}" Style="{StaticResource PillText}" Foreground="{DynamicResource Status.Danger}"/>
                                                     </Border>
                                                     <Border Style="{StaticResource Pill}" Visibility="{Binding SpeedText, Converter={StaticResource HasValue}}">
                                                         <StackPanel Orientation="Horizontal">

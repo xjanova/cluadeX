@@ -141,6 +141,8 @@ public sealed class SetupViewModel : ViewModelBase
     private readonly BrainXInstaller _brainInstaller;
     private readonly Services.Mcp.McpServerManager? _mcp;
 
+    private readonly DebugLogService? _log;
+
     public SetupViewModel(SystemSetupService setup, ConnectionService? connections = null, Services.Mcp.McpServerManager? mcp = null,
         DebugLogService? log = null)
     {
@@ -148,6 +150,7 @@ public sealed class SetupViewModel : ViewModelBase
         _connections = connections;
         _mcp = mcp;
         _brainInstaller = new BrainXInstaller(log);
+        _log = log;
         RecheckCommand = new AsyncRelayCommand(RecheckAsync);
         Wizard = new ConnectWizardViewModel(this, setup);
         LocalizedResources.Instance.PropertyChanged += (_, _) => App.Current?.Dispatcher.BeginInvoke(Relabel);
@@ -291,6 +294,9 @@ public sealed class SetupViewModel : ViewModelBase
                 case SetupActionKind.InstallBrainX:
                     await InstallBrainXAsync(row);
                     break;
+                case SetupActionKind.GetLlamaCpp:
+                    await GetLlamaCppAsync(row);
+                    break;
                 case SetupActionKind.EnterKey:
                     if (Enum.TryParse<Models.AiProviderType>(action.Target, out var keyFor)) await EnterKeyAsync(row, keyFor);
                     break;
@@ -304,7 +310,8 @@ public sealed class SetupViewModel : ViewModelBase
                 InvalidOperationException { Message: "inside-package" } => L("setup.banner.insidePackage"),
                 // an error key from the connection / installer services: their own words
                 InvalidOperationException { Message: var key } when key.StartsWith("connect.", StringComparison.Ordinal)
-                                                                  || key.StartsWith("brainx.", StringComparison.Ordinal) => L(key),
+                                                                  || key.StartsWith("brainx.", StringComparison.Ordinal)
+                                                                  || key.StartsWith("llamacpp.", StringComparison.Ordinal) => L(key),
                 System.Net.Http.HttpRequestException or TaskCanceledException => L("connect.err.download"),
                 _ => L("setup.note.failed"),
             };
@@ -460,6 +467,33 @@ public sealed class SetupViewModel : ViewModelBase
     // ═══════════════════════════════════════════════════════════════════
     //  BrainX in one click
     // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>llama-server: the newest llama.cpp build for this GPU, downloaded and checked by the app (asks first).</summary>
+    private async Task GetLlamaCppAsync(SetupRowViewModel row)
+    {
+        if (LlamaCppInstaller.IsBusy) { row.Note = L("llamacpp.err.busy"); return; }
+        var installer = new LlamaCppInstaller(_log);
+        row.IsBusy = true;
+        try
+        {
+            row.Note = L("llamacpp.stage.find");
+            var variant = await Task.Run(installer.AutoVariant);
+            var release = await installer.FindReleaseAsync(variant);
+            row.IsBusy = false;
+            if (Views.Editor.ChoiceDialog.Show(L("llamacpp.confirm.title"),
+                    LF("llamacpp.confirm.body", release.Tag, variant, release.TotalBytes / 1048576, installer.TargetDir),
+                    new[] { L("llamacpp.confirm.go"), L("llamacpp.confirm.cancel") }) != 0) { row.Note = ""; return; }
+            row.IsBusy = true;
+            var progress = new Progress<LlamaCppProgress>(p => row.Note = p.Stage == "download"
+                ? LF("llamacpp.stage.download", p.Done / 1048576, p.Total / 1048576)
+                : L("llamacpp.stage." + p.Stage));
+            var info = await Task.Run(() => installer.InstallAsync(null, progress));
+            row.IsBusy = false;
+            row.Note = LF("llamacpp.done", info.Tag, info.Variant);
+            await RecheckAsync();
+        }
+        finally { row.IsBusy = false; }
+    }
 
     private async Task InstallBrainXAsync(SetupRowViewModel row)
     {

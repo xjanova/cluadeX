@@ -6,8 +6,8 @@ namespace CluadeX.Services;
 /// <summary>
 /// Which model architectures the llama.cpp builds CluadeX can run a model with are able to load. There are two:
 ///   • the in-process one — LLamaSharp's runtimes\win-x64\native\&lt;variant&gt;\llama.dll, always shipped;
-///   • the llama-server one — llama-backend\llama.dll (or the custom backend folder from Settings), often absent
-///     from an installed copy.
+///   • the llama-server one — the custom backend folder from Settings, the llama.cpp CluadeX downloaded
+///     (<see cref="ManagedBackendDir"/>), llama-backend\ next to the app, or one on PATH.
 /// llama.cpp keeps every architecture name ("qwen35", "gemma4", …) as a NUL-terminated string in llama.dll, so the
 /// answer comes straight from the binary — no process started, no model loaded. A catalog model whose architecture
 /// neither build knows gets "needs a newer llama.cpp" instead of a Download button that ends in a load error.
@@ -25,18 +25,55 @@ public static class LlamaBackendInfo
     private static readonly string[] InProcessVariants = { "avx2", "avx", "avx512", "noavx", "cuda12", "cuda11", "vulkan" };
 
     /// <summary>
-    /// llama.dll of the llama-server backend (custom folder from Settings, else llama-backend\ next to the app), or
-    /// null when there is none. This is the build that reads vision projectors.
+    /// Where CluadeX keeps the llama.cpp it downloads itself (<see cref="LlamaCppInstaller"/>): &lt;data root&gt;\llama-backend,
+    /// outside the install folder, so it survives an app update and needs no admin rights.
+    /// </summary>
+    public static string ManagedBackendDir => Path.Combine(SettingsService.ResolveDataRoot(out _), "llama-backend");
+
+    /// <summary>
+    /// The folder of the llama-server.exe a load would start, or null: the custom folder from Settings, then the one
+    /// CluadeX downloaded (<see cref="ManagedBackendDir"/>), then llama-backend\ next to the app, then PATH (a winget
+    /// install puts a link in WinGet\Links — the link is followed to the real folder, where its llama.dll is).
+    /// One search for the provider, the Setup page and the architecture check, so they cannot disagree.
+    /// </summary>
+    public static string? FindServerDir(string? customBackendDir, string? appDir = null, string? managedDir = null, string? pathEnv = null)
+    {
+        static bool Has(string? dir) => !string.IsNullOrWhiteSpace(dir) && File.Exists(Path.Combine(dir, "llama-server.exe"));
+        if (Has(customBackendDir)) return customBackendDir;
+        string managed = managedDir ?? ManagedBackendDir;
+        if (Has(managed)) return managed;
+        string bundled = Path.Combine(appDir ?? AppDomain.CurrentDomain.BaseDirectory, "llama-backend");
+        if (Has(bundled)) return bundled;
+        foreach (var raw in (pathEnv ?? Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string dir = raw.Trim().Trim('"');
+            if (!Has(dir)) continue;
+            try
+            {
+                var target = new FileInfo(Path.Combine(dir, "llama-server.exe")).ResolveLinkTarget(returnFinalTarget: true);
+                if (target is { Exists: true }) return Path.GetDirectoryName(target.FullName);
+            }
+            catch { /* not a link, or a broken one: the folder itself */ }
+            return dir;
+        }
+        return null;
+    }
+
+    /// <summary>The llama-server.exe a load would start (<see cref="FindServerDir"/>), or null.</summary>
+    public static string? FindServerExe(string? customBackendDir, string? appDir = null, string? managedDir = null, string? pathEnv = null)
+        => FindServerDir(customBackendDir, appDir, managedDir, pathEnv) is { } dir ? Path.Combine(dir, "llama-server.exe") : null;
+
+    /// <summary>
+    /// llama.dll of the llama-server backend (<see cref="FindServerDir"/>), or null when there is none. This is the
+    /// build that reads vision projectors.
     /// </summary>
     public static string? FindServerLlamaDll(string? customBackendDir, string? appDir = null)
     {
-        if (!string.IsNullOrEmpty(customBackendDir))
-        {
-            string custom = Path.Combine(customBackendDir, "llama.dll");
-            if (File.Exists(custom)) return custom;
-        }
-        string bundled = Path.Combine(appDir ?? AppDomain.CurrentDomain.BaseDirectory, "llama-backend", "llama.dll");
-        return File.Exists(bundled) ? bundled : null;
+        if (FindServerDir(customBackendDir, appDir) is { } dir && File.Exists(Path.Combine(dir, "llama.dll")))
+            return Path.Combine(dir, "llama.dll");
+        // No server anywhere, but a custom folder holding only the dll (a build without the server): still the one to ask.
+        string? custom = string.IsNullOrEmpty(customBackendDir) ? null : Path.Combine(customBackendDir, "llama.dll");
+        return custom != null && File.Exists(custom) ? custom : null;
     }
 
     /// <summary>
