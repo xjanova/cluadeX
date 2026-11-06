@@ -25,11 +25,15 @@ public partial class ChatViewModel
     public ModelPickerViewModel ModelPicker => _modelPicker ??= MakeModelPicker();
 
     private ICommand? _openModelPicker;
-    public ICommand OpenModelPickerCommand => _openModelPicker ??= new RelayCommand(() => ModelPicker.Open());
+    /// <summary>The model button. Locked while this chat's run works (owner 2026-11-06: a switch mid-answer throws away what
+    /// that turn already spent and re-sends the whole chat to the new model) — press Stop first.</summary>
+    public ICommand OpenModelPickerCommand => _openModelPicker ??= new RelayCommand(
+        () => { if (IsGenerating) StatusText = Loc("picker.locked"); else ModelPicker.Open(); },
+        () => !IsGenerating);
 
     private ModelPickerViewModel MakeModelPicker()
     {
-        var vm = new ModelPickerViewModel(BuildPickerCards, ApplyPick);
+        var vm = new ModelPickerViewModel(BuildPickerCards, ApplyPick, () => IsGenerating ? Loc("picker.locked") : null);
         vm.Opened += () => _ = LookAroundForPickerAsync();
         return vm;
     }
@@ -131,6 +135,10 @@ public partial class ChatViewModel
         RefreshChatModelChoices();
         var s = _settingsService.Settings;
         var picked = ModelFacts.GroupOf(_providerManager.PickedProviderType);
+        _pickerChatTokens = PickerChatTokens();
+        if (_modelPicker != null)
+            _modelPicker.SwitchWarning = _pickerChatTokens >= SwitchWarnFrom
+                ? LocF("picker.switch.warning", ModelFacts.FormatTokens(_pickerChatTokens)) : "";
         var choices = ChatModelChoices.ToList();
         foreach (var t in PickerAlwaysListed)
             if (!choices.Any(c => ModelFacts.GroupOf(c.Provider) == t)) choices.Add(NotSetUp(t));
@@ -245,7 +253,42 @@ public partial class ChatViewModel
             StatusTone = ToneOf(verdict.Status),
             ReasonText = ReasonOf(verdict.Status, c.ProviderLabel, rate, null),
             ActionText = ActionTextOf(verdict),
+            SwitchCostText = current || verdict.Action == PickAction.None ? "" : SwitchCostOf(price),
             Mascot = ModelFacts.MascotOf(type),
+        };
+    }
+
+    // ─── what a switch costs in a chat that already has history ───
+
+    /// <summary>The chat on screen, in tokens, as the model would be sent it (0 before the first answer).</summary>
+    private int _pickerChatTokens;
+    /// <summary>Below this a re-read costs too little to talk about.</summary>
+    private const int SwitchWarnFrom = 1_000;
+
+    private int PickerChatTokens()
+    {
+        try
+        {
+            var messages = Messages.ToList();
+            if (!messages.Any(m => m.Role == MessageRole.Assistant)) return 0;
+            return ContextUsed(messages, CurrentSession?.LastMeasuredContext, _providerManager.ActiveProviderType,
+                _contextMemoryService.CalculateTotalTokens).Used;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>"First message ≈ $0.42 to re-read this chat (85K tokens)" — per token, from the plan, or free.</summary>
+    private string SwitchCostOf(PriceFacts price)
+    {
+        int t = _pickerChatTokens;
+        if (t < SwitchWarnFrom) return "";
+        string tokens = ModelFacts.FormatTokens(t);
+        return price.Kind switch
+        {
+            PriceKind.PerToken when ModelFacts.RereadCost(t, price) is { } usd => LocF("picker.switch.cost", ModelFacts.Usd(usd), tokens),
+            PriceKind.Plan => LocF("picker.switch.plan", tokens),
+            PriceKind.Free => LocF("picker.switch.free", tokens),
+            _ => "",
         };
     }
 
@@ -257,8 +300,7 @@ public partial class ChatViewModel
             return choices.Select(c => ModelCard(c, s, ModelFacts.GroupOf(_providerManager.PickedProviderType))).ToList();
 
         bool answering = ShowLocalModelPicker;
-        string? loadedPath = _llamaService.LoadedModelPath
-            ?? (_providerManager.ActiveProvider.IsReady ? s.SelectedModelPath : null);
+        string? loadedPath = LoadedGgufPath();
         bool busy = LocalBusy();
         var list = new List<PickerModelCard>();
         foreach (var m in files)
@@ -292,6 +334,7 @@ public partial class ChatViewModel
                 StatusTone = ToneOf(verdict.Status),
                 ReasonText = reason,
                 ActionText = ActionTextOf(verdict),
+                SwitchCostText = current || verdict.Action == PickAction.None ? "" : SwitchCostOf(new PriceFacts(PriceKind.Free, null, null, null)),
                 Mascot = ModelFacts.MascotOf(AiProviderType.Local),
             });
         }
@@ -354,6 +397,8 @@ public partial class ChatViewModel
     /// <summary>What a card does, through the doors the old pickers used.</summary>
     private void ApplyPick(PickerModelCard card)
     {
+        // The button is locked while this chat works; a picker left open when a run started must not switch under it.
+        if (IsGenerating) { StatusText = Loc("picker.locked"); return; }
         if (card.Gguf != null)
         {
             if (card.Action == PickAction.Choose) SelectedLocalModel = card.Gguf;   // asks about VRAM, then loads

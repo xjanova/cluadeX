@@ -155,6 +155,17 @@
                         <TextBlock Text="{services:Loc picker.step2}" FontSize="13" Margin="0,3,0,0" TextWrapping="Wrap"
                                    Foreground="{DynamicResource Text.Secondary}"
                                    Visibility="{Binding IsModelStep, Converter={StaticResource BoolVis}}"/>
+                        <!-- the chat already has history: a new model re-reads all of it without the old one's prompt cache -->
+                        <Border Margin="0,8,0,0" Padding="10,6" CornerRadius="8" HorizontalAlignment="Left"
+                                Background="{DynamicResource State.Fill.Faint}" BorderBrush="{DynamicResource Status.Warning}" BorderThickness="1"
+                                Visibility="{Binding HasSwitchWarning, Converter={StaticResource BoolVis}}">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Left" Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="13" Margin="0,1,8,0"
+                                           Foreground="{DynamicResource Status.Warning}"/>
+                                <TextBlock Text="{Binding SwitchWarning}" FontSize="12.5" TextWrapping="Wrap" MaxWidth="900"
+                                           Foreground="{DynamicResource Text.Primary}"/>
+                            </DockPanel>
+                        </Border>
                     </StackPanel>
                     <Button Grid.Column="2" Style="{StaticResource PickerHeaderButton}" Command="{Binding CloseCommand}"
                             ToolTip="{services:Loc picker.close}" VerticalAlignment="Top">
@@ -360,9 +371,18 @@
                                                 </Grid>
                                             </Border>
                                             <!-- why not / what a press does -->
-                                            <TextBlock Grid.Row="5" Text="{Binding ReasonText}" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,0"
-                                                       Foreground="{DynamicResource Status.Warning}"
-                                                       Visibility="{Binding HasReason, Converter={StaticResource BoolVis}}"/>
+                                            <StackPanel Grid.Row="5">
+                                                <TextBlock Text="{Binding ReasonText}" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,0"
+                                                           Foreground="{DynamicResource Status.Warning}"
+                                                           Visibility="{Binding HasReason, Converter={StaticResource BoolVis}}"/>
+                                                <!-- what a switch costs in this chat (a new model re-reads it without the old cache) -->
+                                                <DockPanel Margin="0,8,0,0" Visibility="{Binding HasSwitchCost, Converter={StaticResource BoolVis}}">
+                                                    <TextBlock DockPanel.Dock="Left" Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,2,6,0"
+                                                               Foreground="{DynamicResource Text.Muted}"/>
+                                                    <TextBlock Text="{Binding SwitchCostText}" FontSize="11.5" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource Text.Muted}"/>
+                                                </DockPanel>
+                                            </StackPanel>
                                             <!-- the press, in words -->
                                             <Border Grid.Row="6" HorizontalAlignment="Right" Margin="0,12,0,0" CornerRadius="10" Padding="14,5"
                                                     Background="{Binding Accent}"

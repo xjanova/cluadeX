@@ -332,6 +332,7 @@ internal static partial class Program
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PICK")
         {
             await TestModelPicker();
+            await TestModelButton();
             Log($"\n## Result (CHATTEST_ONLY=PICK): {Pass} pass / {Fail} FAIL");
             foreach (var f in Failures) Log("  - " + f);
             return Fail == 0 ? 0 : 1;
@@ -387,6 +388,7 @@ internal static partial class Program
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
         await TestConnectWizardJump();        // CW: a model that is not connected opens its wizard
         await TestModelPicker();              // PK: the full-screen model picker (provider → models, status, a pick applies)
+        await TestModelButton();              // MB: the model button names the real model, glows + locks while working; switch cost
         await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)

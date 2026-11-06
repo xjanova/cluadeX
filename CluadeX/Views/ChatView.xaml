@@ -3501,44 +3501,80 @@
                                 <Grid Margin="0,2,8,2" VerticalAlignment="Center"
                                       Visibility="{Binding HasChatModelChoices, Converter={StaticResource BoolVis}}">
                                     <!-- The model box opens the full-screen picker (ModelPickerOverlay): provider first, then its models. -->
+                                    <!-- Owner 2026-11-06: it names the model that really answers now, glows in her colour while this
+                                         chat's run works, and is locked for that time (the command's CanExecute; the tooltip says why). -->
                                     <Button x:Name="ChatModelBox" Command="{Binding OpenModelPickerCommand}" MinWidth="180" Cursor="Hand" FontSize="13"
-                                            ToolTip="{services:Loc picker.open}" Tag="{Binding LiveEffortSuffix}">
+                                            ToolTip="{Binding ModelButtonTip}" ToolTipService.ShowOnDisabled="True"
+                                            AutomationProperties.AutomationId="ChatModelBox">
                                         <Button.Template>
                                             <ControlTemplate TargetType="Button">
                                                 <Border x:Name="bd" Background="{DynamicResource Dropdown.Background}" BorderBrush="{DynamicResource Dropdown.Border}"
                                                         BorderThickness="1" CornerRadius="8" Padding="8,3,10,3">
+                                                    <!-- her glow, invisible until the run works (then it breathes) -->
+                                                    <Border.Effect>
+                                                        <DropShadowEffect Color="{Binding ModelButtonGlow}" BlurRadius="14" ShadowDepth="0" Opacity="0"/>
+                                                    </Border.Effect>
                                                     <ContentPresenter VerticalAlignment="Center"/>
                                                 </Border>
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsMouseOver" Value="True">
                                                         <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Dropdown.Hover.Border}"/>
                                                     </Trigger>
+                                                    <Trigger Property="IsEnabled" Value="False">
+                                                        <Setter Property="Cursor" Value="Arrow"/>
+                                                    </Trigger>
+                                                    <DataTrigger Binding="{Binding IsModelButtonLocked}" Value="True">
+                                                        <Setter TargetName="bd" Property="BorderBrush">
+                                                            <Setter.Value>
+                                                                <SolidColorBrush Color="{Binding ModelButtonGlow}"/>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                        <DataTrigger.EnterActions>
+                                                            <BeginStoryboard x:Name="Breathe">
+                                                                <Storyboard>
+                                                                    <DoubleAnimation Storyboard.TargetName="bd" Storyboard.TargetProperty="(UIElement.Effect).(DropShadowEffect.Opacity)"
+                                                                                     From="0.25" To="0.95" Duration="0:0:0.9" AutoReverse="True" RepeatBehavior="Forever"/>
+                                                                </Storyboard>
+                                                            </BeginStoryboard>
+                                                        </DataTrigger.EnterActions>
+                                                        <DataTrigger.ExitActions>
+                                                            <StopStoryboard BeginStoryboardName="Breathe"/>
+                                                        </DataTrigger.ExitActions>
+                                                    </DataTrigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </Button.Template>
                                         <DockPanel LastChildFill="True">
-                                            <TextBlock DockPanel.Dock="Right" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="8,0,0,0"
-                                                       VerticalAlignment="Center" Foreground="{DynamicResource Dropdown.Arrow}"/>
-                                            <StackPanel Orientation="Horizontal" DataContext="{Binding SelectedChatModel}"
-                                                        Visibility="{Binding Converter={StaticResource NullToCollapsed}}">
+                                            <!-- a chevron to open; a lock while the run works -->
+                                            <Grid DockPanel.Dock="Right" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Dropdown.Arrow}"
+                                                           Visibility="{Binding IsModelButtonLocked, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                                <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource Accent.2}"
+                                                           Visibility="{Binding IsModelButtonLocked, Converter={StaticResource BoolVis}}"/>
+                                            </Grid>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Visibility="{Binding HasModelButtonText, Converter={StaticResource BoolVis}}">
                                                 <!-- the vendor's girl, a round portrait of her face (ChatCharacter.FaceBrush); not in Classic -->
                                                 <Grid Width="24" Height="24" Margin="0,0,8,0" VerticalAlignment="Center" Visibility="{DynamicResource Fx.Flourish}">
-                                                    <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2" Fill="{Binding GirlFace}"/>
+                                                    <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2" Fill="{Binding ModelButtonFace}"/>
                                                 </Grid>
-                                                <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"
-                                                           Foreground="{DynamicResource Dropdown.Foreground}"/>
-                                                <TextBlock Text="{Binding PriceLabel}" FontSize="11" Foreground="{DynamicResource Status.Warning}"
+                                                <!-- the model that really answers ("Opus 5.5", a CLI's default as the model it ran, the loaded GGUF) -->
+                                                <TextBlock Text="{Binding ModelButtonText}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource Dropdown.Foreground}" TextTrimming="CharacterEllipsis" MaxWidth="220"/>
+                                                <TextBlock Text="{Binding ModelButtonPrice}" FontSize="11" Foreground="{DynamicResource Status.Warning}"
                                                            FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,0,0"
-                                                           ToolTip="{services:Loc chat.model.priceTip}"/>
-                                                <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                           ToolTip="{services:Loc chat.model.priceTip}"
+                                                           Visibility="{Binding ModelButtonPrice, Converter={StaticResource BoolVis}}"/>
+                                                <TextBlock Text="{Binding LiveEffortSuffix}"
                                                            FontSize="11" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Accent.2}"
-                                                           VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                                           VerticalAlignment="Center" Margin="8,0,0,0"
+                                                           Visibility="{Binding SelectedChatModel, Converter={StaticResource NullToCollapsed}}"/>
                                             </StackPanel>
                                         </DockPanel>
                                     </Button>
                                     <TextBlock Text="{Binding ChatModelPlaceholder}" Foreground="{DynamicResource Text.Muted}" FontSize="12"
                                                VerticalAlignment="Center" Margin="12,0,30,0" IsHitTestVisible="False" TextTrimming="CharacterEllipsis"
-                                               Visibility="{Binding ChatModelPlaceholder, Converter={StaticResource BoolVis}}"/>
+                                               Visibility="{Binding ShowModelPlaceholder, Converter={StaticResource BoolVis}}"/>
                                 </Grid>
 
                                 <!-- A model on this PC (GGUF): only while one answers the chat — shown for every provider, it

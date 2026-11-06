@@ -95,6 +95,11 @@ public sealed class PickerModelCard : ViewModelBase
     /// <summary>Why it cannot be picked as it is, or what a click will do instead — empty for a plain pick.</summary>
     public string ReasonText { get; init; } = "";
     public bool HasReason => ReasonText.Length > 0;
+
+    /// <summary>What switching to this model costs in a chat that already has history ("first message ≈ $0.42 to re-read
+    /// this chat"): a new model cannot use the old one's prompt cache. "" for the current model or a short chat.</summary>
+    public string SwitchCostText { get; init; } = "";
+    public bool HasSwitchCost => SwitchCostText.Length > 0;
     /// <summary>The button's words: "Use this model", "Add a key", "Sign in", …; empty when nothing can be done.</summary>
     public string ActionText { get; init; } = "";
     public bool CanChoose => Action != PickAction.None;

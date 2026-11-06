@@ -17,11 +17,15 @@ public sealed class ModelPickerViewModel : ViewModelBase
 {
     private readonly Func<IReadOnlyList<PickerProviderCard>> _build;
     private readonly Action<PickerModelCard> _apply;
+    private readonly Func<string?>? _locked;
 
-    public ModelPickerViewModel(Func<IReadOnlyList<PickerProviderCard>> build, Action<PickerModelCard> apply)
+    /// <param name="locked">Why a pick cannot apply right now (the chat is working), or null. The picker then stays open
+    /// and says so on its own note line — the chat's status line is rewritten by the run at once.</param>
+    public ModelPickerViewModel(Func<IReadOnlyList<PickerProviderCard>> build, Action<PickerModelCard> apply, Func<string?>? locked = null)
     {
         _build = build;
         _apply = apply;
+        _locked = locked;
         CloseCommand = new RelayCommand(Close);
         BackCommand = new RelayCommand(Back);
         PickProviderCommand = new RelayCommand<PickerProviderCard>(c => { if (c != null) PickProvider(c); });
@@ -103,6 +107,12 @@ public sealed class ModelPickerViewModel : ViewModelBase
     /// <summary>A line under the cards: why the card just pressed did nothing.</summary>
     public string Note { get => _note; private set { if (SetProperty(ref _note, value)) OnPropertyChanged(nameof(HasNote)); } }
     public bool HasNote => _note.Length > 0;
+
+    private string _switchWarning = "";
+    /// <summary>A banner over the cards when the chat already has history: a new model re-reads all of it without the
+    /// old one's prompt cache. Set by whoever builds the cards, each time they are built.</summary>
+    public string SwitchWarning { get => _switchWarning; set { if (SetProperty(ref _switchWarning, value ?? "")) OnPropertyChanged(nameof(HasSwitchWarning)); } }
+    public bool HasSwitchWarning => _switchWarning.Length > 0;
 
     public void Open()
     {
@@ -196,6 +206,12 @@ public sealed class ModelPickerViewModel : ViewModelBase
                 Close();
                 return;
             default:
+                if (_locked?.Invoke() is { Length: > 0 } why)
+                {
+                    Note = why;
+                    SetHighlight(Models.IndexOf(card));
+                    return;
+                }
                 Close();
                 _apply(card);
                 return;

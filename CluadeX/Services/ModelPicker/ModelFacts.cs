@@ -177,6 +177,12 @@ public static class ModelFacts
     };
 
     /// <summary>"$1" / "$0.05" / "$12.5".</summary>
+    /// <summary>What the first message after a switch pays to re-read a chat of <paramref name="tokens"/> on a model with
+    /// <paramref name="price"/>: a new model has none of the old one's prompt cache, so the whole history goes at the full
+    /// input price (later messages are cached again). Null when the price is not per token.</summary>
+    public static decimal? RereadCost(int tokens, PriceFacts price) =>
+        price.Kind == PriceKind.PerToken && price.InputPerM is { } i && tokens > 0 ? tokens * i / 1_000_000m : null;
+
     public static string Usd(decimal v) => "$" + v.ToString(v < 0.1m && v > 0 ? "0.0##" : "0.##", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>

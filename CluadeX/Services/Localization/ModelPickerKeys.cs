@@ -131,5 +131,21 @@ internal static class ModelPickerKeys
         ["picker.action.needsPro"] = E("Activate Pro", "เปิดใช้ Pro"),
         ["picker.action.offline"] = E("Set up", "ตั้งค่า"),
         ["picker.action.loadViaWizard"] = E("Load with setup", "โหลดผ่านตัวช่วย"),
+
+        // the model button while this chat's run works (owner 2026-11-06)
+        ["picker.locked"] = E("The AI is working — press Stop first, then change the model",
+            "AI กำลังทำงานอยู่ — กดหยุดก่อน แล้วค่อยเปลี่ยนโมเดล"),
+        ["picker.lockedTip"] = E("Locked while the AI works on this chat. Changing the model mid-answer throws away the tokens this turn already used and sends the whole chat again to the new model. Press Stop first.",
+            "ล็อกไว้ระหว่างที่ AI กำลังทำงานในแชทนี้ ถ้าเปลี่ยนโมเดลกลางคำตอบ โทเค็นที่รอบนี้ใช้ไปแล้วจะเสียเปล่า และต้องส่งทั้งแชทใหม่ให้โมเดลใหม่ กดหยุดก่อนถ้าจะเปลี่ยน"),
+
+        // what a switch costs in a chat with history: a new model has none of the old one's prompt cache
+        ["picker.switch.warning"] = E("This chat is about {0} tokens. A new model can't use the old one's prompt cache, so your first message after switching sends the whole chat again at the full input price. Later messages are cached again.",
+            "แชทนี้ยาวประมาณ {0} โทเคน โมเดลใหม่ใช้แคชของโมเดลเดิมไม่ได้ ข้อความแรกหลังเปลี่ยนจึงต้องส่งทั้งแชทใหม่ในราคาเต็ม ข้อความถัดไปถึงจะกลับมาใช้แคชได้"),
+        ["picker.switch.cost"] = E("Switching: first message ≈ {0} to re-read this chat ({1} tokens)",
+            "ถ้าเปลี่ยน: ข้อความแรก ≈ {0} สำหรับอ่านแชทเดิมใหม่ ({1} โทเคน)"),
+        ["picker.switch.plan"] = E("Switching: the first message re-reads {0} tokens from your plan's limit",
+            "ถ้าเปลี่ยน: ข้อความแรกจะใช้โควตาแพ็กเกจราว {0} โทเคนเพื่ออ่านแชทเดิมใหม่"),
+        ["picker.switch.free"] = E("Switching: free, but the first reply re-reads {0} tokens (slower)",
+            "ถ้าเปลี่ยน: ฟรี แต่คำตอบแรกต้องอ่านแชทเดิมใหม่ {0} โทเคน (ช้ากว่าปกติ)"),
     };
 }

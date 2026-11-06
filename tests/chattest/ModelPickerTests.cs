@@ -296,6 +296,130 @@ internal static partial class Program
     }
 
 
+    /// <summary>MB — the model button (owner 2026-11-06): it names the model that really answers, glows in her colour and is
+    /// locked while this chat works, and the picker says what a switch mid-chat costs (the new model re-reads the chat).</summary>
+    static async Task TestModelButton()
+    {
+        Log("\n## MB — the model button: the real model, glow + lock while working, what a switch costs");
+        Check("MB0 a switch re-reads the chat at the input price: 100K tokens at $3/M = $0.30; a plan, this PC or an empty chat has no per-token cost",
+            ModelFacts.RereadCost(100_000, new PriceFacts(PriceKind.PerToken, 3m, 15m, 0.3m)) == 0.3m
+            && ModelFacts.RereadCost(100_000, new PriceFacts(PriceKind.Plan, null, null, null)) == null
+            && ModelFacts.RereadCost(100_000, new PriceFacts(PriceKind.Free, null, null, null)) == null
+            && ModelFacts.RereadCost(0, new PriceFacts(PriceKind.PerToken, 3m, 15m, null)) == null);
+
+        var vmType = typeof(ChatViewModel);
+        var all = (IDictionary)typeof(AiProviderManager).GetField("_providers", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(Providers)!;
+        var realOllama = all[AiProviderType.Ollama];
+        var other = new FakeProvider();
+        var picker = Vm.ModelPicker;
+        var savedConfigs = Settings.Settings.ProviderConfigs.ToDictionary(kv => kv.Key, kv => kv.Value);
+        try
+        {
+            await FreshChat();
+            Settings.UpdateSettings(s =>
+            {
+                s.ProviderConfigs["Anthropic"] = new ProviderConfig { ApiKey = "sk-ant-harness-not-a-key", SelectedModel = "claude-sonnet-5-5" };
+                s.ActiveProvider = AiProviderType.Local;
+            });
+            all[AiProviderType.Ollama] = other;
+            vmType.GetField("_ollamaModels", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(Vm, new List<string> { "mb-model", "mb-other" });
+            picker.OpenOn(AiProviderType.Ollama);
+            picker.PickModel(picker.Models.First(m => m.Model == "mb-model"));
+            await WaitUntil(() => Vm.SelectedChatModel?.Model == "mb-model", 5000);
+            LiveModelReport.Reset();
+            await Render();
+            var box = (System.Windows.Controls.Button)View.FindName("ChatModelBox");
+            string BoxText() => box == null ? "" : string.Join(" ", Find<System.Windows.Controls.TextBlock>(box).Where(t => t.IsVisible).Select(t => t.Text));
+            Check("MB1 picked: the button names that model (her face and colour), not the placeholder; it opens the picker",
+                Vm.ModelButtonText == LiveModelReport.FriendlyModel("mb-model") && Vm.HasModelButtonText && !Vm.ShowModelPlaceholder
+                && Vm.ModelButtonGlow == ChatCharacter.Mind.Accent && Vm.ModelButtonFace != null
+                && box is { IsEnabled: true } && BoxText().Contains(Vm.ModelButtonText) && Vm.ModelButtonTip == L("picker.open"),
+                $"text='{Vm.ModelButtonText}' box='{BoxText()}'");
+
+            // the response names the model that really ran
+            LiveModelReport.Served(AiProviderType.Ollama, "mb-model:q4_k_m");
+            await WaitUntil(() => Vm.ModelButtonText == LiveModelReport.FriendlyModel("mb-model:q4_k_m"), 2000);
+            await Render();
+            Check("MB2 a response names the model it ran: the button shows that one",
+                Vm.ModelButtonText == LiveModelReport.FriendlyModel("mb-model:q4_k_m") && BoxText().Contains(Vm.ModelButtonText), BoxText());
+            LiveModelReport.Served(AiProviderType.Ollama, "someone-else");
+            await Task.Delay(200);
+            Check("MB2 …a report for another model than the pick (switched since) is not shown",
+                Vm.ModelButtonText == LiveModelReport.FriendlyModel("mb-model"), Vm.ModelButtonText);
+            LiveModelReport.Reset();
+
+            // ── locked while this chat works ──
+            other.Script.Enqueue(FakeStep.Hang());
+            await Send("[MB] work for a while");
+            await WaitUntil(() => Vm.IsGenerating);
+            await Render();
+            await Task.Delay(600);   // the glow breathes in
+            var bd = box?.Template.FindName("bd", box) as System.Windows.Controls.Border;
+            var glow = bd?.Effect as System.Windows.Media.Effects.DropShadowEffect;
+            Check("MB3 while the chat works: locked (the command refuses, the button is disabled) and the tip says why",
+                Vm.IsModelButtonLocked && !Vm.OpenModelPickerCommand.CanExecute(null) && box is { IsEnabled: false } && Vm.ModelButtonTip == L("picker.lockedTip"),
+                $"locked={Vm.IsModelButtonLocked} can={Vm.OpenModelPickerCommand.CanExecute(null)} enabled={box?.IsEnabled}");
+            Check("MB3 …and it glows in her colour",
+                glow != null && glow.Color == ChatCharacter.Mind.Accent && glow.Opacity > 0.2, glow == null ? "no effect" : $"{glow.Color} {glow.Opacity:0.00}");
+            Vm.OpenModelPickerCommand.Execute(null);
+            Check("MB4 pressed anyway (keyboard, code): the picker stays shut and the status line says why",
+                !picker.IsOpen && Vm.StatusText == L("picker.locked"), Vm.StatusText);
+            picker.OpenOn(AiProviderType.Ollama);   // a picker left open when the run started
+            picker.PickModel(picker.Models.First(m => m.Model == "mb-other"));
+            await Task.Delay(300);
+            Check("MB5 a pick from a picker left open does not switch under the run; the picker stays open and says why on its note line",
+                Vm.SelectedChatModel?.Model == "mb-model" && Vm.IsGenerating && picker.IsOpen && picker.Note == L("picker.locked"), $"{Vm.SelectedChatModel?.Model} gen={Vm.IsGenerating} status='{Vm.StatusText}' open={picker.IsOpen} note='{picker.Note}'");
+            picker.Close();
+            Vm.StopGenerationCommand.Execute(null);
+            await WaitIdle();
+            await Task.Delay(200);
+            await Render();
+            Check("MB6 stopped: unlocked, and the glow goes out",
+                !Vm.IsModelButtonLocked && Vm.OpenModelPickerCommand.CanExecute(null) && box is { IsEnabled: true } && Vm.ModelButtonTip == L("picker.open")
+                && (glow == null || glow.Opacity < 0.05), $"enabled={box?.IsEnabled} glow={glow?.Opacity:0.00}");
+
+            // ── what a switch costs ──
+            await Send("[MB] " + string.Concat(Enumerable.Repeat("the quick brown fox jumps over the lazy dog ", 500)));
+            await WaitIdle();
+            picker.Open();
+            await Render();
+            Check("MB7 a chat the next model must re-read: the picker warns, naming its size",
+                picker.HasSwitchWarning && picker.SwitchWarning.Length > 0 && !picker.SwitchWarning.StartsWith("picker."), picker.SwitchWarning);
+            picker.PickProvider(picker.Providers.First(p => p.Group == AiProviderType.Anthropic));
+            var haiku = picker.Models.First(m => m.Model == "claude-haiku-5-5");
+            Check("MB7 a priced model's card says what re-reading this chat costs there ($)", haiku.HasSwitchCost && haiku.SwitchCostText.Contains('$'), haiku.SwitchCostText);
+            picker.OpenOn(AiProviderType.Ollama);
+            var cur = picker.Models.First(m => m.Model == "mb-model");
+            var free = picker.Models.First(m => m.Model == "mb-other");
+            Check("MB7 the model in use says nothing; a free one on this PC says it costs time, not money",
+                !cur.HasSwitchCost && free.HasSwitchCost && !free.SwitchCostText.Contains('$'), $"cur='{cur.SwitchCostText}' free='{free.SwitchCostText}'");
+            picker.Close();
+
+            await FreshChat();
+            picker.Open();
+            Check("MB8 a new chat has nothing to re-read: no warning, no cost lines",
+                !picker.HasSwitchWarning && picker.Providers.SelectMany(p => p.Models).All(m => !m.HasSwitchCost));
+            picker.Close();
+        }
+        finally
+        {
+            picker.Close();
+            if (Vm.IsGenerating) { Vm.StopGenerationCommand.Execute(null); await WaitIdle(); }
+            LiveModelReport.Reset();
+            all[AiProviderType.Ollama] = realOllama;
+            vmType.GetField("_ollamaModels", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(Vm, null);
+            SetField(Providers, "_activeProvider", Fake);
+            Settings.UpdateSettings(s =>
+            {
+                s.ActiveProvider = AiProviderType.Local;
+                s.ProviderConfigs.Clear();
+                foreach (var kv in savedConfigs) s.ProviderConfigs[kv.Key] = kv.Value;
+            });
+            vmType.GetMethod("RefreshChatModelChoices", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(Vm, null);
+            await FreshChat();
+        }
+    }
+
     /// <summary>The smallest GGUF header that names an architecture (v3: magic, version, 0 tensors, 1 key).</summary>
     static byte[] SyntheticGguf(string arch)
     {
@@ -385,7 +509,7 @@ internal static partial class Program
         if (repo == null) { Check("PKS repository found next to the harness", false); return; }
         string R(params string[] p) => File.ReadAllText(Path.Combine(new[] { repo, "CluadeX" }.Concat(p).ToArray()));
         string xaml = R("Views", "ModelPickerOverlay.xaml");
-        string code = R("ViewModels", "ChatViewModel.ModelPicker.cs") + R("Services", "ModelPicker", "ModelFacts.cs");
+        string code = R("ViewModels", "ChatViewModel.ModelPicker.cs") + R("ViewModels", "ChatViewModel.ModelButton.cs") + R("Services", "ModelPicker", "ModelFacts.cs");
         string chatView = R("Views", "ChatView.xaml");
         var keys = Regex.Matches(xaml + chatView, @"\{services:Loc\s+(picker\.[\w.]+)\}").Select(m => m.Groups[1].Value)
             .Concat(Regex.Matches(xaml, @"\{services:Loc\s+([\w.]+)\}").Select(m => m.Groups[1].Value))
@@ -418,6 +542,14 @@ internal static partial class Program
             .Select(p => p.StartsWith("DataContext.", StringComparison.Ordinal) ? p["DataContext.".Length..] : p)
             .Distinct().Where(p => !Resolves(types, p)).ToList();
         Check("PKS4 every {Binding} in the overlay names a real property (each segment)", bad.Count == 0, string.Join(", ", bad));
+        int at = chatView.IndexOf("x:Name=\"ChatModelBox\"", StringComparison.Ordinal);
+        int end = at < 0 ? -1 : chatView.IndexOf("</Button>", at, StringComparison.Ordinal);
+        string button = at < 0 || end < 0 ? "" : chatView[at..end];
+        var badButton = Regex.Matches(button, @"\{Binding\s+(?:Path=)?([\w.]+)").Select(m => m.Groups[1].Value).Distinct()
+            .Where(p => !Resolves(new[] { typeof(ChatViewModel) }, p)).ToList();
+        Check("PKS6 the model button's {Binding}s name real ChatViewModel properties (name, face, glow, lock, tip)",
+            button.Length > 0 && badButton.Count == 0 && button.Contains("ModelButtonText") && button.Contains("IsModelButtonLocked") && button.Contains("ModelButtonGlow"),
+            button.Length == 0 ? "button not found" : string.Join(", ", badButton));
         var main = R("MainWindow.xaml");
         Check("PKS5 MainWindow hosts the overlay over everything, on the chat's picker; the chat's box opens it",
             main.Contains("<views:ModelPickerOverlay") && main.Contains("{Binding ChatVM.ModelPicker}")
