@@ -2349,7 +2349,9 @@ public partial class CodeAgentService
     {
         string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
         // Today's cap for CLI agents is used up: nothing is started (the CLI's own stop only comes after a first request).
-        if (provider.RunsOwnSubAgents && CliBudgetLeft() is <= 0)
+        // Every CLI agent, Antigravity included: it records package usage like the others but has no sub-agents of its
+        // own, and keying this on RunsOwnSubAgents let it run past the cap (parity audit 2026-11-06).
+        if (IsCliAgent(delegated) && CliBudgetLeft() is <= 0)
         {
             string spent = _localizationService.T("agent.cliBudgetSpent");
             _debugLog?.Info("Agent", $"{delegated} not started · the CLI daily budget is used");

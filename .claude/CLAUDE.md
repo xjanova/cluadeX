@@ -245,10 +245,25 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   folder in that chat (`DecideWorkerGrant(..., editsApprovedInChat)`). A no adds `agent.cliEditDeclined` and starts nothing.
 - Antigravity's guard now lets a read-only chat call CluadeX's chat tools (`AntigravityGuard.ReadOnlyChatTools`: open_project,
   new_chat, close_chat, update_plan, wrap_up); Codex now gets `CliAgentPolicy.PromptLine` (it has no spawn hook).
-- The rest of the CLI parity gaps (new_chat/split guide/brain tools not named or wired on the non-Claude CLIs) are listed in
-  the brain note "CluadeX CLI agents tool parity audit" (77faca9ac76d).
 - Proven by `tests/chattest` COP0–COP4 (`CHATTEST_ONLY=COP`, scripted CLI through the real chat page) and safetytest's
   Antigravity card checks. Not yet tried with a real Codex turn.
+
+## CLI parity — what Claude Dev gets, every CLI gets (2026-11-06, audit = brain note 77faca9ac76d)
+- `ChatToolBridge.ChatToolsHint(CliToolNames, splitChats, plan)` names new_chat / close_chat, wrap_up, every
+  `EngineeringToolModule` tool and add_code_comments in each CLI's own names (Plain "… (MCP server cluadex)", Claude
+  `mcp__cluadex__x`, Grok `cluadex__x` through use_tool); Antigravity also gets update_plan (it has no plan tool).
+- `WorkflowGate.SplitGuide(AiProviderType)`: the Ultra guide with spawn_agent (Codex), codebase_investigator (Gemini),
+  spawn_subagent (Grok); Antigravity has no sub-agent tool → straight to the workflow. Reaches worker turns with chat tools.
+- The CLI daily budget stops every CLI agent (`IsCliAgent`), not only those with `RunsOwnSubAgents` (Antigravity ran past it).
+- Brain tools = `ClaudeDevProvider.BrainToolsFor(grant)` everywhere: Gemini's brain is trusted + `includeTools` (yolo used
+  to run ssh_run unasked); Codex without its own brain gets the whole server from ~/.claude.json as a `-c` override with
+  only those tools approved; Grok gets a `[mcp_servers.brainx-brain]` table + `--allow MCPTool(brainx-brain__<t>)` per tool,
+  **not on a run-grant turn** (bypassPermissions would run every brain tool).
+- Antigravity's guard: those brain tools pass in any chat; any other server's MCP tool in a worker run → the red prompt
+  (`Verdict.AskUser`), cluadex tools still pass (they gate themselves).
+- Codex sees the user's pictures: `AttachmentDigest.CliImagePaths` reads the CLI digest's image lines back, Codex gets
+  `--image=<path>` (one each — the flag would swallow the stdin `-`; comma paths skipped; image extensions only, ≤ 10).
+- Proven by `tests/apitest` CliParityWire (cp-*) and safetytest's Antigravity MCP checks. No live CLI turn yet.
 
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).

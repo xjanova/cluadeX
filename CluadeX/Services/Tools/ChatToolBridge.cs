@@ -740,6 +740,61 @@ public static class ChatToolBridge
             : $"To work in another project folder, or to start a new one, call {call} (create=\"true\" for a new folder).";
     }
 
+    /// <summary>How a CLI names CluadeX's MCP tools in its wrapper.</summary>
+    public enum CliToolNames
+    {
+        /// <summary>Codex, Gemini, Antigravity: the bare tool name "on MCP server cluadex".</summary>
+        Plain,
+        /// <summary>Claude Code: mcp__cluadex__tool.</summary>
+        Claude,
+        /// <summary>Grok Build: cluadex__tool, reached through use_tool.</summary>
+        Grok,
+    }
+
+    /// <summary>A tool of the cluadex server as <paramref name="naming"/>'s CLI calls it. Pure.</summary>
+    public static string ToolRef(CliToolNames naming, string tool) => naming switch
+    {
+        CliToolNames.Claude => $"mcp__{ServerName}__{tool}",
+        CliToolNames.Grok => $"{ServerName}__{tool}",
+        _ => tool,
+    };
+
+    /// <summary>
+    /// The wrapper line naming the rest of the cluadex server's tools, so every CLI knows them — the 2026-11-06 parity audit
+    /// found Codex, Gemini and Antigravity were never told new_chat / close_chat existed, and no CLI was told about wrap_up,
+    /// the engineering tools or add_code_comments, so they answered "I can't" for things CluadeX hands them.
+    /// <paramref name="splitChats"/>: name new_chat / close_chat (Claude Dev and Grok Dev already have their own line).
+    /// <paramref name="plan"/>: name update_plan (Antigravity has no plan tool of its own). One line. Pure.
+    /// </summary>
+    public static string ChatToolsHint(CliToolNames naming, bool splitChats, bool plan = false)
+    {
+        string T(string tool) => ToolRef(naming, tool);
+        string server = naming switch
+        {
+            CliToolNames.Plain => $" (MCP server {ServerName})",
+            CliToolNames.Grok => " (through use_tool)",
+            _ => "",
+        };
+        var sb = new StringBuilder("CluadeX's chat tools" + server + ": ");
+        if (splitChats)
+            sb.Append($"{T(ProjectToolModule.NewChatToolName)} opens a new chat that runs beside this one — for a separate task, ")
+              .Append("or a new, independent request that arrives mid-task; give it the whole brief, it does not see this chat — ")
+              .Append($"and {T(ProjectToolModule.CloseChatToolName)} lists the chats you split off and puts finished ones away. ")
+              .Append("Never answer that you cannot open a chat. ");
+        if (plan)
+            sb.Append($"{T(PlanToolName)} keeps the plan card under your reply: send the whole plan when a task has several ")
+              .Append("steps, then advance as each step finishes. ");
+        sb.Append($"{T(OrchestrationToolModule.WrapUpToolName)} ends a turn of multi-step work with a short recap and, only ")
+          .Append("when the user must decide, one question with 1-2 answer buttons — call it once, last. ")
+          .Append($"In a project: {T("verify_change")} proves a change (build, tests and the problems it left); ")
+          .Append($"{T("find_references")}, {T("rename_symbol")} and {T("impact_of")} work on a symbol across the project; ")
+          .Append($"{T("checkpoint_list")}, {T("checkpoint_diff")} and {T("checkpoint_restore")} show or undo what the AI changed ")
+          .Append($"in this chat; {T("git_blame")}, {T("git_show")}, {T("gh_pr_view")}, {T("gh_pr_checks")} and {T("gh_run_log")} ")
+          .Append($"read history, pull requests and CI; {T("debug")} runs a debugger; {T(AutoComment.AutoCommentToolModule.ToolName)} ")
+          .Append("adds comments to existing code without changing the code.");
+        return sb.ToString();
+    }
+
     // ─── CLI side: CluadeX.exe --cx-tools (an MCP stdio server) ───
 
     /// <summary>The tools mode's entry point: newline JSON-RPC on stdin/stdout until stdin closes. Exit code 0.</summary>

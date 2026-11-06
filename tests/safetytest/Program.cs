@@ -494,7 +494,7 @@ internal static class Program
         Check("read-only: write_to_file, run_command, an MCP call, the browser are refused",
             V(Agy("write_to_file", new { TargetFile = Path.Combine(cwd, "b.cs"), CodeContent = "x" }), read) == Deny
             && V(Agy("run_command", new { CommandLine = "git status" }), read) == Deny
-            && V(Agy("call_mcp_tool", new { ServerName = "cluadex_brainx-brain", ToolName = "brain_search" }), read) == Deny
+            && V(Agy("call_mcp_tool", new { ServerName = "cluadex_brainx-brain", ToolName = "ssh_run" }), read) == Deny
             && V(Agy("browser_click_element", new { }), read) == Deny);
         Check("edit grant: writes pass, commands are still refused",
             V(Agy("replace_file_content", new { TargetFile = Path.Combine(cwd, "b.cs"), ReplacementContent = "class B { }" }), editOnly) == Allow
@@ -520,6 +520,20 @@ internal static class Program
             && V(Agy("run_command", new { CommandLine = "del " + Path.Combine(plugin, "guard.cmd") }), full) == Deny);
         Check("a broken payload or one with no tool → refused", V("{not json", full) == Deny && V(Agy("", new { }), full) == Deny);
         Check("an MCP call passes in a worker run", V(Agy("call_mcp_tool", new { ServerName = "cluadex_cluadex", ToolName = "open_project" }), editOnly) == Allow);
+        // Parity audit 2026-11-06: the brain tools Claude Dev calls unasked pass in any chat; anything else on another server
+        // goes to the user's red prompt in a worker run (it used to run unasked).
+        AntigravityGuard.Verdict Mcp(string server, string tool, AntigravityGuard.Config c) => V(Agy("call_mcp_tool", new { ServerName = server, ToolName = tool }), c);
+        Check("brain recall + agent bus pass even read-only (Claude Dev's read-only turn has them too)",
+            Mcp("cluadex_brainx-brain", "brain_search", read) == Allow && Mcp("brainx-brain", "task_queue", read) == Allow, "");
+        Check("the brain's write tools need the edit grant", Mcp("brainx-brain", "brain_remember", read) == Deny && Mcp("brainx-brain", "brain_remember", editOnly) == Allow, "");
+        Check("worker run: the brain's ssh_run / chrome__ and another server's tool → the red prompt (AskUser), not a silent pass",
+            Mcp("brainx-brain", "ssh_run", full) == AskUser && Mcp("cluadex_brainx-brain", "chrome__navigate", editOnly) == AskUser
+            && Mcp("github", "create_issue", runOnly) == AskUser, "");
+        Check("worker run: every cluadex tool still passes (CluadeX gates each call itself)",
+            Mcp("cluadex_cluadex", "rename_symbol", editOnly) == Allow && Mcp("cluadex", "verify_change", full) == Allow, "");
+        Check("the red prompt names the server and the tool",
+            AntigravityGuard.Decide(Agy("call_mcp_tool", new { ServerName = "github", ToolName = "create_issue", Arguments = new { title = "x" } }), full)
+                is { Verdict: AskUser } ask && ask.Action.Contains("github") && ask.Action.Contains("create_issue") && ask.Reason!.Contains("create_issue"), "");
 
         string? exe = MatchingExe();
         if (exe == null) return;

@@ -187,8 +187,13 @@ public sealed class GrokTurnHome
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
-    /// <summary>config.toml: the user's own, plus CluadeX's chat-tools server. True = the chat tools are in.</summary>
-    public bool WriteConfig(string realHome, string? chatToolsJson)
+    /// <summary>The turn's config has a brainx-brain server: the user's own, or the one <see cref="WriteConfig"/> added.</summary>
+    public bool HasBrain { get; private set; }
+
+    /// <summary>config.toml: the user's own, plus CluadeX's chat-tools server and, when the user's file has none, the BrainX
+    /// brain as Claude Code registers it (<paramref name="brainServerJson"/>). Grok Dev had no brain at all — the parity
+    /// audit of 2026-11-06. True = the chat tools are in.</summary>
+    public bool WriteConfig(string realHome, string? chatToolsJson, string? brainServerJson = null)
     {
         string user = "";
         try
@@ -198,9 +203,28 @@ public sealed class GrokTurnHome
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         string? mcp = McpToml(chatToolsJson, user);
-        File.WriteAllText(Path.Combine(Home, "config.toml"), user + (mcp ?? ""), new UTF8Encoding(false));
+        string? brain = BrainToml(brainServerJson, user + (mcp ?? ""));
+        HasBrain = brain != null || HasServer(user, GeminiDevProvider.BrainServerName);
+        File.WriteAllText(Path.Combine(Home, "config.toml"), user + (mcp ?? "") + (brain ?? ""), new UTF8Encoding(false));
         return mcp != null;
     }
+
+    /// <summary>The brain server (one mcpServers entry, Claude Code's shape) as a config.toml table, or null when the
+    /// TOML already has one or the entry has no command. Pure.</summary>
+    public static string? BrainToml(string? brainServerJson, string toml)
+    {
+        if (string.IsNullOrWhiteSpace(brainServerJson)) return null;
+        JsonNode? brain;
+        try { brain = JsonNode.Parse(brainServerJson); }
+        catch (JsonException) { return null; }
+        if (brain is not JsonObject) return null;
+        var wrapped = new JsonObject { ["mcpServers"] = new JsonObject { [GeminiDevProvider.BrainServerName] = brain.DeepClone() } };
+        return McpToml(wrapped.ToJsonString(), toml);
+    }
+
+    /// <summary>Does the TOML have an [mcp_servers.&lt;name&gt;] table? Pure.</summary>
+    public static bool HasServer(string toml, string name) =>
+        Regex.IsMatch(toml, @"^\s*\[\s*mcp_servers\s*\.\s*[""']?" + Regex.Escape(name) + @"[""']?\s*[\].]", RegexOptions.Multiline);
 
     /// <summary>The ChatToolBridge's mcpServers as config.toml tables to append. Null = nothing to add: no config, or the
     /// user's file already has a table of that name (a second one would make the whole file invalid TOML). Pure.</summary>
@@ -215,9 +239,9 @@ public sealed class GrokTurnHome
         foreach (var (name, node) in servers)
         {
             if (node is not JsonObject s || s["command"] is not JsonValue cv || !cv.TryGetValue(out string? command) || string.IsNullOrWhiteSpace(command)) continue;
-            if (Regex.IsMatch(userToml, @"^\s*\[\s*mcp_servers\s*\.\s*[""']?" + Regex.Escape(name) + @"[""']?\s*[\].]", RegexOptions.Multiline)) continue;
+            if (HasServer(userToml, name)) continue;
             string key = "mcp_servers." + TomlKey(name);
-            sb.Append("\n\n# CluadeX's chat tools for one Grok Dev turn (this home is deleted with the turn)\n");
+            sb.Append("\n\n# CluadeX's ").Append(name).Append(" server for one Grok Dev turn (this home is deleted with the turn)\n");
             sb.Append('[').Append(key).Append("]\n");
             sb.Append("command = ").Append(TomlString(command)).Append('\n');
             var args = (s["args"] as JsonArray)?.Select(a => a is JsonValue av && av.TryGetValue(out string? x) ? x : null).Where(x => x != null).ToList()

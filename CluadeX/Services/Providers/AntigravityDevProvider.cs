@@ -193,7 +193,8 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
     /// agent about this chat (the grant, the folders, the language). Pure.</summary>
     /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
-        string transcript, string userMessage, string? codeComments = null, string? browserHint = null, bool noProject = false)
+        string transcript, string userMessage, string? codeComments = null, string? browserHint = null, bool noProject = false,
+        bool chatTools = false, string? splitGuide = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -220,7 +221,10 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
                   "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
         wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(noProject);
         wrapper += " " + Tools.ChatToolBridge.AskHint;
+        // Antigravity has no plan tool of its own: CluadeX's update_plan is its plan card.
+        if (chatTools) wrapper += " " + Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Plain, splitChats: true, plan: true);
         if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
+        if (worker && chatTools && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.AntigravityDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
 
@@ -414,7 +418,8 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
                 string prompt = BuildPrompt(cwd, grant, ClaudeDevProvider.TurnAddDirs(extras), ClaudeDevProvider.BuildTranscript(history),
                     userMessage, CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
                     chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
-                    noProject: !_fileSystemService.HasWorkingDirectory);
+                    noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
+                    splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.AntigravityDev));
                 await stdin.WriteLineAsync(StdinLine(prompt));
             }   // closing stdin ends the session after this one turn
 

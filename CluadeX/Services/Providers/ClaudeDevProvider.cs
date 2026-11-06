@@ -233,6 +233,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
                   "mcp__cluadex__new_chat; a new, independent request that arrives mid-task goes to its own chat with new_chat too, " +
                   "and mcp__cluadex__close_chat lists the chats you split off and puts finished ones away. Never answer that you " +
                   "cannot open a chat or a folder. AskUserQuestion and mcp__cluadex__ask_user both show the user a question card. " +
+                  Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Claude, splitChats: false) + " " +
                   Tools.ChatToolBridge.BrowserHint(browserRefusal, claudeNames: true) + " " +
                   Tools.ChatToolBridge.DesktopHint(desktopRefusal, claudeNames: true) + " "
                 : "") +
