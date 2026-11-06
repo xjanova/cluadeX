@@ -69,7 +69,8 @@ public static class ChatToolBridge
 
     /// <summary>The line for each CLI's wrapper: it says which tool reaches the user's card.</summary>
     public const string AskHint = "When you need the user's answer or choice, call CluadeX's ask_user tool (MCP server cluadex) "
-        + "if you have it: it shows a question card in the chat and waits for the answer.";
+        + "if you have it: it shows a question card in the chat and waits for the answer. Several questions that belong "
+        + "together go in one call (questions: [{question, options, multiSelect}]) — one card the user steps through.";
 
     /// <summary>
     /// The line for each CLI's wrapper (only when the turn has the cluadex server) about web pages: CluadeX's browser_*
@@ -164,6 +165,9 @@ public static class ChatToolBridge
     /// <summary>Opens the question card in the asking chat: the answer, or null when nobody answered.</summary>
     public delegate Task<string?> QuestionAsker(string question, List<string> options);
 
+    /// <summary>Opens one card with a step per question (Back / Next, a review): one answer each, or null.</summary>
+    public delegate Task<IReadOnlyList<string>?> StepsAsker(IReadOnlyList<AskStep> steps);
+
     /// <summary>One question of Claude Code's AskUserQuestion.</summary>
     public sealed record CliQuestion(string Text, List<string> Options, List<string> Notes, bool Multi);
 
@@ -178,7 +182,8 @@ public static class ChatToolBridge
     /// parallel (Gemini unless told to wait), and on one shared page a click must not race a screenshot — nor three clicks
     /// on one site show three permission cards where the first answer covers the rest.</summary>
     private sealed record Registration(AgentRunScope? Scope, Func<ToolCall, CancellationToken, Task<ToolResult>> Execute,
-        CancellationTokenSource Cts, string? Cwd, McpApprover? Approve, QuestionAsker? Ask, Agents.CliAgentGate? Gate)
+        CancellationTokenSource Cts, string? Cwd, McpApprover? Approve, QuestionAsker? Ask, Agents.CliAgentGate? Gate,
+        StepsAsker? AskSteps = null)
     {
         public SemaphoreSlim BrowserLane { get; } = new(1, 1);
 
@@ -217,7 +222,8 @@ public static class ChatToolBridge
     /// <paramref name="gate"/> answers the CLI's hook before each sub-agent it spawns (<see cref="AgentGateToolName"/>).
     /// </summary>
     public static Ticket? Register(AgentRunScope? scope, Func<ToolCall, CancellationToken, Task<ToolResult>> execute,
-        string? cwd, CancellationToken turn, McpApprover? approve = null, QuestionAsker? ask = null, Agents.CliAgentGate? gate = null)
+        string? cwd, CancellationToken turn, McpApprover? approve = null, QuestionAsker? ask = null, Agents.CliAgentGate? gate = null,
+        StepsAsker? askSteps = null)
     {
         try
         {
@@ -227,7 +233,7 @@ public static class ChatToolBridge
             SweepStale(dir);
             string file = Path.Combine(dir, $"claude-dev-tools-{token[..12]}.json");
             File.WriteAllText(file, ConfigJson(Safety.GuardHook.ExePath(), token, PipeName), new UTF8Encoding(false));
-            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask, gate);
+            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask, gate, askSteps);
             return new Ticket(token, file);
         }
         catch { return null; }
@@ -561,11 +567,40 @@ public static class ChatToolBridge
         catch (OperationCanceledException) { return null; }
     }
 
+    /// <summary>The card with steps, in the asking chat's run; without one, the questions one card after another.</summary>
+    private static async Task<IReadOnlyList<string>?> AskStepsOnCardAsync(IReadOnlyList<AskStep> steps, Registration reg)
+    {
+        AgentRunScope.Enter(reg.Scope);
+        try
+        {
+            if (reg.AskSteps != null) return await reg.AskSteps(steps).WaitAsync(reg.Cts.Token).ConfigureAwait(false);
+            var answers = new List<string>();
+            foreach (var s in steps)
+            {
+                string? a = await AskOnCardAsync(s.Notes.Count == 0 ? s.Question : s.Question + "\n" + string.Join("\n", s.Notes.Select(n => "- " + n)),
+                    s.Options.ToList(), reg).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(a)) return null;
+                answers.Add(a);
+            }
+            return answers;
+        }
+        catch (OperationCanceledException) { return null; }
+    }
+
     /// <summary>The ask_user MCP tool (Codex, Gemini, Antigravity, Claude Code).</summary>
     private static async Task<(bool Ok, string Text)> AskFromToolAsync(JsonElement request, Registration reg)
     {
         if (reg.Ask == null) return (false, "CluadeX: this turn cannot ask the user — ask in your reply instead.");
         var args = request.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : default;
+        // Several questions at once: one card with a step each.
+        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("questions", out var qs)
+            && AgentToolService.ParseAskSteps(qs.ValueKind == JsonValueKind.String ? qs.GetString() : qs.GetRawText()) is { Count: > 0 } steps)
+        {
+            var answers = await AskStepsOnCardAsync(steps, reg).ConfigureAwait(false);
+            return answers != null
+                ? (true, "User answered:\n" + AskStep.AnswersText(steps, answers) + NotesFor(reg))
+                : (false, "The user did not answer in CluadeX (the run was stopped).");
+        }
         string question = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("question", out var q)
             && q.ValueKind == JsonValueKind.String ? q.GetString()?.Trim() ?? "" : "";
         if (question.Length == 0) return (false, "CluadeX: ask_user needs a question.");
@@ -585,6 +620,15 @@ public static class ChatToolBridge
         var questions = ReadCliQuestions(input);
         if (questions.Count == 0) return Verdict(false, input, "CluadeX: AskUserQuestion came with no question.");
         var answers = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Several questions, or one with several picks: one card with steps (Back / Next, tick buttons).
+        if (reg.AskSteps != null && (questions.Count > 1 || questions.Any(q => q.Multi)))
+        {
+            var steps = questions.Select(q => new AskStep(q.Text, q.Options, q.Notes, q.Multi)).ToList();
+            var got = await AskStepsOnCardAsync(steps, reg).ConfigureAwait(false);
+            if (got == null || got.Count != questions.Count) return Verdict(false, input, "The user did not answer in CluadeX (the run was stopped).");
+            for (int i = 0; i < questions.Count; i++) answers[questions[i].Text] = got[i];
+            return AnswersVerdict(input, answers);
+        }
         foreach (var q in questions)
         {
             string? answer = await AskOnCardAsync(CliQuestionPrompt(q), q.Options, reg).ConfigureAwait(false);
@@ -958,19 +1002,8 @@ public static class ChatToolBridge
     }).Append(new
     {
         name = AskToolName,
-        description = "Ask the user a question on a card in the CluadeX chat and wait for the answer. Use it whenever you need "
-            + "the user's decision or choice: this is the way to reach them while you work. Give options for a choice; they can "
-            + "also type a free answer.",
-        inputSchema = (object)new
-        {
-            type = "object",
-            properties = new
-            {
-                question = new { type = "string", description = "The question, in the user's language." },
-                options = new { type = "array", items = new { type = "string" }, description = "Short answers to choose from (optional)." },
-            },
-            required = new[] { "question" },
-        },
+        description = AgentToolService.AskUserDescription,
+        inputSchema = (object)JsonDocument.Parse(AgentToolService.AskUserSchemaJson).RootElement.Clone(),
     }).Append(new
     {
         name = PlanToolName,

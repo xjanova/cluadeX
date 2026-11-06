@@ -818,6 +818,46 @@ internal static class Program
         Check("card: ask_user with no question opens nothing", R(28).Contains("\"isError\":true") && !cards.Any(c => c.O.SequenceEqual(new[] { "x" })), R(28));
         ticket.Dispose();
 
+        // Several questions at once, with a steps card (what CluadeX registers for every CLI): ONE card with a step each.
+        var stepCards = new List<IReadOnlyList<CluadeX.Models.AskStep>>();
+        int plainCards = cards.Count;
+        using (var turnS = new CancellationTokenSource())
+        {
+            var ticketS = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) => Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true }),
+                proj, turnS.Token, null, (q, o) => { lock (cards) cards.Add((q, o)); return Task.FromResult<string?>(o.Count > 0 ? o[0] : "พิมพ์"); }, null,
+                steps =>
+                {
+                    lock (stepCards) stepCards.Add(steps);
+                    if (steps.Any(s => s.Question == "ไม่ตอบ")) return Task.FromResult<IReadOnlyList<string>?>(null);
+                    return Task.FromResult<IReadOnlyList<string>?>(steps.Select((s, i) => s.Multi ? string.Join(", ", s.Options) : $"ตอบ{i + 1}").ToList());
+                });
+            Check("steps: a turn gets a ticket", ticketS != null);
+            if (ticketS != null)
+            {
+                var rs = talk(ticketS.Token, new[]
+                {
+                    Approve(51, two),
+                    Tool(52, new { questions = new object[] { new { question = "ฐานข้อมูล?", options = new[] { "SQLite", "Postgres" } }, "ชื่อแอป?" } }),
+                    Tool(53, new { questions = new object[] { new { question = "ไม่ตอบ" }, new { question = "ข้อสอง" } } }),
+                    Approve(54, new { questions = new object[] { new { question = "ข้อเดียว", options = new[] { new { label = "a", description = "" } } } } }),
+                });
+                string RS(int id) => rs.FirstOrDefault(r => r.Contains("\"id\":" + id + ",") || r.Contains("\"id\":" + id + "}")) ?? "";
+                var first = stepCards.FirstOrDefault();
+                Check("steps: AskUserQuestion with two questions opens ONE card with two steps (labels, meanings, multi-select kept)",
+                    first is { Count: 2 } && first[0].Question == "สีอะไรดีคะ?" && first[0].Options.SequenceEqual(new[] { "แดง", "ฟ้า" })
+                    && first[0].Notes.Contains("แดง: สีเดิม") && !first[0].Multi && first[1].Multi && first[1].Options.SequenceEqual(new[] { "S", "L" }),
+                    string.Join(" | ", stepCards.Select(s => string.Join(" / ", s.Select(x => x.Question + (x.Multi ? "*" : ""))))));
+                Check("steps: …answered per question in updatedInput (the multi-select's picks together)",
+                    RS(51).Contains("allow") && RS(51).Contains("ตอบ1") && RS(51).Contains("S, L") && RS(51).Contains("ขนาดไหน?"), RS(51));
+                Check("steps: ask_user over MCP with questions (Codex, Gemini, Antigravity, Grok) → one card, numbered answers back",
+                    stepCards.Any(s => s.Count == 2 && s[0].Question == "ฐานข้อมูล?" && s[0].Options.Count == 2 && s[1].Question == "ชื่อแอป?")
+                    && RS(52).Contains("\"isError\":false") && RS(52).Contains("1. ฐานข้อมูล? → ตอบ1") && RS(52).Contains("2. ชื่อแอป? → ตอบ2"), RS(52));
+                Check("steps: nobody answered the card → an error, no made-up answers", RS(53).Contains("\"isError\":true") && !RS(53).Contains("→ ตอบ"), RS(53));
+                Check("steps: ONE plain single-choice question still opens the plain card", cards.Count == plainCards + 1 && cards[^1].Q.StartsWith("ข้อเดียว") && RS(54).Contains("allow"), RS(54));
+                ticketS.Dispose();
+            }
+        }
+
         // The run stops while the card waits: the CLI gets its answer at once, the pipe call does not hang.
         var waiting = new TaskCompletionSource<string?>();
         var turn2 = new CancellationTokenSource();
@@ -846,6 +886,7 @@ internal static class Program
         Check("card: ask_user is one of the tools a CLI gets unasked", names.Contains("mcp__cluadex__ask_user"), string.Join(",", names));
         string list = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}", "t", (_, _, _) => (true, "")) ?? "";
         Check("card: tools/list offers ask_user with its schema", list.Contains("\"name\":\"ask_user\"") && list.Contains("question"), list);
+        Check("card: …including questions[] (several at once) and multiSelect", list.Contains("\"questions\"") && list.Contains("multiSelect"), list);
         var codex = CluadeX.Services.Providers.OpenAIDevProvider.McpOverrides(CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"));
         Check("card: Codex runs ask_user unasked (approval_policy=never would refuse it otherwise)", codex.Any(o => o.Contains("ask_user={approval_mode='approve'}")), string.Join("\n", codex));
         var gemini = CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(null, CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"), null);

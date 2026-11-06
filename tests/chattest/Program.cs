@@ -356,6 +356,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=UX: just code boxes, the question card with steps, and media / web-picture attachments.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "UX")
+        {
+            await TestChatUx();
+            Log($"\n## Result (CHATTEST_ONLY=UX): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         await TestPermissionPrompt();         // C1
         await TestStatusRows();               // L4 (screen)
         await TestThinkingBlock();            // L8 (screen)
@@ -404,6 +413,7 @@ internal static partial class Program
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
+        await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
         await TestSwitchRace();               // SW: a chat still loading never lands over New Chat / delete; pipe and agent chats don't cancel a pick

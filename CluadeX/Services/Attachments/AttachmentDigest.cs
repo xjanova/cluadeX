@@ -220,6 +220,8 @@ public static class AttachmentDigest
         "text" => "text",
         "binary" => "binary file",
         "image" => "image",
+        "video" => "video file",
+        "audio" => "audio file",
         "" => "file",
         _ => kind,
     };
