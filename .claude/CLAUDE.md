@@ -195,6 +195,32 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   guarded, survives a killed browser). Proven by `tests/chattest` DM*/DL*/SW*, `tests/pagestest`, `tests/studiotest`.
 - The old UsageWindow is gone: its account/savings views live in the Billing page (`Views/Billing/`).
 
+## Failure-audit fixes (2026-11-06, from 19 days of `~/.cluadex/logs`)
+- Loop guard (`Services/Agents/AgentLoopGuard.cs`, was PR #82): same call + same error twice = nudge, four = stop.
+- `Providers/CliRefusals.cs`: a CLI refusal that is a plan/rate limit or a policy flag is **not** run again while the CLI
+  is still signed in (OpenAI Dev used to retry and fail in 3 s). The CLI's error text is kept in
+  `AgentLoopResult.RefusalText` and logged (`ForLog` redacts keys); a safeguard flag gets a "switch model" hint.
+- `UiStallWatchdog`: stall lines say `UI busy N ms in K ops` (low busy = CPU starved or a Win32 loop, not our code) and
+  name a `DispatcherTimer` by its Tick handler. Models page reads the model folders off the UI thread on a hardware reading.
+- File tools accept `%TEMP%\cluadex-agent` (`Helpers/AgentScratch.cs`, pruned after 3 days); the outside-the-project
+  refusal names it and `open_project add="true"`. `CheckpointService` follows portable.txt like the other data.
+- Proven by `tests/loopguardtest` F1–F9.
+
+## llama.cpp download in the app (2026-11-06)
+- `Services/LlamaCppInstaller.cs`: newest llama.cpp Windows build → `<data root>\llama-backend` (`LlamaBackendInfo.ManagedBackendDir`,
+  survives app updates). GitHub's "latest" is a source-only tag (v0.9.0); the b#### builds with zips are prereleases, so
+  the releases list is read. GPU cc ≥ 7.5 → CUDA 13, older NVIDIA (GTX 10xx) → CUDA 12 + cudart, other GPU → Vulkan,
+  none → CPU; a CUDA build whose `--list-devices` shows no CUDA falls back to Vulkan. sha256 from GitHub, size cap,
+  zip-slip guard, `--version` must answer, old folder swapped aside (never while its llama-server runs). One at a time.
+- `LlamaBackendInfo.FindServerDir` is the one search (custom → downloaded → app\llama-backend → PATH, links followed)
+  for the provider, the Setup row and the arch badge. Models page: card + button, badge on installed files, and a
+  refused load offers the download (with size) and loads again. Setup ▸ llama-server row downloads in-app (was winget).
+- Proven by `tests/archtest` I1–I10 (localhost GitHub, fake zips, nothing started). `dotnet run -- --real-install <dir>`
+  does the real thing: 2026-11-06 b12144 CUDA 12, 648 MB, qwen35 known, CUDA0 = GTX 1070 Ti.
+- Real load (owner's OK): `dotnet run -- --real-load <gguf> <backend dir>` (ctx 4096). Qwen3.5-4B-Q6_K on that build:
+  GPU 999 layers + vision, ready in 5 s (35 s cold), ≈ 3.9 GB VRAM, answers. Its inline `<think>` block now goes to the
+  Thinking block (`Helpers/ThinkTags.cs` in `LlamaServerProvider`, stream + tool loop) — it used to land in the reply.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

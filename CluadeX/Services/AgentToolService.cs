@@ -2316,6 +2316,17 @@ public class AgentToolService : IDisposable
         };
     }
 
+    /// <summary>A "File not found" that says the next move. Bare, a small model read the missing file again and again
+    /// (Sudoku on llama3.2:3b, 2026-11-04: nine identical reads); told it does not exist, it can create it.</summary>
+    internal string MissingFileHint(string message)
+    {
+        string hint = $"{message} — this file does not exist yet. Do not read or edit it again: to create it, call "
+                    + "write_file with its path and the COMPLETE content.";
+        if (_fileSystem.IsWorkingDirectoryEmpty())
+            hint += " The project folder is empty, so every file has to be created with write_file first.";
+        return hint;
+    }
+
     private ToolResult ExecuteReadFile(ToolCall call)
     {
         string path = call.GetArg("path");
@@ -2330,7 +2341,11 @@ public class AgentToolService : IDisposable
 
         FileSystemService.AgentRead read;
         try { read = _fileSystem.ReadForAgent(path, off, lim, ReadCharBudget()); }
-        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or UnauthorizedAccessException)
+        catch (FileNotFoundException ex)
+        {
+            return Fail(call, MissingFileHint(ex.Message));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException)
         {
             return Fail(call, ex.Message);
         }
@@ -2596,7 +2611,7 @@ public class AgentToolService : IDisposable
 
             string? cur = _fileSystem.TryReadRaw(path);
             if (cur == null)
-                return Fail(call, $"File not found: {path} — to create a new file use write_file.");
+                return Fail(call, MissingFileHint($"File not found: {path}"));
 
             // WHERE to append matters. A plain EOF append is right for a script or a text file,
             // but in a brace language the file ends with the class's closing brace — appending a
@@ -2665,9 +2680,13 @@ public class AgentToolService : IDisposable
         {
             (found, replacements) = _fileSystem.EditFile(path, find, replace, replaceAll);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException)
+        catch (FileNotFoundException ex)
         {
-            // Ambiguous match / empty find / missing file — surface the actionable message to the model.
+            return Fail(call, MissingFileHint(ex.Message));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            // Ambiguous match / empty find — surface the actionable message to the model.
             return Fail(call, ex.Message);
         }
 
@@ -2731,7 +2750,8 @@ public class AgentToolService : IDisposable
         string? before = _fileSystem.TryReadRaw(path);
         bool ok; int applied; string message;
         try { (ok, applied, message) = _fileSystem.MultiEdit(path, edits); }
-        catch (Exception ex) when (ex is FileNotFoundException or ArgumentException or InvalidOperationException) { return Fail(call, ex.Message); }
+        catch (FileNotFoundException ex) { return Fail(call, MissingFileHint(ex.Message)); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return Fail(call, ex.Message); }
 
         if (!ok)
         {

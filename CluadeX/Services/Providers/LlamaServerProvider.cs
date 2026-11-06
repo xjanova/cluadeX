@@ -536,6 +536,8 @@ public class LlamaServerProvider : ApiProviderBase
         // Parse SSE stream (OpenAI format: data: {...}\n\n)
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
+        // Inline <think>…</think> (Qwen 3.5, R1…) → "<thinking>…</thinking>" chunks the chat puts in the Thinking block.
+        var think = new CluadeX.Helpers.ThinkTagStream();
 
         // NOTE: never loop on reader.EndOfStream — it is a SYNCHRONOUS property that blocks the calling
         // thread on the network read until the next byte arrives. During a long local prefill (no bytes
@@ -592,10 +594,12 @@ public class LlamaServerProvider : ApiProviderBase
                 // tokens into content and even begin a fake next turn ("…GPT-4<|im_end|><|im_start|>").
                 // Cut at the first turn-end marker and strip any stray control tokens before display.
                 var (clean, stop) = CluadeX.Helpers.ModelOutputSanitizer.SanitizeStreamChunk(content);
-                if (!string.IsNullOrEmpty(clean)) yield return clean;
-                if (stop) yield break;
+                if (!string.IsNullOrEmpty(clean))
+                    foreach (var piece in think.Feed(clean)) yield return piece;
+                if (stop) break;
             }
         }
+        foreach (var piece in think.Flush()) yield return piece;
     }
 
     public override async Task<string> GenerateAsync(
@@ -683,7 +687,15 @@ public class LlamaServerProvider : ApiProviderBase
         }
 
         var responseText = await response.Content.ReadAsStringAsync(ct);
-        return ParseOpenAiToolResponse(responseText);
+        var parsed = ParseOpenAiToolResponse(responseText);
+        // The same inline <think> block, in a tool-loop reply: the answer without it, the thinking apart.
+        var (answer, thought) = CluadeX.Helpers.ThinkTagStream.Split(parsed.TextContent);
+        if (thought.Length > 0)
+        {
+            parsed.TextContent = answer;
+            parsed.ThinkingContent = string.IsNullOrEmpty(parsed.ThinkingContent) ? thought : parsed.ThinkingContent + "\n\n" + thought;
+        }
+        return parsed;
     }
 
     /// <summary>Turn llama-server's raw JSON error into a short, actionable message. The most common one for
@@ -739,49 +751,12 @@ public class LlamaServerProvider : ApiProviderBase
     /// reliably — when the user wants GPU but in-process LLamaSharp can't use CUDA (no CUDA Toolkit).</summary>
     public bool IsServerBackendAvailable => FindServerExe() != null;
 
-    /// <summary>The llama-server.exe a load would start (custom folder, llama-backend\, then PATH), or null.</summary>
+    /// <summary>The llama-server.exe a load would start (custom folder, downloaded, llama-backend\, then PATH), or null.</summary>
     public string? ServerExePath => FindServerExe();
 
-    private string? FindServerExe()
-    {
-        // Check custom path
-        string? customPath = _settingsService.Settings.CustomLlamaCppBackendPath;
-        if (!string.IsNullOrEmpty(customPath))
-        {
-            string custom = Path.Combine(customPath, "llama-server.exe");
-            if (File.Exists(custom)) return custom;
-        }
-
-        // Check llama-backend/ next to app
-        string appDir = AppDomain.CurrentDomain.BaseDirectory;
-        string auto = Path.Combine(appDir, "llama-backend", "llama-server.exe");
-        if (File.Exists(auto)) return auto;
-
-        // Check PATH
-        try
-        {
-            var psi = new ProcessStartInfo("where", "llama-server.exe")
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true,
-            };
-            using var proc = Process.Start(psi);
-            if (proc != null)
-            {
-                string? result = proc.StandardOutput.ReadLine()?.Trim();
-                if (!proc.WaitForExit(3000))
-                {
-                    // `where` hung (rare, but a stuck handle blocks the using-dispose) — don't orphan it.
-                    try { proc.Kill(entireProcessTree: true); } catch { }
-                }
-                if (!string.IsNullOrEmpty(result) && File.Exists(result)) return result;
-            }
-        }
-        catch { }
-
-        return null;
-    }
+    // Custom folder, the llama.cpp CluadeX downloaded, llama-backend\ next to the app, then PATH — the same search
+    // the Setup page and the architecture check use (LlamaBackendInfo.FindServerDir). A PATH scan, not `where`.
+    private string? FindServerExe() => LlamaBackendInfo.FindServerExe(_settingsService.Settings.CustomLlamaCppBackendPath);
 
     /// <summary>
     /// Pick an available loopback TCP port starting from <paramref name="preferred"/>. llama-server

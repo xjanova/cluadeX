@@ -398,6 +398,22 @@ public class GpuDetectionService
         return gpus;
     }
 
+    /// <summary>
+    /// The lowest CUDA compute capability among the NVIDIA cards (6.1 = Pascal, 7.5 = Turing…), or null with no
+    /// NVIDIA card / no nvidia-smi. Decides which llama.cpp CUDA build can run here: CUDA 13 dropped everything
+    /// below 7.5, so a GTX 10xx needs the CUDA 12 build.
+    /// </summary>
+    public static double? NvidiaComputeCapability()
+    {
+        string? output = RunNvidiaSmi("--query-gpu=compute_cap --format=csv,noheader", 5000);
+        if (output == null) return null;
+        double? lowest = null;
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (double.TryParse(line, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double cc))
+                lowest = lowest is { } l ? Math.Min(l, cc) : cc;
+        return lowest;
+    }
+
     // ─── Real-Time GPU Monitoring ─────────────────────────────────────
     // Uses nvidia-smi for NVIDIA GPUs. Returns null for AMD/Intel (not supported).
 

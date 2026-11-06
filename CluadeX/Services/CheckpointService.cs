@@ -44,7 +44,9 @@ public sealed class CheckpointService
     public CheckpointService(DebugLogService? log = null, string? root = null)
     {
         _log = log;
-        _root = root ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex", "checkpoints");
+        // The data home's rule (portable.txt → <exe>\Data): a test harness wrote 23 restore-point folders into the
+        // user's real ~/.cluadex\checkpoints before (reported 2026-11-04). The installed app still gets ~/.cluadex.
+        _root = root ?? Path.Combine(SettingsService.ResolveDataRoot(out _), "checkpoints");
         Current = this;
     }
 

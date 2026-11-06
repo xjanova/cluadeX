@@ -1,4 +1,4 @@
-# update-llama-backend.ps1
+﻿# update-llama-backend.ps1
 # Downloads the latest llama.cpp Windows release and extracts it into
 # CluadeX\bin\<config>\net8.0-windows\llama-backend\ so newer model architectures
 # (Gemma 4, Llama 4, Qwen 3, etc.) can be loaded via the LlamaServer fallback.
@@ -40,24 +40,30 @@ if ($Variant -eq 'auto') {
     Write-Host "==> Auto-selected variant: $Variant" -ForegroundColor Cyan
 }
 
-# 2. Resolve the latest release asset URLs via GitHub API
-Write-Host "==> Querying llama.cpp latest release..." -ForegroundColor Cyan
-$apiUrl = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest'
-$release = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'CluadeX-Updater' }
+# 2. Resolve the newest release that has a Windows build.
+# ggml-org's "latest" is a source-only tag now (v0.9.0, 2026-11-04, no binaries); the b#### builds that carry
+# the zips are marked prerelease. So read the list and take the newest release with the zip we need.
+Write-Host "==> Querying llama.cpp releases..." -ForegroundColor Cyan
+$apiUrl = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20'
+$releases = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'CluadeX-Updater' }
 
 # Main bin asset (llama-server, ggml, etc.)
 $mainPattern = switch ($Variant) {
-    'cuda'   { 'llama-.*-bin-win-cuda-(12|cu12).*x64\.zip' }
-    'vulkan' { 'llama-.*-bin-win-vulkan-x64\.zip' }
-    'cpu'    { 'llama-.*-bin-win-cpu-x64\.zip' }
+    'cuda'   { '^llama-.*-bin-win-cuda-12(\.\d+)*-x64\.zip$' }
+    'vulkan' { '^llama-.*-bin-win-vulkan-x64\.zip$' }
+    'cpu'    { '^llama-.*-bin-win-cpu-x64\.zip$' }
 }
-$mainAsset = $release.assets | Where-Object { $_.name -match $mainPattern } | Select-Object -First 1
+$release = $null; $mainAsset = $null
+foreach ($r in $releases) {
+    if ($r.draft) { continue }
+    $a = $r.assets | Where-Object { $_.name -match $mainPattern } | Select-Object -First 1
+    if ($a) { $release = $r; $mainAsset = $a; break }
+}
 if (-not $mainAsset) {
-    Write-Host "Could not find $Variant asset in release $($release.tag_name)" -ForegroundColor Red
-    Write-Host "Available assets:" -ForegroundColor Yellow
-    $release.assets | ForEach-Object { Write-Host "  $($_.name)" }
+    Write-Host "Could not find a $Variant asset in the last 20 llama.cpp releases" -ForegroundColor Red
     exit 1
 }
+Write-Host "==> Release: $($release.tag_name)" -ForegroundColor Cyan
 
 # CUDA runtime asset (cudart, cublas) — only needed for CUDA variant.
 # Most users don't have the CUDA Toolkit installed, so we ship cudart64_12.dll +
@@ -65,7 +71,7 @@ if (-not $mainAsset) {
 # falls back to CPU-only and you wonder why your GPU isn't being used.
 $cudartAsset = $null
 if ($Variant -eq 'cuda') {
-    $cudartAsset = $release.assets | Where-Object { $_.name -match 'cudart-.*-bin-win-cuda-12.*x64\.zip' } | Select-Object -First 1
+    $cudartAsset = $release.assets | Where-Object { $_.name -match '^cudart-llama-bin-win-cuda-12(\.\d+)*-x64\.zip$' } | Select-Object -First 1
     if (-not $cudartAsset) {
         Write-Host "WARN: cudart runtime asset not found — GPU may fall back to CPU" -ForegroundColor Yellow
     }

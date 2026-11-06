@@ -5,6 +5,11 @@ namespace CluadeX.Models;
 
 public class ModelInfo
 {
+    /// <summary>general.architecture from the GGUF header ("qwen35"…), read when the folder is scanned.</summary>
+    public string? Architecture { get; set; }
+    /// <summary>Can a llama.cpp of this copy load it (LlamaBackendInfo.SupportsArchitecture)? null = could not tell.</summary>
+    public bool? ArchSupported { get; set; }
+    public bool NeedsNewerBackend => ArchSupported == false;
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
