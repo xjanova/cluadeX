@@ -73,6 +73,7 @@ public class LocalGgufProvider : IAiProvider
         _serverProvider.OnStatusChanged += _serverStatusHandler;
         _serverProvider.OnLoadingChanged += _serverLoadingHandler;
         _serverProvider.OnError += _serverErrorHandler;
+        _serverProvider.OnServerDied += OnServerDied;
     }
 
     public Task InitializeAsync(CancellationToken ct = default)
@@ -81,12 +82,86 @@ public class LocalGgufProvider : IAiProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>Models that failed on this PC (load or mid-answer). Replaced by the test harness.</summary>
+    public Local.ModelHealthLog Health { get; set; } = Local.ModelHealthLog.Default;
+
+    /// <summary>The cards in this PC now; the harness replaces it (the real one asks nvidia-smi).</summary>
+    public Func<string>? CurrentGpu { get; set; }
+    private string Gpu() => (CurrentGpu ?? _serverProvider.GpuFingerprint)();
+    private bool IsThai => string.Equals(_settingsService.Settings.Language, "th", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
-    /// Load a GGUF model. Picks the right backend based on the model's architecture:
-    /// known-supported archs (llama, qwen2, gemma2, mistral, phi3 etc.) go to LLamaSharp;
-    /// newer architectures route to llama-server.exe.
+    /// Load a GGUF model — unless it failed on this PC before: then refuse with why and what to do
+    /// (<see cref="Local.ModelBlockedException"/>) until the owner presses Force load (<paramref name="force"/>).
+    /// A load that fails is recorded with its reason (memory, crash, damaged file…) and explained
+    /// (<see cref="Local.ModelLoadFailedException"/>); one that works clears the record.
     /// </summary>
-    public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default)
+    public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default, bool force = false)
+    {
+        bool th = IsThai;
+
+        // The last load never finished (in-process crash, the PC restarted): that model failed, whatever it was.
+        if (Health.TakeInterruptedLoad() is { } lost)
+            OnError?.Invoke(Local.ModelHealthLog.FailedMessage(lost, th));
+
+        if (!force && Health.Find(modelPath) is { } past)
+        {
+            string gpuThen = "";
+            try { gpuThen = await Task.Run(Gpu, ct); } catch { }
+            string msg = Local.ModelHealthLog.BlockedMessage(past, gpuThen, th, out string shortMsg);
+            OnStatusChanged?.Invoke(shortMsg);
+            throw new Local.ModelBlockedException(past, msg, shortMsg);
+        }
+
+        string gpuNow = "";
+        try { gpuNow = await Task.Run(Gpu, ct); } catch { }   // nvidia-smi: not on the UI thread
+        Health.MarkLoading(modelPath, gpuNow);
+        try
+        {
+            await LoadModelCoreAsync(modelPath, progress, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException
+                                       and not ModelArchitectureNotSupportedException   // its own way out: get a newer llama.cpp
+                                       and not FileNotFoundException)
+        {
+            Health.EndLoading();
+            string detail = Local.ModelHealthLog.Describe(ex, _serverProvider.RecentStderr);
+            var kind = Local.ModelHealthLog.Classify(detail);
+            var failure = Health.Record(modelPath, kind, detail, gpuNow, duringRun: false);
+            string msg = Local.ModelHealthLog.FailedMessage(failure, th);
+            OnStatusChanged?.Invoke(th ? "โหลดโมเดลไม่สำเร็จ — " + Local.ModelHealthLog.ReasonText(kind, true)
+                                       : "Model load failed — " + Local.ModelHealthLog.ReasonText(kind, false));
+            throw new Local.ModelLoadFailedException(failure, msg, ex);
+        }
+        catch
+        {
+            Health.EndLoading();
+            throw;
+        }
+        Health.EndLoading();
+        Health.Clear(modelPath);
+    }
+
+    /// <summary>The server died while a model was loaded and answering: remember it, and say why.</summary>
+    private void OnServerDied(string modelPath, int exitCode)
+    {
+        try
+        {
+            var lines = _serverProvider.RecentStderr;
+            string telling = string.Join(" | ", lines.Where(l => Local.ModelHealthLog.Classify(l) != Local.ModelFailureKind.Unknown)
+                .Select(l => l.Trim()).TakeLast(3));
+            var kind = Local.ModelHealthLog.Classify(telling, exitCode);
+            // Exit 0 with nothing telling = closed from outside (Task Manager, another tool), not the model's fault.
+            if (exitCode == 0 && kind == Local.ModelFailureKind.Unknown) return;
+            if (kind == Local.ModelFailureKind.Unknown) kind = Local.ModelFailureKind.Crash;
+            string detail = $"llama-server exited with code 0x{unchecked((uint)exitCode):X8}" + (telling.Length > 0 ? " | " + telling : "");
+            var failure = Health.Record(modelPath, kind, detail, Gpu(), duringRun: true);
+            OnError?.Invoke(Local.ModelHealthLog.FailedMessage(failure, IsThai));
+        }
+        catch { /* the crash message from the server itself still reaches the owner */ }
+    }
+
+    private async Task LoadModelCoreAsync(string modelPath, IProgress<string>? progress, CancellationToken ct)
     {
         var settings = _settingsService.Settings;
 

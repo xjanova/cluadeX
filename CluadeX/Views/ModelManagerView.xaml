@@ -993,6 +993,13 @@
                                                             ToolTip="{services:Loc modelsm.newerBackendTip}">
                                                         <TextBlock Text="{services:Loc modelsm.newerBackend}" Style="{StaticResource PillText}" Foreground="{DynamicResource Status.Danger}"/>
                                                     </Border>
+                                                    <Border Style="{StaticResource DangerPill}" Visibility="{Binding HasFailed, Converter={StaticResource BoolVis}}"
+                                                            ToolTip="{Binding FailedReason}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="&#xE7BA;" Style="{StaticResource PillGlyph}" Foreground="{DynamicResource Status.Danger}"/>
+                                                            <TextBlock Text="{services:Loc modelsm.failedBefore}" Style="{StaticResource PillText}" Foreground="{DynamicResource Status.Danger}"/>
+                                                        </StackPanel>
+                                                    </Border>
                                                     <Border Style="{StaticResource Pill}" Visibility="{Binding SpeedText, Converter={StaticResource HasValue}}">
                                                         <StackPanel Orientation="Horizontal">
                                                             <TextBlock Text="&#xEC4A;" Style="{StaticResource PillGlyph}"/>
@@ -1021,11 +1028,23 @@
                                             </StackPanel>
                                             <WrapPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,10,0" MaxWidth="220" HorizontalAlignment="Right">
                                                 <Button Style="{StaticResource ActionSuccess}"
+                                                        Visibility="{Binding HasFailed, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"
                                                         Command="{Binding DataContext.LoadModelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                         CommandParameter="{Binding LocalPath}">
                                                     <StackPanel Orientation="Horizontal">
                                                         <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center"/>
                                                         <TextBlock Text="{services:Loc models.load}"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <!-- Failed on this PC before: Load is replaced by Force load (asks first, says why). -->
+                                                <Button Style="{StaticResource ActionButton}" Foreground="{DynamicResource Status.Danger}"
+                                                        Visibility="{Binding HasFailed, Converter={StaticResource BoolVis}}"
+                                                        ToolTip="{Binding FailedReason}"
+                                                        Command="{Binding DataContext.ForceLoadModelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding LocalPath}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                        <TextBlock Text="{services:Loc modelsm.forceLoad}"/>
                                                     </StackPanel>
                                                 </Button>
                                                 <Button Style="{StaticResource ActionButton}" Padding="9,7" Foreground="{DynamicResource Status.Danger}"

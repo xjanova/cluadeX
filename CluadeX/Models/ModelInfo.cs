@@ -10,6 +10,10 @@ public class ModelInfo
     /// <summary>Can a llama.cpp of this copy load it (LlamaBackendInfo.SupportsArchitecture)? null = could not tell.</summary>
     public bool? ArchSupported { get; set; }
     public bool NeedsNewerBackend => ArchSupported == false;
+    /// <summary>Why this model failed on this PC before (ModelHealthLog), localized; empty = never failed. While set, Load
+    /// is refused and the card offers Force load.</summary>
+    public string FailedReason { get; set; } = "";
+    public bool HasFailed => FailedReason.Length > 0;
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;

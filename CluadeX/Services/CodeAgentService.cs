@@ -3327,6 +3327,7 @@ public partial class CodeAgentService
         int failedEditAttempts = 0;              // edits/writes the model TRIED that all failed
         string? lastEditFailPath = null;         // file of the last failed edit — lets recovery name the exact call
         int ctxCompactAttempts = 0;              // context-overflow compactions used this turn (max 3)
+        int ctxShrinkStage = 0;                  // big tool blocks cut before compacting (0 = not yet, max 2)
         var unresolvedEditPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // files whose edit failed and was never redone
         int unresolvedGuards = 0;                // how many times we've blocked a finish on an unresolved file
         var writtenPathsThisTurn = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // files actually written this turn
@@ -3806,12 +3807,25 @@ public partial class CodeAgentService
                     }
                     continue;
                 }
-                catch (OperationCanceledException) when (callCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    // Per-call timeout fired (NOT a user cancel) — surface as retryable so the outer
-                    // auto-retry re-issues the request instead of leaving a dead spinner.
+                    // A timeout, not the user: the per-call budget (callCts) or the HTTP client's own ceiling.
+                    int waited = (int)callWatch.Elapsed.TotalSeconds;
+                    if (loopIsLocal)
+                    {
+                        // A local model that cannot answer in time will not answer faster on a retry: the GPU/CPU is
+                        // the limit. Stop with why and the ways out — never a silent "stopped" (Sudoku2, 2026-11-06).
+                        _debugLog?.Error("Agent", $"step {iteration + 1}: local model gave no answer in {waited}s (budget {timeoutSec}s, ~{EstimateNativeTokens(outboundMessages)} prompt tok) — stopping");
+                        result.Steps.Add(step);
+                        result.StopReason = "timeout";
+                        result.Success = false;
+                        result.FinalResponse = Agents.ContextRescue.LocalTooSlowMessage(LocalModelNameFor(loopProvider), waited,
+                            EstimateNativeTokens(outboundMessages), result.Steps.Count, isThai);
+                        break;
+                    }
+                    // Surface as retryable so the outer auto-retry re-issues the request instead of leaving a dead spinner.
                     throw new TimeoutException(
-                        $"Request timed out after {timeoutSec}s — the model did not respond (timeout).");
+                        $"Request timed out after {waited}s — the model did not respond (timeout).");
                 }
                 catch (HttpRequestException ex) when (
                     ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge
@@ -3937,6 +3951,21 @@ public partial class CodeAgentService
                     OnAgentStatus?.Invoke(isThai ? "Context เต็ม — ตัดภาพหน้าจอออกก่อน..." : "Context overflow — dropping screenshots first...");
                     continue;
                 }
+                // Then the big blocks: a file the model just wrote (whole, in the tool_use input) and read back (whole,
+                // in the tool_result) is what fills a 16k window — and keeping "the last N messages" keeps exactly them.
+                if (ctxOverflow && ctxShrinkStage < 2)
+                {
+                    int cutAt = ctxShrinkStage == 0 ? Agents.ContextRescue.FirstCut : Agents.ContextRescue.SecondCut;
+                    ctxShrinkStage++;
+                    int freed = Agents.ContextRescue.ShrinkLargeBlocks(nativeMessages, cutAt);
+                    if (freed > 0)
+                    {
+                        hasAttemptedReactiveCompact = true;
+                        _debugLog?.Warn("Agent", $"context overflow at step {iteration + 1} — cut {freed} chars of long tool blocks (>{cutAt}) before compacting");
+                        OnAgentStatus?.Invoke(isThai ? "Context เต็ม — ตัดข้อความยาว ๆ ออกก่อน..." : "Context overflow — cutting long tool output first...");
+                        continue;
+                    }
+                }
                 if (ctxCompactAttempts < 3 && ctxOverflow)
                 {
                     ctxCompactAttempts++;
@@ -3959,6 +3988,18 @@ public partial class CodeAgentService
                     });
                     nativeMessages = EnsureAlternatingRoles(nativeMessages);
                     continue;
+                }
+
+                if (ctxOverflow)
+                {
+                    // Every rescue spent and it still does not fit: say that, with the ways out — not the server's text.
+                    _debugLog?.Error("Agent", $"context overflow at step {iteration + 1} — still over after cutting and {ctxCompactAttempts} compaction(s); stopping");
+                    result.Steps.Add(step);
+                    result.StopReason = "context";
+                    result.Success = false;
+                    result.FinalResponse = Agents.ContextRescue.OverflowStopMessage(localCtxTokens, IsLocalProvider(loopProvider),
+                        result.Steps.Count, isThai);
+                    break;
                 }
 
                 _debugLog?.Error("Agent", $"provider error at step {iteration + 1}: {errText.Replace("\n", " ")}");
@@ -4325,6 +4366,16 @@ public partial class CodeAgentService
                 result.FinalResponse = KeepAnswerOverRemark(answerBeforeBrainGuard, textContent);
                 result.Success = true;
                 result.StopReason = response.StopReason;
+                // Silent after the window had to be cut: the model lost its place, it did not finish. Saying "finished
+                // N steps, no summary" here read as success while the page it wrote was broken (2026-11-06).
+                if (string.IsNullOrWhiteSpace(result.FinalResponse) && (ctxCompactAttempts > 0 || ctxShrinkStage > 0))
+                {
+                    result.Success = false;
+                    result.StopReason = "context";
+                    result.FinalResponse = Agents.ContextRescue.SilentAfterCompactMessage(localCtxTokens,
+                        ctxCompactAttempts + ctxShrinkStage, result.Steps.Count, isThai);
+                    _debugLog?.Warn("Agent", $"turn ended silent after {ctxCompactAttempts} compaction(s) + {ctxShrinkStage} cut(s) — reported as possibly unfinished");
+                }
                 break;
             }
 

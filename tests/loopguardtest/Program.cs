@@ -185,6 +185,8 @@ Call Write(string path) => new("write_file", $"{{\"path\":\"{path}\",\"content\"
         ("llama3.3:70b", 70), ("gpt-oss:20b", 20), ("hf.co/bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M", 7),
         ("mistral:latest", null), ("llama3.2", null), ("nomic-embed-text:v1.5", null), ("", null), (null!, null),
         ("Phi-3-mini-4k-instruct-q4.gguf", null),
+        // MoE names carry the active parameters too ("A3B"): the size is the total, not 3B (2026-11-06 Sudoku2)
+        ("Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf", 30), ("Qwen3-235B-A22B-Instruct", 235), ("qwen3:30b-a3b", 30),
     };
     foreach (var (name, want) in cases)
     {

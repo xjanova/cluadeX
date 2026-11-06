@@ -203,6 +203,8 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand RefreshLocalModelsCommand { get; }
     public ICommand RefreshHardwareCommand { get; }
     public ICommand LoadModelCommand { get; }
+    /// <summary>Load a model that failed here before, after the owner confirms (ModelHealthLog blocks it otherwise).</summary>
+    public ICommand ForceLoadModelCommand { get; }
     public ICommand GetLlamaCppCommand { get; }
     public ICommand UnloadModelCommand { get; }
     public ICommand DownloadRecommendedCommand { get; }
@@ -256,7 +258,8 @@ public class ModelManagerViewModel : ViewModelBase
 
         RefreshLocalModelsCommand = new RelayCommand(RefreshLocalModels);
         RefreshHardwareCommand = new RelayCommand(() => DetectHardwareAsync(clearCache: true), () => !IsDetecting);
-        LoadModelCommand = new AsyncRelayCommand<string>(LoadModel);
+        LoadModelCommand = new AsyncRelayCommand<string>(p => LoadModel(p));
+        ForceLoadModelCommand = new AsyncRelayCommand<string>(ForceLoadModel);
         // One button: get / update, and cancel while it downloads.
         GetLlamaCppCommand = new AsyncRelayCommand(() =>
         {
@@ -639,8 +642,12 @@ public class ModelManagerViewModel : ViewModelBase
     private void ShowLocalModels(List<ModelInfo> models)
     {
         LocalModels.Clear();
+        bool th = string.Equals(_settingsService.Settings.Language, "th", StringComparison.OrdinalIgnoreCase);
         foreach (var model in models)
         {
+            model.FailedReason = !string.IsNullOrEmpty(model.LocalPath) && _localProvider.Health.Find(model.LocalPath) is { } failed
+                ? CluadeX.Services.Local.ModelHealthLog.BlockedMessage(failed, "", th, out _)
+                : "";
             model.IsLoaded = SamePath(model.LocalPath, SelectedModelPath) && _localProvider.IsReady;
             DescribeFile(model);
             LocalModels.Add(model);
@@ -652,7 +659,23 @@ public class ModelManagerViewModel : ViewModelBase
         RefreshLlamaCppCard();
     }
 
-    private async Task LoadModel(string? path)
+    /// <summary>Force load: the model failed on this PC before. Say why once more and let the owner decide — a model
+    /// that ran the GPU out of memory can take the whole PC down with it.</summary>
+    private async Task ForceLoadModel(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || _localProvider.IsLoading) return;
+        bool th = string.Equals(_settingsService.Settings.Language, "th", StringComparison.OrdinalIgnoreCase);
+        if (_localProvider.Health.Find(path) is { } failed)
+        {
+            string why = CluadeX.Services.Local.ModelHealthLog.ReasonText(failed.Kind, th);
+            var answer = MessageBox.Show(_loc.T("modelsm.forceLoadConfirm", Path.GetFileNameWithoutExtension(path), why),
+                "CluadeX", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+        await LoadModel(path, force: true);
+    }
+
+    private async Task LoadModel(string? path, bool force = false)
     {
         if (string.IsNullOrEmpty(path) || _localProvider.IsLoading) return;
         string name = Path.GetFileNameWithoutExtension(path);
@@ -669,7 +692,7 @@ public class ModelManagerViewModel : ViewModelBase
 
             // Route through LocalGgufProvider — it inspects the GGUF arch and
             // transparently picks LLamaSharp or llama-server.exe (Gemma 4 etc.)
-            await _localProvider.LoadModelAsync(path, progress);
+            await _localProvider.LoadModelAsync(path, progress, force: force);
 
             SelectedModelPath = path;
             ModelLoadStatus = _localProvider.LoadedProjectorPath != null ? _loc.T("modelsm.loadedVision", name)
@@ -692,6 +715,9 @@ public class ModelManagerViewModel : ViewModelBase
             {
                 // Already localized, and it names the ways out (Ollama, a custom backend folder, the update script).
                 ModelArchitectureNotSupportedException arch => arch.Message,
+                // Failed here before / failed just now: why, what to do, and that Force load is the way back.
+                CluadeX.Services.Local.ModelBlockedException blocked => blocked.Message,
+                CluadeX.Services.Local.ModelLoadFailedException failedNow => failedNow.Message,
                 FileNotFoundException => _loc.T("modelsm.loadFailedMissing", name),
                 OutOfMemoryException or InsufficientMemoryException => _loc.T("modelsm.loadFailedMemory", name),
                 _ => _loc.T("modelsm.loadFailed", name),

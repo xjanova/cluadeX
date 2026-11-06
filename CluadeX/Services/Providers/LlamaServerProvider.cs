@@ -27,6 +27,15 @@ public class LlamaServerProvider : ApiProviderBase
     public bool IsServerRunning => _serverProcess is { HasExited: false };
     public string? LoadedModelName => _loadedModelPath != null ? Path.GetFileNameWithoutExtension(_loadedModelPath) : null;
 
+    /// <summary>The chat requests' client: no HttpClient ceiling. The base client's 5-minute Timeout cut a big model's
+    /// prompt processing on a small GPU (Qwen3-Coder-30B-A3B, 12k prompt, CPU offload — 2026-11-06) although the agent
+    /// loop gives a local model 10 minutes, and the TaskCanceledException it threw read as "stopped by the user".
+    /// The caller's token is the budget (the loop's per-call timeout, the Stop button); a dead server closes the socket.</summary>
+    private static readonly HttpClient ChatClient = new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(15) })
+    {
+        Timeout = System.Threading.Timeout.InfiniteTimeSpan,
+    };
+
     public LlamaServerProvider(SettingsService settingsService, GpuDetectionService? gpuDetection = null) : base(settingsService)
     {
         _gpuDetection = gpuDetection;
@@ -107,6 +116,19 @@ public class LlamaServerProvider : ApiProviderBase
 
     /// <summary>Last stderr lines of the current/last server process (the projector error is usually among them).</summary>
     private readonly System.Collections.Concurrent.ConcurrentQueue<string> _lastStderr = new();
+
+    /// <summary>The server's last stderr lines — where "cudaMalloc failed: out of memory" and friends are.</summary>
+    public IReadOnlyList<string> RecentStderr => _lastStderr.ToArray();
+
+    /// <summary>The server died on its own after it was ready (model path, exit code) — not our own stop.</summary>
+    public event Action<string, int>? OnServerDied;
+
+    /// <summary>The cards in this PC, for the model health log ("" when unknown).</summary>
+    public string GpuFingerprint()
+    {
+        try { return Local.ModelHealthLog.GpuFingerprint(_gpuDetection?.DetectAllNvidiaGpus()); }
+        catch { return ""; }
+    }
 
     private async Task LaunchAsync(string modelPath, string? projector, IProgress<string>? progress, CancellationToken ct)
     {
@@ -244,10 +266,17 @@ public class LlamaServerProvider : ApiProviderBase
             _serverProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
             // Crash detection: without this the UI kept showing "Ready" against a DEAD server and the
             // next request failed with a vague connection error (audit: "no Exited handler, stale Ready").
-            _serverProcess.Exited += (_, _) =>
+            _serverProcess.Exited += (sender, _) =>
             {
                 if (_stoppingIntentionally) return; // our own StopServerAsync kill — not a crash
+                bool wasReady = IsReady;
                 IsReady = false;
+                if (wasReady)
+                {
+                    int code = 0;
+                    try { code = (sender as Process)?.ExitCode ?? 0; } catch { }
+                    try { OnServerDied?.Invoke(modelPath, code); } catch { }
+                }
                 SetStatus("llama-server exited unexpectedly");
                 RaiseError("llama-server stopped (crashed or was killed). Reload the model from the Models page.");
             };
@@ -524,7 +553,7 @@ public class LlamaServerProvider : ApiProviderBase
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/v1/chat/completions");
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await ChatClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -672,7 +701,7 @@ public class LlamaServerProvider : ApiProviderBase
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/v1/chat/completions");
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await ChatClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(ct);
