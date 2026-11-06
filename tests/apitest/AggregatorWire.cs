@@ -167,6 +167,128 @@ internal static class AggregatorWire
 
         // ── service-specific shapes ──
         await Specifics(check, svc, root);
+        await GrokSpecifics(check, svc, root);
+    }
+
+    // ── xAI Grok, first-class (owner 2026-11-06: "เพิ่มการรองรับ Grok ด้วย"): what docs.x.ai says, through the real client ──
+    static async Task GrokSpecifics(Action<string, string, bool, string> check, SettingsService svc, string root)
+    {
+        var s = svc.Settings;
+        string savedEffort = s.ReasoningEffort;
+        CompatibleProvider P(string model, CostTrackingService cost = null)
+        {
+            s.ProviderConfigs["XAI"] = new ProviderConfig { ApiKey = Key, BaseUrl = $"{root}/xai", SelectedModel = model };
+            return new CompatibleProvider(svc, CompatiblePresets.For(AiProviderType.XAI), cost);
+        }
+        async Task<JsonElement> Sent(string model, string effort)
+        {
+            s.ReasoningEffort = effort;
+            await foreach (var _ in P(model).ChatAsync([], "ping", "sys")) { }
+            return Json(Last("xai", "/chat/completions").Body);
+        }
+        string Effort(JsonElement b) => Str(b, "reasoning_effort") ?? "(none)";
+
+        var preset = CompatiblePresets.For(AiProviderType.XAI);
+        check("grok", "preset: named Grok, defaults to grok-4.7, offline list = GrokModels, key page console.x.ai",
+            preset.Name.Contains("Grok") && preset.DefaultModel == "grok-4.7" && preset.Models.SequenceEqual(GrokModels.Fallback)
+            && preset.KeysUrl.Contains("console.x.ai"), $"{preset.Name} {preset.DefaultModel}");
+
+        // reasoning_effort: low/medium/high/xhigh on grok-4.5+, xhigh from 4.6, nothing on 4.3 / 4.20 / grok-build
+        var b = await Sent("grok-4.7", "max");
+        check("grok", "grok-4.7 + effort max -> reasoning_effort xhigh (its highest)", Effort(b) == "xhigh", Raw(b));
+        check("grok", "never sends presence_penalty / frequency_penalty / stop (errors on reasoning models)",
+            !Has(b, "presence_penalty") && !Has(b, "frequency_penalty") && !Has(b, "stop"), Raw(b));
+        b = await Sent("grok-4.5", "xhigh");
+        check("grok", "grok-4.5 + xhigh -> high (4.5 has no xhigh)", Effort(b) == "high", Raw(b));
+        b = await Sent("grok-4.7", "low");
+        check("grok", "grok-4.7 + low -> low", Effort(b) == "low", Raw(b));
+        b = await Sent("grok-4.7", "auto");
+        check("grok", "auto -> no reasoning_effort (xAI's own default, high)", !Has(b, "reasoning_effort"), Raw(b));
+        b = await Sent("grok-4.3", "high");
+        var b2 = await Sent("grok-4.20-0309-reasoning", "high");
+        var b3 = await Sent("x-ai/grok-build-0.1", "high");
+        check("grok", "grok-4.3, grok-4.20 and grok-build take no reasoning_effort -> none sent",
+            !Has(b, "reasoning_effort") && !Has(b2, "reasoning_effort") && !Has(b3, "reasoning_effort"), Raw(b) + Raw(b2) + Raw(b3));
+
+        // a newer Grok that refuses the field: one extra request, then never again for that model
+        int before = Count("xai");
+        s.ReasoningEffort = "high";
+        var nf = P("grok-4.9-noeffort");
+        string nfErr = null; nf.OnError += e => nfErr = e;
+        string nfText = "";
+        await foreach (var c in nf.ChatAsync([], "ping", "sys")) if (!c.StartsWith("<thinking>")) nfText += c;
+        var nfLast = Json(Last("xai", "/chat/completions").Body);
+        await foreach (var _ in nf.ChatAsync([], "ping", "sys")) { }
+        var nfNext = Json(Last("xai", "/chat/completions").Body);
+        check("grok", "400 naming reasoning_effort (xAI's error shape) -> sent again without it, answer read, not sent again",
+            nfText == "pong" && nfErr == null && !Has(nfLast, "reasoning_effort") && !Has(nfNext, "reasoning_effort") && Count("xai") - before == 3,
+            $"text={nfText} err={nfErr} requests={Count("xai") - before}");
+
+        // usage: xAI reports reasoning tokens beside completion_tokens (total = prompt + completion + reasoning), billed as output
+        s.ReasoningEffort = "auto";
+        var cost = new CostTrackingService();
+        await foreach (var _ in P("grok-4.7", cost).ChatAsync([], "ping", "sys")) { }
+        var row = cost.Log.ReadAll().LastOrDefault(e => e.Model == "grok-4.7");
+        // 6 new input x $2/M + 4 cached x $0.50/M + (2 + 5 reasoning) output x $6/M
+        check("grok", "usage: reasoning tokens counted as output and kept as thinking; priced at grok-4.7's $2 / $6 / $0.50 per M; on the XAI tab",
+            cost.TotalInputTokens == 6 && cost.TotalCacheReadTokens == 4 && cost.TotalOutputTokens == 7 && row is { Thinking: 5, Provider: "XAI" }
+            && cost.TotalCostUsd == 0.000056m,
+            $"in={cost.TotalInputTokens} cache={cost.TotalCacheReadTokens} out={cost.TotalOutputTokens} th={row?.Thinking} tab={row?.Provider} usd={cost.TotalCostUsd}");
+        var cost2 = new CostTrackingService();
+        await foreach (var _ in P("grok-4.7-incl", cost2).ChatAsync([], "ping", "sys")) { }
+        check("grok", "usage: a total that already holds the reasoning (OpenAI style) is not counted twice",
+            cost2.TotalOutputTokens == 2, $"out={cost2.TotalOutputTokens}");
+        var tcost = new CostTrackingService();
+        var tr = await P("grok-4.7", tcost).ChatWithToolsAsync(Ask(), "sys", Echo());
+        check("grok", "tools: the whole call in one chunk (no index) assembled; priced, on the XAI tab",
+            tr.ToolCalls.Count == 1 && tr.ToolCalls[0].Name == "echo" && tcost.TotalCostUsd > 0m
+            && tcost.Log.ReadAll().LastOrDefault()?.Provider == "XAI", $"{tr.StopReason} calls={tr.ToolCalls.Count} usd={tcost.TotalCostUsd}");
+
+        // prices and windows from docs.x.ai (2026-11-06)
+        var p47 = CostTrackingService.PricingOf("grok-4.7");
+        var p47Long = CostTrackingService.PricingOf("grok-4.7", GrokModels.LongContextPromptTokens);
+        var pBuild = CostTrackingService.PricingOf("grok-build-0.1");
+        var p43 = CostTrackingService.PricingOf("grok-4.3");
+        check("grok", "price table: 4.7 $2/$6, a 200K+ prompt doubles, grok-build $1/$2, 4.3 $1.25/$2.50",
+            p47.InputPerMToken == 2m && p47.OutputPerMToken == 6m && p47.CacheReadPerMToken == 0.5m
+            && p47Long.InputPerMToken == 4m && p47Long.OutputPerMToken == 12m
+            && pBuild.InputPerMToken == 1m && pBuild.OutputPerMToken == 2m && p43.InputPerMToken == 1.25m && p43.OutputPerMToken == 2.5m,
+            $"{p47} {p47Long} {pBuild} {p43}");
+        check("grok", "context meter: grok-4.7 500K, grok-4.3 1M, grok-build 256K; Grok Dev's default = grok-4.7",
+            ContextMemoryService.ContextWindowFor(AiProviderType.XAI, "grok-4.7", 4096) == 500_000
+            && ContextMemoryService.ContextWindowFor(AiProviderType.XAI, "grok-4.3", 4096) == 1_000_000
+            && ContextMemoryService.ContextWindowFor(AiProviderType.XAI, "grok-build-0.1", 4096) == 256_000
+            && ContextMemoryService.ContextWindowFor(AiProviderType.GrokDev, "default", 4096) == 500_000,
+            ContextMemoryService.ContextWindowFor(AiProviderType.XAI, "grok-4.7", 4096).ToString());
+        check("grok", "effort table: 4.5 high, 4.6+ xhigh, grok-5 xhigh, 4.20 / 4.3 / build none, unknown none",
+            GrokModels.MaxEffort("grok-4.5") == "high" && GrokModels.MaxEffort("grok-4.6") == "xhigh" && GrokModels.MaxEffort("grok-4.7-latest") == "xhigh"
+            && GrokModels.MaxEffort("grok-5") == "xhigh" && GrokModels.MaxEffort("grok-4.20-0309-reasoning") == null
+            && GrokModels.MaxEffort("grok-4.3") == null && GrokModels.MaxEffort("grok-build-0.1") == null && GrokModels.MaxEffort("not-grok") == null, "");
+
+        // the model list: chat models only (Imagine image/video dropped), Test Connection finds the default
+        var list = await P("grok-4.7").ListModelsAsync();
+        check("grok", "/v1/models: grok-imagine image + video dropped",
+            list != null && list.Contains("grok-4.7") && list.Contains("grok-build-0.1") && !list.Any(m => m.Contains("imagine")),
+            list == null ? "null" : string.Join(",", list));
+        var (ok, msg) = await P("grok-4.7").TestConnectionAsync();
+        check("grok", "Test Connection with the default model", ok && !msg.Contains(Key), msg);
+
+        // a team out of credit: the quota explanation with the billing page, key never echoed
+        var qp = P("grok-no-credit");
+        string qErr = null; qp.OnError += e => qErr = e;
+        await foreach (var _ in qp.ChatAsync([], "ping", "sys")) { }
+        check("grok", "403 out of credit / spending limit -> quota explained, console.x.ai named, key never echoed",
+            qErr != null && qErr.Contains("no quota or credit left") && qErr.Contains("console.x.ai") && !qErr.Contains(Key), qErr ?? "(no error)");
+
+        // the Billing page: both Grok tabs, seen on every chart
+        var api = CluadeX.Services.Billing.ProviderBrand.For("XAI");
+        var plan = CluadeX.Services.Billing.ProviderBrand.For("GrokDev");
+        check("grok", "Billing: an XAI tab (API, reports thinking, visible colour) and a GrokDev tab (plan), neither falls into Other",
+            api.Key == "XAI" && api.Kind == CluadeX.Services.Billing.BillingKind.Api && api.ReportsThinking && api.Color != "#111827"
+            && plan.Key == "GrokDev" && plan.Kind == CluadeX.Services.Billing.BillingKind.Subscription
+            && CluadeX.Services.Billing.ProviderBrand.FromLedgerKey("GrokDev") == "GrokDev" && CluadeX.Services.Billing.ProviderBrand.FromLedgerKey("XAI") == "XAI",
+            $"{api.Key}/{api.Kind}/{api.Color} {plan.Key}/{plan.Kind}");
+        s.ReasoningEffort = savedEffort;
     }
 
     static async Task Specifics(Action<string, string, bool, string> check, SettingsService svc, string root)
@@ -368,6 +490,7 @@ internal static class AggregatorWire
         "together" => """[{"id":"Org/Chat-1","type":"chat","context_length":131072,"pricing":{"input":0.6,"output":2.4}},{"id":"Org/Embed","type":"embedding"}]""",
         "huggingface" => """{"object":"list","data":[{"id":"org/hf-chat","providers":[{"provider":"groq","status":"live","context_length":65536,"pricing":{"input":0.15,"output":0.6},"supports_tools":true}]}]}""",
         "mistral" => """{"data":[{"id":"mistral-large-4","capabilities":{"completion_chat":true,"function_calling":true},"max_context_length":1000000},{"id":"mistral-embed","capabilities":{"completion_chat":false}}]}""",
+        "xai" => """{"object":"list","data":[{"id":"grok-4.7","created":1761000000,"object":"model","owned_by":"xai"},{"id":"grok-build-0.1","created":1760000000,"object":"model","owned_by":"xai"},{"id":"grok-imagine-image","created":1759000000,"object":"model","owned_by":"xai"},{"id":"grok-imagine-video","created":1758000000,"object":"model","owned_by":"xai"}]}""",
         "groq" => """{"data":[{"id":"openai/gpt-oss-120b","active":true,"context_window":131072},{"id":"old-model","active":false},{"id":"whisper-large-v3","active":true}]}""",
         _ => """{"object":"list","data":[{"id":"model-a","created":1},{"id":"model-b","created":3},{"id":"text-embedding-3","created":5},{"id":"whisper-large-v3","created":4}]}""",
     };
@@ -399,6 +522,24 @@ internal static class AggregatorWire
             return stream ? (400, json, """{"error":{"message":"tools cannot be used with stream mode"}}""") : (200, json, NonStreamToolCall);
         if (model == "overflow")
             return (400, json, """{"error":{"message":"This model's maximum context length is 8192 tokens. Please reduce the length of the messages."}}""");
+        if (svc == "xai")
+        {
+            // xAI's error body: {"code": ..., "error": "..."}
+            if (model == "grok-4.9-noeffort" && req.TryGetProperty("reasoning_effort", out _))
+                return (400, json, """{"code":"Client specified an invalid argument","error":"Argument not supported on this model: reasoning_effort"}""");
+            if (model == "grok-no-credit")
+                return (403, json, """{"code":"The caller does not have permission to execute the specified operation","error":"Your newly created team doesn't have any credits or licenses yet. Your team has used all available credits or reached its monthly spending limit."}""");
+            if (!tools && model.StartsWith("grok-"))
+            {
+                // reasoning beside completion (total = 10 + 2 + 5), or inside it OpenAI-style (total = 10 + 2)
+                string total = model == "grok-4.7-incl" ? "12" : "17";
+                return (200, sse, Sse(
+                    """{"model":"grok-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"think"}}]}""",
+                    """{"choices":[{"index":0,"delta":{"content":"pong"},"finish_reason":"stop"}]}""",
+                    """{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":""" + total
+                    + ""","prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":5}}}"""));
+            }
+        }
         if (tools) return (200, sse, toolReply ? ToolStep2Sse : ToolStep1(svc));
         return (200, sse, ChatSse(svc));
     }

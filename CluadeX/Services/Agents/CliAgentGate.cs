@@ -25,11 +25,19 @@ public static class CliAgentPolicy
     {
         AiProviderType.ClaudeDev => type is "Explore" or "Plan" or "claude-code-guide",
         AiProviderType.GeminiDev or AiProviderType.AntigravityDev => type is "codebase_investigator" or "cli_help",
+        // CluadeX's own read-only type in the turn's Grok home (its model cannot pick the built-in explore / plan by name),
+        // and those two should a build list them.
+        AiProviderType.GrokDev => type is Providers.GrokTurnHome.ExploreAgent or "explore" or "plan",
         _ => false,
     };
 
     /// <summary>The type this CLI's read-only search goes by, for a refusal to name.</summary>
-    public static string ReadOnlyType(AiProviderType cli) => cli == AiProviderType.ClaudeDev ? "Explore" : "codebase_investigator";
+    public static string ReadOnlyType(AiProviderType cli) => cli switch
+    {
+        AiProviderType.ClaudeDev => "Explore",
+        AiProviderType.GrokDev => Providers.GrokTurnHome.ExploreAgent,
+        _ => "codebase_investigator",
+    };
 
     /// <summary>The CLI can give a writing sub-agent its own worktree (Claude Code's isolation: worktree, proven against
     /// 2.1.296 on 2026-11-01). Gemini's invoke_agent has no such option, so its writers stay refused.</summary>
@@ -53,6 +61,9 @@ public static class CliAgentPolicy
         string? picked = overrides != null && overrides.TryGetValue(kind.ToString().ToLowerInvariant(), out var o) && !string.IsNullOrWhiteSpace(o)
             ? o.Trim() : null;
         if (cli == AiProviderType.ClaudeDev) return ClaudeAlias(picked) ?? (readOnly ? "haiku" : null);
+        // Grok's spawn_subagent refuses a model it does not list (and every model while its subagent_model_inheritance is
+        // on): a Settings pick made for another CLI would turn an allowed spawn into a failed one. Grok's sub-agents inherit.
+        if (cli == AiProviderType.GrokDev) return null;
         return picked;
     }
 
@@ -65,6 +76,7 @@ public static class CliAgentPolicy
         {
             AiProviderType.ClaudeDev => "the Agent tool",
             AiProviderType.OpenAIDev => "spawn_agent",
+            AiProviderType.GrokDev => "spawn_subagent",
             _ => "your sub-agents",
         };
         if (!d.SubAgents) return $"Sub-agents are off for this step ({d.Reason}): do the work yourself in this conversation.";

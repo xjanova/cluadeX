@@ -22,7 +22,7 @@ static partial class Program
     {
         foreach (var k in new[] { "hub", "hubSub", "title", "stepOf", "close", "closeChat", "useThis", "retest", "keyAgain", "useAgy", "testing", "test.failed",
                      "test.timeout", "test.noDetail", "body.TestFailed", "key.prompt", "key.bad", "done.title", "done.body", "done.chat", "done.loaded",
-                     "hint.GeminiDev", "hint.AntigravityDev", "hint.Gemini" })
+                     "hint.GeminiDev", "hint.AntigravityDev", "hint.Gemini", "hint.XAI", "hint.GrokDev" })
             yield return "wizard." + k;
         foreach (var s in Enum.GetValues<ConnectStepKind>()) { yield return "wizard.step." + s; yield return "wizard.body." + s; }
         foreach (var s in Enum.GetValues<ProviderConnectionState>()) yield return "wizard.state." + s;
@@ -34,9 +34,10 @@ static partial class Program
     {
         Console.WriteLine("── the wizard's steps ──");
         // The OpenAI-compatible services have no wizard: their key and "get a key" link are on Settings ▸ AI Provider,
-        // where the chat sends them (MainViewModel), so none of them may be in the wizard's list either.
-        var wizardTypes = Enum.GetValues<AiProviderType>().Where(t => !CluadeX.Services.Providers.CompatiblePresets.IsCompatible(t)).ToArray();
-        Check("W1", "every provider CluadeX has is offered (the OpenAI-compatible ones on Settings, not here)",
+        // where the chat sends them (MainViewModel) — except xAI's Grok, first-class since 2026-11-06.
+        var wizardTypes = Enum.GetValues<AiProviderType>()
+            .Where(t => !CluadeX.Services.Providers.CompatiblePresets.IsCompatible(t) || t == AiProviderType.XAI).ToArray();
+        Check("W1", "every provider CluadeX has is offered (the OpenAI-compatible ones on Settings, not here — Grok is)",
             wizardTypes.All(ProviderConnections.All.Contains) && ProviderConnections.All.Distinct().Count() == wizardTypes.Length);
         Check("W2", "every provider has a setup row on a bare PC",
             ProviderConnections.All.All(p => SystemSetupService.BuildItems(new SetupFacts()).Any(i => i.Id == ProviderConnections.RowId(p))));
@@ -83,6 +84,27 @@ static partial class Program
             ProviderConnections.All.SelectMany(p => Conn(p, new SetupFacts()).Steps.Concat(Conn(p, agyIn).Steps)).Where(s => s.Done).All(s => s.Action == null && s.Other == null));
         Check("W17", "the agy install line is only echoed by the console script: its | does not run in the echo",
             SystemSetupService.BuildScript("t", new[] { SystemSetupService.AgyInstall }).Contains("^| iex"));
+
+        // Grok (owner 2026-11-06): the xAI API key, and Grok Dev = the Grok Build CLI on the owner's sign-in
+        var grok = Conn(AiProviderType.GrokDev, Licensed);
+        Check("W40", "Grok Dev: install, sign in, test, in that order", Kinds(grok) == "License,Install,SignIn,Test", Kinds(grok));
+        Check("W41", "its install is xAI's documented script, quoted for cmd, and the console only echoes its |",
+            grok.Current?.Action is { Kind: SetupActionKind.Install, Commands: { Count: 1 } g } && g[0] == SystemSetupService.GrokInstall
+            && g[0].Contains("\"irm https://x.ai/cli/install.ps1 | iex\"") && SystemSetupService.BuildScript("t", g).Contains("^| iex"),
+            grok.Current?.Action?.Commands?[0] ?? "");
+        Check("W42", "installed but signed out: the sign-in step, through grok",
+            Conn(AiProviderType.GrokDev, Licensed with { GrokCli = @"C:\u\.grok\bin\grok.exe" }).Current is { Kind: ConnectStepKind.SignIn, Action: { Kind: SetupActionKind.SignIn, Target: "grok" } });
+        var grokIn = Licensed with { GrokCli = @"C:\u\.grok\bin\grok.exe", GrokSignedIn = true };
+        Check("W43", "signed in: the test is left, and Grok Dev counts as a model that can answer",
+            Conn(AiProviderType.GrokDev, grokIn) is { Current.Kind: ConnectStepKind.Test, IsSetUp: true } && SystemSetupService.AnyChatModelReady(grokIn)
+            && !SystemSetupService.AnyChatModelReady(Licensed with { GrokCli = @"C:\u\.grok\bin\grok.exe" }));
+        var xai = Conn(AiProviderType.XAI, Licensed);
+        Check("W44", "the xAI API: the key here, console.x.ai beside it; with a key only the test is left; a key counts as ready",
+            xai.Current is { Kind: ConnectStepKind.ApiKey, Action: { Kind: SetupActionKind.EnterKey, Target: "XAI" }, Other: { Kind: SetupActionKind.OpenUrl } }
+            && Conn(AiProviderType.XAI, Licensed with { XaiKey = true }).Current?.Kind == ConnectStepKind.Test
+            && SystemSetupService.AnyChatModelReady(Licensed with { XaiKey = true }));
+        Check("W45", "both Grok rows on a bare PC (their Thai is L1's)",
+            SystemSetupService.BuildItems(new SetupFacts()).Count(i => i.Id is "xai" or "grokcli") == 2);
     }
 
     /// <summary>On the thread that owns the app's resources (Program.Main's render thread).</summary>

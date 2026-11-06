@@ -26,6 +26,7 @@ public static class ProviderLogos
         AiProviderType.ClaudeDev => "claude-code.png",
         AiProviderType.Gemini or AiProviderType.GeminiDev => "gemini.png",
         AiProviderType.AntigravityDev => "antigravity.png",
+        AiProviderType.GrokDev => "xai.png",
         AiProviderType.Ollama => "ollama.png",
         AiProviderType.Local or AiProviderType.LlamaServer => "llamacpp.png",
         _ => CompatiblePresets.For(type)?.Logo,
@@ -34,6 +35,7 @@ public static class ProviderLogos
     public static string Badge(AiProviderType type) => type switch
     {
         AiProviderType.OpenAI or AiProviderType.OpenAIDev => "AI",
+        AiProviderType.GrokDev => "xAI",
         AiProviderType.BrainX => "BX",
         _ => CompatiblePresets.For(type)?.Badge is { Length: > 0 } b ? b : type.ToString()[..1],
     };
