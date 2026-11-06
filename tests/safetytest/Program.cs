@@ -494,7 +494,7 @@ internal static class Program
         Check("read-only: write_to_file, run_command, an MCP call, the browser are refused",
             V(Agy("write_to_file", new { TargetFile = Path.Combine(cwd, "b.cs"), CodeContent = "x" }), read) == Deny
             && V(Agy("run_command", new { CommandLine = "git status" }), read) == Deny
-            && V(Agy("call_mcp_tool", new { ServerName = "cluadex_brainx-brain", ToolName = "brain_search" }), read) == Deny
+            && V(Agy("call_mcp_tool", new { ServerName = "cluadex_brainx-brain", ToolName = "ssh_run" }), read) == Deny
             && V(Agy("browser_click_element", new { }), read) == Deny);
         Check("edit grant: writes pass, commands are still refused",
             V(Agy("replace_file_content", new { TargetFile = Path.Combine(cwd, "b.cs"), ReplacementContent = "class B { }" }), editOnly) == Allow
@@ -520,6 +520,20 @@ internal static class Program
             && V(Agy("run_command", new { CommandLine = "del " + Path.Combine(plugin, "guard.cmd") }), full) == Deny);
         Check("a broken payload or one with no tool → refused", V("{not json", full) == Deny && V(Agy("", new { }), full) == Deny);
         Check("an MCP call passes in a worker run", V(Agy("call_mcp_tool", new { ServerName = "cluadex_cluadex", ToolName = "open_project" }), editOnly) == Allow);
+        // Parity audit 2026-11-06: the brain tools Claude Dev calls unasked pass in any chat; anything else on another server
+        // goes to the user's red prompt in a worker run (it used to run unasked).
+        AntigravityGuard.Verdict Mcp(string server, string tool, AntigravityGuard.Config c) => V(Agy("call_mcp_tool", new { ServerName = server, ToolName = tool }), c);
+        Check("brain recall + agent bus pass even read-only (Claude Dev's read-only turn has them too)",
+            Mcp("cluadex_brainx-brain", "brain_search", read) == Allow && Mcp("brainx-brain", "task_queue", read) == Allow, "");
+        Check("the brain's write tools need the edit grant", Mcp("brainx-brain", "brain_remember", read) == Deny && Mcp("brainx-brain", "brain_remember", editOnly) == Allow, "");
+        Check("worker run: the brain's ssh_run / chrome__ and another server's tool → the red prompt (AskUser), not a silent pass",
+            Mcp("brainx-brain", "ssh_run", full) == AskUser && Mcp("cluadex_brainx-brain", "chrome__navigate", editOnly) == AskUser
+            && Mcp("github", "create_issue", runOnly) == AskUser, "");
+        Check("worker run: every cluadex tool still passes (CluadeX gates each call itself)",
+            Mcp("cluadex_cluadex", "rename_symbol", editOnly) == Allow && Mcp("cluadex", "verify_change", full) == Allow, "");
+        Check("the red prompt names the server and the tool",
+            AntigravityGuard.Decide(Agy("call_mcp_tool", new { ServerName = "github", ToolName = "create_issue", Arguments = new { title = "x" } }), full)
+                is { Verdict: AskUser } ask && ask.Action.Contains("github") && ask.Action.Contains("create_issue") && ask.Reason!.Contains("create_issue"), "");
 
         string? exe = MatchingExe();
         if (exe == null) return;
@@ -804,6 +818,46 @@ internal static class Program
         Check("card: ask_user with no question opens nothing", R(28).Contains("\"isError\":true") && !cards.Any(c => c.O.SequenceEqual(new[] { "x" })), R(28));
         ticket.Dispose();
 
+        // Several questions at once, with a steps card (what CluadeX registers for every CLI): ONE card with a step each.
+        var stepCards = new List<IReadOnlyList<CluadeX.Models.AskStep>>();
+        int plainCards = cards.Count;
+        using (var turnS = new CancellationTokenSource())
+        {
+            var ticketS = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) => Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true }),
+                proj, turnS.Token, null, (q, o) => { lock (cards) cards.Add((q, o)); return Task.FromResult<string?>(o.Count > 0 ? o[0] : "พิมพ์"); }, null,
+                steps =>
+                {
+                    lock (stepCards) stepCards.Add(steps);
+                    if (steps.Any(s => s.Question == "ไม่ตอบ")) return Task.FromResult<IReadOnlyList<string>?>(null);
+                    return Task.FromResult<IReadOnlyList<string>?>(steps.Select((s, i) => s.Multi ? string.Join(", ", s.Options) : $"ตอบ{i + 1}").ToList());
+                });
+            Check("steps: a turn gets a ticket", ticketS != null);
+            if (ticketS != null)
+            {
+                var rs = talk(ticketS.Token, new[]
+                {
+                    Approve(51, two),
+                    Tool(52, new { questions = new object[] { new { question = "ฐานข้อมูล?", options = new[] { "SQLite", "Postgres" } }, "ชื่อแอป?" } }),
+                    Tool(53, new { questions = new object[] { new { question = "ไม่ตอบ" }, new { question = "ข้อสอง" } } }),
+                    Approve(54, new { questions = new object[] { new { question = "ข้อเดียว", options = new[] { new { label = "a", description = "" } } } } }),
+                });
+                string RS(int id) => rs.FirstOrDefault(r => r.Contains("\"id\":" + id + ",") || r.Contains("\"id\":" + id + "}")) ?? "";
+                var first = stepCards.FirstOrDefault();
+                Check("steps: AskUserQuestion with two questions opens ONE card with two steps (labels, meanings, multi-select kept)",
+                    first is { Count: 2 } && first[0].Question == "สีอะไรดีคะ?" && first[0].Options.SequenceEqual(new[] { "แดง", "ฟ้า" })
+                    && first[0].Notes.Contains("แดง: สีเดิม") && !first[0].Multi && first[1].Multi && first[1].Options.SequenceEqual(new[] { "S", "L" }),
+                    string.Join(" | ", stepCards.Select(s => string.Join(" / ", s.Select(x => x.Question + (x.Multi ? "*" : ""))))));
+                Check("steps: …answered per question in updatedInput (the multi-select's picks together)",
+                    RS(51).Contains("allow") && RS(51).Contains("ตอบ1") && RS(51).Contains("S, L") && RS(51).Contains("ขนาดไหน?"), RS(51));
+                Check("steps: ask_user over MCP with questions (Codex, Gemini, Antigravity, Grok) → one card, numbered answers back",
+                    stepCards.Any(s => s.Count == 2 && s[0].Question == "ฐานข้อมูล?" && s[0].Options.Count == 2 && s[1].Question == "ชื่อแอป?")
+                    && RS(52).Contains("\"isError\":false") && RS(52).Contains("1. ฐานข้อมูล? → ตอบ1") && RS(52).Contains("2. ชื่อแอป? → ตอบ2"), RS(52));
+                Check("steps: nobody answered the card → an error, no made-up answers", RS(53).Contains("\"isError\":true") && !RS(53).Contains("→ ตอบ"), RS(53));
+                Check("steps: ONE plain single-choice question still opens the plain card", cards.Count == plainCards + 1 && cards[^1].Q.StartsWith("ข้อเดียว") && RS(54).Contains("allow"), RS(54));
+                ticketS.Dispose();
+            }
+        }
+
         // The run stops while the card waits: the CLI gets its answer at once, the pipe call does not hang.
         var waiting = new TaskCompletionSource<string?>();
         var turn2 = new CancellationTokenSource();
@@ -832,6 +886,7 @@ internal static class Program
         Check("card: ask_user is one of the tools a CLI gets unasked", names.Contains("mcp__cluadex__ask_user"), string.Join(",", names));
         string list = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}", "t", (_, _, _) => (true, "")) ?? "";
         Check("card: tools/list offers ask_user with its schema", list.Contains("\"name\":\"ask_user\"") && list.Contains("question"), list);
+        Check("card: …including questions[] (several at once) and multiSelect", list.Contains("\"questions\"") && list.Contains("multiSelect"), list);
         var codex = CluadeX.Services.Providers.OpenAIDevProvider.McpOverrides(CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"));
         Check("card: Codex runs ask_user unasked (approval_policy=never would refuse it otherwise)", codex.Any(o => o.Contains("ask_user={approval_mode='approve'}")), string.Join("\n", codex));
         var gemini = CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(null, CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"), null);
@@ -839,8 +894,12 @@ internal static class Program
         string agyCall(string tool, string server) => JsonSerializer.Serialize(new { toolCall = new { name = "call_mcp_tool", args = new { ServerName = server, ToolName = tool } } });
         var readOnly = new CluadeX.Services.Safety.AntigravityGuard.Config(false, false, proj, proj);
         Check("card: Antigravity's guard lets a read-only chat ask", CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("ask_user", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Allow);
-        Check("card: ...and still refuses every other MCP tool there, or an ask_user of another server",
-            CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("new_chat", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny
+        Check("card: ...and the chat's own tools too (open_project, new_chat, close_chat, update_plan, wrap_up: each asks in CluadeX itself), as on the other CLIs",
+            new[] { "open_project", "new_chat", "close_chat", "update_plan", "wrap_up" }.All(t =>
+                CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall(t, "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Allow));
+        Check("card: ...and still refuses every other MCP tool there (a cluadex engineering tool, a chat tool of another server)",
+            CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("rename_symbol", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny
+            && CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("open_project", "other"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny
             && CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("ask_user", "other"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny);
         using var cliRow = JsonDocument.Parse("{\"questions\":[{\"question\":\"สีอะไรดีคะ?\"}]}");
         var row = CluadeX.Services.Providers.ClaudeDevToolMap.Map("AskUserQuestion", cliRow.RootElement, null);

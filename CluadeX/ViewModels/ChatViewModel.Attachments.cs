@@ -80,7 +80,26 @@ public partial class ChatViewModel
     /// <summary>The kinds of image file that can be attached (a BMP or TIFF is converted to PNG).</summary>
     public static bool LooksLikeImageFile(string? path) =>
         !string.IsNullOrWhiteSpace(path)
-        && Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".bmp" or ".tif" or ".tiff";
+        && Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".jfif" or ".jpe" or ".gif" or ".webp" or ".bmp" or ".tif" or ".tiff";
+
+    /// <summary>Pictures a model cannot take as they are, converted to PNG when Windows can decode them (HEIC needs
+    /// the HEIF Image Extensions, AVIF the AV1 Video Extension); one Windows cannot open goes in as a file.</summary>
+    public static bool LooksLikeConvertibleImage(string? path) =>
+        !string.IsNullOrWhiteSpace(path)
+        && Path.GetExtension(path).ToLowerInvariant() is ".heic" or ".heif" or ".avif" or ".ico" or ".jxl" or ".dds" or ".wdp" or ".jxr";
+
+    /// <summary>A picture decoded by Windows (WIC) and re-encoded as PNG — the largest frame of an icon. Null when no
+    /// codec for it is installed or it is not a picture.</summary>
+    public static byte[]? TryDecodeToPng(string path)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists || fi.Length == 0 || fi.Length > MaxImageBytes) return null;
+            return DecodeBytesToPng(File.ReadAllBytes(path));
+        }
+        catch { return null; }
+    }
 
     /// <summary>Image bytes (a pasted screenshot): saved as a file and attached. False — and why in the status line —
     /// when they are not an image, too big, or the limit is reached. <paramref name="name"/>: what the picture was called
@@ -160,6 +179,13 @@ public partial class ChatViewModel
         foreach (var p in paths)
         {
             if (Directory.Exists(p)) { problem = Loc("chat.attach.folder"); continue; }
+            // HEIC from a phone, an AVIF, an icon: a picture the model can see once Windows has decoded it.
+            if (LooksLikeConvertibleImage(p) && File.Exists(p))
+            {
+                byte[]? png = await Task.Run(() => TryDecodeToPng(p));
+                if (png != null && AttachImageBytes(png, Path.GetFileNameWithoutExtension(p))) { added++; continue; }
+                problem = LocF("chat.attach.imageAsFile", Path.GetFileName(p));
+            }
             if (PendingFiles.Count >= MaxPendingFiles) { problem = LocF("chat.attach.tooManyFiles", MaxPendingFiles); break; }
             try
             {
@@ -186,6 +212,136 @@ public partial class ChatViewModel
         else if (problem != null)
             StatusText = problem;
         return added;
+    }
+
+    // ─── a picture dragged out of a web page ───
+
+    private static readonly System.Net.Http.HttpClient WebImageClient = CreateWebImageClient();
+
+    private static System.Net.Http.HttpClient CreateWebImageClient()
+    {
+        var c = new System.Net.Http.HttpClient(new System.Net.Http.SocketsHttpHandler { AllowAutoRedirect = true, MaxAutomaticRedirections = 5 })
+        {
+            Timeout = TimeSpan.FromSeconds(20),
+        };
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) CluadeX");
+        return c;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ImgSrcRegex = new(
+        @"<img\b[^>]*?\bsrc\s*=\s*(?:""(?<u>[^""]+)""|'(?<u>[^']+)'|(?<u>[^\s>]+))",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Where the picture of a browser drag is: the first &lt;img src&gt; of the clipboard-style HTML a browser puts on
+    /// the drag ("HTML Format", made absolute against its SourceURL), or a link that names an image file. Only http(s)
+    /// and data:image URLs. Null when the drag holds no picture (a plain text or link drag stays the text box's).
+    /// Pure: the harness checks it.
+    /// </summary>
+    public static Uri? WebImageSource(string? html, string? url)
+    {
+        if (!string.IsNullOrWhiteSpace(html) && ImgSrcRegex.Match(html) is { Success: true } m)
+        {
+            string src = System.Net.WebUtility.HtmlDecode(m.Groups["u"].Value.Trim());
+            Uri? baseUri = null;
+            var source = System.Text.RegularExpressions.Regex.Match(html, @"^SourceURL:(\S+)", System.Text.RegularExpressions.RegexOptions.Multiline);
+            if (source.Success) Uri.TryCreate(source.Groups[1].Value.Trim(), UriKind.Absolute, out baseUri);
+            if (Uri.TryCreate(src, UriKind.Absolute, out var abs) || (baseUri != null && Uri.TryCreate(baseUri, src, out abs)))
+                if (IsWebImageScheme(abs)) return abs;
+        }
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            string first = url.Split('\n', '\r', '\0')[0].Trim();
+            if (Uri.TryCreate(first, UriKind.Absolute, out var u) && IsWebImageScheme(u)
+                && (u.Scheme == "data" || LooksLikeImageFile(u.AbsolutePath) || LooksLikeConvertibleImage(u.AbsolutePath)))
+                return u;
+        }
+        return null;
+    }
+
+    private static bool IsWebImageScheme(Uri u) =>
+        u.Scheme is "http" or "https" || (u.Scheme == "data" && u.OriginalString.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>A picture dragged from a web page: decoded (data: URL) or downloaded (at most 20 MB, 20 s), then attached
+    /// like a pasted one. Send waits for it.</summary>
+    public Task<bool> AttachWebImageAsync(Uri source)
+    {
+        HookPendingImages();
+        var task = AttachWebImageCoreAsync(source);
+        _attachingFiles = Task.WhenAll(_attachingFiles, task);
+        return task;
+    }
+
+    private async Task<bool> AttachWebImageCoreAsync(Uri source)
+    {
+        try
+        {
+            byte[]? bytes;
+            string name;
+            if (source.Scheme == "data")
+            {
+                string s = source.OriginalString;
+                int comma = s.IndexOf(',');
+                if (comma < 0 || !s[..comma].Contains(";base64", StringComparison.OrdinalIgnoreCase)) { StatusText = Loc("chat.attach.webImageFailed"); return false; }
+                bytes = Convert.FromBase64String(s[(comma + 1)..]);
+                name = $"web-image-{DateTime.Now:HHmmss}";
+            }
+            else
+            {
+                StatusText = Loc("chat.attach.webImageLoading");
+                bytes = await DownloadCappedAsync(source, MaxImageBytes);
+                name = Path.GetFileNameWithoutExtension(Uri.UnescapeDataString(source.AbsolutePath)) is { Length: > 0 } stem ? stem : $"web-image-{DateTime.Now:HHmmss}";
+            }
+            if (bytes == null || bytes.Length == 0) { StatusText = Loc("chat.attach.webImageFailed"); return false; }
+            // A WebP/PNG/JPEG/GIF goes in as it is; anything else Windows can decode (an AVIF, an icon) as PNG.
+            if (Services.Vision.ImageCodec.SniffMediaType(bytes) == null)
+            {
+                bytes = await Task.Run(() => DecodeBytesToPng(bytes));
+                if (bytes == null) { StatusText = Loc("chat.attach.webImageFailed"); return false; }
+            }
+            return AttachImageBytes(bytes, name);
+        }
+        catch (Exception ex)
+        {
+            _debugLog?.Warn("Chat", $"a picture dragged from {source.Host} could not be attached", ex);
+            StatusText = Loc("chat.attach.webImageFailed");
+            return false;
+        }
+    }
+
+    private static async Task<byte[]?> DownloadCappedAsync(Uri url, long maxBytes)
+    {
+        using var resp = await WebImageClient.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+        if (!resp.IsSuccessStatusCode) return null;
+        if (resp.Content.Headers.ContentLength is long len && len > maxBytes) return null;
+        await using var stream = await resp.Content.ReadAsStreamAsync();
+        using var ms = new MemoryStream();
+        var buf = new byte[81920];
+        int n;
+        while ((n = await stream.ReadAsync(buf)) > 0)
+        {
+            if (ms.Length + n > maxBytes) return null;
+            ms.Write(buf, 0, n);
+        }
+        return ms.ToArray();
+    }
+
+    public static byte[]? DecodeBytesToPng(byte[] bytes)
+    {
+        try
+        {
+            using var input = new MemoryStream(bytes);
+            var decoder = BitmapDecoder.Create(input, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            // An icon holds several sizes: the largest.
+            var frame = decoder.Frames.OrderByDescending(f => f.PixelWidth * (long)f.PixelHeight).FirstOrDefault();
+            if (frame == null || frame.PixelWidth == 0) return null;
+            var enc = new PngBitmapEncoder();
+            enc.Frames.Add(BitmapFrame.Create(frame));
+            using var output = new MemoryStream();
+            enc.Save(output);
+            return output.Length <= MaxImageBytes ? output.ToArray() : null;
+        }
+        catch { return null; }
     }
 
     /// <summary>Waits for files still being copied in, so the message about to go out carries them.</summary>

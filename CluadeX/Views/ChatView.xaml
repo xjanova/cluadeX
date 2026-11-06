@@ -633,10 +633,34 @@
                                                     <TextBlock Text="{services:Loc chat.who.asks}" Foreground="{DynamicResource Text.Muted}" FontSize="11.5"
                                                                VerticalAlignment="Center" Margin="8,0,0,0"/>
                                                 </StackPanel>
-                                                <TextBlock Text="{Binding Content}" Foreground="{DynamicResource Text.Primary}"
-                                                           FontSize="13.5" FontFamily="{DynamicResource Font.Ui}" TextWrapping="Wrap" Margin="0,0,0,10"
-                                                           LineHeight="20"/>
+                                                <!-- several questions on one card: which step is on screen (owner 2026-11-06: ย้อนกลับหรือเดินหน้าได้) -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6" AutomationProperties.AutomationId="CxGuard.QuestionStepBar"
+                                                            Visibility="{Binding ShowsStepBar, Converter={StaticResource BoolVis}}">
+                                                    <TextBlock Text="{services:Loc chat.ask.step}" Foreground="{DynamicResource Text.Muted}" FontSize="11.5" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding StepLabel}" Foreground="{DynamicResource Accent.1}" FontSize="11.5" FontWeight="SemiBold"
+                                                               Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{services:Loc chat.ask.review}" Foreground="{DynamicResource Text.Muted}" FontSize="11.5" Margin="10,0,0,0"
+                                                               VerticalAlignment="Center" Visibility="{Binding OnReview, Converter={StaticResource BoolVis}}"/>
+                                                </StackPanel>
+                                                <!-- the question as Markdown: code in it gets its own box with a Copy button, like a reply -->
+                                                <StackPanel helpers:MarkdownHelper.Markdown="{Binding QuestionShown}" Margin="0,0,0,10"
+                                                            AutomationProperties.AutomationId="CxGuard.QuestionText"/>
                                                 <StackPanel Visibility="{Binding QuestionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                                    <!-- a step's option buttons: one pick moves on; on a multi-select step each one ticks -->
+                                                    <ItemsControl ItemsSource="{Binding StepChoices}" Margin="0,0,0,6"
+                                                                  Visibility="{Binding ShowsStepChoices, Converter={StaticResource BoolVis}}">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Button Content="{Binding Shown}" Style="{StaticResource CxCharPill}"
+                                                                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        AutomationProperties.AutomationId="CxGuard.QuestionStepOption"
+                                                                        Click="QuestionStepOption_Click"/>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
                                                     <ItemsControl ItemsSource="{Binding QuestionOptions}" Margin="0,0,0,6"
                                                                   Visibility="{Binding HasQuestionOptions, Converter={StaticResource BoolVis}}">
                                                         <ItemsControl.ItemsPanel>
@@ -652,7 +676,14 @@
                                                         </ItemsControl.ItemTemplate>
                                                     </ItemsControl>
                                                     <Grid>
-                                                        <Grid.ColumnDefinitions><ColumnDefinition MinWidth="200"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <!-- Back: the step before, with its answer as it was left -->
+                                                        <Button Content="{services:Loc chat.ask.back}" Padding="12,4" Margin="0,0,8,0" FontSize="12.5"
+                                                                Style="{StaticResource CxCharPill}" AutomationProperties.AutomationId="CxGuard.QuestionBack"
+                                                                Visibility="{Binding CanStepBack, Converter={StaticResource BoolVis}}" Click="QuestionBack_Click"/>
+                                                        <Grid Grid.Column="1" MinWidth="200" Visibility="{Binding ShowsAnswerBox, Converter={StaticResource BoolVis}}">
                                                         <!-- The plain box (Classic: its implicit TextBox style must reach it, so it carries no Style) -->
                                                         <Grid>
                                                             <Grid.Style>
@@ -689,8 +720,13 @@
                                                                 </TextBox.Template>
                                                             </TextBox>
                                                         </Grid>
-                                                        <Button Grid.Column="1" Content="{services:Loc chat.ask.send}" Padding="14,4" Margin="8,0,0,0"
-                                                                FontSize="12.5" Style="{StaticResource CxCharPrimary}" AutomationProperties.AutomationId="CxGuard.QuestionSend" Click="QuestionSend_Click"/>
+                                                        </Grid>
+                                                        <Button Grid.Column="2" Content="{services:Loc chat.ask.send}" Padding="14,4" Margin="8,0,0,0"
+                                                                FontSize="12.5" Style="{StaticResource CxCharPrimary}" AutomationProperties.AutomationId="CxGuard.QuestionSend" Click="QuestionSend_Click"
+                                                                Visibility="{Binding StepIsLast, Converter={StaticResource BoolVis}}"/>
+                                                        <Button Grid.Column="2" Content="{services:Loc chat.ask.next}" Padding="14,4" Margin="8,0,0,0"
+                                                                FontSize="12.5" Style="{StaticResource CxCharPrimary}" AutomationProperties.AutomationId="CxGuard.QuestionNext" Click="QuestionNext_Click"
+                                                                Visibility="{Binding StepIsLast, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                                                     </Grid>
                                                 </StackPanel>
                                             </StackPanel>

@@ -297,6 +297,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=COP: just a CLI agent opening a folder for the task (asked once, then it carries on there).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "COP")
+        {
+            await TestCliOpenProject();
+            Log($"\n## Result (CHATTEST_ONLY=COP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=ORCH: just the orchestration views (docs/agent-orchestration.md), and the narrow composer the
         // Ultra switch joined.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "ORCH")
@@ -347,6 +356,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=UX: just code boxes, the question card with steps, and media / web-picture attachments.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "UX")
+        {
+            await TestChatUx();
+            Log($"\n## Result (CHATTEST_ONLY=UX): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         await TestPermissionPrompt();         // C1
         await TestStatusRows();               // L4 (screen)
         await TestThinkingBlock();            // L8 (screen)
@@ -370,6 +388,7 @@ internal static partial class Program
         await TestPipeRuns();                 // T5: pipe runs watched live, isError, project restored
         await TestPipeChats();                // T6: list_chats / continue_chat over the pipe
         await TestSupervision();              // SUP: late sub-agent results, consent wait, progress, who started, poll limit
+        await TestCliOpenProject();           // COP: a CLI agent opens a folder for the task → asked once, carries on there
         await TestAcceptEdits();              // T5: Accept edits switch
         await TestAutonomousBuildGate();      // T5: the Autonomous loop's build/test after unseen edits
         await TestThumbnail();                // T5: tool-row image thumbnail
@@ -394,6 +413,7 @@ internal static partial class Program
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
+        await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
         await TestSwitchRace();               // SW: a chat still loading never lands over New Chat / delete; pipe and agent chats don't cancel a pick
