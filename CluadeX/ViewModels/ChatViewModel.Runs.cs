@@ -422,6 +422,32 @@ public partial class ChatViewModel
         return tcs.Task;
     }
 
+    /// <summary>Several questions on one card, a step each, with Back / Next and a review before they go (or one
+    /// multi-select question with tick buttons). One answer per step; the run's Stop withdraws it like a single one.</summary>
+    private Task<IReadOnlyList<string>> AskUserStepsAsync(IReadOnlyList<AskStep> steps)
+    {
+        var run = Cur;
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return Task.FromResult<IReadOnlyList<string>>(steps.Select(_ => "(no answer: CluadeX has no window open)").ToList());
+        var tcs = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var who = CharacterForBox(run);
+        var msg = new ChatMessage { Role = MessageRole.Question, QuestionGirl = who.Girl, Character = who };
+        msg.SetSteps(steps, answers => tcs.TrySetResult(answers));
+        var token = run?.Cts?.Token ?? CancellationToken.None;
+        var reg = token.Register(() =>
+        {
+            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
+        });
+        _ = tcs.Task.ContinueWith(_ => { reg.Dispose(); dispatcher.InvokeAsync(RaiseRunStateChanged); }, TaskScheduler.Default);
+        dispatcher.InvokeAsync(() =>
+        {
+            (run?.Messages ?? Messages).Add(msg);
+            RaiseRunStateChanged();
+            ScrollToBottom?.Invoke();
+        });
+        return tcs.Task;
+    }
+
     // ─── start / end ───
 
     /// <summary>Start a run in the chat on screen: it gets that chat's live list and a scope that pins the project

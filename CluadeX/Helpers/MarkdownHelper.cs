@@ -61,14 +61,8 @@ public static class MarkdownHelper
     private static Run TokRun(string text, string token) => Fg(new Run(text), token);
 
     // ─── Regex Patterns ───
-    private static readonly Regex CodeBlockRegex = new(
-        @"```(\w*)\s*\r?\n([\s\S]*?)```",
-        RegexOptions.Compiled);
-
-    /// <summary>The opening of a fence — the same opening <see cref="CodeBlockRegex"/> needs, without the close.</summary>
-    private static readonly Regex OpenFenceRegex = new(
-        @"```(\w*)\s*\r?\n",
-        RegexOptions.Compiled);
+    /// <summary>A language tag written straight after a fence that opens in the middle of a line ("Run: ```bash").</summary>
+    private static readonly Regex MidLineInfoRegex = new(@"^[\w#+.\-]*$", RegexOptions.Compiled);
 
     private static readonly Regex InlineRegex = new(
         @"\*\*\*(.+?)\*\*\*|" +           // ***bold italic*** (group 1)
@@ -213,34 +207,142 @@ public static class MarkdownHelper
         var segments = new List<MarkdownSegment>();
         int pos = 0;
 
-        foreach (Match m in CodeBlockRegex.Matches(text))
+        // A fence that has not closed yet (the reply is still writing its code) is Open: everything after it is that
+        // code, not paragraphs to run the inline formatting over again on every streamed token.
+        foreach (var f in FindCodeFences(text))
         {
-            if (m.Index > pos)
-                AddTextSegments(segments, text[pos..m.Index]);
-
-            segments.Add(new MarkdownSegment { Type = SegmentType.CodeBlock, Code = m.Groups[2].Value.TrimEnd(), Language = m.Groups[1].Value });
-            pos = m.Index + m.Length;
+            if (f.Start > pos)
+                AddTextSegments(segments, text[pos..f.Start]);
+            segments.Add(new MarkdownSegment { Type = SegmentType.CodeBlock, Code = f.Code, Language = f.Language, Open = f.Open });
+            pos = f.End;
         }
 
         if (pos < text.Length)
-        {
-            // A fence that has not closed yet (the reply is still writing its code): everything after it is that code,
-            // not paragraphs to run the inline formatting over again on every streamed token.
-            var open = OpenFenceRegex.Match(text, pos);
-            if (open.Success)
-            {
-                if (open.Index > pos)
-                    AddTextSegments(segments, text[pos..open.Index]);
-                segments.Add(new MarkdownSegment
-                {
-                    Type = SegmentType.CodeBlock, Open = true,
-                    Code = text[(open.Index + open.Length)..].TrimEnd(), Language = open.Groups[1].Value,
-                });
-            }
-            else AddTextSegments(segments, text[pos..]);
-        }
+            AddTextSegments(segments, text[pos..]);
 
         return segments;
+    }
+
+    /// <summary>One fenced code block: where it starts and ends in the text, its language and its code.</summary>
+    public readonly record struct CodeFence(int Start, int End, string Language, string Code, bool Open);
+
+    /// <summary>
+    /// The fenced code blocks of a reply, the way every provider writes them (owner 2026-11-06: "กล่องโต้ตอบเมื่อต้องแสดงโค๊ด
+    /// ควรแสดงเป็นโค๊ดแบบก๊อปไปวางได้ … ทุกเจ้าทำให้ดี"): ``` or ~~~ of any length (a 4-backtick fence may hold ``` inside),
+    /// any info string (<c>c#</c>, <c>c++</c>, <c>objective-c</c>, <c>python title="x.py"</c>, <c>ts:app.ts</c>,
+    /// <c>{.rust}</c>), a fence indented inside a list (the indent is taken off the code), and one that opens at the end
+    /// of a sentence ("Run: ```bash"). Closed by a line of the same character, at least as long. An opening line only
+    /// counts once its newline has arrived, so a streamed "```pyt" is not read as language "pyt". Pure: the harness checks it.
+    /// </summary>
+    public static List<CodeFence> FindCodeFences(string text)
+    {
+        var list = new List<CodeFence>();
+        int lineStart = 0;
+        while (lineStart < text.Length)
+        {
+            int nl = text.IndexOf('\n', lineStart);
+            if (nl < 0) break;                       // the opening line is still being written
+            int next = nl + 1;
+            string line = text[lineStart..nl].TrimEnd('\r');
+            if (OpeningFence(line) is not { } o) { lineStart = next; continue; }
+
+            int closeStart = -1, closeEnd = -1, p = next;
+            while (p < text.Length)
+            {
+                int le = text.IndexOf('\n', p);
+                int nx = le < 0 ? text.Length : le + 1;
+                string l = text[p..(le < 0 ? text.Length : le)].TrimEnd('\r');
+                if (IsClosingFence(l, o.Char, o.Length))
+                {
+                    closeStart = p; closeEnd = nx;
+                    break;
+                }
+                // A sentence-style fence was usually closed the same way: "ls```" at the end of the last code line.
+                if (o.At > 0 && l.TrimEnd().EndsWith(new string(o.Char, o.Length), StringComparison.Ordinal))
+                {
+                    closeStart = p + l.TrimEnd().Length - o.Length; closeEnd = nx;
+                    break;
+                }
+                p = nx;
+            }
+            bool open = closeStart < 0;
+            string raw = next >= text.Length ? "" : text[next..(open ? text.Length : closeStart)];
+            int end = open ? text.Length : closeEnd;
+            list.Add(new CodeFence(lineStart + o.At, end, o.Language, Dedent(raw, o.Indent).TrimEnd(), open));
+            lineStart = end;
+        }
+        return list;
+    }
+
+    private readonly record struct Opening(int At, int Indent, char Char, int Length, string Language);
+
+    private static Opening? OpeningFence(string line)
+    {
+        int i = 0;
+        while (i < line.Length && line[i] is ' ' or '\t') i++;
+        if (i < line.Length && line[i] is '`' or '~')
+        {
+            char c = line[i];
+            int n = Run(line, i, c);
+            if (n >= 3)
+            {
+                string info = line[(i + n)..].Trim();
+                // ```code``` on one line is inline code, not a fence (a backtick fence's info has no backtick).
+                if (c == '~' || !info.Contains('`')) return new Opening(0, i, c, n, LanguageOf(info));
+            }
+        }
+        // A fence at the end of a sentence: "Here it is: ```python".
+        int at = line.LastIndexOf("```", StringComparison.Ordinal);
+        if (at > 0)
+        {
+            while (at > 0 && line[at - 1] == '`') at--;
+            int n = Run(line, at, '`');
+            string info = line[(at + n)..].Trim();
+            // Not "use ```npm i``` here": the fence must be the line's only one (that one closes inline code).
+            if (n >= 3 && info.Length <= 30 && MidLineInfoRegex.IsMatch(info) && line[..at].Trim().Length > 0
+                && !line[..at].Contains("```", StringComparison.Ordinal))
+                return new Opening(at, 0, '`', n, LanguageOf(info));
+        }
+        return null;
+    }
+
+    private static int Run(string s, int from, char c)
+    {
+        int n = 0;
+        while (from + n < s.Length && s[from + n] == c) n++;
+        return n;
+    }
+
+    private static bool IsClosingFence(string line, char c, int length)
+    {
+        string t = line.Trim();
+        return t.Length >= length && t.All(ch => ch == c);
+    }
+
+    /// <summary>The language of an info string: its first word, without {.lang} braces, a ":file" tail or a "title=".</summary>
+    private static string LanguageOf(string info)
+    {
+        if (info.Length == 0) return "";
+        string first = info.Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries)[0];
+        first = first.Trim('{', '}').TrimStart('.');
+        int colon = first.IndexOf(':');
+        if (colon > 0) first = first[..colon];
+        if (first.Contains('=')) return "";
+        return first.Length > 30 ? first[..30] : first;
+    }
+
+    /// <summary>Takes a fence's own indent off each code line (a fence inside a list item is indented with it).</summary>
+    private static string Dedent(string code, int indent)
+    {
+        if (indent == 0 || code.Length == 0) return code;
+        var lines = code.Split('\n');
+        for (int k = 0; k < lines.Length; k++)
+        {
+            int cut = 0;
+            while (cut < indent && cut < lines[k].Length && lines[k][cut] is ' ' or '\t') cut++;
+            lines[k] = lines[k][cut..];
+        }
+        return string.Join('\n', lines);
     }
 
     private static void AddTextSegments(List<MarkdownSegment> segments, string text)
@@ -612,8 +714,10 @@ public static class MarkdownHelper
 
     private static UIElement CreateCodeBlock(string code, string language)
     {
-        bool isDiff = language.Equals("diff", StringComparison.OrdinalIgnoreCase)
-                      || (code.Contains("\n+") && code.Contains("\n-"));
+        // A block named for its language is that language (a Markdown or YAML list starts lines with "-"); only an
+        // unnamed block is guessed to be a diff from its +/- lines.
+        bool isDiff = language.Equals("diff", StringComparison.OrdinalIgnoreCase) || language.Equals("patch", StringComparison.OrdinalIgnoreCase)
+                      || (language.Length == 0 && code.Contains("\n+") && code.Contains("\n-"));
 
         var outerBorder = new Border
         {

@@ -45,7 +45,7 @@ public static class PermissionExplainer
         string tool = info.ToolName ?? "";
         string who = t("perm.who.ai");
         string bare = tool;
-        foreach (var agent in new[] { "Claude Dev ", "Gemini Dev " })
+        foreach (var agent in new[] { "Claude Dev ", "Gemini Dev ", "OpenAI Dev ", "Grok Dev ", "Antigravity Dev " })
             if (tool.StartsWith(agent, StringComparison.Ordinal)) { who = agent.Trim(); bare = tool[agent.Length..].Trim(); }
 
         var args = info.Args ?? new Dictionary<string, string>();
@@ -96,6 +96,8 @@ public static class PermissionExplainer
             e.Add(PermissionRisk.High, string.Format(t("perm.do.desktop"), Short(resource, 80)), t("perm.effect.run"), t("perm.where.machine"));
         else if (lower is "open_project")
             e.Folder(ExtractPath(detail) ?? First(Arg("path"), resource));
+        else if (lower is "cli_edit_folder")   // AgentToolService.AskCliEditGrantAsync: edits in a folder the CLI opened
+            e.Add(PermissionRisk.Medium, string.Format(t("perm.do.cliEditFolder"), First(Arg("path"), resource)), t("perm.effect.write"));
         else if (lower is "restart_app")
             e.Add(PermissionRisk.Medium, t("perm.do.restart"), t("perm.effect.run"), t("perm.where.machine"));
         else if (lower is "agent_spawn" or "subagent_invoke" or "task")

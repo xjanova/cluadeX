@@ -1376,6 +1376,8 @@ public partial class ChatViewModel : ViewModelBase
         // subscribed to OnAskUserQuestion before, so the tool failed every time ("no UI handler connected") while the
         // model was told it could ask.
         _agentToolService.OnAskUserQuestion += AskUserAsync;
+        // Several questions at once (any provider): one card with steps, Back / Next and a review.
+        _agentToolService.OnAskUserSteps += AskUserStepsAsync;
 
         // Wire the human-in-the-loop permission prompt. Without this, PermAction.Ask resolved against a
         // null handler → silently DENIED → users were funneled into blanket-allowing "*" (which then

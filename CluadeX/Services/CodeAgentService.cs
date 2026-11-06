@@ -2160,10 +2160,12 @@ public partial class CodeAgentService
             var pick = AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, AgentRunScope.Current?.UserImages?.Count ?? 0, history));
             _debugLog?.Info("Agent", $"effort auto starts at {pick.Effort} ({pick.ReasonKey}) · the CLI runs the turn, no climb");
         }
+        string? folderBefore = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
         var result = await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
         result = await CarryOnLateReportsAsync(provider, delegated, history, userMessage, result, ct, progress);
+        result = await CarryOnInOpenedFolderAsync(provider, delegated, history, userMessage, folderBefore, result, ct, progress);
         if (!result.AuthRefused || provider is not Providers.IDelegatedCliProvider claudeDev) return result;
-        string cliName = delegated switch { AiProviderType.GeminiDev => "Gemini Dev", AiProviderType.AntigravityDev => "Antigravity Dev", AiProviderType.OpenAIDev => "OpenAI Dev", AiProviderType.GrokDev => "Grok Dev", _ => "Claude Dev" };
+        string cliName = CliDisplayName(delegated);
 
         bool th = _localizationService.CurrentLanguage == "th";
         bool loggedIn = await claudeDev.IsLoggedInAsync(ct);
@@ -2196,6 +2198,88 @@ public partial class CodeAgentService
         OnAgentStatus?.Invoke(th ? "✅ ล็อกอินแล้ว — กำลังส่งคำถามเดิมอีกครั้ง…" : "✅ Signed in — asking again…");
         _debugLog?.Info("Agent", $"{cliName} signed in · running the turn again (refusal: {Providers.CliRefusals.ForLog(result.RefusalText ?? result.FinalResponse, 160)})");
         return await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
+    }
+
+    private static string CliDisplayName(AiProviderType delegated) => delegated switch
+    {
+        AiProviderType.GeminiDev => "Gemini Dev", AiProviderType.AntigravityDev => "Antigravity Dev",
+        AiProviderType.OpenAIDev => "OpenAI Dev", AiProviderType.GrokDev => "Grok Dev", _ => "Claude Dev",
+    };
+
+    private static bool IsCliAgent(AiProviderType t) =>
+        t is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.GrokDev;
+
+    /// <summary>The folder a CLI turn moved its run to with open_project, or null when it stayed. Pure.</summary>
+    public static string? FolderOpenedDuringTurn(string? before, string? after)
+    {
+        if (string.IsNullOrWhiteSpace(after)) return null;
+        if (string.IsNullOrWhiteSpace(before)) return after;
+        try
+        {
+            return string.Equals(Path.GetFullPath(before).TrimEnd('\\', '/'), Path.GetFullPath(after).TrimEnd('\\', '/'),
+                StringComparison.OrdinalIgnoreCase) ? null : after;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The message the follow-up turn in a folder the agent just opened starts with. Pure.</summary>
+    public static string OpenedFolderMessage(string folder, Providers.ClaudeDevProvider.WorkerGrant? grant, string userMessage)
+    {
+        string rights = grant is { Edit: true }
+            ? "you may now create and edit files in it" + (grant.Run ? " and run commands there" : "")
+            : "it is read-only for you (the user did not allow edits there)";
+        string ask = userMessage.Trim();
+        if (ask.Length > 2000) ask = ask[..2000] + "…";
+        return $"CluadeX opened {folder} for this task and this turn runs in it: {rights}. Carry the user's request on from "
+            + "where you stopped — do the work there now (create the files, folders and outputs it needs) instead of describing "
+            + "it, and do not ask the user to open or allow anything again. Then give the complete final report."
+            + (ask.Length > 0 ? "\n\nThe user's request was:\n" + ask : "");
+    }
+
+    /// <summary>
+    /// A CLI agent opened (or created) a project folder with open_project during its turn. Its process stayed read-only in
+    /// the folder it started in, so it could only say "this session is read-only" — the owner then had to send another
+    /// message, and with Accept edits off even that turn was read-only (Codex, 2026-11-06). Now: ask the user once whether
+    /// it may edit there in this chat, then go on at once with a turn that starts in that folder. One follow-up per turn.
+    /// </summary>
+    private async Task<AgentLoopResult> CarryOnInOpenedFolderAsync(Providers.IAiProvider provider, AiProviderType delegated,
+        List<ChatMessage> history, string userMessage, string? folderBefore, AgentLoopResult result, CancellationToken ct,
+        IProgress<string>? progress)
+    {
+        if (!IsCliAgent(delegated) || result.AuthRefused || ct.IsCancellationRequested) return result;
+        string? now = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
+        string? opened = FolderOpenedDuringTurn(folderBefore, now);
+        if (opened == null) return result;
+        string cliName = CliDisplayName(delegated);
+        var grant = WorkerGrantFor(opened);
+        if (grant is not { Edit: true } && await _agentToolService.AskCliEditGrantAsync(cliName, opened, ct))
+            grant = WorkerGrantFor(opened) ?? new Providers.ClaudeDevProvider.WorkerGrant(true, false);
+        // Stop while the card was open retires it as a "no": that is the stop, not a refusal to explain.
+        if (ct.IsCancellationRequested) return result;
+        if (grant is not { Edit: true })
+        {
+            _debugLog?.Info("Agent", $"{delegated} opened {opened} mid-turn · edits not allowed there, no follow-up");
+            result.FinalResponse = (result.FinalResponse + "\n\n⚠ " + _localizationService.T("agent.cliEditDeclined", cliName, opened)).Trim();
+            return result;
+        }
+        OnAgentStatus?.Invoke(_localizationService.T("agent.cliFolderCarryOn", cliName, opened));
+        _debugLog?.Info("Agent", $"{delegated} opened {opened} mid-turn · carrying on there · edit=True run={grant.Run}");
+        var withTurn = new List<ChatMessage>(history);
+        if (!string.IsNullOrWhiteSpace(userMessage)) withTurn.Add(new ChatMessage { Role = MessageRole.User, Content = userMessage });
+        foreach (var st in result.Steps)
+            foreach (var call in st.ToolCalls)
+            {
+                string arg = call.Arguments.Values.FirstOrDefault() ?? "";
+                withTurn.Add(new ChatMessage { Role = MessageRole.ToolAction, Content = $"{call.ToolName} {(arg.Length > 160 ? arg[..160] : arg)}".Trim() });
+            }
+        if (!string.IsNullOrWhiteSpace(result.FinalResponse))
+            withTurn.Add(new ChatMessage { Role = MessageRole.Assistant, Content = result.FinalResponse });
+        var next = await RunDelegatedTurnCoreAsync(provider, delegated, withTurn, OpenedFolderMessage(opened, grant, userMessage), ct, progress);
+        next = await CarryOnLateReportsAsync(provider, delegated, withTurn, userMessage, next, ct, progress);
+        next.Steps.InsertRange(0, result.Steps);
+        next.TurnCount += result.TurnCount;
+        if (string.IsNullOrWhiteSpace(next.FinalResponse)) next.FinalResponse = result.FinalResponse;
+        return next;
     }
 
     /// <summary>The StopReason of a CLI turn whose background sub-agents ended after its last reply.</summary>
@@ -2285,7 +2369,9 @@ public partial class CodeAgentService
     {
         string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
         // Today's cap for CLI agents is used up: nothing is started (the CLI's own stop only comes after a first request).
-        if (provider.RunsOwnSubAgents && CliBudgetLeft() is <= 0)
+        // Every CLI agent, Antigravity included: it records package usage like the others but has no sub-agents of its
+        // own, and keying this on RunsOwnSubAgents let it run past the cap (parity audit 2026-11-06).
+        if (IsCliAgent(delegated) && CliBudgetLeft() is <= 0)
         {
             string spent = _localizationService.T("agent.cliBudgetSpent");
             _debugLog?.Info("Agent", $"{delegated} not started · the CLI daily budget is used");
@@ -2343,7 +2429,9 @@ public partial class CodeAgentService
                 // answers — the user's rules, "Allow in this chat", or the permission row in this chat.
                 delegated == AiProviderType.ClaudeDev ? _agentToolService.AuthorizeCliMcpCallAsync : null,
                 // A question from any CLI opens the same card as ask_user on the native loop.
-                _agentToolService.AskUserAsync, spawnGate)
+                _agentToolService.AskUserAsync, spawnGate,
+                // Several questions at once: one card with steps, Back / Next and a review — the same for every CLI.
+                _agentToolService.AskUserStepsAsync)
             : null;
         if (cliAgent)
         {
@@ -2591,15 +2679,19 @@ public partial class CodeAgentService
     /// running task to Claude Dev left a model that could only "propose diffs", and nothing applied them.
     /// </summary>
     internal Providers.ClaudeDevProvider.WorkerGrant? WorkerGrantFor(string? folder) =>
-        DecideWorkerGrant(_permissionService, folder);
+        DecideWorkerGrant(_permissionService, folder,
+            !string.IsNullOrWhiteSpace(folder) && _agentToolService.CliEditApproved(folder));
 
-    public static Providers.ClaudeDevProvider.WorkerGrant? DecideWorkerGrant(PermissionService? perms, string? folder)
+    /// <param name="editsApprovedInChat">The user said yes, in this chat, to a CLI agent editing in this folder
+    /// (AgentToolService.AskCliEditGrantAsync, after the agent opened it): counts as Accept edits for it.</param>
+    public static Providers.ClaudeDevProvider.WorkerGrant? DecideWorkerGrant(PermissionService? perms, string? folder,
+        bool editsApprovedInChat = false)
     {
         if (perms == null || string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return null;
         if (PermissionService.IsUnsafeAcceptEditsRoot(folder)) return null;
         string probe = Path.Combine(folder, "file.txt");
         var writeRule = perms.FindRule(probe, "write", "write_file");
-        bool edit = writeRule == PermAction.Allow || (writeRule == null && perms.AcceptsEditsIn(folder));
+        bool edit = writeRule == PermAction.Allow || (writeRule == null && (perms.AcceptsEditsIn(folder) || editsApprovedInChat));
         bool run = perms.FindRule("git status", "execute", "run_command") == PermAction.Allow;
         return edit || run ? new Providers.ClaudeDevProvider.WorkerGrant(edit, run) : null;
     }

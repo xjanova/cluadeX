@@ -59,6 +59,13 @@ public static class AntigravityGuard
 
     public const string McpTool = "call_mcp_tool";
 
+    /// <summary>CluadeX's chat tools a read-only Antigravity chat may still call: each runs through CluadeX's own gate.</summary>
+    public static readonly HashSet<string> ReadOnlyChatTools = new(StringComparer.Ordinal)
+    {
+        Tools.ProjectToolModule.ToolName, Tools.ProjectToolModule.NewChatToolName, Tools.ProjectToolModule.CloseChatToolName,
+        Tools.ChatToolBridge.PlanToolName, Tools.OrchestrationToolModule.WrapUpToolName,
+    };
+
     /// <summary>The decision for one hook input. Pure apart from the changed-files scan <see cref="GuardHook.Decide"/> makes
     /// for a command that runs project code.</summary>
     public static Decision Decide(string hookJson, Config cfg)
@@ -77,15 +84,33 @@ public static class AntigravityGuard
         // Asking the user changes nothing, so a read-only chat may ask too. CluadeX's browser and desktop tools pass in any chat like
         // on the other CLIs: each runs through CluadeX's own gate inside the call (Dev Preview, the site's permission card,
         // the user's rules) — the same answer a native call gets, so this hook adds no second question.
+        // The chat's own tools too: open_project / new_chat / close_chat ask the user inside the call where a native call
+        // would, and the plan / wrap-up only draw on the chat. A read-only chat with no project needs open_project most of
+        // all — the wrapper tells the model to call it (ChatToolBridge.OpenProjectHint), and this hook used to refuse it.
         if (tool == McpTool && IsCluadexServer(Str(args, "ServerName"))
             && (Str(args, "ToolName") is { } own && (own == Tools.ChatToolBridge.AskToolName || Browser.BrowserToolModule.ToolNames.Contains(own)
-                || Desktop.DesktopToolModule.ToolNames.Contains(own))))
+                || Desktop.DesktopToolModule.ToolNames.Contains(own) || ReadOnlyChatTools.Contains(own))))
             return new Decision(Verdict.Allow, null, who);
 
         if (tool == McpTool)
-            return cfg.Edit || cfg.Run
-                ? new Decision(Verdict.Allow, null, who)
-                : Deny("CluadeX: this chat is read-only (no edit/run grant) — MCP tools are not used here. Answer from what you can read.");
+        {
+            string server = Str(args, "ServerName") ?? "";
+            string mcpTool = Str(args, "ToolName") ?? "";
+            // The brain tools Claude Dev may call unasked (recall and the agent bus always, its write tools with the edit
+            // grant): the same set, in any chat — a read-only Claude Dev turn has them too.
+            if (IsServer(server, Providers.GeminiDevProvider.BrainServerName)
+                && Providers.ClaudeDevProvider.BrainToolsFor(new Providers.ClaudeDevProvider.WorkerGrant(cfg.Edit, cfg.Run)).Contains(mcpTool))
+                return new Decision(Verdict.Allow, null, who);
+            if (!cfg.Edit && !cfg.Run)
+                return Deny("CluadeX: this chat is read-only (no edit/run grant) — MCP tools are not used here. Answer from what you can read.");
+            // CluadeX's own server gates every call itself.
+            if (IsCluadexServer(server)) return new Decision(Verdict.Allow, null, who);
+            // Any other server's tool (ssh_run, the brain's chrome__*, a user's own server…) ran unasked with a grant;
+            // the other CLIs put it to the user first (parity audit 2026-11-06). Now the user decides on CluadeX's prompt.
+            return new Decision(Verdict.AskUser,
+                $"CluadeX: Antigravity wants to call the MCP tool {mcpTool} on server {server}, which CluadeX does not gate itself.",
+                who, Cap(server + " · " + mcpTool + " " + (args["Arguments"]?.ToJsonString() ?? args["arguments"]?.ToJsonString() ?? "")));
+        }
 
         if (IsRunTool(tool))
         {
@@ -182,9 +207,11 @@ public static class AntigravityGuard
 
     /// <summary>CluadeX's own MCP server as agy names it: "cluadex", or "&lt;plugin&gt;_cluadex" (the turn's plugin prefixes
     /// its servers).</summary>
-    private static bool IsCluadexServer(string? server) =>
-        server == Tools.ChatToolBridge.ServerName
-        || server?.EndsWith("_" + Tools.ChatToolBridge.ServerName, StringComparison.Ordinal) == true;
+    private static bool IsCluadexServer(string? server) => IsServer(server, Tools.ChatToolBridge.ServerName);
+
+    /// <summary>The server by its own name, or as agy names a plugin's server (&lt;plugin&gt;_&lt;server&gt;).</summary>
+    private static bool IsServer(string? server, string name) =>
+        server == name || server?.EndsWith("_" + name, StringComparison.Ordinal) == true;
 
     private static Decision Deny(string reason) => new(Verdict.Deny, reason);
 

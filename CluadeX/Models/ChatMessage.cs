@@ -57,6 +57,7 @@ public class ChatMessage : INotifyPropertyChanged
             if (_content == value) return;
             _content = value;
             OnPropertyChanged();
+            if (Role == MessageRole.Question) OnPropertyChanged(nameof(QuestionShown));
             if (Role == MessageRole.Assistant) NoteRoomSpeaker();
         }
     }
@@ -438,8 +439,8 @@ public class ChatMessage : INotifyPropertyChanged
     public Action<string>? QuestionCallback { get; set; }
     private bool _questionAnswered;
     /// <summary>Answered, cancelled, or a row from an earlier session (nobody is waiting for it any more).</summary>
-    public bool QuestionAnswered => _questionAnswered || QuestionCallback == null;
-    public bool HasQuestionOptions => QuestionOptions.Count > 0;
+    public bool QuestionAnswered => _questionAnswered || (QuestionCallback == null && StepsCallback == null);
+    public bool HasQuestionOptions => QuestionOptions.Count > 0 && !UsesSteps;
     /// <summary>The girl standing beside this question (an Assets\Girls name), picked at random when it was asked.</summary>
     public string? QuestionGirl { get; set; }
     public System.Windows.Media.ImageSource? QuestionGirlImage => Services.GirlArt.Image(QuestionGirl);
@@ -447,9 +448,12 @@ public class ChatMessage : INotifyPropertyChanged
     private string _answerDraft = "";
     public string AnswerDraft { get => _answerDraft; set { _answerDraft = value; OnPropertyChanged(); } }
 
-    /// <summary>Answer once: the answer is kept under the question (it is saved with it) and the agent continues.</summary>
+    /// <summary>Answer once: the answer is kept under the question (it is saved with it) and the agent continues.
+    /// On a card with steps it answers the step on screen (and moves on) — the composer's answer box and Enter work the
+    /// same on both.</summary>
     public bool AnswerQuestion(string? answer)
     {
+        if (UsesSteps) return StepAnswerTyped();
         answer = answer?.Trim() ?? "";
         if (QuestionAnswered || answer.Length == 0) return false;
         _questionAnswered = true;
@@ -466,6 +470,145 @@ public class ChatMessage : INotifyPropertyChanged
         _questionAnswered = true;
         Content += "\n→ " + note;
         OnPropertyChanged(nameof(QuestionAnswered));
+        RaiseSteps();
+    }
+
+    // ─── a question card with steps (several questions, or one with several picks) ───
+
+    /// <summary>The steps of a card that asks several questions at once, or one multi-select question. Empty = the
+    /// plain one-question card (<see cref="QuestionOptions"/>, <see cref="QuestionCallback"/>).</summary>
+    public List<AskStepState> Steps { get; private set; } = new();
+    /// <summary>Resolves the agent's waiting question with one answer per step.</summary>
+    public Action<IReadOnlyList<string>>? StepsCallback { get; private set; }
+
+    public bool UsesSteps => Steps.Count > 0;
+    private int _stepIndex;
+    /// <summary>The step on screen: 0..Steps.Count-1, or Steps.Count = the review of every answer before they are sent.</summary>
+    public int StepIndex => _stepIndex;
+    public bool OnReview => Steps.Count > 1 && _stepIndex >= Steps.Count;
+    public AskStepState? CurrentStep => UsesSteps && _stepIndex < Steps.Count ? Steps[_stepIndex] : null;
+    /// <summary>The bar over the card: "2 / 3" while it is open and asks more than one question.</summary>
+    public bool ShowsStepBar => Steps.Count > 1 && !QuestionAnswered;
+    public string StepLabel => OnReview ? $"{Steps.Count} / {Steps.Count}" : $"{_stepIndex + 1} / {Steps.Count}";
+    public bool CanStepBack => UsesSteps && !QuestionAnswered && _stepIndex > 0;
+    /// <summary>The step's option buttons are shown (not on the review, not once answered).</summary>
+    public bool ShowsStepChoices => CurrentStep is { Choices.Count: > 0 } && !QuestionAnswered;
+    public IReadOnlyList<AskChoice> StepChoices => CurrentStep?.Choices ?? (IReadOnlyList<AskChoice>)Array.Empty<AskChoice>();
+    /// <summary>The answer box: the plain card, or a step (the review has none).</summary>
+    public bool ShowsAnswerBox => !QuestionAnswered && !OnReview;
+    /// <summary>The primary button's text: Next on a step, Send on the last one / on the review.</summary>
+    public bool StepIsLast => !UsesSteps || OnReview || (Steps.Count == 1);
+
+    /// <summary>What the card shows: the step on screen (or the review) while it is open, else the saved text.</summary>
+    /// Empty on every other row: the (collapsed) question card is in every row's template, and its Markdown panel would
+    /// otherwise render each reply a second time.
+    public string QuestionShown =>
+        Role != MessageRole.Question ? "" : UsesSteps && !QuestionAnswered ? (CurrentStep?.Text ?? ReviewText) : Content;
+
+    /// <summary>The review step: every question with its answer, Back to change one.</summary>
+    public string ReviewText
+    {
+        get
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < Steps.Count; i++)
+            {
+                if (i > 0) sb.Append("\n\n");
+                string a = Steps[i].Answer;
+                // "**2.**", not "2.": a Markdown list item would restart at 1 in every paragraph.
+                sb.Append("**").Append(i + 1).Append(".** ").Append(Steps[i].Step.Question.Trim()).Append("\n→ ").Append(a.Length > 0 ? a : "—");
+            }
+            return sb.ToString();
+        }
+    }
+
+    /// <summary>Make this a card with steps. Its saved text lists the questions (a chat closed while it waits still shows
+    /// them); once answered it holds every question with its answer.</summary>
+    public void SetSteps(IReadOnlyList<AskStep> steps, Action<IReadOnlyList<string>> answered)
+    {
+        Steps = steps.Select(s => new AskStepState(s)).ToList();
+        StepsCallback = answered;
+        _stepIndex = 0;
+        AnswerDraft = "";
+        Content = string.Join("\n\n", steps.Select(s => "❓ " + s.Question.Trim()));
+        RaiseSteps();
+    }
+
+    /// <summary>An option button on the step on screen: a single-choice step takes it as the answer and moves on; a
+    /// multi-select step ticks or unticks it.</summary>
+    public void StepPick(AskChoice choice)
+    {
+        if (CurrentStep is not { } step || QuestionAnswered || !step.Choices.Contains(choice)) return;
+        if (step.Step.Multi) { choice.Picked = !choice.Picked; RaiseSteps(); return; }
+        foreach (var c in step.Choices) c.Picked = ReferenceEquals(c, choice);
+        step.Draft = "";
+        AnswerDraft = "";
+        StepNext();
+    }
+
+    /// <summary>The answer box / Enter / the primary button: keep what was typed and go on (send on the last step).</summary>
+    private bool StepAnswerTyped()
+    {
+        if (QuestionAnswered) return false;
+        if (CurrentStep is { } step)
+        {
+            step.Draft = AnswerDraft ?? "";
+            // A single-choice step answered by typing: the typed answer replaces an option picked before.
+            if (!step.Step.Multi && step.Draft.Trim().Length > 0) foreach (var c in step.Choices) c.Picked = false;
+            if (step.Answer.Length == 0) return false;
+        }
+        return StepNext();
+    }
+
+    /// <summary>Next step; after the last one the review (more than one question) or the answer itself.</summary>
+    public bool StepNext()
+    {
+        if (!UsesSteps || QuestionAnswered) return false;
+        if (CurrentStep is not { } step) return SendSteps();   // on the review
+        step.Draft = AnswerDraft ?? "";
+        if (step.Answer.Length == 0) return false;
+        if (Steps.Count == 1) return SendSteps();
+        _stepIndex++;
+        AnswerDraft = CurrentStep?.Draft ?? "";
+        RaiseSteps();
+        return true;
+    }
+
+    /// <summary>Back one step, with its answer as it was left.</summary>
+    public void StepBack()
+    {
+        if (!CanStepBack) return;
+        if (CurrentStep is { } step) step.Draft = AnswerDraft ?? "";
+        _stepIndex--;
+        AnswerDraft = CurrentStep?.Draft ?? "";
+        RaiseSteps();
+    }
+
+    /// <summary>Every step answered: the card keeps the questions with their answers and the agent continues.</summary>
+    private bool SendSteps()
+    {
+        var answers = Steps.Select(s => s.Answer).ToList();
+        if (answers.Any(a => a.Length == 0))
+        {
+            _stepIndex = answers.FindIndex(a => a.Length == 0);   // back to the first one left open
+            AnswerDraft = CurrentStep?.Draft ?? "";
+            RaiseSteps();
+            return false;
+        }
+        _questionAnswered = true;
+        Content = string.Join("\n\n", Steps.Select((s, i) => "❓ " + s.Step.Question.Trim() + "\n→ " + answers[i]));
+        OnPropertyChanged(nameof(QuestionAnswered));
+        RaiseSteps();
+        try { StepsCallback?.Invoke(answers); } catch { /* already resolved */ }
+        return true;
+    }
+
+    private void RaiseSteps()
+    {
+        foreach (var name in new[] { nameof(StepIndex), nameof(OnReview), nameof(CurrentStep), nameof(ShowsStepBar), nameof(StepLabel),
+                     nameof(CanStepBack), nameof(ShowsStepChoices), nameof(StepChoices), nameof(ShowsAnswerBox), nameof(StepIsLast),
+                     nameof(QuestionShown), nameof(ReviewText), nameof(HasQuestionOptions) })
+            OnPropertyChanged(name);
     }
 
     // ─── Permission Request Fields ───

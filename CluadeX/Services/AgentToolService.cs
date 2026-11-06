@@ -256,6 +256,53 @@ public class AgentToolService : IDisposable
         lock (_onceLock) _onceApprovals.Add(SessionKey + "|" + onceKey);
     }
 
+    // ── Edits for a CLI agent in a folder it opened ──
+    // A CLI agent (Codex, Gemini Dev…) runs headless: it cannot stop at each write for a prompt, so with no Allow rule and
+    // Accept edits off it gets a read-only sandbox (CodeAgentService.DecideWorkerGrant). When it opens or creates a folder
+    // for the task with open_project, the user is asked ONCE for that folder in this chat instead — then its turns there
+    // may create and edit files (owner 2026-11-06: Codex was asked for a new folder and answered "read-only" 13 times).
+
+    private static string CliEditKey(string folder)
+    {
+        string full;
+        try { full = Path.GetFullPath(folder).TrimEnd('\\', '/'); }
+        catch { full = folder; }
+        return "cli-edit|" + full.ToLowerInvariant();
+    }
+
+    /// <summary>The user allowed CLI agents to edit in <paramref name="folder"/> in this chat (<see cref="AskCliEditGrantAsync"/>).</summary>
+    public bool CliEditApproved(string folder) =>
+        !string.IsNullOrWhiteSpace(folder) && IsOnceApproved(CliEditKey(folder));
+
+    /// <summary>
+    /// Ask the user once whether <paramref name="agentName"/> may create and edit files in <paramref name="folder"/> for
+    /// this chat. No prompt and false for a folder Accept edits may never cover (a drive root, the profile, a system
+    /// folder) or one a Deny / Ask rule names for write_file; true at once with the permission system off (as every
+    /// write is then). A yes is remembered for this chat only.
+    /// </summary>
+    public async Task<bool> AskCliEditGrantAsync(string agentName, string folder, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return false;
+        if (PermissionService.IsUnsafeAcceptEditsRoot(folder, _settingsService.DataRoot)) return false;
+        string probe = Path.Combine(folder, "file.txt");
+        var rule = _permissionService.FindRule(probe, "write", "write_file");
+        if (rule is PermAction.Deny or PermAction.Ask) return false;
+        if (rule == PermAction.Allow || CliEditApproved(folder)) return true;
+        // Remembered too, so the turn that starts there (it decides its own grant) gets the edit rights.
+        if (!_settingsService.Settings.Features.PermissionSystem) { RememberOnceApproval(CliEditKey(folder)); return true; }
+        if (OnPermissionRequired == null) return false;
+        ct.ThrowIfCancellationRequested();
+        bool allowed = await OnPermissionRequired.Invoke(new PermissionRequestInfo
+        {
+            ToolName = agentName + " cli_edit_folder",
+            Detail = "write: " + folder + "\n" + string.Format(L("agent.cliEditAsk"), agentName, folder),
+            Args = new Dictionary<string, string> { ["path"] = folder },
+            GivenUp = ct,
+        });
+        if (allowed) RememberOnceApproval(CliEditKey(folder));
+        return allowed;
+    }
+
     // ── "Accept edits" and the automatic build check ──
     // Every file edit "Accept edits" let through without a prompt bumps _acceptedEditSeq. The automatic build check
     // after an edit runs the project's build — and a build runs whatever the project's scripts/targets say — so while
@@ -1270,7 +1317,7 @@ public class AgentToolService : IDisposable
                 ("done", "array", "Step numbers (1-based) to mark finished, e.g. [2]", false), ("start", "integer", "Step number (1-based) to start now", false),
                 ("action", "string", "Without todos: add|complete|list|clear (default add)", false), ("content", "string", "Without todos: the item text (add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
-        schemas.Add(new() { Name = "ask_user", Description = "Ask the user a question for clarification", InputSchema = MakeSchema(("question", "string", "Question to ask", true), ("options", "string", "Comma-separated options", false)) });
+        schemas.Add(new() { Name = "ask_user", Description = AskUserDescription, InputSchema = System.Text.Json.JsonDocument.Parse(AskUserSchemaJson).RootElement.Clone() });
         schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
@@ -5377,6 +5424,119 @@ public class AgentToolService : IDisposable
         catch (OperationCanceledException) { return null; }
     }
 
+    /// <summary>ask_user's description, the same on the native loop and on the CLIs' MCP tool.</summary>
+    public const string AskUserDescription =
+        "Ask the user on a card in the CluadeX chat and wait for the answer. Use it whenever you need the user's decision "
+        + "or choice. One question: question (+ options to choose from; they can also type a free answer). Several "
+        + "questions that belong together: questions — one card with a step per question, Back / Next and a review "
+        + "before it is sent; you get one answer per question. Set multiSelect on a question whose options can be picked together.";
+
+    /// <summary>ask_user's input: one question, or several in <c>questions</c>.</summary>
+    public const string AskUserSchemaJson = """
+    {
+      "type": "object",
+      "properties": {
+        "question": { "type": "string", "description": "One question, in the user's language." },
+        "options": { "type": "array", "items": { "type": "string" }, "description": "Short answers to choose from (optional)." },
+        "questions": {
+          "type": "array",
+          "description": "Several questions at once (instead of question): each shown as a step the user can go back to.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "question": { "type": "string", "description": "The question, in the user's language." },
+              "options": { "type": "array", "items": { "type": "string" }, "description": "Short answers to choose from (optional)." },
+              "multiSelect": { "type": "boolean", "description": "true = several options can be picked." }
+            },
+            "required": ["question"]
+          }
+        }
+      }
+    }
+    """;
+
+    /// <summary>Raised to put several questions on one card with steps (Back / Next, a review before sending).</summary>
+    public event Func<IReadOnlyList<AskStep>, Task<IReadOnlyList<string>>>? OnAskUserSteps;
+
+    /// <summary>
+    /// Several questions at once — every provider's way in (ask_user with <c>questions</c>, Claude Code's
+    /// AskUserQuestion). One answer per question, or null when nobody answers (stopped, headless). A single plain
+    /// question goes on the plain card; without a steps card (an older host) they are asked one after another.
+    /// </summary>
+    public async Task<IReadOnlyList<string>?> AskUserStepsAsync(IReadOnlyList<AskStep> steps)
+    {
+        if (steps.Count == 0) return Array.Empty<string>();
+        try
+        {
+            if (steps.Count == 1 && !steps[0].Multi)
+                return await AskUserAsync(StepPrompt(steps[0]), steps[0].Options.ToList()) is { } one ? new[] { one } : null;
+            if (OnAskUserSteps is { } handler) return await handler.Invoke(steps);
+            var answers = new List<string>();
+            foreach (var s in steps)
+            {
+                string? a = await AskUserAsync(StepPrompt(s), s.Options.ToList());
+                if (a == null) return null;
+                answers.Add(a);
+            }
+            return answers;
+        }
+        catch (OperationCanceledException) { return null; }
+    }
+
+    /// <summary>A step as one plain question: its text and what each option means.</summary>
+    private static string StepPrompt(AskStep s) =>
+        s.Notes.Count == 0 ? s.Question : s.Question + "\n" + string.Join("\n", s.Notes.Select(n => "- " + n));
+
+    /// <summary>
+    /// ask_user's <c>questions</c>: a JSON array of strings or of {question, options, multiSelect} (Claude Code's own
+    /// shape: options may be strings or {label, description}). Empty when there is none or it cannot be read. Pure.
+    /// </summary>
+    public static List<AskStep> ParseAskSteps(string? json)
+    {
+        var list = new List<AskStep>();
+        string text = json?.Trim() ?? "";
+        if (!text.StartsWith('[')) return list;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(text);
+            foreach (var q in doc.RootElement.EnumerateArray())
+            {
+                if (q.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    if (q.GetString()?.Trim() is { Length: > 0 } plain) list.Add(new AskStep(plain, Array.Empty<string>()));
+                    continue;
+                }
+                if (q.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                string? question = Str(q, "question") ?? Str(q, "q") ?? Str(q, "text");
+                if (string.IsNullOrWhiteSpace(question)) continue;
+                var options = new List<string>();
+                var notes = new List<string>();
+                if (q.TryGetProperty("options", out var os))
+                {
+                    if (os.ValueKind == System.Text.Json.JsonValueKind.String) options.AddRange(ParseAskOptions(os.GetString() ?? ""));
+                    else if (os.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        foreach (var o in os.EnumerateArray())
+                        {
+                            if (o.ValueKind == System.Text.Json.JsonValueKind.String) { if (o.GetString()?.Trim() is { Length: > 0 } s) options.Add(s); }
+                            else if (o.ValueKind == System.Text.Json.JsonValueKind.Object && Str(o, "label") is { Length: > 0 } label)
+                            {
+                                options.Add(label);
+                                if (Str(o, "description") is { Length: > 0 } d) notes.Add(label + ": " + d);
+                            }
+                        }
+                }
+                bool multi = (q.TryGetProperty("multiSelect", out var m) || q.TryGetProperty("multi_select", out m) || q.TryGetProperty("multiple", out m))
+                             && m.ValueKind == System.Text.Json.JsonValueKind.True;
+                list.Add(new AskStep(question.Trim(), options, notes, multi));
+            }
+        }
+        catch (System.Text.Json.JsonException) { }
+        return list.Take(10).ToList();
+
+        static string? Str(System.Text.Json.JsonElement e, string key) =>
+            e.TryGetProperty(key, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString()?.Trim() : null;
+    }
+
     /// <summary>ask_user's options: comma-separated text, or the JSON array many models send whatever the schema says
     /// (split on commas it became buttons reading <c>["a"</c> and <c>"b"]</c>).</summary>
     public static List<string> ParseAskOptions(string options)
@@ -5397,6 +5557,22 @@ public class AgentToolService : IDisposable
 
     private async Task<ToolResult> ExecuteAskUserAsync(ToolCall call)
     {
+        // Several questions at once: one card with steps, one answer each.
+        var steps = ParseAskSteps(call.GetArg("questions", ""));
+        if (steps.Count > 0)
+        {
+            if (OnAskUserQuestion == null && OnAskUserSteps == null)
+                return Fail(call, "AskUser not available — no UI handler connected");
+            var answers = await AskUserStepsAsync(steps);
+            if (answers == null) return Fail(call, "The user did not answer (the run was stopped).");
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = "User answered:\n" + AskStep.AnswersText(steps, answers),
+                Summary = $"Asked user {steps.Count} question(s)",
+            };
+        }
+
         string question = call.GetArg("question", call.GetArg("q"));
         if (string.IsNullOrEmpty(question))
             return Fail(call, "Missing 'question' argument");

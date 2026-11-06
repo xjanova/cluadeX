@@ -26,16 +26,18 @@ public partial class CodeAgentService
         var provider = _providerManager.ActiveProvider;
         string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
         bool cli = provider?.RunsOwnSubAgents == true;
+        // The CLI budgets hold for every CLI agent (Antigravity spawns nothing, yet spends on the same package).
+        bool cliBudget = cli || IsCliAgent(_providerManager.ActiveProviderType);
         return DispatchPolicy.Decide(new DispatchInput
         {
             Effort = DispatchPolicy.ResolveEffort(s.ReasoningEffort, scope?.StepEffort),
             PolicyEnabled = s.DispatchPolicyEnabled,
             ProviderCanRunSubAgents = provider != null && (provider.SupportsNativeToolUse || cli) && provider.IsReady,
-            RunBudgetUsd = cli ? s.CliRunBudgetUsd : s.RunBudgetUsd,
+            RunBudgetUsd = cliBudget ? s.CliRunBudgetUsd : s.RunBudgetUsd,
             BudgetGrantedUsd = root?.BudgetGrantedUsd ?? 0,
             RunSpentUsd = root?.CostUsd ?? 0,
-            DailyBudgetUsd = cli ? s.CliDailyBudgetUsd : s.DailyBudgetUsd,
-            TodaySpentUsd = cli ? TodayCliUsd() : _costTrackingService?.TodayCostUsd ?? 0,
+            DailyBudgetUsd = cliBudget ? s.CliDailyBudgetUsd : s.DailyBudgetUsd,
+            TodaySpentUsd = cliBudget ? TodayCliUsd() : _costTrackingService?.TodayCostUsd ?? 0,
             MaxParallel = s.MaxParallelAgents,
             SpeculativeFixEnabled = s.SpeculativeFixEnabled,
             SpeculativeFixCount = s.SpeculativeFixCount,

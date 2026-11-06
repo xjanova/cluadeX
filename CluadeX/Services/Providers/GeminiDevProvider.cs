@@ -171,7 +171,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>The CLI's arguments for one call (after the script path). Pure, so the harness checks them.</summary>
     /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, IReadOnlyList<string>? addDirs,
-        string? codeComments = null, string? browserHint = null, string? agentLine = null)
+        string? codeComments = null, string? browserHint = null, string? agentLine = null, bool noProject = false,
+        bool chatTools = false, string? splitGuide = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -186,13 +187,20 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               "Other agents on this machine are reachable through the brainx-brain tools (task_queue, task_handoff, cowork_*). " +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
-            : "You are 'gemini-dev', answering inside the CluadeX desktop app. " +
-              $"Project working directory: {cwd}. " +
-              "You have read-only tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " + folders +
-              "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+            : noProject
+                ? "You are 'gemini-dev', answering inside the CluadeX desktop app. " +
+                  $"This turn runs with read-only tools in {cwd}. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
+                : "You are 'gemini-dev', answering inside the CluadeX desktop app. " +
+                  $"Project working directory: {cwd}. " +
+                  "You have read-only tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(noProject);
         wrapper += " " + Tools.ChatToolBridge.AskHint;
+        if (chatTools) wrapper += " " + Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Plain, splitChats: true);
         if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
         if (worker && !string.IsNullOrWhiteSpace(agentLine)) wrapper += " " + agentLine;
+        if (worker && chatTools && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.GeminiDev, false);
         // The user's AI-comment instruction (CodeCommentPolicy); ArgumentList carries the line breaks as they are.
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
@@ -232,7 +240,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     /// settings do not already have it (copied from Claude Code's registration). Pure: the caller writes it.
     /// </summary>
     public static JsonObject BuildTurnSettings(TurnHooks? hooks, string? chatToolsConfigJson, string? brainServerJson, JsonObject? user = null,
-        Agents.DispatchDecision? dispatch = null, string? readOnlyAgentModel = null)
+        Agents.DispatchDecision? dispatch = null, string? readOnlyAgentModel = null, IReadOnlyList<string>? brainTools = null)
     {
         var settings = user?.DeepClone() as JsonObject ?? new JsonObject();
         // The policy in Gemini's own settings: sub-agents off, and generalist off always (it writes, and invoke_agent has no
@@ -317,6 +325,13 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
                 if (JsonNode.Parse(brainServerJson) is JsonObject brain)
                 {
                     brain.Remove("type");   // Claude Code's "stdio" marker; Gemini infers the transport from command
+                    // Untrusted, every brain call was refused in a headless default-mode turn, and a yolo turn ran all of
+                    // them unasked (ssh_run, chrome…). Now: only the tools Claude Dev may call unasked, and those trusted.
+                    if (brainTools != null)
+                    {
+                        brain["includeTools"] = new JsonArray(brainTools.Select(t => (JsonNode?)JsonValue.Create(t)).ToArray());
+                        brain["trust"] = true;
+                    }
                     servers[BrainServerName] = brain;
                 }
             }
@@ -354,7 +369,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     private static string GeminiHome() => Path.Combine(UserHome(), ".gemini");
 
     /// <summary>brainx-brain as Claude Code registers it in ~/.claude.json, or null.</summary>
-    private static string? BrainServerFromClaude()
+    public static string? BrainServerFromClaude()
     {
         try
         {
@@ -413,7 +428,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
 #endif
             turnSettings = BuildTurnSettings(hooks, chatToolsJson, brain, user, dispatch,
                 Agents.CliAgentPolicy.ModelFor(AiProviderType.GeminiDev, true, _settingsService.Settings.SubAgentModelOverrides)
-                ?? Agents.DispatchPolicy.CheapestModel(AiProviderType.Gemini));
+                ?? Agents.DispatchPolicy.CheapestModel(AiProviderType.Gemini),
+                ClaudeDevProvider.BrainToolsFor(grant));
             turn.CarryUserHome(UserHome(), GeminiHome());
             await turn.WriteSettingsAsync(turnSettings, ct);
         }
@@ -447,7 +463,9 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         foreach (var a in BuildArgs(cwd, grant, model, ClaudeDevProvider.TurnAddDirs(extras),
                      CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
                      chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
-                     Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GeminiDev))) psi.ArgumentList.Add(a);
+                     Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GeminiDev),
+                     noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
+                     splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.GeminiDev))) psi.ArgumentList.Add(a);
 #if DEBUG
         // Debug builds only: tests/safetytest drives this turn with the real CLI and a recorded model (--fake-responses).
         if (Environment.GetEnvironmentVariable("CLUADEX_GEMINI_TEST_ARGS") is { Length: > 0 } testArgs)

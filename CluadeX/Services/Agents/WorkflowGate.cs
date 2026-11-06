@@ -1,3 +1,4 @@
+using CluadeX.Models;
 using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -100,19 +101,40 @@ public static class WorkflowGate
     /// opened the workflow tool, and a chat with Ultra on still did everything in one agent (GigLive, 2026-11-03).</summary>
     public static string? SplitGuideFor(string? chat, bool cli) => Allowed(chat) ? SplitGuide(cli) : null;
 
+    /// <summary>The split guide for a chat that opted in, in <paramref name="cli"/>'s own tool names, else null. Only Claude
+    /// Dev used to get it, so Ultra on a Codex / Gemini / Antigravity / Grok chat changed nothing (parity audit 2026-11-06).</summary>
+    public static string? SplitGuideFor(string? chat, AiProviderType cli) => Allowed(chat) ? SplitGuide(cli) : null;
+
     /// <summary>How to decide between doing it yourself, sub-agents, a workflow and a chat of its own. Pure.
     /// <paramref name="cli"/>: Claude Code's names (its Agent tool, mcp__cluadex__*).</summary>
-    public static string SplitGuide(bool cli)
+    public static string SplitGuide(bool cli) => cli
+        ? SplitGuide("the Agent tool", "mcp__cluadex__")
+        : SplitGuide("agent_spawn", "");
+
+    /// <summary>The guide in a CLI agent's own names: its spawn tool and how it calls the cluadex server's tools. Pure.
+    /// Antigravity has no sub-agent tool: its guide goes from doing it itself straight to the workflow.</summary>
+    public static string SplitGuide(AiProviderType cli) => cli switch
     {
-        string spawn = cli ? "the Agent tool" : "agent_spawn";
-        string wf = cli ? "mcp__cluadex__workflow" : "workflow";
-        string chat = cli ? "mcp__cluadex__new_chat" : "new_chat";
-        string close = cli ? "mcp__cluadex__close_chat" : "close_chat";
+        AiProviderType.ClaudeDev => SplitGuide(true),
+        AiProviderType.OpenAIDev => SplitGuide("spawn_agent (read-only work only: every edit stays with you)", "", " (MCP server cluadex)"),
+        AiProviderType.GeminiDev => SplitGuide($"your sub-agents ({CliAgentPolicy.ReadOnlyType(cli)})", "", " (MCP server cluadex)"),
+        AiProviderType.GrokDev => SplitGuide($"spawn_subagent ({CliAgentPolicy.ReadOnlyType(cli)} for read-only work)", "cluadex__", " (through use_tool)"),
+        AiProviderType.AntigravityDev => SplitGuide(null, "", " (MCP server cluadex)"),
+        _ => SplitGuide(false),
+    };
+
+    private static string SplitGuide(string? spawn, string prefix, string server = "")
+    {
+        string wf = prefix + "workflow" + server;
+        string chat = prefix + "new_chat";
+        string close = prefix + "close_chat";
         return "The user switched Ultra on for this chat (or asked for multi-agent work): you may split the work, and you decide "
              + "how. Go down this list and take the first that fits each piece: "
              + "(1) Do it yourself — one or two files, steps that depend on each other, or work that needs this chat's context. "
-             + $"(2) Sub-agents with {spawn} — two or more independent parts that are mostly reading or checking (several folders, "
-             + "questions, logs); start them in one response so they run in parallel. "
+             + (spawn != null
+                 ? $"(2) Sub-agents with {spawn} — two or more independent parts that are mostly reading or checking (several "
+                   + "folders, questions, logs); start them in one response so they run in parallel. "
+                 : "(2) You have no sub-agent tool of your own: independent reading or checking goes to the workflow below. ")
              + $"(3) {wf} — three or more independent pieces of real work, or findings that must be checked (a review, an audit, a "
              + "multi-part build): phases of agents with JSON schemas, and refuters on what they find. "
              + $"(4) {chat} — a separate deliverable the user may want to steer or review on its own (another app or repository, a "

@@ -596,6 +596,26 @@ public partial class ChatView : UserControl
             msg.AnswerQuestion(msg.AnswerDraft);
     }
 
+    /// <summary>A step's option button: the answer (and on to the next step), or a tick on a multi-select step.</summary>
+    private void QuestionStepOption_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: ChatMessage msg } fe && fe.DataContext is AskChoice choice)
+            msg.StepPick(choice);
+    }
+
+    /// <summary>Next: what was typed or picked on this step, then the next one (or the review).</summary>
+    private void QuestionNext_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.AnswerQuestion(msg.AnswerDraft);
+    }
+
+    private void QuestionBack_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.StepBack();
+    }
+
     private void QuestionBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == System.Windows.Input.Key.Enter && sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
@@ -709,21 +729,65 @@ public partial class ChatView : UserControl
             ? files
             : Array.Empty<string>();
 
-    /// <summary>Files dragged over the composer (Preview: the text box would refuse a file drop).</summary>
+    /// <summary>Files dragged over the composer (Preview: the text box would refuse a file drop) — or a picture dragged
+    /// out of a web page. A plain text or link drag is left to the text box.</summary>
     private void Composer_PreviewDragOver(object sender, DragEventArgs e)
     {
-        if (DroppedFiles(e).Length == 0) return;
+        if (DroppedFiles(e).Length == 0 && DroppedBitmap(e) == null && DroppedWebImage(e) == null) return;
         e.Effects = DragDropEffects.Copy;
         e.Handled = true;
     }
 
     private void Composer_PreviewDrop(object sender, DragEventArgs e)
     {
+        if (DataContext is not ChatViewModel vm) return;
         var files = DroppedFiles(e);
-        if (files.Length == 0 || DataContext is not ChatViewModel vm) return;
-        _ = vm.AttachFilesAsync(files);
+        if (files.Length > 0) _ = vm.AttachFilesAsync(files);
+        else if (DroppedWebImage(e) is { } web) _ = vm.AttachWebImageAsync(web);   // the picture itself, full size
+        else if (DroppedBitmap(e) is { } bmp) AttachBitmap(vm, bmp);
+        else return;
         e.Handled = true;
         InputBox.Focus();
+    }
+
+    /// <summary>The picture a browser drag carries (its &lt;img src&gt; or an image link), or null.</summary>
+    private static Uri? DroppedWebImage(DragEventArgs e)
+    {
+        try
+        {
+            // Text selected on a page (it may hold pictures) is dragged as its words: that stays the text box's drop.
+            // A picture's drag carries its address as the text, if any.
+            string? text = e.Data.GetDataPresent(DataFormats.UnicodeText) ? e.Data.GetData(DataFormats.UnicodeText) as string : null;
+            if (!string.IsNullOrWhiteSpace(text) && !Uri.TryCreate(text.Trim(), UriKind.Absolute, out _)) return null;
+            string? html = e.Data.GetDataPresent(DataFormats.Html) ? e.Data.GetData(DataFormats.Html) as string : null;
+            string? url = e.Data.GetDataPresent("UniformResourceLocatorW") ? ReadUnicodeUrl(e.Data.GetData("UniformResourceLocatorW")) : null;
+            return ChatViewModel.WebImageSource(html, url);
+        }
+        catch { return null; }   // a drag source that fails to render a format
+    }
+
+    private static string? ReadUnicodeUrl(object? data) => data switch
+    {
+        string s => s,
+        System.IO.MemoryStream ms => System.Text.Encoding.Unicode.GetString(ms.ToArray()).TrimEnd('\0'),
+        _ => null,
+    };
+
+    /// <summary>A bitmap on the drag (some apps drag the picture itself, not a file).</summary>
+    private static System.Windows.Media.Imaging.BitmapSource? DroppedBitmap(DragEventArgs e)
+    {
+        try { return e.Data.GetDataPresent(DataFormats.Bitmap) ? e.Data.GetData(DataFormats.Bitmap) as System.Windows.Media.Imaging.BitmapSource : null; }
+        catch { return null; }
+    }
+
+    private static void AttachBitmap(ChatViewModel vm, System.Windows.Media.Imaging.BitmapSource bmp)
+    {
+        var opaque = new System.Windows.Media.Imaging.FormatConvertedBitmap(bmp, PixelFormats.Bgr32, null, 0);
+        var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(opaque));
+        using var ms = new System.IO.MemoryStream();
+        enc.Save(ms);
+        vm.AttachImageBytes(ms.ToArray());
     }
 
     /// <summary>"+" › Attach image…: pick one or more pictures.</summary>
