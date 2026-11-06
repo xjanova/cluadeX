@@ -17,8 +17,9 @@ try
         [AiProviderType.Anthropic] = "claude", [AiProviderType.ClaudeDev] = "claude",
         [AiProviderType.OpenAI] = "codex", [AiProviderType.OpenAIDev] = "codex",
         [AiProviderType.Gemini] = "gemini", [AiProviderType.GeminiDev] = "gemini",
-        [AiProviderType.AntigravityDev] = "gemini", [AiProviderType.Local] = "mind",
-        [AiProviderType.LlamaServer] = "mind", [AiProviderType.Ollama] = "mind",
+        // owner 2026-11-06: a GGUF is CluadeX's girl, Antigravity has her own; Ollama stays มายด์
+        [AiProviderType.AntigravityDev] = "antigravity", [AiProviderType.Local] = "cluadex",
+        [AiProviderType.LlamaServer] = "cluadex", [AiProviderType.Ollama] = "mind",
         [AiProviderType.BrainX] = "cluadex",
         [AiProviderType.XAI] = "grok", [AiProviderType.GrokDev] = "grok",
     };
@@ -92,7 +93,7 @@ try
         }
     foreach (var model in AntigravityDevProvider.KnownModels)
         foreach (var grant in grants)
-            Check(AntigravityDevProvider.BuildPrompt(@"C:\project", grant, null, "", "hello").Contains("# Who you are: Gemini"),
+            Check(AntigravityDevProvider.BuildPrompt(@"C:\project", grant, null, "", "hello").Contains("# Who you are: Antigravity"),
                 "Antigravity Dev model identity: " + model);
     // The real API payload builders retain the full persona, including on models with different request formats.
     var settings = new SettingsService();
@@ -159,7 +160,7 @@ try
     void WriteOverrides(string suffix)
     {
         var map = new Dictionary<string, object>();
-        foreach (var key in new[] { "claude", "codex", "gemini", "grok", "mind", "cluadex" })
+        foreach (var key in new[] { "claude", "codex", "gemini", "grok", "mind", "cluadex", "antigravity" })
             map[key] = new { name = "Owner-" + key + suffix, persona = "OWNER_PERSONA_" + suffix, style = "OWNER_STYLE_" + suffix };
         File.WriteAllText(file, JsonSerializer.Serialize(map));
         File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddSeconds(suffix == "A" ? 1 : 2));

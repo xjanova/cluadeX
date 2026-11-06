@@ -102,16 +102,23 @@ public sealed class ChatCharacter
     public static readonly ChatCharacter BrainX = new("brainx", "BrainX", Color.FromRgb(0x3E, 0x9B, 0xFF), 0.46, 0.120);
     public static readonly ChatCharacter CluadeX = new("cluadex", "CluadeX", Color.FromRgb(0xB9, 0x8C, 0xFF), 0.52, 0.128);
 
-    public static IReadOnlyList<ChatCharacter> All { get; } = [Claude, Codex, Gemini, Grok, Mind, BrainX, CluadeX];
+    // Owner 2026-11-06: "ขาดสาวคนไหน ไปสร้างมา" — Antigravity (agy) shared Gemini's girl; she has her own now (Grok Imagine,
+    // cut out with rembg isnet-anime like the others).
+    public static readonly ChatCharacter Antigravity = new("antigravity", "Antigravity", Color.FromRgb(0x2D, 0xD4, 0xBF), 0.55, 0.110);
+
+    public static IReadOnlyList<ChatCharacter> All { get; } = [Claude, Codex, Gemini, Grok, Mind, BrainX, CluadeX, Antigravity];
 
     /// <summary>The girl who answers for a provider — the same girls AgentPersona gives the voices to.</summary>
     public static ChatCharacter ForProvider(AiProviderType provider) => provider switch
     {
         AiProviderType.Anthropic or AiProviderType.ClaudeDev => Claude,
         AiProviderType.OpenAI or AiProviderType.OpenAIDev => Codex,
-        AiProviderType.Gemini or AiProviderType.GeminiDev or AiProviderType.AntigravityDev => Gemini,
+        AiProviderType.Gemini or AiProviderType.GeminiDev => Gemini,
+        AiProviderType.AntigravityDev => Antigravity,
         AiProviderType.XAI or AiProviderType.GrokDev => Grok,
-        AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama => Mind,   // local = มายด์
+        AiProviderType.Ollama => Mind,   // Ollama = มายด์
+        // Owner 2026-11-06: "น้อง มายด์ เปลี่ยนเป็น cluadex สาวม่วง สำหรับ dev gguf" — a GGUF on this PC is CluadeX's own girl
+        AiProviderType.Local or AiProviderType.LlamaServer => CluadeX,
         AiProviderType.BrainX => BrainX,   // the room itself, until someone in it answers
         _ => CluadeX,
     };

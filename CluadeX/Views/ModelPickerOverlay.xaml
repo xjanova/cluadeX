@@ -1,0 +1,412 @@
+<UserControl x:Class="CluadeX.Views.ModelPickerOverlay"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
+             Focusable="True" IsTabStop="True" FocusVisualStyle="{x:Null}"
+             Visibility="{Binding IsOpen, Converter={StaticResource BoolVis}}">
+    <!-- The chat's model picker, full screen over the window (DataContext: ModelPickerViewModel).
+         Step 1: a card per provider with her girl and whether she answers now. Step 2: that provider's models.
+         Keys are the VM's (HandleKey): arrows move, Enter picks, Backspace goes back, Esc closes. -->
+    <UserControl.Resources>
+        <!-- A status pill: Tag = current / ok / warn / off / busy / blocked -->
+        <Style x:Key="PickerPill" TargetType="Border">
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="8,2,10,2"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Chip}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Style.Triggers>
+                <Trigger Property="Tag" Value="current">
+                    <Setter Property="Background" Value="{DynamicResource Accent.2.Tint}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource Accent.2.Border}"/>
+                </Trigger>
+                <Trigger Property="Tag" Value="ok">
+                    <Setter Property="Background" Value="{DynamicResource Status.Success.Tint}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource Status.Success.Border}"/>
+                </Trigger>
+                <Trigger Property="Tag" Value="warn">
+                    <Setter Property="Background" Value="{DynamicResource Status.Warning.Tint}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource Status.Warning.Border}"/>
+                </Trigger>
+                <Trigger Property="Tag" Value="busy">
+                    <Setter Property="Background" Value="{DynamicResource Status.Info.Tint}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource Status.Info.Border}"/>
+                </Trigger>
+                <Trigger Property="Tag" Value="blocked">
+                    <Setter Property="Background" Value="{DynamicResource Status.Danger.Tint}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger.Border}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PickerDot" TargetType="Ellipse">
+            <Setter Property="Width" Value="7"/>
+            <Setter Property="Height" Value="7"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Fill" Value="{DynamicResource Text.Muted}"/>
+            <Style.Triggers>
+                <Trigger Property="Tag" Value="current"><Setter Property="Fill" Value="{DynamicResource Accent.2}"/></Trigger>
+                <Trigger Property="Tag" Value="ok"><Setter Property="Fill" Value="{DynamicResource Status.Success}"/></Trigger>
+                <Trigger Property="Tag" Value="warn"><Setter Property="Fill" Value="{DynamicResource Status.Warning}"/></Trigger>
+                <Trigger Property="Tag" Value="busy"><Setter Property="Fill" Value="{DynamicResource Status.Info}"/></Trigger>
+                <Trigger Property="Tag" Value="blocked"><Setter Property="Fill" Value="{DynamicResource Status.Danger}"/></Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- A capability chip -->
+        <Style x:Key="PickerChip" TargetType="Border">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="7,2"/>
+            <Setter Property="Margin" Value="0,0,6,6"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Chip}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <!-- A card you can press: the whole card is the button; its frame takes the girl's colour on hover / keyboard. -->
+        <Style x:Key="PickerCard" TargetType="Button">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="8"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Card}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+            <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1" ScaleY="1"/></Setter.Value></Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" CornerRadius="16" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                ClipToBounds="True">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="BorderBrush" Value="{Binding Accent}"/>
+                </Trigger>
+                <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                    <Setter Property="BorderBrush" Value="{Binding Accent}"/>
+                    <Setter Property="Effect" Value="{Binding Mascot.GlowEffect}"/>
+                    <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="1.02" ScaleY="1.02"/></Setter.Value></Setter>
+                </DataTrigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="RenderTransform"><Setter.Value><ScaleTransform ScaleX="0.98" ScaleY="0.98"/></Setter.Value></Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="PickerHeaderButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Width" Value="36"/>
+            <Setter Property="Height" Value="36"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <!-- the dimmed window; a click on it closes -->
+        <Button Command="{Binding CloseCommand}" Focusable="False" Cursor="Arrow">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{DynamicResource Bg.Scrim}"/>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
+
+        <Border Margin="32,26" CornerRadius="22" Background="{DynamicResource Bg.Panel.Solid}"
+                BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                Effect="{DynamicResource Shadow.Palette}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- ═══ header ═══ -->
+                <Grid Margin="22,18,18,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Style="{StaticResource PickerHeaderButton}" Command="{Binding BackCommand}" Margin="0,0,12,0"
+                            ToolTip="{services:Loc picker.back}" VerticalAlignment="Center"
+                            Visibility="{Binding IsModelStep, Converter={StaticResource BoolVis}}">
+                        <TextBlock Text="&#xE72B;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="{DynamicResource Text.Primary}"/>
+                    </Button>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{services:Loc picker.title}" FontSize="22" FontWeight="Bold"
+                                       FontFamily="{DynamicResource Font.Ui.Display}" Foreground="{DynamicResource Text.Primary}"/>
+                            <TextBlock Text="{Binding Provider.Title, StringFormat=' · {0}'}" FontSize="22" FontWeight="Bold"
+                                       FontFamily="{DynamicResource Font.Ui.Display}" Foreground="{Binding Provider.Accent}"
+                                       Visibility="{Binding IsModelStep, Converter={StaticResource BoolVis}}"/>
+                        </StackPanel>
+                        <TextBlock Text="{services:Loc picker.step1}" FontSize="13" Margin="0,3,0,0" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource Text.Secondary}"
+                                   Visibility="{Binding IsProviderStep, Converter={StaticResource BoolVis}}"/>
+                        <TextBlock Text="{services:Loc picker.step2}" FontSize="13" Margin="0,3,0,0" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource Text.Secondary}"
+                                   Visibility="{Binding IsModelStep, Converter={StaticResource BoolVis}}"/>
+                        <!-- the chat already has history: a new model re-reads all of it without the old one's prompt cache -->
+                        <Border Margin="0,8,0,0" Padding="10,6" CornerRadius="8" HorizontalAlignment="Left"
+                                Background="{DynamicResource State.Fill.Faint}" BorderBrush="{DynamicResource Status.Warning}" BorderThickness="1"
+                                Visibility="{Binding HasSwitchWarning, Converter={StaticResource BoolVis}}">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Left" Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="13" Margin="0,1,8,0"
+                                           Foreground="{DynamicResource Status.Warning}"/>
+                                <TextBlock Text="{Binding SwitchWarning}" FontSize="12.5" TextWrapping="Wrap" MaxWidth="900"
+                                           Foreground="{DynamicResource Text.Primary}"/>
+                            </DockPanel>
+                        </Border>
+                    </StackPanel>
+                    <Button Grid.Column="2" Style="{StaticResource PickerHeaderButton}" Command="{Binding CloseCommand}"
+                            ToolTip="{services:Loc picker.close}" VerticalAlignment="Top">
+                        <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource Text.Secondary}"/>
+                    </Button>
+                </Grid>
+                <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Border.Subtle}"/>
+
+                <!-- ═══ step 1: providers ═══ -->
+                <ScrollViewer x:Name="ProviderScroll" Grid.Row="1" Padding="14,10" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" Focusable="False"
+                              Visibility="{Binding IsProviderStep, Converter={StaticResource BoolVis}}">
+                    <ItemsControl x:Name="ProviderList" ItemsSource="{Binding Providers}" Focusable="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <UniformGrid Columns="{Binding DataContext.ProviderColumns, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                             VerticalAlignment="Top"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource PickerCard}" Height="330"
+                                        Command="{Binding DataContext.PickProviderCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                        CommandParameter="{Binding}">
+                                    <Grid>
+                                        <!-- her colour washed over the card, then her picture from the head down -->
+                                        <Border Background="{Binding Wash}"/>
+                                        <Image Source="{Binding Image}" Stretch="UniformToFill" VerticalAlignment="Top"
+                                               HorizontalAlignment="Center" Height="250" Margin="0,6,0,0"
+                                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                                        <!-- a fade so the words read over her -->
+                                        <Border VerticalAlignment="Bottom" Height="170">
+                                            <Border.Background>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                    <GradientStop Color="Transparent" Offset="0"/>
+                                                    <GradientStop Color="#E0000000" Offset="0.55"/>
+                                                    <GradientStop Color="#F0000000" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.Background>
+                                        </Border>
+                                        <!-- kind, top left -->
+                                        <Border VerticalAlignment="Top" HorizontalAlignment="Left" Margin="10" CornerRadius="9" Padding="8,2"
+                                                Background="{Binding Accent}">
+                                            <TextBlock Text="{Binding KindText}" FontSize="11" FontWeight="SemiBold" Foreground="{Binding OnAccent}"/>
+                                        </Border>
+                                        <!-- the one answering now, top right -->
+                                        <Border VerticalAlignment="Top" HorizontalAlignment="Right" Margin="10" CornerRadius="12" Width="24" Height="24"
+                                                Background="{DynamicResource Accent.2}"
+                                                Visibility="{Binding IsCurrent, Converter={StaticResource BoolVis}}">
+                                            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Text.OnAccent}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <StackPanel VerticalAlignment="Bottom" Margin="14,0,14,14">
+                                            <TextBlock Text="{Binding Title}" FontSize="18" FontWeight="Bold" Foreground="White"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding ModelCountText}" FontSize="12" Foreground="#CCFFFFFF" Margin="0,2,0,8"/>
+                                            <Border Style="{StaticResource PickerPill}" Tag="{Binding StateTone}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Ellipse Style="{StaticResource PickerDot}" Tag="{Binding StateTone}"/>
+                                                    <TextBlock Text="{Binding StateText}" FontSize="12" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource Text.Primary}"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </StackPanel>
+                                    </Grid>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- ═══ step 2: the provider's models ═══ -->
+                <Grid Grid.Row="1" Visibility="{Binding IsModelStep, Converter={StaticResource BoolVis}}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="260"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <!-- her, full figure -->
+                    <Border Margin="18,12,6,16" CornerRadius="18" Background="{Binding Provider.Wash}" ClipToBounds="True">
+                        <Grid>
+                            <Image Source="{Binding Provider.Image}" Stretch="Uniform" VerticalAlignment="Bottom"
+                                   Margin="10,60,10,0" RenderOptions.BitmapScalingMode="HighQuality"/>
+                            <StackPanel VerticalAlignment="Top" Margin="14">
+                                <TextBlock Text="{Binding Provider.Title}" FontSize="17" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"
+                                           TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding Provider.KindText}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,2,0,6"/>
+                                <Border Style="{StaticResource PickerPill}" Tag="{Binding Provider.StateTone}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse Style="{StaticResource PickerDot}" Tag="{Binding Provider.StateTone}"/>
+                                        <TextBlock Text="{Binding Provider.StateText}" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Text.Primary}"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <ScrollViewer x:Name="ModelScroll" Grid.Column="1" Padding="6,4,14,10" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                        <ItemsControl x:Name="ModelList" ItemsSource="{Binding Models}" Focusable="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <UniformGrid Columns="{Binding DataContext.ModelColumns, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                 VerticalAlignment="Top"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Command="{Binding DataContext.PickModelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}" ToolTip="{Binding ReasonText}">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource PickerCard}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding CanChoose}" Value="False">
+                                                        <Setter Property="Opacity" Value="0.66"/>
+                                                        <Setter Property="Cursor" Value="No"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                        <Setter Property="Background" Value="{Binding Tint}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                        <Grid Margin="16,14,16,14">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="*"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <!-- name + status -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"
+                                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                <Border Grid.Column="1" Style="{StaticResource PickerPill}" Tag="{Binding StatusTone}" Margin="8,0,0,0">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Ellipse Style="{StaticResource PickerDot}" Tag="{Binding StatusTone}"/>
+                                                        <TextBlock Text="{Binding StatusText}" FontSize="11" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource Text.Primary}"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </Grid>
+                                            <TextBlock Grid.Row="1" Text="{Binding Subtitle}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
+                                                       Foreground="{DynamicResource Text.Muted}" Margin="0,2,0,8" TextTrimming="CharacterEllipsis"/>
+                                            <!-- what it suits -->
+                                            <StackPanel Grid.Row="2" Margin="0,0,0,10">
+                                                <TextBlock Text="{services:Loc picker.suitsLabel}" FontSize="11" FontWeight="SemiBold" Foreground="{Binding Accent}"/>
+                                                <TextBlock Text="{Binding SuitsText}" FontSize="12.5" TextWrapping="Wrap" Foreground="{DynamicResource Text.Body}"
+                                                           Margin="0,2,0,0"/>
+                                            </StackPanel>
+                                            <!-- what it can do -->
+                                            <WrapPanel Grid.Row="3">
+                                                <Border Style="{StaticResource PickerChip}" Visibility="{Binding HasTools, Converter={StaticResource BoolVis}}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE90F;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,1,5,0" Foreground="{Binding Accent}"/>
+                                                        <TextBlock Text="{services:Loc picker.cap.tools}" FontSize="11" Foreground="{DynamicResource Text.Secondary}"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border Style="{StaticResource PickerChip}" Visibility="{Binding HasVision, Converter={StaticResource BoolVis}}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE7B3;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,1,5,0" Foreground="{Binding Accent}"/>
+                                                        <TextBlock Text="{services:Loc picker.cap.vision}" FontSize="11" Foreground="{DynamicResource Text.Secondary}"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border Style="{StaticResource PickerChip}" Visibility="{Binding HasThinking, Converter={StaticResource BoolVis}}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,1,5,0" Foreground="{Binding Accent}"/>
+                                                        <TextBlock Text="{Binding ThinkingText}" FontSize="11" Foreground="{DynamicResource Text.Secondary}"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border Style="{StaticResource PickerChip}" Visibility="{Binding ContextText, Converter={StaticResource BoolVis}}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE8A1;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,1,5,0" Foreground="{Binding Accent}"/>
+                                                        <TextBlock Text="{Binding ContextText}" FontSize="11" Foreground="{DynamicResource Text.Secondary}"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </WrapPanel>
+                                            <!-- price -->
+                                            <Border Grid.Row="4" CornerRadius="10" Padding="10,6" Margin="0,4,0,0" Background="{DynamicResource Surface.Sunken}">
+                                                <Grid>
+                                                    <StackPanel Visibility="{Binding HasTokenPrice, Converter={StaticResource BoolVis}}">
+                                                        <TextBlock Text="{services:Loc picker.priceLabel}" FontSize="10.5" Foreground="{DynamicResource Text.Muted}"/>
+                                                        <WrapPanel Margin="0,2,0,0">
+                                                            <TextBlock Text="{services:Loc picker.price.in}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,4,0"/>
+                                                            <TextBlock Text="{Binding PriceInText}" FontSize="13" FontWeight="Bold" FontFamily="{DynamicResource Font.Mono}"
+                                                                       Foreground="{DynamicResource Status.Warning}" Margin="0,0,12,0"/>
+                                                            <TextBlock Text="{services:Loc picker.price.out}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,4,0"/>
+                                                            <TextBlock Text="{Binding PriceOutText}" FontSize="13" FontWeight="Bold" FontFamily="{DynamicResource Font.Mono}"
+                                                                       Foreground="{DynamicResource Status.Warning}" Margin="0,0,12,0"/>
+                                                            <TextBlock Text="{Binding PriceCacheText}" FontSize="11.5" FontFamily="{DynamicResource Font.Mono}"
+                                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                                        </WrapPanel>
+                                                    </StackPanel>
+                                                    <TextBlock Text="{Binding PriceNote}" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Status.Success}"
+                                                               Visibility="{Binding PriceNote, Converter={StaticResource BoolVis}}"/>
+                                                </Grid>
+                                            </Border>
+                                            <!-- why not / what a press does -->
+                                            <StackPanel Grid.Row="5">
+                                                <TextBlock Text="{Binding ReasonText}" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,0"
+                                                           Foreground="{DynamicResource Status.Warning}"
+                                                           Visibility="{Binding HasReason, Converter={StaticResource BoolVis}}"/>
+                                                <!-- what a switch costs in this chat (a new model re-reads it without the old cache) -->
+                                                <DockPanel Margin="0,8,0,0" Visibility="{Binding HasSwitchCost, Converter={StaticResource BoolVis}}">
+                                                    <TextBlock DockPanel.Dock="Left" Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,2,6,0"
+                                                               Foreground="{DynamicResource Text.Muted}"/>
+                                                    <TextBlock Text="{Binding SwitchCostText}" FontSize="11.5" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource Text.Muted}"/>
+                                                </DockPanel>
+                                            </StackPanel>
+                                            <!-- the press, in words -->
+                                            <Border Grid.Row="6" HorizontalAlignment="Right" Margin="0,12,0,0" CornerRadius="10" Padding="14,5"
+                                                    Background="{Binding Accent}"
+                                                    Visibility="{Binding ActionText, Converter={StaticResource BoolVis}}">
+                                                <TextBlock Text="{Binding ActionText}" FontSize="12.5" FontWeight="SemiBold" Foreground="{Binding OnAccent}"/>
+                                            </Border>
+                                        </Grid>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- ═══ footer: why the last press did nothing, and the keys ═══ -->
+                <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Border.Subtle}" Padding="22,9">
+                    <Grid>
+                        <TextBlock Text="{Binding Note}" FontSize="12" Foreground="{DynamicResource Status.Warning}" TextWrapping="Wrap"
+                                   Margin="0,0,320,0" Visibility="{Binding HasNote, Converter={StaticResource BoolVis}}"/>
+                        <TextBlock HorizontalAlignment="Right" Text="{services:Loc picker.hint}" FontSize="11"
+                                   FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Faint}"/>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

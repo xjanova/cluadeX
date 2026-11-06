@@ -184,7 +184,9 @@ internal static partial class Program
         var storedX = Persist.LoadSession(x.Id);
         Check("SW7 …and finishes into its own chat, never into the chat that landed",
             done7 && storedX != null && storedX.Messages.Any(m => m.Content.Contains("SW7 done")) && !Vm.Messages.Any(m => m.Content.Contains("SW7")),
-            storedX == null ? "not stored" : string.Join(" | ", storedX.Messages.Select(m => m.Content.Length > 40 ? m.Content[..40] : m.Content)));
+            $"done={done7} elsewhere={Vm.HasRunningElsewhere} on screen={Vm.CurrentSession?.Title} SW7 rows on screen="
+            + string.Join(" / ", Vm.Messages.Where(m => m.Content.Contains("SW7")).Select(m => m.Role + ":" + (m.Content.Length > 60 ? m.Content[..60] : m.Content)))
+            + " · stored: " + (storedX == null ? "not stored" : string.Join(" | ", storedX.Messages.Select(m => m.Content.Length > 40 ? m.Content[..40] : m.Content))));
 
         // ── SW8: the UI Studio opens a project into the chat on screen (reused, untouched) while a big chat loads ──
         // The Studio's own move wins like New Chat does: only the branch that made a new chat used to cancel the load, so a

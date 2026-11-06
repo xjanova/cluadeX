@@ -2003,6 +2003,11 @@
                     </Grid>
                 </Border>
             </Grid>
+
+            <!-- ═══ MODEL PICKER (the chat's model box) ═══ full screen over everything: a card per provider with her
+                 girl, then that provider's models (Views/ModelPickerOverlay.xaml, ChatViewModel.ModelPicker.cs). -->
+            <views:ModelPickerOverlay Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="905"
+                                      DataContext="{Binding ChatVM.ModelPicker}"/>
         </Grid>
     </Border>
 </Window>
