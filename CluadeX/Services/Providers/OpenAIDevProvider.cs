@@ -46,6 +46,9 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     public bool IsReady => _exe != null;
     public bool IsLoading => _isLoading;
     public string StatusMessage => _statusMessage;
+    /// <summary>The most pictures one turn hands Codex with --image.</summary>
+    public const int MaxImages = 10;
+
     /// <summary>codex.exe, once found.</summary>
     public string? Exe => _exe;
 
@@ -146,7 +149,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     /// </summary>
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, string effort,
         IReadOnlyList<string>? addDirs, string? chatToolsConfigJson = null, bool brainInCodexConfig = false,
-        Agents.DispatchDecision? dispatch = null, string? readOnlyAgentModel = null)
+        Agents.DispatchDecision? dispatch = null, string? readOnlyAgentModel = null, string? brainServerJson = null,
+        IReadOnlyList<string>? images = null)
     {
         bool write = grant is { Edit: true } || grant is { Run: true };
         var args = new List<string>
@@ -200,6 +204,27 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                 args.Add("-c");
                 args.Add($"mcp_servers.{GeminiDevProvider.BrainServerName}.tools.{tool}.approval_mode=\"approve\"");
             }
+        // Codex's config has no brain: the one Claude Code registers (~/.claude.json) rides along as a whole server, with
+        // the same tools approved — a Codex chat had no brain at all unless the user wired it by hand (audit 2026-11-06).
+        else if (!string.IsNullOrWhiteSpace(brainServerJson))
+            try
+            {
+                if (JsonNode.Parse(brainServerJson) is JsonObject brain)
+                {
+                    var wrapped = new JsonObject { ["mcpServers"] = new JsonObject { [GeminiDevProvider.BrainServerName] = brain.DeepClone() } };
+                    foreach (var o in McpOverrides(wrapped.ToJsonString(), ClaudeDevProvider.BrainToolsFor(grant)))
+                    {
+                        args.Add("-c");
+                        args.Add(o);
+                    }
+                }
+            }
+            catch (JsonException) { }
+        // The user's pictures as real images (codex exec -i): "--image=<path>" one by one, because the flag takes several
+        // values and would swallow the "-" after it, and it splits a value at commas (such a path is left to the text).
+        foreach (var image in images ?? Array.Empty<string>())
+            if (!string.IsNullOrWhiteSpace(image) && !image.Contains(','))
+                args.Add("--image=" + image);
         args.Add("-");
         return args;
     }
@@ -219,7 +244,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     }
 
     /// <summary>The ChatToolBridge's mcpServers as Codex config overrides: mcp_servers.&lt;name&gt;={command=…, args=[…], env={…}}.</summary>
-    public static List<string> McpOverrides(string? chatToolsConfigJson)
+    /// <param name="brainTools">For the brainx-brain server: the tools approved one by one (the rest stay refused).</param>
+    public static List<string> McpOverrides(string? chatToolsConfigJson, IReadOnlyList<string>? brainTools = null)
     {
         var list = new List<string>();
         if (string.IsNullOrWhiteSpace(chatToolsConfigJson)) return list;
@@ -248,6 +274,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                     // The same setting OpenAI's own computer-use plugin ships with.
                     parts.Add("omit_tools_from=['code_mode', 'deferred']");
                 }
+                else if (name == GeminiDevProvider.BrainServerName && brainTools is { Count: > 0 })
+                    parts.Add("tools={" + string.Join(", ", brainTools.Select(t => TomlKey(t) + "={approval_mode='approve'}")) + "}");
                 list.Add($"mcp_servers.{TomlKey(name)}={{{string.Join(", ", parts)}}}");
             }
         }
@@ -266,7 +294,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>The prompt on stdin: CluadeX's wrapper, the conversation so far, then the request. Pure.</summary>
     /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
-        string transcript, string userMessage, string? codeComments = null, string? browserHint = null, string? agentLine = null)
+        string transcript, string userMessage, string? codeComments = null, string? browserHint = null, string? agentLine = null,
+        bool noProject = false, bool chatTools = false, string? splitGuide = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -280,13 +309,20 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
               "Keep a short plan for a task of several steps. " + folders +
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
-            : "You are 'openai-dev', answering inside the CluadeX desktop app. " +
-              $"Project working directory: {cwd}. " +
-              "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
-              "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+            : noProject
+                ? "You are 'openai-dev', answering inside the CluadeX desktop app. " +
+                  $"This turn runs read-only in {cwd}. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
+                : "You are 'openai-dev', answering inside the CluadeX desktop app. " +
+                  $"Project working directory: {cwd}. " +
+                  "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
+                  "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(noProject);
         wrapper += " " + Tools.ChatToolBridge.AskHint;
+        if (chatTools) wrapper += " " + Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Plain, splitChats: true);
         if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
         if (worker && !string.IsNullOrWhiteSpace(agentLine)) wrapper += " " + agentLine;
+        if (worker && chatTools && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.OpenAIDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
         var sb = new StringBuilder();
@@ -346,9 +382,12 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
+        bool brainInConfig = CodexConfigHasServer(GeminiDevProvider.BrainServerName);
         foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, chatToolsJson,
-                     CodexConfigHasServer(GeminiDevProvider.BrainServerName), dispatch,
-                     Agents.CliAgentPolicy.ModelFor(AiProviderType.OpenAIDev, true, _settingsService.Settings.SubAgentModelOverrides))) psi.ArgumentList.Add(a);
+                     brainInConfig, dispatch,
+                     Agents.CliAgentPolicy.ModelFor(AiProviderType.OpenAIDev, true, _settingsService.Settings.SubAgentModelOverrides),
+                     brainInConfig ? null : GeminiDevProvider.BrainServerFromClaude(),
+                     Attachments.AttachmentDigest.CliImagePaths(userMessage).Where(File.Exists).Take(MaxImages).ToList())) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
 
         string shownModel = !string.IsNullOrWhiteSpace(model) && model is not ("default" or "auto") ? model : "";
@@ -369,7 +408,11 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             {
                 await stdin.WriteAsync(BuildPrompt(cwd, grant, addDirs, ClaudeDevProvider.BuildTranscript(history), userMessage,
                     CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
-                    chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null));
+                    chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
+                    // Codex has no spawn hook: this line is the only thing that keeps its sub-agents to the step's policy.
+                    agentLine: Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.OpenAIDev),
+                    noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
+                    splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.OpenAIDev)));
             }
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

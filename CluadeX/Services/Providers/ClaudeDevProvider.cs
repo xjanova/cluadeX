@@ -220,11 +220,12 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort,
         string? toolsConfig = null, IReadOnlyList<string>? addDirs = null, bool allLevels = false, string? codeComments = null,
         string? browserRefusal = null, Agents.DispatchDecision? dispatch = null, decimal? budgetUsd = null,
-        string? desktopRefusal = null, string? splitGuide = null)
+        string? desktopRefusal = null, string? splitGuide = null, bool noProject = false)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
         bool chatTools = !string.IsNullOrWhiteSpace(toolsConfig);
+        string noFolder = noProject && chatTools ? Tools.ChatToolBridge.OpenProjectHint(true, "mcp__cluadex__open_project") + " " : "";
         string folders = addDirs.Count == 0 ? ""
             : "The user also allowed these folders beside the project — work in them by absolute path: " + string.Join(", ", addDirs) + ". ";
         string reach = (chatTools
@@ -232,6 +233,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
                   "mcp__cluadex__new_chat; a new, independent request that arrives mid-task goes to its own chat with new_chat too, " +
                   "and mcp__cluadex__close_chat lists the chats you split off and puts finished ones away. Never answer that you " +
                   "cannot open a chat or a folder. AskUserQuestion and mcp__cluadex__ask_user both show the user a question card. " +
+                  Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Claude, splitChats: false) + " " +
                   Tools.ChatToolBridge.BrowserHint(browserRefusal, claudeNames: true) + " " +
                   Tools.ChatToolBridge.DesktopHint(desktopRefusal, claudeNames: true) + " "
                 : "") +
@@ -251,6 +253,11 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               reach +
               "Reply in the language the user writes in."
+            : noProject
+                ? "You are 'claude-dev', answering inside the CluadeX desktop app. " +
+                  $"This turn has READ-ONLY tools plus the BrainX brain recall tools, in {cwd}. " +
+                  noFolder + folders + reach +
+                  "Reply in the language the user writes in."
             : "You are 'claude-dev', answering inside the CluadeX desktop app. " +
               $"Project working directory: {cwd}. " +
               "You have READ-ONLY tools plus the BrainX brain recall tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " +
@@ -585,7 +592,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         bool allLevels = CliTakesAllLevels(ReportedCliVersion);
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
             CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
-            extras?.DesktopRefusal, Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, cli: true));
+            extras?.DesktopRefusal, Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, cli: true),
+            noProject: !_fileSystemService.HasWorkingDirectory);
         // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.
         string sentEffort = SentEffort(effort, allLevels);
         if (effortScope != null) effortScope.LiveEffort = sentEffort;

@@ -233,6 +233,54 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   after xAI's API card. Locked while the chat's run works. Proven by `tests/chattest` PK/PR/PF/PKS.
 - Girls (owner 2026-11-06): a GGUF is CluadeX's purple girl, Ollama stays มายด์, Antigravity has her own, Grok = Grok.
 
+## A CLI agent in a chat with no project (2026-11-06)
+- A CLI agent (Codex, Gemini Dev, Antigravity, Claude Dev, Grok Dev) gets its sandbox from `DecideWorkerGrant`: no folder,
+  or a folder with no write Allow rule and Accept edits off = read-only (it cannot ask before each write). Codex answered
+  "read-only" for 13 turns because nothing told it about `open_project`.
+- Every CLI wrapper now carries `ChatToolBridge.OpenProjectHint(noProject)`: with nothing open, call open_project (create="true"
+  for a new folder) yourself, never answer "cannot".
+- A CLI turn that moves the run to another folder (`FolderOpenedDuringTurn`) is followed at once by a turn that starts there
+  (`CarryOnInOpenedFolderAsync`, once per turn). Before it, `AgentToolService.AskCliEditGrantAsync` asks once per folder per
+  chat (card "cli_edit_folder"; a Deny/Ask write rule or an unsafe root = no). The yes counts as Accept edits for that
+  folder in that chat (`DecideWorkerGrant(..., editsApprovedInChat)`). A no adds `agent.cliEditDeclined` and starts nothing.
+- Antigravity's guard now lets a read-only chat call CluadeX's chat tools (`AntigravityGuard.ReadOnlyChatTools`: open_project,
+  new_chat, close_chat, update_plan, wrap_up); Codex now gets `CliAgentPolicy.PromptLine` (it has no spawn hook).
+- Proven by `tests/chattest` COP0–COP4 (`CHATTEST_ONLY=COP`, scripted CLI through the real chat page) and safetytest's
+  Antigravity card checks. Not yet tried with a real Codex turn.
+
+## CLI parity — what Claude Dev gets, every CLI gets (2026-11-06, audit = brain note 77faca9ac76d)
+- `ChatToolBridge.ChatToolsHint(CliToolNames, splitChats, plan)` names new_chat / close_chat, wrap_up, every
+  `EngineeringToolModule` tool and add_code_comments in each CLI's own names (Plain "… (MCP server cluadex)", Claude
+  `mcp__cluadex__x`, Grok `cluadex__x` through use_tool); Antigravity also gets update_plan (it has no plan tool).
+- `WorkflowGate.SplitGuide(AiProviderType)`: the Ultra guide with spawn_agent (Codex), codebase_investigator (Gemini),
+  spawn_subagent (Grok); Antigravity has no sub-agent tool → straight to the workflow. Reaches worker turns with chat tools.
+- The CLI daily budget stops every CLI agent (`IsCliAgent`), not only those with `RunsOwnSubAgents` (Antigravity ran past it).
+- Brain tools = `ClaudeDevProvider.BrainToolsFor(grant)` everywhere: Gemini's brain is trusted + `includeTools` (yolo used
+  to run ssh_run unasked); Codex without its own brain gets the whole server from ~/.claude.json as a `-c` override with
+  only those tools approved; Grok gets a `[mcp_servers.brainx-brain]` table + `--allow MCPTool(brainx-brain__<t>)` per tool,
+  **not on a run-grant turn** (bypassPermissions would run every brain tool).
+- Antigravity's guard: those brain tools pass in any chat; any other server's MCP tool in a worker run → the red prompt
+  (`Verdict.AskUser`), cluadex tools still pass (they gate themselves).
+- Codex sees the user's pictures: `AttachmentDigest.CliImagePaths` reads the CLI digest's image lines back, Codex gets
+  `--image=<path>` (one each — the flag would swallow the stdin `-`; comma paths skipped; image extensions only, ≤ 10).
+- Proven by `tests/apitest` CliParityWire (cp-*) and safetytest's Antigravity MCP checks. No live CLI turn yet.
+
+## Code boxes, question cards with steps, every kind of attachment (2026-11-06)
+- Code fences are found by `MarkdownHelper.FindCodeFences` (line scanner, not a regex): ``` or ~~~ of any length, any info
+  string (c#, c++, `python title=…`, `ts:file`, `{.rust}`), fences indented in a list (dedented), a fence at the end of a
+  sentence. An opening line counts only once its newline arrived (streaming). Every block gets the box with Copy.
+- The question card renders its text through the same Markdown (code in a question gets Copy). `ask_user` takes
+  `questions: [{question, options, multiSelect}]` on the native loop and the CLIs' MCP tool; Claude Code's AskUserQuestion
+  with >1 question or multiSelect uses the same card. One card, a step each (`ChatMessage.SetSteps`, `AskStepState`):
+  bar "2 / 3", ‹ Back / Next ›, tick buttons, a review, one numbered answer each (`AskStep.AnswersText`). Saved Content =
+  every question + answer; a reloaded card is the plain one.
+- Attachments: audio/video → `MediaInfo.Describe` (ffprobe if on PATH, else Windows' shell properties; never hex_read).
+  HEIC/AVIF/ICO/JXL → PNG through WIC when a codec exists, else a file with a localized reason. A picture dragged out of
+  a browser (`ChatViewModel.WebImageSource`: the drag's HTML `<img src>` against SourceURL, or an image link; http(s) and
+  data:image only, 20 MB / 20 s cap) is downloaded and attached; a text selection drag stays the text box's.
+- Proven by `tests/chattest` CF*/AS*/XM* (`CHATTEST_ONLY=UX`) and safetytest "steps:" (through the real --cx-tools).
+  Not yet driven by hand with a real browser drag or a real CLI asking several questions.
+
 ## GPU share slider (2026-11-06)
 - Click the status-bar VRAM graph → vertical 0–100 % slider (`ViewModels/GpuShareViewModel.cs`, popups in
   `MainWindow.xaml` beside `GpuGraph` — not inside it: a click in a Popup bubbles to its parent's MouseBinding).

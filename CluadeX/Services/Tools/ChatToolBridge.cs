@@ -69,7 +69,8 @@ public static class ChatToolBridge
 
     /// <summary>The line for each CLI's wrapper: it says which tool reaches the user's card.</summary>
     public const string AskHint = "When you need the user's answer or choice, call CluadeX's ask_user tool (MCP server cluadex) "
-        + "if you have it: it shows a question card in the chat and waits for the answer.";
+        + "if you have it: it shows a question card in the chat and waits for the answer. Several questions that belong "
+        + "together go in one call (questions: [{question, options, multiSelect}]) — one card the user steps through.";
 
     /// <summary>
     /// The line for each CLI's wrapper (only when the turn has the cluadex server) about web pages: CluadeX's browser_*
@@ -164,6 +165,9 @@ public static class ChatToolBridge
     /// <summary>Opens the question card in the asking chat: the answer, or null when nobody answered.</summary>
     public delegate Task<string?> QuestionAsker(string question, List<string> options);
 
+    /// <summary>Opens one card with a step per question (Back / Next, a review): one answer each, or null.</summary>
+    public delegate Task<IReadOnlyList<string>?> StepsAsker(IReadOnlyList<AskStep> steps);
+
     /// <summary>One question of Claude Code's AskUserQuestion.</summary>
     public sealed record CliQuestion(string Text, List<string> Options, List<string> Notes, bool Multi);
 
@@ -178,7 +182,8 @@ public static class ChatToolBridge
     /// parallel (Gemini unless told to wait), and on one shared page a click must not race a screenshot — nor three clicks
     /// on one site show three permission cards where the first answer covers the rest.</summary>
     private sealed record Registration(AgentRunScope? Scope, Func<ToolCall, CancellationToken, Task<ToolResult>> Execute,
-        CancellationTokenSource Cts, string? Cwd, McpApprover? Approve, QuestionAsker? Ask, Agents.CliAgentGate? Gate)
+        CancellationTokenSource Cts, string? Cwd, McpApprover? Approve, QuestionAsker? Ask, Agents.CliAgentGate? Gate,
+        StepsAsker? AskSteps = null)
     {
         public SemaphoreSlim BrowserLane { get; } = new(1, 1);
 
@@ -217,7 +222,8 @@ public static class ChatToolBridge
     /// <paramref name="gate"/> answers the CLI's hook before each sub-agent it spawns (<see cref="AgentGateToolName"/>).
     /// </summary>
     public static Ticket? Register(AgentRunScope? scope, Func<ToolCall, CancellationToken, Task<ToolResult>> execute,
-        string? cwd, CancellationToken turn, McpApprover? approve = null, QuestionAsker? ask = null, Agents.CliAgentGate? gate = null)
+        string? cwd, CancellationToken turn, McpApprover? approve = null, QuestionAsker? ask = null, Agents.CliAgentGate? gate = null,
+        StepsAsker? askSteps = null)
     {
         try
         {
@@ -227,7 +233,7 @@ public static class ChatToolBridge
             SweepStale(dir);
             string file = Path.Combine(dir, $"claude-dev-tools-{token[..12]}.json");
             File.WriteAllText(file, ConfigJson(Safety.GuardHook.ExePath(), token, PipeName), new UTF8Encoding(false));
-            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask, gate);
+            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask, gate, askSteps);
             return new Ticket(token, file);
         }
         catch { return null; }
@@ -408,7 +414,9 @@ public static class ChatToolBridge
         // ExecuteToolAsync turns a cancellation into a failed result ("The operation was canceled."): say what it means.
         if (!result.Success && ct.IsCancellationRequested) return (false, Stopped(tool, hungUp));
         string text = TextOf(result);
-        if (result.Success && type == ToolType.OpenProject) text += "\n\n" + OpenProjectNote(reg.Cwd);
+        if (result.Success && type == ToolType.OpenProject)
+            text += "\n\n" + OpenProjectNote(reg.Cwd, result.FilePath,
+                added: call.GetArg("add").Trim().Equals("true", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(reg.Cwd));
         text += NotesFor(reg);
         // An error result carries no image (Claude Code keeps only its first text block; Gemini turns it into text).
         if (!result.Success || result.Images is not { Count: > 0 } shots) return new Reply(result.Success, text);
@@ -559,11 +567,40 @@ public static class ChatToolBridge
         catch (OperationCanceledException) { return null; }
     }
 
+    /// <summary>The card with steps, in the asking chat's run; without one, the questions one card after another.</summary>
+    private static async Task<IReadOnlyList<string>?> AskStepsOnCardAsync(IReadOnlyList<AskStep> steps, Registration reg)
+    {
+        AgentRunScope.Enter(reg.Scope);
+        try
+        {
+            if (reg.AskSteps != null) return await reg.AskSteps(steps).WaitAsync(reg.Cts.Token).ConfigureAwait(false);
+            var answers = new List<string>();
+            foreach (var s in steps)
+            {
+                string? a = await AskOnCardAsync(s.Notes.Count == 0 ? s.Question : s.Question + "\n" + string.Join("\n", s.Notes.Select(n => "- " + n)),
+                    s.Options.ToList(), reg).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(a)) return null;
+                answers.Add(a);
+            }
+            return answers;
+        }
+        catch (OperationCanceledException) { return null; }
+    }
+
     /// <summary>The ask_user MCP tool (Codex, Gemini, Antigravity, Claude Code).</summary>
     private static async Task<(bool Ok, string Text)> AskFromToolAsync(JsonElement request, Registration reg)
     {
         if (reg.Ask == null) return (false, "CluadeX: this turn cannot ask the user — ask in your reply instead.");
         var args = request.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : default;
+        // Several questions at once: one card with a step each.
+        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("questions", out var qs)
+            && AgentToolService.ParseAskSteps(qs.ValueKind == JsonValueKind.String ? qs.GetString() : qs.GetRawText()) is { Count: > 0 } steps)
+        {
+            var answers = await AskStepsOnCardAsync(steps, reg).ConfigureAwait(false);
+            return answers != null
+                ? (true, "User answered:\n" + AskStep.AnswersText(steps, answers) + NotesFor(reg))
+                : (false, "The user did not answer in CluadeX (the run was stopped).");
+        }
         string question = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("question", out var q)
             && q.ValueKind == JsonValueKind.String ? q.GetString()?.Trim() ?? "" : "";
         if (question.Length == 0) return (false, "CluadeX: ask_user needs a question.");
@@ -583,6 +620,15 @@ public static class ChatToolBridge
         var questions = ReadCliQuestions(input);
         if (questions.Count == 0) return Verdict(false, input, "CluadeX: AskUserQuestion came with no question.");
         var answers = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Several questions, or one with several picks: one card with steps (Back / Next, tick buttons).
+        if (reg.AskSteps != null && (questions.Count > 1 || questions.Any(q => q.Multi)))
+        {
+            var steps = questions.Select(q => new AskStep(q.Text, q.Options, q.Notes, q.Multi)).ToList();
+            var got = await AskStepsOnCardAsync(steps, reg).ConfigureAwait(false);
+            if (got == null || got.Count != questions.Count) return Verdict(false, input, "The user did not answer in CluadeX (the run was stopped).");
+            for (int i = 0; i < questions.Count; i++) answers[questions[i].Text] = got[i];
+            return AnswersVerdict(input, answers);
+        }
         foreach (var q in questions)
         {
             string? answer = await AskOnCardAsync(CliQuestionPrompt(q), q.Options, reg).ConfigureAwait(false);
@@ -690,11 +736,108 @@ public static class ChatToolBridge
         }, Json)
         : JsonSerializer.Serialize(new { behavior = "deny", message = message ?? "Denied by CluadeX." }, Json);
 
-    /// <summary>What open_project means for a CLI that keeps the folder it started in.</summary>
-    public static string OpenProjectNote(string? cwd) =>
-        "(Claude Dev: this run keeps working in " + (cwd ?? "the folder it started in") + ". The folder is now allowed for "
-        + "this chat: read it by absolute path now; this chat's next turn starts with it added (--add-dir), so edits and "
-        + "builds there work from then. To work in it right away, start a chat there with new_chat.)";
+    /// <summary>What open_project means for a CLI that keeps the folder it started in: this process cannot write there,
+    /// so it ends its turn and CluadeX carries the task on in a new turn that starts in the folder
+    /// (CodeAgentService.CarryOnInOpenedFolderAsync).</summary>
+    /// <param name="opened">The folder open_project opened (its result's FilePath).</param>
+    /// <param name="added">open_project add="true": the folder sits beside the project, the run stays where it is.</param>
+    public static string OpenProjectNote(string? cwd, string? opened = null, bool added = false)
+    {
+        string here = cwd ?? "the folder it started in";
+        if (added)
+            return "(This CLI process keeps working in " + here + ". The folder is now allowed for this chat: read it by "
+                + "absolute path now; this chat's next turn starts with it added (--add-dir), so edits and builds there work "
+                + "from then.)";
+        if (cwd != null && opened != null && SameFolder(cwd, opened))
+            return "(That is the folder this turn already works in: nothing changes.)";
+        return "(This CLI process stays in " + here + " until this turn ends, so it cannot write in the folder just opened. "
+            + "Do not write the files anywhere else and do not ask the user to open or allow anything: read the folder by "
+            + "absolute path if you need to, then end your turn with one short line. CluadeX carries the task on at once in "
+            + "a new turn that starts in that folder — asking the user for edit rights there if they are needed.)";
+
+        static bool SameFolder(string a, string b)
+        {
+            try
+            {
+                return string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+    }
+
+    /// <summary>
+    /// The wrapper line about CluadeX's open_project for a CLI agent. With no project open the CLI runs read-only in the
+    /// profile folder, and it used to answer "this session is read-only, open a folder for me" over and over (Codex,
+    /// 2026-11-06: 13 turns, "เปิดโฟลเดอร์ใหม่เลย" and it still could not) — the tool that creates the folder was never
+    /// named to it. <paramref name="toolRef"/> is the name this CLI calls it by. Pure.
+    /// </summary>
+    public static string OpenProjectHint(bool noProject, string toolRef = "open_project")
+    {
+        string call = toolRef == "open_project" ? "CluadeX's open_project tool (MCP server " + ServerName + ")" : toolRef;
+        return noProject
+            ? "No project folder is open in this chat, so nothing can be written yet. When the request needs files — a new "
+              + $"project, documents or outputs to save — call {call} yourself: create=\"true\" with a short folder name (or the "
+              + "full path the user gave) for a new folder, or the name / path of an existing project. CluadeX asks the user "
+              + "where it must, then carries the task on in that folder right away. Never answer that you cannot create files "
+              + "or open a folder, and do not ask the user to open one."
+            : $"To work in another project folder, or to start a new one, call {call} (create=\"true\" for a new folder).";
+    }
+
+    /// <summary>How a CLI names CluadeX's MCP tools in its wrapper.</summary>
+    public enum CliToolNames
+    {
+        /// <summary>Codex, Gemini, Antigravity: the bare tool name "on MCP server cluadex".</summary>
+        Plain,
+        /// <summary>Claude Code: mcp__cluadex__tool.</summary>
+        Claude,
+        /// <summary>Grok Build: cluadex__tool, reached through use_tool.</summary>
+        Grok,
+    }
+
+    /// <summary>A tool of the cluadex server as <paramref name="naming"/>'s CLI calls it. Pure.</summary>
+    public static string ToolRef(CliToolNames naming, string tool) => naming switch
+    {
+        CliToolNames.Claude => $"mcp__{ServerName}__{tool}",
+        CliToolNames.Grok => $"{ServerName}__{tool}",
+        _ => tool,
+    };
+
+    /// <summary>
+    /// The wrapper line naming the rest of the cluadex server's tools, so every CLI knows them — the 2026-11-06 parity audit
+    /// found Codex, Gemini and Antigravity were never told new_chat / close_chat existed, and no CLI was told about wrap_up,
+    /// the engineering tools or add_code_comments, so they answered "I can't" for things CluadeX hands them.
+    /// <paramref name="splitChats"/>: name new_chat / close_chat (Claude Dev and Grok Dev already have their own line).
+    /// <paramref name="plan"/>: name update_plan (Antigravity has no plan tool of its own). One line. Pure.
+    /// </summary>
+    public static string ChatToolsHint(CliToolNames naming, bool splitChats, bool plan = false)
+    {
+        string T(string tool) => ToolRef(naming, tool);
+        string server = naming switch
+        {
+            CliToolNames.Plain => $" (MCP server {ServerName})",
+            CliToolNames.Grok => " (through use_tool)",
+            _ => "",
+        };
+        var sb = new StringBuilder("CluadeX's chat tools" + server + ": ");
+        if (splitChats)
+            sb.Append($"{T(ProjectToolModule.NewChatToolName)} opens a new chat that runs beside this one — for a separate task, ")
+              .Append("or a new, independent request that arrives mid-task; give it the whole brief, it does not see this chat — ")
+              .Append($"and {T(ProjectToolModule.CloseChatToolName)} lists the chats you split off and puts finished ones away. ")
+              .Append("Never answer that you cannot open a chat. ");
+        if (plan)
+            sb.Append($"{T(PlanToolName)} keeps the plan card under your reply: send the whole plan when a task has several ")
+              .Append("steps, then advance as each step finishes. ");
+        sb.Append($"{T(OrchestrationToolModule.WrapUpToolName)} ends a turn of multi-step work with a short recap and, only ")
+          .Append("when the user must decide, one question with 1-2 answer buttons — call it once, last. ")
+          .Append($"In a project: {T("verify_change")} proves a change (build, tests and the problems it left); ")
+          .Append($"{T("find_references")}, {T("rename_symbol")} and {T("impact_of")} work on a symbol across the project; ")
+          .Append($"{T("checkpoint_list")}, {T("checkpoint_diff")} and {T("checkpoint_restore")} show or undo what the AI changed ")
+          .Append($"in this chat; {T("git_blame")}, {T("git_show")}, {T("gh_pr_view")}, {T("gh_pr_checks")} and {T("gh_run_log")} ")
+          .Append($"read history, pull requests and CI; {T("debug")} runs a debugger; {T(AutoComment.AutoCommentToolModule.ToolName)} ")
+          .Append("adds comments to existing code without changing the code.");
+        return sb.ToString();
+    }
 
     // ─── CLI side: CluadeX.exe --cx-tools (an MCP stdio server) ───
 
@@ -859,19 +1002,8 @@ public static class ChatToolBridge
     }).Append(new
     {
         name = AskToolName,
-        description = "Ask the user a question on a card in the CluadeX chat and wait for the answer. Use it whenever you need "
-            + "the user's decision or choice: this is the way to reach them while you work. Give options for a choice; they can "
-            + "also type a free answer.",
-        inputSchema = (object)new
-        {
-            type = "object",
-            properties = new
-            {
-                question = new { type = "string", description = "The question, in the user's language." },
-                options = new { type = "array", items = new { type = "string" }, description = "Short answers to choose from (optional)." },
-            },
-            required = new[] { "question" },
-        },
+        description = AgentToolService.AskUserDescription,
+        inputSchema = (object)JsonDocument.Parse(AgentToolService.AskUserSchemaJson).RootElement.Clone(),
     }).Append(new
     {
         name = PlanToolName,

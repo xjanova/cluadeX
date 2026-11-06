@@ -72,6 +72,8 @@ public static class DocumentReader
                 case ".png": case ".jpg": case ".jpeg": case ".gif": case ".webp": case ".bmp": case ".tif": case ".tiff": case ".ico":
                     return new() { Kind = "image", Note = $"{Path.GetFileName(path)} is an image, not a document." };
             }
+            if (MediaInfo.IsMedia(path))
+                return new() { Kind = MediaInfo.IsVideo(path) ? "video" : "audio", Note = MediaInfo.Describe(path) };
             if (TextExtensions.Contains(ext) || LooksLikeText(path)) return TextFile(path, offset, maxChars);
             if (ArchiveExtractor.IsOtherArchive(path))
                 return new() { Kind = "archive", Note = $"{Path.GetFileName(path)} is a {ext.TrimStart('.')} archive; only zip/tar/gz can be opened here — use 7-Zip through the shell if it is installed." };
