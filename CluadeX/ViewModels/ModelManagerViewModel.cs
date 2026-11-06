@@ -341,19 +341,25 @@ public class ModelManagerViewModel : ViewModelBase
                 _log?.Warn("Models", "Hardware detection failed", ex);
                 hw = new HardwareProfile { SystemRamMB = 8192 };
             }
-            try { App.Current?.Dispatcher.Invoke(() => ApplyHardware(hw)); }
+            // The model folders are read here too, not on the UI thread: ApplyHardware's rescan ran inside the
+            // Dispatcher.Invoke and held the UI 400–700 ms on every hardware reading (failure audit 2026-11-05).
+            var scanned = ScanLocalModelFiles();
+            try { App.Current?.Dispatcher.Invoke(() => ApplyHardware(hw, scanned)); }
             catch (Exception ex) { _log?.Warn("Models", "Applying the hardware reading failed", ex); }   // app closing
         });
     }
 
     /// <summary>Use a hardware profile (also the harness's way in: no nvidia-smi, any PC it likes).</summary>
-    public void ApplyHardware(HardwareProfile hw)
+    public void ApplyHardware(HardwareProfile hw) => ApplyHardware(hw, null);
+
+    /// <summary><paramref name="scanned"/>: the model files already read off the UI thread; null reads them now.</summary>
+    private void ApplyHardware(HardwareProfile hw, List<ModelInfo>? scanned)
     {
         _hw = hw;
         AvailableVramMB = hw.VramTotalMB;
         IsDetecting = false;
         UpdateHardwareText();
-        RefreshLocalModels();
+        ShowLocalModels(scanned ?? ScanLocalModelFiles());
         CommandManager.InvalidateRequerySuggested();
     }
 
@@ -595,20 +601,33 @@ public class ModelManagerViewModel : ViewModelBase
         info.SpeedText = SpeedText(e.TokensPerSecond, e.Tier);
     }
 
-    private void RefreshLocalModels()
+    private void RefreshLocalModels() => ShowLocalModels(ScanLocalModelFiles());
+
+    /// <summary>The disk part of a refresh (folder scan + vision projector lookup): safe on any thread.</summary>
+    private List<ModelInfo> ScanLocalModelFiles()
     {
         List<ModelInfo> models;
         try { models = _huggingFaceService.GetLocalModels(); }
         catch (Exception ex)
         {
             _log?.Warn("Models", "Scanning model folders failed", ex);
-            models = new List<ModelInfo>();
+            return new List<ModelInfo>();
         }
+        foreach (var model in models)
+        {
+            try { model.HasVision = VisionProjector.FindFor(model.LocalPath) != null; }
+            catch { model.HasVision = false; }
+        }
+        return models;
+    }
+
+    /// <summary>The UI part: loaded state, fit badges, the list and the catalog. UI thread.</summary>
+    private void ShowLocalModels(List<ModelInfo> models)
+    {
         LocalModels.Clear();
         foreach (var model in models)
         {
             model.IsLoaded = SamePath(model.LocalPath, SelectedModelPath) && _localProvider.IsReady;
-            model.HasVision = VisionProjector.FindFor(model.LocalPath) != null;
             DescribeFile(model);
             LocalModels.Add(model);
         }

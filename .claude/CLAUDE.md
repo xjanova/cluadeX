@@ -195,6 +195,17 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   guarded, survives a killed browser). Proven by `tests/chattest` DM*/DL*/SW*, `tests/pagestest`, `tests/studiotest`.
 - The old UsageWindow is gone: its account/savings views live in the Billing page (`Views/Billing/`).
 
+## Failure-audit fixes (2026-11-06, from 19 days of `~/.cluadex/logs`)
+- Loop guard (`Services/Agents/AgentLoopGuard.cs`, was PR #82): same call + same error twice = nudge, four = stop.
+- `Providers/CliRefusals.cs`: a CLI refusal that is a plan/rate limit or a policy flag is **not** run again while the CLI
+  is still signed in (OpenAI Dev used to retry and fail in 3 s). The CLI's error text is kept in
+  `AgentLoopResult.RefusalText` and logged (`ForLog` redacts keys); a safeguard flag gets a "switch model" hint.
+- `UiStallWatchdog`: stall lines say `UI busy N ms in K ops` (low busy = CPU starved or a Win32 loop, not our code) and
+  name a `DispatcherTimer` by its Tick handler. Models page reads the model folders off the UI thread on a hardware reading.
+- File tools accept `%TEMP%\cluadex-agent` (`Helpers/AgentScratch.cs`, pruned after 3 days); the outside-the-project
+  refusal names it and `open_project add="true"`. `CheckpointService` follows portable.txt like the other data.
+- Proven by `tests/loopguardtest` F1–F9.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

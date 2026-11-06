@@ -46,6 +46,18 @@ public class FileSystemService
 
     public bool HasWorkingDirectory => !string.IsNullOrEmpty(Root) && Directory.Exists(Root);
 
+    /// <summary>True when the project folder exists and holds nothing but dot-entries (.git, .vscode …): there is no
+    /// file to read or edit yet. Any error (no access) says false — an unknown folder is never called empty.</summary>
+    public bool IsWorkingDirectoryEmpty()
+    {
+        try
+        {
+            return HasWorkingDirectory
+                && !Directory.EnumerateFileSystemEntries(Root).Any(e => !Path.GetFileName(e).StartsWith('.'));
+        }
+        catch { return false; }
+    }
+
     // ─── Read File ───
     public string ReadFile(string relativePath)
     {
@@ -895,9 +907,17 @@ public class FileSystemService
             else if (AgentRunScope.Current is { } scope
                      && AgentRunScope.ContainingFolder(rootedFull, scope.ExtraFolders) != null)
                 return rootedFull;
+            // The agents' scratch folder (%TEMP%\cluadex-agent): throwaway files, never the user's project.
+            else if (CluadeX.Helpers.AgentScratch.Contains(rootedFull))
+            {
+                CluadeX.Helpers.AgentScratch.Ensure();
+                return rootedFull;
+            }
             else
                 throw new UnauthorizedAccessException(
-                    $"Access denied: '{relativePath}' is outside the project root. Use relative paths from the project root.");
+                    $"Access denied: '{relativePath}' is outside the project root. Use a path relative to the project root. "
+                    + $"For a throwaway file use the scratch folder {CluadeX.Helpers.AgentScratch.Root}; "
+                    + "to work in another folder, call open_project with add=\"true\" first.");
         }
 
         string fullPath = Path.GetFullPath(Path.Combine(Root, normalized));

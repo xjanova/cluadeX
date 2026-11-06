@@ -3257,7 +3257,8 @@ public partial class ChatViewModel : ViewModelBase
         private void OnStatus(string status)
         {
             if (!Mine) return;
-            bool notable = status.Contains('⤴') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
+            // '⚠' first = what this model can be trusted with, said before the run (ModelCapability.PreRunWarning).
+            bool notable = status.Contains('⤴') || status.StartsWith('⚠') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
                 || status.Contains("Recovered tool call") || status.Contains("กู้คืน")
                 || status.Contains("compacting") || status.Contains("บีบอัด")
                 || status.Contains("truncated") || status.Contains("ถูกตัด");
@@ -4441,7 +4442,8 @@ public partial class ChatViewModel : ViewModelBase
         void OnAgentStatusNotice(string status)
         {
             if (!Mine()) return;
-            bool notable = status.Contains('⤴') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
+            // '⚠' first = what this model can be trusted with, said before the run (ModelCapability.PreRunWarning).
+            bool notable = status.Contains('⤴') || status.StartsWith('⚠') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
                 || status.Contains("Recovered tool call") || status.Contains("กู้คืน")
                 || status.Contains("compacting") || status.Contains("บีบอัด")
                 || status.Contains("truncated") || status.Contains("ถูกตัด");
