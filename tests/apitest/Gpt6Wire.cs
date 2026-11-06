@@ -4,6 +4,8 @@
 // Luna $0.10/$0.01/$0.50 per 1M (input/cached/output), cache writes 1.25x input, a prompt over 272K bills 2x in and 1.5x
 // out; efforts low…max (Astra and 6.1 Sol refuse "none"); temperature/top_p go only with effort "none". GPT-Live
 // (gpt-live-1), the realtime models and GPT Image 2.5 (sunburst / flare) are not chat models.
+// GPT-6.1 Terra (gpt-6.1-terra, 2026-10-26, developers.openai.com/api/docs/models/gpt-6.1-terra checked 2026-11-06): the same
+// 1.05M window and 128K output, efforts none…max, image input; $1 / $0.05 cached / $5, cache write $1.25, over 272K $2 / $7.50.
 using System.Text.Json;
 using CluadeX.Models;
 using CluadeX.Services;
@@ -18,13 +20,13 @@ internal static class Gpt6Wire
     {
         section("offline · OpenAI GPT-6 Astra / 6.1 Sol / Luna");
 
-        check("gpt6", "default model is gpt-6.1-sol; the list starts astra, 6.1-sol, 6-sol, luna",
+        check("gpt6", "default model is gpt-6.1-sol; the list starts astra, 6.1-sol, 6.1-terra, 6-sol, luna",
             OpenAiProvider.DefaultModel == "gpt-6.1-sol"
-            && string.Join(",", OpenAiProvider.KnownModels.Take(4)) == "gpt-6-astra,gpt-6.1-sol,gpt-6-sol,gpt-6-luna",
-            string.Join(",", OpenAiProvider.KnownModels.Take(4)));
+            && string.Join(",", OpenAiProvider.KnownModels.Take(5)) == "gpt-6-astra,gpt-6.1-sol,gpt-6.1-terra,gpt-6-sol,gpt-6-luna",
+            string.Join(",", OpenAiProvider.KnownModels.Take(5)));
 
         // Effort: every level the picker has goes out as one of low…max, never "none"/"minimal" (a 400 on Astra / 6.1 Sol).
-        string[] gpt6 = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"];
+        string[] gpt6 = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
         var sent = gpt6.SelectMany(m => EffortLevels.All.Select(p => OpenAiProvider.EffortFor(m, p, true))).ToList();
         check("gpt6", "efforts: every pick → low/medium/high/xhigh/max as picked (auto + Think → high)",
             gpt6.All(m => OpenAiProvider.EffortFor(m, "max", false) == "max" && OpenAiProvider.EffortFor(m, "xhigh", false) == "xhigh"
@@ -53,6 +55,13 @@ internal static class Gpt6Wire
         check("gpt6", "list prices: astra 10/50 (cache 1, write 12.50), 6.1 sol 2/10 (0.10, 2.50), 6 sol 2/10 (0.20), luna 0.10/0.50 (0.01, 0.125)",
             P("gpt-6-astra", 10m, 50m, 1m, 12.5m) && P("gpt-6.1-sol", 2m, 10m, 0.10m, 2.5m) && P("gpt-6-sol", 2m, 10m, 0.20m, 2.5m)
             && P("gpt-6-luna", 0.10m, 0.50m, 0.01m, 0.125m), "");
+        check("gpt6", "6.1 Terra: $1 / $5, cached $0.05, cache write $1.25; over 272K $2 / $7.50 (cached $0.10, write $2.50)",
+            P("gpt-6.1-terra", 1m, 5m, 0.05m, 1.25m) && P("openai/gpt-6.1-terra", 1m, 5m, 0.05m, 1.25m, 272_000)
+            && P("gpt-6.1-terra", 2m, 7.5m, 0.10m, 2.5m, 272_001), CostTrackingService.PricingOf("gpt-6.1-terra").ToString());
+        check("gpt6", "6.1 Terra: a reasoning model up to max, 128K output ceiling, sees images, and Codex (OpenAI Dev) lists it",
+            OpenAiProvider.MaxEffort("gpt-6.1-terra") == "max" && OpenAiProvider.MaxOutputTokens("gpt-6.1-terra") == 128_000
+            && new OpenAiProvider(new SettingsService()).SupportsToolResultImages("gpt-6.1-terra")
+            && OpenAIDevProvider.KnownModels.Contains("gpt-6.1-terra"), "");
         check("gpt6", "a prompt over 272K: 2x input/cache, 1.5x output; exactly 272K stays standard",
             P("gpt-6.1-sol", 4m, 15m, 0.20m, 5m, 272_001) && P("gpt-6-astra", 20m, 75m, 2m, 25m, 300_000)
             && P("gpt-6-luna", 0.20m, 0.75m, 0.02m, 0.25m, 900_000) && P("gpt-6.1-sol", 2m, 10m, 0.10m, 2.5m, 272_000)
@@ -70,7 +79,7 @@ internal static class Gpt6Wire
             OpenAiProvider.MaxEffort("gpt-live-1") == null && OpenAiProvider.MaxOutputTokens("gpt-image-2.5-sunburst") == null, "");
 
         check("gpt6", "friendly names: GPT-6 Astra, GPT-6.1 Sol, GPT-6 Luna, GPT-5.4 Mini, GPT-5.5, GPT-4o",
-            LiveModelReport.FriendlyModel("gpt-6-astra") == "GPT-6 Astra" && LiveModelReport.FriendlyModel("gpt-6.1-sol") == "GPT-6.1 Sol"
+            LiveModelReport.FriendlyModel("gpt-6-astra") == "GPT-6 Astra" && LiveModelReport.FriendlyModel("gpt-6.1-sol") == "GPT-6.1 Sol" && LiveModelReport.FriendlyModel("gpt-6.1-terra") == "GPT-6.1 Terra"
             && LiveModelReport.FriendlyModel("openai/gpt-6-luna") == "GPT-6 Luna" && LiveModelReport.FriendlyModel("gpt-5.4-mini") == "GPT-5.4 Mini"
             && LiveModelReport.FriendlyModel("gpt-5.5-2026-09-01") == "GPT-5.5" && LiveModelReport.FriendlyModel("gpt-4o") == "GPT-4o",
             LiveModelReport.FriendlyModel("gpt-6.1-sol") + " | " + LiveModelReport.FriendlyModel("gpt-5.4-mini"));

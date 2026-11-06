@@ -29,6 +29,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
     [
         "gpt-6-astra",     // most capable, hardest end-to-end work
         "gpt-6.1-sol",     // high performance where time and cost matter (the default)
+        "gpt-6.1-terra",   // mid-sized, everyday computer work and vision at half Sol's price ($1 / $5)
         "gpt-6-sol",       // the previous Sol
         "gpt-6-luna",      // most efficient, high-volume
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
@@ -56,7 +57,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
 
     /// <summary>The model's published output ceiling (reasoning tokens included), or null when this build doesn't know
     /// it and the setting goes out as it is. GPT-6 Astra / 6.1 Sol / 6 Sol / Luna: 128K — a larger max_output_tokens
-    /// is refused rather than trimmed.</summary>
+    /// is refused rather than trimmed. 6.1 Terra too (2026-10-26).</summary>
     public static int? MaxOutputTokens(string? model)
     {
         string m = model?.Trim().ToLowerInvariant() ?? "";

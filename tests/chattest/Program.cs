@@ -328,6 +328,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=PICK: just the full-screen model picker.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PICK")
+        {
+            await TestModelPicker();
+            Log($"\n## Result (CHATTEST_ONLY=PICK): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PROJ: just renaming chats and the projects that group them.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PROJ")
         {
@@ -377,6 +386,7 @@ internal static partial class Program
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
         await TestConnectWizardJump();        // CW: a model that is not connected opens its wizard
+        await TestModelPicker();              // PK: the full-screen model picker (provider → models, status, a pick applies)
         await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
@@ -2226,7 +2236,7 @@ internal static partial class Program
         // Model box: the models of every API provider that has a key; a cloud pick is the paid tier.
         Settings.UpdateSettings(s => s.ProviderConfigs["Anthropic"] = new ProviderConfig { ApiKey = "sk-ant-harness-not-a-key", SelectedModel = "claude-sonnet-5-5" });
         await Render();
-        var modelBox = (ComboBox)View.FindName("ChatModelBox");
+        var modelBox = (Control)View.FindName("ChatModelBox");
         Check("U7 model box: shown once a provider has a key, listing its models", modelBox is { IsVisible: true }
             && Vm.ChatModelChoices.Any(c => c.Model == "claude-sonnet-5-5") && Vm.ChatModelChoices.Any(c => c.Model == "claude-haiku-5-5"),
             $"{Vm.ChatModelChoices.Count} choices");
@@ -2469,13 +2479,15 @@ internal static partial class Program
         Check("U7 text: no key → Claude's models stay listed, marked as needing a key (every vendor is in the box)",
             noKey is { NeedsKey: true } && noKey.PriceLabel.Contains(L("chat.model.noKeyLabel")), noKey?.PriceLabel);
         // A refused pick springs back: the box kept showing "claude-haiku-5-5 · ยังไม่มีคีย์" while another model went on
-        // answering (owner 2026-10-20). Picked on screen (the ComboBox), as the owner does.
+        // answering (owner 2026-10-20). Picked on screen (the box opens the full-screen picker), as the owner does.
         var before = Vm.SelectedChatModel;
-        modelBox.SelectedItem = noKey;
+        ((System.Windows.Input.ICommand)modelBox.GetType().GetProperty("Command")!.GetValue(modelBox)).Execute(null);
+        Vm.ModelPicker.PickProvider(Vm.ModelPicker.Providers.First(p => p.Group == AiProviderType.Anthropic));
+        Vm.ModelPicker.PickModel(Vm.ModelPicker.Models.First(m => m.Model == "claude-sonnet-5-5"));
         await Task.Delay(100); await Render();
         Check("U7 model box: a model without a key is refused and the box shows what still answers",
-            !Equals(modelBox.SelectedItem, noKey) && Equals(Vm.SelectedChatModel, before) && Vm.StatusText.Length > 0,
-            $"box={(modelBox.SelectedItem as ChatViewModel.ChatModelChoice)?.Model} vm={Vm.SelectedChatModel?.Model} status={Vm.StatusText}");
+            !Vm.ModelPicker.IsOpen && Equals(Vm.SelectedChatModel, before) && Vm.StatusText.Length > 0,
+            $"vm={Vm.SelectedChatModel?.Model} status={Vm.StatusText}");
         // The credit link moved to the window's title bar (the "today" chip's menu): MainWindow, not this view.
         Check("U7 text: the composer's \"+\" menu carries the agent switches and the chat actions",
             ((Button)View.FindName("MoreButton")).ContextMenu.Items.OfType<MenuItem>().Count() >= 9);

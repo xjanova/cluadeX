@@ -55,7 +55,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
 
     /// <summary>The models offered in the chat's model box: "default" sends no -m (Codex's own pick from its
     /// config.toml), then the models Codex lists for a ChatGPT account (its models_cache.json, 2026-10-20).</summary>
-    public static readonly string[] KnownModels = ["default", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+    public static readonly string[] KnownModels = ["default", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 
     public OpenAIDevProvider(SettingsService settingsService, FileSystemService fileSystemService)
     {

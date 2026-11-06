@@ -3500,53 +3500,42 @@
                                 <!-- Model (an API provider with a key): shows its price; a model on this PC is named over it -->
                                 <Grid Margin="0,2,8,2" VerticalAlignment="Center"
                                       Visibility="{Binding HasChatModelChoices, Converter={StaticResource BoolVis}}">
-                                    <ComboBox x:Name="ChatModelBox" ItemsSource="{Binding ChatModelChoices}" SelectedItem="{Binding SelectedChatModel}"
-                                              Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="180"
-                                              Tag="{Binding LiveEffortSuffix}"
-                                              ToolTip="{services:Loc chat.model.pickTip}">
-                                        <ComboBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <StackPanel Orientation="Horizontal">
-                                                    <!-- the vendor's girl, a round portrait of her face (ChatCharacter.FaceBrush); not in Classic -->
-                                                    <Grid Width="26" Height="26" Margin="0,0,8,0" VerticalAlignment="Center" Visibility="{DynamicResource Fx.Flourish}">
-                                                        <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2" Fill="{Binding GirlFace}"/>
-                                                    </Grid>
-                                                    <StackPanel VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"/>
-                                                    <TextBlock Text="{Binding ProviderLabel}" FontSize="10" Foreground="{DynamicResource Text.Muted}">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ComboBoxItem}}" Value="{x:Null}">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                    </StackPanel>
-                                                    <TextBlock Text="{Binding PriceLabel}" FontSize="11" Foreground="{DynamicResource Status.Warning}"
-                                                               FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,0,0"
-                                                               ToolTip="{services:Loc chat.model.priceTip}"/>
-                                                    <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=ComboBox}}"
-                                                               FontSize="11" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Accent.2}"
-                                                               VerticalAlignment="Center" Margin="8,0,0,0">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ComboBoxItem}}" Value="{x:Null}">
-                                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                </StackPanel>
-                                            </DataTemplate>
-                                        </ComboBox.ItemTemplate>
-                                    </ComboBox>
+                                    <!-- The model box opens the full-screen picker (ModelPickerOverlay): provider first, then its models. -->
+                                    <Button x:Name="ChatModelBox" Command="{Binding OpenModelPickerCommand}" MinWidth="180" Cursor="Hand" FontSize="13"
+                                            ToolTip="{services:Loc picker.open}" Tag="{Binding LiveEffortSuffix}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="bd" Background="{DynamicResource Dropdown.Background}" BorderBrush="{DynamicResource Dropdown.Border}"
+                                                        BorderThickness="1" CornerRadius="8" Padding="8,3,10,3">
+                                                    <ContentPresenter VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Dropdown.Hover.Border}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                        <DockPanel LastChildFill="True">
+                                            <TextBlock DockPanel.Dock="Right" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="8,0,0,0"
+                                                       VerticalAlignment="Center" Foreground="{DynamicResource Dropdown.Arrow}"/>
+                                            <StackPanel Orientation="Horizontal" DataContext="{Binding SelectedChatModel}"
+                                                        Visibility="{Binding Converter={StaticResource NullToCollapsed}}">
+                                                <!-- the vendor's girl, a round portrait of her face (ChatCharacter.FaceBrush); not in Classic -->
+                                                <Grid Width="24" Height="24" Margin="0,0,8,0" VerticalAlignment="Center" Visibility="{DynamicResource Fx.Flourish}">
+                                                    <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2" Fill="{Binding GirlFace}"/>
+                                                </Grid>
+                                                <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource Dropdown.Foreground}"/>
+                                                <TextBlock Text="{Binding PriceLabel}" FontSize="11" Foreground="{DynamicResource Status.Warning}"
+                                                           FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                           ToolTip="{services:Loc chat.model.priceTip}"/>
+                                                <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=Button}}"
+                                                           FontSize="11" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Accent.2}"
+                                                           VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Button>
                                     <TextBlock Text="{Binding ChatModelPlaceholder}" Foreground="{DynamicResource Text.Muted}" FontSize="12"
                                                VerticalAlignment="Center" Margin="12,0,30,0" IsHitTestVisible="False" TextTrimming="CharacterEllipsis"
                                                Visibility="{Binding ChatModelPlaceholder, Converter={StaticResource BoolVis}}"/>
