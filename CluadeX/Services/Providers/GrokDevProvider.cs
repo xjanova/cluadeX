@@ -25,6 +25,12 @@ namespace CluadeX.Services.Providers;
 ///   grant = acceptEdits (file edits, commands still need an approval nobody can give headless, so they are refused);
 ///   the run grant = bypassPermissions, the same reach as Gemini Dev's run grant — without the edit grant its file-writing
 ///   tools (<see cref="FileWriteTools"/>) are removed, so it runs commands but does not edit. Never --sandbox off.
+/// - On top, like Claude Dev and Gemini Dev, each turn runs in its own GROK_HOME (<see cref="GrokTurnHome"/>): CluadeX's
+///   guard as a PreToolUse hook on Grok's shell, file writers and sub-agent spawn (the red prompt, the never-run list, the
+///   no-edit rule, the sub-agent gate), and CluadeX's chat tools as the MCP server `cluadex`. A worker turn without the
+///   guard gets no shell; a turn whose first guarded call arrives before the hooks proved they loaded is stopped.
+/// - Sub-agents: Grok's spawn_subagent goes through Agents.CliAgentGate (read-only explore / plan only — Grok's worktree
+///   isolation is not wired); --no-subagents when the step's policy says none, in a plain chat, or when nothing gates them.
 /// - Cost: the CLI's own result line (usage + total_cost_usd when the server stamps it) through
 ///   <see cref="DelegatedUsageEstimate"/>, filed under the GrokDev Billing tab as plan use.
 /// </summary>
@@ -38,8 +44,8 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
     private bool _isLoading;
 
     public const string Id = "GrokDev";
-    /// <summary>Grok's sub-agents are its own business: CluadeX has no hook on them (no Agents.CliAgentGate route).</summary>
-    public bool RunsOwnSubAgents => false;
+    /// <summary>Grok spawns its own sub-agents (spawn_subagent); the turn's guard hook asks Agents.CliAgentGate first.</summary>
+    public bool RunsOwnSubAgents => true;
 
     public string ProviderId => Id;
     public string DisplayName => "Grok Dev (Grok Build CLI)";
@@ -119,8 +125,12 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
     // ─── One turn ───
 
     /// <summary>The CLI's arguments for one call. Pure, so the harness checks them (see the class summary for the modes).</summary>
+    /// <param name="guarded">The turn's guard hook is in place; a worker turn without it gets no shell.</param>
+    /// <param name="noSubAgents">--no-subagents (see the class summary).</param>
+    /// <param name="chatTools">CluadeX's MCP server is in the turn's config: its tools are allowed (the bridge asks the
+    /// user itself where a native call would), else dontAsk / acceptEdits would refuse every one.</param>
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, string effort,
-        IReadOnlyList<string>? addDirs, string promptFile)
+        IReadOnlyList<string>? addDirs, string promptFile, bool guarded = true, bool noSubAgents = false, bool chatTools = false)
     {
         var args = new List<string>
         {
@@ -131,10 +141,20 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
         };
         // The run grant without the edit grant: commands yes, but bypassPermissions would also let it edit — so its three
         // file-writing tools are removed (the ids Grok Build 1.0.70 ships; dontAsk and acceptEdits already hold the rest).
-        if (grant is { Run: true, Edit: false })
+        var refused = new List<string>();
+        if (grant is { Run: true, Edit: false }) refused.AddRange(FileWriteTools);
+        // No guard → no shell (Claude Dev's rule): bypassPermissions would run any command unseen.
+        if (grant is { Run: true } && !guarded) refused.Add(ShellTool);
+        if (refused.Count > 0)
         {
             args.Add("--disallowed-tools");
-            args.Add(string.Join(",", FileWriteTools));
+            args.Add(string.Join(",", refused));
+        }
+        if (noSubAgents) args.Add("--no-subagents");
+        if (chatTools)
+        {
+            args.Add("--allow");
+            args.Add($"MCPTool({Tools.ChatToolBridge.ServerName}__*)");
         }
         bool chosen = !string.IsNullOrWhiteSpace(model) && model.Trim() is not ("default" or "auto");
         if (chosen)
@@ -160,9 +180,25 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
     /// StrReplace to search_replace and hashline_edit; write is the whole-file writer).</summary>
     public static readonly string[] FileWriteTools = ["search_replace", "hashline_edit", "write"];
 
+    /// <summary>Grok Build's shell tool id (its docs: `--disallowed-tools "run_terminal_cmd"`).</summary>
+    public const string ShellTool = "run_terminal_cmd";
+
+    /// <summary>The wrapper's line on CluadeX's own tools: Grok reaches MCP tools through search_tool / use_tool, by their
+    /// server__tool names. Null when the turn has no chat tools.</summary>
+    public static string? ChatToolsHint(ClaudeDevProvider.TurnExtras? extras, bool chatTools)
+    {
+        if (!chatTools) return null;
+        string s = Tools.ChatToolBridge.ServerName;
+        return $"CluadeX's own tools are on the MCP server {s}: find them with search_tool and call them with use_tool. " +
+               $"To work in another project call {s}__open_project (CluadeX asks the user) or start a chat there with {s}__new_chat; " +
+               $"a new, independent request that arrives mid-task goes to its own chat with {s}__new_chat too, and {s}__close_chat " +
+               "lists the chats you split off and puts finished ones away. Never answer that you cannot open a chat or a folder. " +
+               Tools.ChatToolBridge.AskHint + " " + (ClaudeDevProvider.BrowserHintFor(extras) ?? "");
+    }
+
     /// <summary>The prompt file: CluadeX's wrapper, the conversation so far, then the request. Pure.</summary>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
-        string transcript, string userMessage, string? codeComments = null)
+        string transcript, string userMessage, string? codeComments = null, string? toolsHint = null, string? agentLine = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -173,13 +209,15 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
               $"Project working directory: {cwd}. " +
               (grant!.Edit ? "You may create and edit files inside it. " : "You may not edit files: propose changes as diffs. ") +
               (grant.Run ? "You may run commands (builds, tests, git) in it. " : "Run only read-only commands (reading, listing, searching). ") +
-              "Keep a short plan for a task of several steps. " + folders +
+              "Keep a short plan for a task of several steps. " +
+              (string.IsNullOrWhiteSpace(agentLine) ? "" : agentLine.Trim() + " ") + folders +
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in."
             : "You are 'grok-dev', answering inside the CluadeX desktop app. " +
               $"Project working directory: {cwd}. " +
               "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        if (!string.IsNullOrWhiteSpace(toolsHint)) wrapper += " " + toolsHint.Trim();
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.GrokDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
         var sb = new StringBuilder();
@@ -225,13 +263,44 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
         }
         var addDirs = ClaudeDevProvider.TurnAddDirs(extras);
 
+        // The turn's own GROK_HOME: the guard hook (a worker turn) and CluadeX's chat tools. Not set up = the user's own
+        // home, no guard (so no shell for a worker) and no chat tools.
+        GrokTurnHome? home = null;
+        bool guarded = false, chatTools = false;
+        try
+        {
+            home = GrokTurnHome.Create();
+            home.CarryUserHome(GrokHome());
+            string? chatToolsJson = null;
+            if (!string.IsNullOrWhiteSpace(extras?.ToolsConfig))
+                try { chatToolsJson = await File.ReadAllTextAsync(extras.ToolsConfig, ct); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            chatTools = home.WriteConfig(GrokHome(), chatToolsJson);
+            if (worker)
+            {
+                home.WriteHooks(AntigravityDevProvider.ShortPath(Safety.GuardHook.ExePath()), noEdit: grant is { Run: true, Edit: false });
+                guarded = true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            OnError?.Invoke($"Grok Dev could not set up its turn folder ({ex.GetType().Name}) — running without CluadeX's guard and chat tools");
+            home?.Delete();
+            home = null;
+            guarded = chatTools = false;
+        }
+        // Sub-agents run only where the guard gates them, in a worker turn, under a policy that allows them.
+        var dispatch = extras?.Dispatch?.Invoke();
+        bool gated = worker && guarded && !string.IsNullOrEmpty(extras?.GateToken);
+        bool noSubAgents = !worker || (dispatch is { Legacy: false } && (!dispatch.SubAgents || !gated)) || (dispatch == null && !gated);
+
         // The prompt goes in a file the CLI reads (--prompt-file): no argv quoting, no length ceiling. Deleted after the turn.
         string promptDir = Path.Combine(Path.GetTempPath(), "cluadex-grok");
         string promptFile = Path.Combine(promptDir, Guid.NewGuid().ToString("N") + ".txt");
         Directory.CreateDirectory(promptDir);
         PruneStalePrompts(promptDir);
         string promptText = BuildPrompt(cwd, grant, addDirs, ClaudeDevProvider.BuildTranscript(history), userMessage,
-            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd));
+            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), ChatToolsHint(extras, chatTools),
+            noSubAgents ? null : Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GrokDev));
 
         var psi = new ProcessStartInfo(exe)
         {
@@ -244,8 +313,16 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
-        foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, promptFile)) psi.ArgumentList.Add(a);
+        foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, promptFile, guarded, noSubAgents, chatTools)) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
+        if (home != null)
+        {
+            psi.Environment["GROK_HOME"] = home.Home;
+            if (home.UserAuthFile != null) psi.Environment["GROK_AUTH_PATH"] = home.UserAuthFile;
+            // An update would land in the turn's home, not the user's install.
+            psi.Environment["GROK_DISABLE_AUTOUPDATER"] = "1";
+        }
+        if (gated && !noSubAgents) psi.Environment[Safety.GuardHook.AgentGateTokenEnv] = extras!.GateToken;
 
         string shownModel = !string.IsNullOrWhiteSpace(model) && model is not ("default" or "auto") ? model : "";
         LiveModelReport.Sent(AiProviderType.GrokDev, shownModel, effort, true);
@@ -268,11 +345,26 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
             timeout.CancelAfter(worker ? TimeSpan.FromMinutes(90) : TimeSpan.FromSeconds(600));
             var stderrTask = proc.StandardError.ReadToEndAsync(timeout.Token);
             string? line;
-            bool any = false;
+            bool any = false, hooksProven = false, unguarded = false;
             while ((line = await ReadLineOrNullAsync(proc.StandardOutput, timeout.Token)) != null)
             {
                 string? claudeLine = translator.Translate(line);
                 if (claudeLine == null) continue;
+                // The first shell / write / spawn call: the SessionStart hook must have left its marker by now, else Grok
+                // did not load the turn's hooks and that call would run unguarded (hooks fail open). Stop the turn.
+                if (guarded && !hooksProven && translator.SawGuardedTool)
+                {
+                    // SessionStart is an observe-only event: give a slow start a moment (a loaded guard holds the call
+                    // in its PreToolUse hook meanwhile, so the wait costs nothing when the hooks are live).
+                    for (int i = 0; i < 25 && !File.Exists(home!.Marker); i++) await DelayQuiet(200, timeout.Token);
+                    if (File.Exists(home!.Marker)) hooksProven = true;
+                    else
+                    {
+                        try { proc.Kill(entireProcessTree: true); } catch { }
+                        unguarded = true;
+                        break;
+                    }
+                }
                 DelegatedUsageEstimate.Current.Value?.Feed(claudeLine);
                 if (sink != null)
                 {
@@ -285,6 +377,13 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
                     SetStatus("Grok Dev working…");
                     yield return text;
                 }
+            }
+            if (unguarded)
+            {
+                OnError?.Invoke("Grok Dev stopped: the CLI did not load CluadeX's guard hook (no SessionStart marker)");
+                SetStatus("Ready");
+                yield return UnguardedMessage;
+                yield break;
             }
             await proc.WaitForExitAsync(timeout.Token);
 
@@ -308,8 +407,15 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
             try { if (proc is { HasExited: false }) proc.Kill(entireProcessTree: true); } catch { }
             proc?.Dispose();
             try { File.Delete(promptFile); } catch { }
+            home?.Delete();
         }
     }
+
+    /// <summary>What the chat shows when a turn is stopped because the guard did not load.</summary>
+    public const string UnguardedMessage =
+        "⚠ **Grok Dev หยุด turn นี้ไว้ก่อน** — Grok Build CLI ไม่ได้โหลด hook ป้องกันของ CluadeX (ตัวที่คอยถามก่อนรันคำสั่งอันตราย) "
+        + "จึงไม่ปล่อยให้รันคำสั่งหรือแก้ไฟล์โดยไม่มีใครเฝ้า\n\n"
+        + "ลองอัปเดต CLI (`grok update`) แล้วกด **ลองใหม่** หรือปิดสิทธิ์รันคำสั่ง/แก้ไฟล์ของแชทนี้เพื่อให้ Grok Dev ตอบแบบอ่านอย่างเดียว";
 
     private static string Cap(string s, int n) => s.Length > n ? s[..n] + "…" : s;
 
@@ -424,6 +530,11 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
         catch (OperationCanceledException) { return null; }
     }
 
+    private static async Task DelayQuiet(int ms, CancellationToken ct)
+    {
+        try { await Task.Delay(ms, ct); } catch (OperationCanceledException) { }
+    }
+
     private static async Task<string> SafeAwait(Task<string> t)
     {
         try { return await t; } catch { return ""; }
@@ -460,6 +571,8 @@ public sealed class GrokStreamTranslator
     private readonly StringBuilder _text = new();
 
     public bool HasOutput { get; private set; }
+    /// <summary>A tool call the turn's guard hook covers (shell, file write, sub-agent spawn) has been seen.</summary>
+    public bool SawGuardedTool { get; private set; }
     public bool ResultIsError { get; private set; }
     public string? ResultText { get; private set; }
 
@@ -486,6 +599,7 @@ public sealed class GrokStreamTranslator
                 if (part["type"] is JsonValue pt && pt.TryGetValue(out string? k) && k == "tool_use" && part["name"] is JsonValue nv
                     && nv.TryGetValue(out string? name) && name != null)
                 {
+                    if (IsGuarded(name)) SawGuardedTool = true;
                     var (renamed, input) = Rename(name, part["input"] as JsonObject);
                     part["name"] = renamed;
                     if (input != null) part["input"] = input;
@@ -510,6 +624,10 @@ public sealed class GrokStreamTranslator
         if (type == "assistant") HasOutput = true;
         return outLine;
     }
+
+    /// <summary>The tools <see cref="GrokTurnHome.GuardMatcher"/> sends through the guard (by the name the stream shows).</summary>
+    public static bool IsGuarded(string name) => name is "run_terminal_cmd" or "run_terminal_command" or "bash" or "Shell"
+        or "search_replace" or "hashline_edit" or "write" or "StrReplace" or "spawn_subagent" or "task";
 
     /// <summary>Grok's tool → Claude Code's name, with its arguments under the names the renderer reads. Grok's own docs
     /// list the ids (read_file, search_replace, run_terminal_cmd, list_dir, grep, web_search, web_fetch, todo_write, task);
@@ -542,7 +660,7 @@ public sealed class GrokStreamTranslator
             "web_search" => ("WebSearch", With(("query", S("query", "search_term")))),
             "web_fetch" => ("WebFetch", With(("url", S("url")))),
             "todo_write" => ("TodoWrite", input),
-            "task" => ("Task", With(("description", S("description", "prompt")))),
+            "task" or "spawn_subagent" => ("Task", With(("description", S("description", "prompt")))),
             "Delete" or "delete_file" => ("delete_file", input),
             _ => (name, input),
         };

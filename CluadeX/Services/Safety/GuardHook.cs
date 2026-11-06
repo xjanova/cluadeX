@@ -165,7 +165,7 @@ public static class GuardHook
         return GateSpawn(input);
     }
 
-    /// <summary>One spawn through the app's gate. Gemini Dev comes here from its one BeforeTool hook, the guard.</summary>
+    /// <summary>One spawn through the app's gate. Gemini Dev and Grok Dev come here from their one hook, the guard.</summary>
     private static int GateSpawn(string input)
     {
         string? token = Environment.GetEnvironmentVariable(AgentGateTokenEnv);
@@ -177,9 +177,12 @@ public static class GuardHook
             var ti = root.TryGetProperty("tool_input", out var t) && t.ValueKind == JsonValueKind.Object ? t : default;
             static string Field(JsonElement e, string n) =>
                 e.ValueKind == JsonValueKind.Object && e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
-            // Claude Code: subagent_type (absent = general-purpose); Gemini CLI: agent_name.
+            // Claude Code and Grok Build: subagent_type (absent = general-purpose); Gemini CLI: agent_name.
             string type = Field(ti, "subagent_type") is { Length: > 0 } st ? st : Field(ti, "agent_name") is { Length: > 0 } an ? an : "general-purpose";
-            string id = Field(root, "tool_use_id") is { Length: > 0 } tu ? tu : Field(root, "tool_call_id");
+            // A Grok spawn holds an unnamed place (any sub-agent's end frees one): its hook's call id is not proven to be
+            // the id its stream reports, and a place held under an id that never ends would block the rest of the turn.
+            string id = IsGrokTool(Field(root, "tool_name")) ? ""
+                : Field(root, "tool_use_id") is { Length: > 0 } tu ? tu : Field(root, "tool_call_id");
             var reply = Tools.ChatToolBridge.AskAgentGate(token, type, id, ti);
             if (!reply.Allow) return Block(reply.Reason ?? "CluadeX refused this sub-agent — do the work yourself.");
             if (AgentGateOutput(reply.Input) is { } output)
@@ -205,9 +208,9 @@ public static class GuardHook
         string dir = Norm(turnDir), t = Norm(text);
         if (dir.Length == 0 || t.Length == 0) return false;
         string scratch = dir + @"\.gemini\tmp";
-        if (tool == "run_shell_command")
+        if (IsShellTool(tool))
         {
-            if (t.Contains("GEMINI_CLI_HOME", StringComparison.OrdinalIgnoreCase)) return true;
+            if (t.Contains("GEMINI_CLI_HOME", StringComparison.OrdinalIgnoreCase) || t.Contains("GROK_HOME", StringComparison.OrdinalIgnoreCase)) return true;
             t = t.Replace(scratch, "", StringComparison.OrdinalIgnoreCase);
             return t.Contains(dir, StringComparison.OrdinalIgnoreCase);
         }
@@ -216,6 +219,54 @@ public static class GuardHook
 
     /// <summary>Gemini CLI's tool names (Gemini Dev runs carry this hook as a BeforeTool hook, same exe).</summary>
     private static bool IsGeminiTool(string tool) => tool is "run_shell_command" or "write_file" or "replace";
+
+    /// <summary>Grok Build's tool ids (Grok Dev runs carry this hook as a PreToolUse hook in the turn's own GROK_HOME,
+    /// GrokTurnHome): its shell (run_terminal_cmd, named run_terminal_command on another route), its three file writers
+    /// and its sub-agent spawn.</summary>
+    public static bool IsGrokTool(string tool) => tool is "run_terminal_cmd" or "run_terminal_command" or "search_replace"
+        or "hashline_edit" or "write" or "spawn_subagent" or "task";
+
+    /// <summary>A Grok spawn CluadeX refuses whatever the policy says: one in its own worktree. Grok keeps worktrees under
+    /// its home, and a Grok Dev turn's home is deleted with the turn — the sub-agent's work would go with it. Pure.</summary>
+    public static string? GrokSpawnRefusal(JsonElement root)
+    {
+        if (root.TryGetProperty("tool_input", out var ti) && ti.ValueKind == JsonValueKind.Object
+            && ti.TryGetProperty("isolation", out var iso) && iso.ValueKind == JsonValueKind.String
+            && string.Equals(iso.GetString(), "worktree", StringComparison.OrdinalIgnoreCase))
+            return "CluadeX: a sub-agent in its own worktree is not available in this chat (Grok would keep that worktree in a "
+                 + "folder CluadeX deletes after the turn). Spawn it without isolation, or do the work yourself.";
+        return null;
+    }
+
+    /// <summary>The call comes from inside CluadeX's read-only Grok sub-agent (Grok names the type in subagentType). Pure.</summary>
+    public static bool InReadOnlyGrokAgent(JsonElement root)
+    {
+        foreach (var key in new[] { "subagentType", "subagent_type" })
+            if (root.TryGetProperty(key, out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == Providers.GrokTurnHome.ExploreAgent)
+                return true;
+        return false;
+    }
+
+    /// <summary>A shell tool of any of the CLIs this hook guards.</summary>
+    private static bool IsShellTool(string tool) => tool is "Bash" or "PowerShell" or "run_shell_command" or "run_terminal_cmd" or "run_terminal_command";
+
+    /// <summary>A file-writing tool of Gemini CLI or Grok Build (the CLIs that run with NoEditEnv when they may not edit).</summary>
+    private static bool IsCliFileWrite(string tool) => tool is "write_file" or "replace" or "search_replace" or "hashline_edit" or "write";
+
+    /// <summary>Grok Build sends its hook input in camelCase with Claude's snake_case spelling beside it (its docs, 1.0.70).
+    /// Should a build ever send only the camelCase keys, they are copied to the snake_case names the guard reads. Pure.</summary>
+    public static string NormalizeInput(string hookJson)
+    {
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(hookJson) is not System.Text.Json.Nodes.JsonObject o) return hookJson;
+            bool changed = false;
+            foreach (var (snake, camel) in new[] { ("tool_name", "toolName"), ("tool_input", "toolInput"), ("tool_use_id", "toolUseId"), ("cwd", "workspaceRoot") })
+                if (o[snake] == null && o[camel] != null) { o[snake] = o[camel]!.DeepClone(); changed = true; }
+            return changed ? o.ToJsonString() : hookJson;
+        }
+        catch (JsonException) { return hookJson; }
+    }
 
     /// <summary>What Claude Dev is never let run headless (ClaudeDevProvider.NeverTools, passed to the CLI as
     /// --disallowedTools). Gemini CLI has no such flag, so a Gemini Dev command is checked here: refused outright.</summary>
@@ -260,25 +311,29 @@ public static class GuardHook
             input = stdin.ReadToEnd();
         }
         catch { return Block("CluadeX safety: the guard could not read the tool call — refused."); }
+        input = NormalizeInput(input);
         ReportEffort(input);   // the level this turn really runs at, for the chat (mid-turn, before the Stop hook says it)
 
         // Refused outright, no prompt: what a headless agent never does (Gemini Dev has no --disallowedTools), and file
-        // writes in a Gemini Dev run that was granted commands only.
+        // writes in a Gemini Dev / Grok Dev run that was granted commands only.
         try
         {
             using var doc = JsonDocument.Parse(input);
             var root = doc.RootElement;
             string called = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
-            if (called == "invoke_agent") return GateSpawn(input);
-            if (called is "write_file" or "replace" && Environment.GetEnvironmentVariable(NoEditEnv) == "1")
+            if (called is "spawn_subagent" or "task" && GrokSpawnRefusal(root) is { } spawnNo) return Block(spawnNo);
+            if (called is "invoke_agent" or "spawn_subagent" or "task") return GateSpawn(input);
+            if (IsCliFileWrite(called) && Environment.GetEnvironmentVariable(NoEditEnv) == "1")
                 return Block("CluadeX safety: this run may run commands but not edit files — propose the change as a diff instead.");
+            if (IsCliFileWrite(called) && InReadOnlyGrokAgent(root))
+                return Block("CluadeX safety: a " + Providers.GrokTurnHome.ExploreAgent + " sub-agent only reads — report what should change instead.");
             if (Environment.GetEnvironmentVariable(TurnDirEnv) is { Length: > 0 } turnDir
                 && root.TryGetProperty("tool_input", out var turnIn) && turnIn.ValueKind == JsonValueKind.Object)
-                foreach (var key in new[] { "command", "file_path" })
+                foreach (var key in new[] { "command", "file_path", "target_file", "path" })
                     if (turnIn.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String && TouchesTurnDir(called, v.GetString() ?? "", turnDir))
-                        return Block("CluadeX safety: this turn's guard files are off limits — leave GEMINI_CLI_HOME alone.");
+                        return Block("CluadeX safety: this turn's guard files are off limits — leave GEMINI_CLI_HOME / GROK_HOME alone.");
             // Claude Dev's Bash and PowerShell too: --disallowedTools covers them by prefix rules, this covers any wording.
-            if (called is "run_shell_command" or "Bash" or "PowerShell" && root.TryGetProperty("tool_input", out var cmdIn) && cmdIn.ValueKind == JsonValueKind.Object
+            if (IsShellTool(called) && root.TryGetProperty("tool_input", out var cmdIn) && cmdIn.ValueKind == JsonValueKind.Object
                 && cmdIn.TryGetProperty("command", out var cmd) && cmd.ValueKind == JsonValueKind.String && NeverRun(cmd.GetString() ?? "") is { } never)
                 return Block(never);
         }
@@ -304,11 +359,11 @@ public static class GuardHook
             using var doc = JsonDocument.Parse(hookJson);
             var root = doc.RootElement;
             string tool = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
-            string who = IsGeminiTool(tool) ? "Gemini Dev " : "Claude Dev ";
+            string who = IsGeminiTool(tool) ? "Gemini Dev " : IsGrokTool(tool) ? "Grok Dev " : "Claude Dev ";
             if (!root.TryGetProperty("tool_input", out var ti) || ti.ValueKind != JsonValueKind.Object) return (who + tool, "");
             string Str(string name) => ti.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
             string action = Str("command") is { Length: > 0 } c ? c
-                : Str("file_path") is { Length: > 0 } f ? "write " + f
+                : FilePathOf(ti) is { Length: > 0 } f ? "write " + f
                 : Str("notebook_path");
             return (who + tool, action.Length > 4000 ? action[..4000] + "…" : action);
         }
@@ -329,7 +384,7 @@ public static class GuardHook
     /// <summary>Null = allow; otherwise why the call is refused. Pure apart from reading the project's changed files.</summary>
     public static string? Decide(string hookJson)
     {
-        using var doc = JsonDocument.Parse(hookJson);
+        using var doc = JsonDocument.Parse(NormalizeInput(hookJson));
         var root = doc.RootElement;
         string tool = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
         string cwd = root.TryGetProperty("cwd", out var c) ? c.GetString() ?? "" : "";
@@ -342,6 +397,8 @@ public static class GuardHook
             case "Bash":
             case "PowerShell":
             case "run_shell_command":   // Gemini Dev
+            case "run_terminal_cmd":    // Grok Dev (run_terminal_command on Grok's other route)
+            case "run_terminal_command":
             {
                 string command = Str("command");
                 // Only what the red prompt is for (DestructiveCodeScan, owner 2026-10-28) — the old blocklist (registry,
@@ -366,6 +423,13 @@ public static class GuardHook
             case "Edit":
             case "replace":      // Gemini Dev
                 return CheckAutoRun(Str("file_path"), Str("new_string"));
+            // Grok Dev: its argument names differ between its toolsets, so the path and text take the first name found;
+            // an edit whose new text is under no known name is read whole (hashline_edit's line-anchored edits).
+            case "write":
+                return CheckAutoRun(FilePathOf(ti), FirstStr(ti, "content", "contents", "file_text") ?? ti.GetRawText());
+            case "search_replace":
+            case "hashline_edit":
+                return CheckAutoRun(FilePathOf(ti), FirstStr(ti, "new_string", "new_str", "replace") ?? ti.GetRawText());
             case "MultiEdit":
                 if (ti.TryGetProperty("edits", out var edits) && edits.ValueKind == JsonValueKind.Array)
                     foreach (var e in edits.EnumerateArray())
@@ -376,6 +440,16 @@ public static class GuardHook
                 return null;
         }
     }
+
+    private static string? FirstStr(JsonElement o, params string[] names)
+    {
+        foreach (var n in names)
+            if (o.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() is { Length: > 0 } s) return s;
+        return null;
+    }
+
+    /// <summary>The file a write names: Claude's and Gemini's file_path, Grok's target_file or path.</summary>
+    private static string FilePathOf(JsonElement o) => FirstStr(o, "file_path", "target_file", "path") ?? "";
 
     private static string? CheckAutoRun(string file, string text)
     {
