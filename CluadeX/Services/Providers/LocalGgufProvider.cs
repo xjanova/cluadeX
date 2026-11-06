@@ -85,9 +85,22 @@ public class LocalGgufProvider : IAiProvider
     /// <summary>Models that failed on this PC (load or mid-answer). Replaced by the test harness.</summary>
     public Local.ModelHealthLog Health { get; set; } = Local.ModelHealthLog.Default;
 
-    /// <summary>The cards in this PC now; the harness replaces it (the real one asks nvidia-smi).</summary>
+    /// <summary>The cards in this PC now; the harness replaces it (the real one asks nvidia-smi once, then caches).</summary>
     public Func<string>? CurrentGpu { get; set; }
     private string Gpu() => (CurrentGpu ?? _serverProvider.GpuFingerprint)();
+    /// <summary>The GPU fingerprint (asks nvidia-smi the first time: not on the UI thread).</summary>
+    public string GpuNow() => Gpu();
+    /// <summary>The fingerprint if already known, else "" — for the UI thread.</summary>
+    public string CachedGpu => CurrentGpu != null ? CurrentGpu() : _serverProvider.CachedGpuFingerprint;
+
+    /// <summary>The GGUF loaded now (either backend), null when none.</summary>
+    public string? LoadedModelPath => _activeBackend == Backend.None ? null : _loadedModelPath;
+
+    /// <summary>How fast each model ran on this PC (shared with the llama-server backend, which measures it).</summary>
+    public Local.ModelSpeedLog Speed { get => _serverProvider.Speed; set => _serverProvider.Speed = value; }
+
+    /// <summary>The last agent step's measured speed (llama-server only; LLamaSharp reports no timings).</summary>
+    public Local.ModelSpeed? LastStepSpeed => _activeBackend == Backend.LlamaServer ? _serverProvider.LastStepSpeed : null;
     private bool IsThai => string.Equals(_settingsService.Settings.Language, "th", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>

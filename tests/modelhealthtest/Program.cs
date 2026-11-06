@@ -184,6 +184,67 @@ try
         Check("P7 …and that model is now remembered too", provider.Health.Find(other)?.Kind == ModelFailureKind.Crash);
     }
 
+    // ─── S: a model too slow for agent work on this PC (warned, never blocked) ───
+    {
+        Check("S1 2.1 tok/s over 200 tokens is slow writing", ModelSpeedLog.Judge(9000, 400, 200, 2.1, 100) == SlowReason.SlowGeneration);
+        Check("S2 a 10-token answer is too small to judge the writing speed", ModelSpeedLog.Judge(300, 400, 10, 1.5, 7) == SlowReason.None);
+        Check("S3 30 tok/s over a 12k prompt is slow reading", ModelSpeedLog.Judge(12000, 30, 300, 9, 400) == SlowReason.SlowPrompt);
+        Check("S4 a 3½-minute step is slow", ModelSpeedLog.Judge(500, 300, 20, 8, 210) == SlowReason.SlowStep);
+        Check("S5 a healthy 7B step (8k @ 600 tok/s, 300 @ 25 tok/s, 26 s) is fine", ModelSpeedLog.Judge(8000, 600, 300, 25, 26) == SlowReason.None);
+
+        string file = Path.Combine(root, "speed", "model-speed.json");
+        var log = new ModelSpeedLog(file);
+        const string gtx = "NVIDIA GeForce GTX 1070 Ti 8 GB", rtx = "NVIDIA GeForce RTX 4090 24 GB";
+        Check("S6 nothing measured → not slow", log.FindSlow(model, gtx) == null && log.FindSlow(null, gtx) == null);
+        var slow = log.Observe(model, gtx, 12000, 31.5, 250, 2.4, 290);
+        Check("S7 a slow step sets the verdict", slow is { IsSlow: true, Reason: SlowReason.SlowGeneration } && log.FindSlow(model, gtx) != null, slow?.ToString() ?? "null");
+        Check("S8 another card ignores it", log.FindSlow(model, rtx) == null);
+        Check("S9 an unknown current card (UI before nvidia-smi) still shows it", log.FindSlow(model, "") != null);
+        Check("S10 another model is untouched", log.FindSlow(other, gtx) == null);
+        Check("S11 the verdict survives a restart", new ModelSpeedLog(file).FindSlow(model, gtx)?.GenTps == 2.4);
+        log.Observe(model, gtx, 200, 500, 12, 30, 2);
+        Check("S12 a tiny step does not clear it (too small to tell)", log.FindSlow(model, gtx) != null);
+        log.Observe(model, gtx, 9000, 700, 300, 22, 25);
+        Check("S13 a later fast run on the same card clears it", log.FindSlow(model, gtx) == null && log.Find(model)?.GenTps == 22);
+
+        var none = log.RecordNoAnswer(model, gtx, 300, 12435);
+        Check("S14 no answer in the budget marks it slow", log.FindSlow(model, gtx) is { Reason: SlowReason.NoAnswer } && none.StepSec == 300);
+        string nums = ModelSpeedLog.Numbers(none, true);
+        Check("S15 the numbers say how long and how big", nums.Contains("5 นาที") && nums.Contains("12,435"), nums);
+        File.WriteAllBytes(model, new byte[8192]);
+        Check("S16 a replaced file (another size) is not called slow", log.FindSlow(model, gtx) == null);
+        File.WriteAllBytes(model, new byte[4096]);
+        Check("S17 Clear forgets it (the pill's ×, Force load)", log.Clear(model) && log.FindSlow(model, gtx) == null && !log.Clear(model));
+
+        var rec = log.Observe(model, gtx, 12000, 31.5, 250, 2.4, 290)!;
+        string warnTh = ModelSpeedLog.PreRunWarning(rec, model, escalationOn: false, isThai: true);
+        Check("S18 the pre-run warning names the model, the numbers and what to use instead", warnTh.Contains("Qwen3-Coder-30B-A3B-Instruct-Q4_K_M")
+            && warnTh.Contains("2.4 tok/s") && warnTh.Contains("VRAM") && warnTh.Contains("API") && !warnTh.Contains("ส่งต่อ"), warnTh);
+        Check("S19 with escalation on it says a stronger model takes over", ModelSpeedLog.PreRunWarning(rec, model, true, false).Contains("stronger model"));
+        string card = ModelSpeedLog.Describe(rec, isThai: true);
+        Check("S20 the card text says it still loads, the card it was measured on, and how it clears", card.Contains("ยังโหลด") && card.Contains(gtx)
+            && card.Contains("หายเอง") && card.Contains("2.4"), card);
+        foreach (SlowReason r in Enum.GetValues<SlowReason>().Where(r => r != SlowReason.None))
+            Check($"S21 {r} has a Thai and an English reason", ModelSpeedLog.ReasonText(r, true).Any(ch => ch >= '฀' && ch <= '๿') && ModelSpeedLog.ReasonText(r, false).Length > 0);
+
+        // llama-server's own answer (b6xxx–b12xxx shape)
+        const string answer = """{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null}}],"usage":{"prompt_tokens":12435,"completion_tokens":96},"timings":{"cache_n":0,"prompt_n":12435,"prompt_ms":402311.2,"prompt_per_token_ms":32.35,"prompt_per_second":30.91,"predicted_n":96,"predicted_ms":41203.4,"predicted_per_token_ms":429.2,"predicted_per_second":2.33}}""";
+        var t = LlamaServerProvider.ParseTimings(answer);
+        Check("S22 llama-server timings are read", t is { PromptN: 12435, GenN: 96 } && Math.Abs(t.Value.PromptTps - 30.91) < 0.01 && Math.Abs(t.Value.GenTps - 2.33) < 0.01, t?.ToString() ?? "null");
+        Check("S23 an answer without timings, or not JSON, gives none", LlamaServerProvider.ParseTimings("""{"choices":[]}""") == null
+            && LlamaServerProvider.ParseTimings("<html>") == null && LlamaServerProvider.ParseTimings(null) == null);
+        Check("S24 those timings (the Sudoku2 kind of run) judge slow", ModelSpeedLog.Judge(t!.Value.PromptN, t.Value.PromptTps, t.Value.GenN, t.Value.GenTps, 443) == SlowReason.SlowGeneration);
+
+        var settings = new SettingsService();
+        var server = new LlamaServerProvider(settings);
+        var provider = new LocalGgufProvider(new LlamaInferenceService(settings), server, settings);
+        var mine = new ModelSpeedLog(Path.Combine(root, "speed2", "model-speed.json"));
+        provider.Speed = mine;
+        Check("S25 the provider and its llama-server share one speed log", ReferenceEquals(server.Speed, mine));
+        Check("S26 nothing loaded → no model path, no step speed", provider.LoadedModelPath == null && provider.LastStepSpeed == null && server.LoadedModelPath == null);
+        Check("S27 the cached GPU is empty before anyone asked nvidia-smi (UI thread safe)", server.CachedGpuFingerprint == "");
+    }
+
     // ─── R: rescuing an overflowing context ───
     {
         string page = string.Concat(Enumerable.Repeat("<div class=\"cell\" data-r=\"1\"></div>\n", 400)); // ≈15 KB, the Sudoku index.html

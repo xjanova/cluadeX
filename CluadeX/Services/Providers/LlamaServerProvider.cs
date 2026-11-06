@@ -123,11 +123,55 @@ public class LlamaServerProvider : ApiProviderBase
     /// <summary>The server died on its own after it was ready (model path, exit code) — not our own stop.</summary>
     public event Action<string, int>? OnServerDied;
 
-    /// <summary>The cards in this PC, for the model health log ("" when unknown).</summary>
+    /// <summary>The cards in this PC, for the model health log ("" when unknown). Asks nvidia-smi once per run of the
+    /// app (a card is not swapped while Windows runs): never call the first time on the UI thread.</summary>
     public string GpuFingerprint()
     {
-        try { return Local.ModelHealthLog.GpuFingerprint(_gpuDetection?.DetectAllNvidiaGpus()); }
+        if (_gpuPrint != null) return _gpuPrint;
+        try { return _gpuPrint = Local.ModelHealthLog.GpuFingerprint(_gpuDetection?.DetectAllNvidiaGpus()); }
         catch { return ""; }
+    }
+    private string? _gpuPrint;
+    /// <summary>The fingerprint if it was already read, else "" — safe on the UI thread.</summary>
+    public string CachedGpuFingerprint => _gpuPrint ?? "";
+
+    /// <summary>The GGUF the server runs (null when none).</summary>
+    public string? LoadedModelPath => _loadedModelPath;
+
+    /// <summary>How fast each model runs on this PC, from the timings llama-server returns. Replaced by the harness.</summary>
+    public Local.ModelSpeedLog Speed { get; set; } = Local.ModelSpeedLog.Default;
+
+    /// <summary>llama-server's "timings" object: prompt tokens read and their speed, tokens written and their speed.
+    /// Null when the answer carries none (an older build, or not JSON).</summary>
+    public static (int PromptN, double PromptTps, int GenN, double GenTps)? ParseTimings(string? responseJson)
+    {
+        if (string.IsNullOrEmpty(responseJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(responseJson);
+            if (!doc.RootElement.TryGetProperty("timings", out var t) || t.ValueKind != JsonValueKind.Object) return null;
+            static double D(JsonElement o, string name) => o.TryGetProperty(name, out var v) && v.TryGetDouble(out var d) ? d : 0;
+            return ((int)D(t, "prompt_n"), D(t, "prompt_per_second"), (int)D(t, "predicted_n"), D(t, "predicted_per_second"));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The last agent step's measured speed (the agent loop logs it).</summary>
+    public Local.ModelSpeed? LastStepSpeed { get; private set; }
+
+    /// <summary>One agent step finished: keep its speed (never throws — measuring must not break a run).</summary>
+    private void ObserveSpeed(string responseJson, TimeSpan took)
+    {
+        try
+        {
+            LastStepSpeed = null;
+            if (_loadedModelPath is not { } path || ParseTimings(responseJson) is not { } t) return;
+            LastStepSpeed = new Local.ModelSpeed(path, 0, "", DateTime.UtcNow, Math.Round(t.PromptTps, 1), Math.Round(t.GenTps, 1),
+                t.PromptN, t.GenN, Math.Round(took.TotalSeconds, 1),
+                Local.ModelSpeedLog.Judge(t.PromptN, t.PromptTps, t.GenN, t.GenTps, took.TotalSeconds));
+            Speed.Observe(path, GpuFingerprint(), t.PromptN, t.PromptTps, t.GenN, t.GenTps, took.TotalSeconds);
+        }
+        catch { }
     }
 
     private async Task LaunchAsync(string modelPath, string? projector, IProgress<string>? progress, CancellationToken ct)
@@ -701,6 +745,7 @@ public class LlamaServerProvider : ApiProviderBase
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/v1/chat/completions");
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
+        var stepWatch = Stopwatch.StartNew();
         using var response = await ChatClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
@@ -716,6 +761,7 @@ public class LlamaServerProvider : ApiProviderBase
         }
 
         var responseText = await response.Content.ReadAsStringAsync(ct);
+        ObserveSpeed(responseText, stepWatch.Elapsed);
         var parsed = ParseOpenAiToolResponse(responseText);
         // The same inline <think> block, in a tool-loop reply: the answer without it, the thinking apart.
         var (answer, thought) = CluadeX.Helpers.ThinkTagStream.Split(parsed.TextContent);

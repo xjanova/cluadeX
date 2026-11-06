@@ -1000,6 +1000,19 @@
                                                             <TextBlock Text="{services:Loc modelsm.failedBefore}" Style="{StaticResource PillText}" Foreground="{DynamicResource Status.Danger}"/>
                                                         </StackPanel>
                                                     </Border>
+                                                    <!-- Measured too slow for agent work here (ModelSpeedLog): a warning, not a block. × forgets it. -->
+                                                    <Border Style="{StaticResource Pill}" Background="{DynamicResource Status.Warning.Tint}" BorderBrush="{DynamicResource Status.Warning.Border}"
+                                                            Visibility="{Binding IsSlow, Converter={StaticResource BoolVis}}" ToolTip="{Binding SlowReason}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="&#xE916;" Style="{StaticResource PillGlyph}" Foreground="{DynamicResource Status.Warning}"/>
+                                                            <TextBlock Text="{services:Loc modelsm.slowHere}" Style="{StaticResource PillText}" Foreground="{DynamicResource Status.Warning}"/>
+                                                            <Button Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="8" Padding="4,0,0,0" Margin="2,0,0,0"
+                                                                    Background="Transparent" BorderThickness="0" Cursor="Hand" Foreground="{DynamicResource Status.Warning}"
+                                                                    ToolTip="{services:Loc modelsm.slowForget}"
+                                                                    Command="{Binding DataContext.ForgetSlowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                    CommandParameter="{Binding LocalPath}"/>
+                                                        </StackPanel>
+                                                    </Border>
                                                     <Border Style="{StaticResource Pill}" Visibility="{Binding SpeedText, Converter={StaticResource HasValue}}">
                                                         <StackPanel Orientation="Horizontal">
                                                             <TextBlock Text="&#xEC4A;" Style="{StaticResource PillGlyph}"/>

@@ -14,6 +14,10 @@ public class ModelInfo
     /// is refused and the card offers Force load.</summary>
     public string FailedReason { get; set; } = "";
     public bool HasFailed => FailedReason.Length > 0;
+    /// <summary>Measured too slow for agent work on this PC (ModelSpeedLog), with the numbers; empty = not slow. Loading
+    /// is NOT refused — the card only warns.</summary>
+    public string SlowReason { get; set; } = "";
+    public bool IsSlow => SlowReason.Length > 0 && !HasFailed;
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;

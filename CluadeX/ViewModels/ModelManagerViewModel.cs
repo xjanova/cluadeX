@@ -205,6 +205,8 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand LoadModelCommand { get; }
     /// <summary>Load a model that failed here before, after the owner confirms (ModelHealthLog blocks it otherwise).</summary>
     public ICommand ForceLoadModelCommand { get; }
+    /// <summary>Forget a model's "too slow here" measurement (the × on its pill).</summary>
+    public ICommand ForgetSlowCommand { get; }
     public ICommand GetLlamaCppCommand { get; }
     public ICommand UnloadModelCommand { get; }
     public ICommand DownloadRecommendedCommand { get; }
@@ -260,6 +262,12 @@ public class ModelManagerViewModel : ViewModelBase
         RefreshHardwareCommand = new RelayCommand(() => DetectHardwareAsync(clearCache: true), () => !IsDetecting);
         LoadModelCommand = new AsyncRelayCommand<string>(p => LoadModel(p));
         ForceLoadModelCommand = new AsyncRelayCommand<string>(ForceLoadModel);
+        ForgetSlowCommand = new RelayCommand<string>(p =>
+        {
+            if (string.IsNullOrEmpty(p)) return;
+            _localProvider.Speed.Clear(p);
+            RefreshLocalModels();
+        });
         // One button: get / update, and cancel while it downloads.
         GetLlamaCppCommand = new AsyncRelayCommand(() =>
         {
@@ -648,6 +656,10 @@ public class ModelManagerViewModel : ViewModelBase
             model.FailedReason = !string.IsNullOrEmpty(model.LocalPath) && _localProvider.Health.Find(model.LocalPath) is { } failed
                 ? CluadeX.Services.Local.ModelHealthLog.BlockedMessage(failed, "", th, out _)
                 : "";
+            // The GPU fingerprint only if already read (nvidia-smi is never asked on the UI thread): unknown = still shown.
+            model.SlowReason = !string.IsNullOrEmpty(model.LocalPath) && _localProvider.Speed.FindSlow(model.LocalPath, _localProvider.CachedGpu) is { } slow
+                ? CluadeX.Services.Local.ModelSpeedLog.Describe(slow, th)
+                : "";
             model.IsLoaded = SamePath(model.LocalPath, SelectedModelPath) && _localProvider.IsReady;
             DescribeFile(model);
             LocalModels.Add(model);
@@ -672,6 +684,8 @@ public class ModelManagerViewModel : ViewModelBase
                 "CluadeX", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
             if (answer != MessageBoxResult.Yes) return;
         }
+        // A fresh start for this model: its speed is measured again too.
+        _localProvider.Speed.Clear(path);
         await LoadModel(path, force: true);
     }
 

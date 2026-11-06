@@ -255,6 +255,8 @@ internal static class ManagerKeys
         ["modelsm.loadedNow"] = new() { ["en"] = "● Loaded", ["th"] = "● โหลดอยู่" },
         ["modelsm.newerBackend"] = new() { ["en"] = "Needs a newer llama.cpp", ["th"] = "ต้องใช้ llama.cpp รุ่นใหม่กว่า" },
         ["modelsm.failedBefore"] = new() { ["en"] = "Failed on this PC", ["th"] = "เคยล้มเหลวในเครื่องนี้" },
+        ["modelsm.slowHere"] = new() { ["en"] = "Slow on this PC", ["th"] = "ช้าบนเครื่องนี้" },
+        ["modelsm.slowForget"] = new() { ["en"] = "Forget this speed measurement", ["th"] = "ลืมผลวัดความเร็วนี้" },
         ["modelsm.forceLoad"] = new() { ["en"] = "Force load", ["th"] = "Force load" },
         ["modelsm.forceLoadConfirm"] = new() { ["en"] = "{0} failed on this PC before: {1}.\n\nLoading it again may fail the same way — a model that runs the graphics card out of memory can freeze or restart the PC. Load it anyway (e.g. after changing the card or lowering GPU layers / Context Size)?", ["th"] = "{0} เคยล้มเหลวในเครื่องนี้: {1}\n\nถ้าโหลดอีกอาจล้มแบบเดิม — โมเดลที่ทำให้การ์ดจอหน่วยความจำเต็มอาจทำให้เครื่องค้างหรือรีสตาร์ทได้ ยืนยันจะโหลดไหม (เช่น หลังเปลี่ยนการ์ดจอ หรือลด GPU layers / Context Size แล้ว)?" },
         ["modelsm.newerBackendTip"] = new() { ["en"] = "The llama.cpp bundled with CluadeX does not know this model's architecture yet. Press “Get the latest llama.cpp” at the top of this page (it downloads llama-server), or set a newer backend folder in Settings.", ["th"] = "llama.cpp ที่มากับ CluadeX ยังไม่รู้จักสถาปัตยกรรมของโมเดลนี้ กด “ดาวน์โหลด llama.cpp ล่าสุด” ด้านบนของหน้านี้ (ดาวน์โหลด llama-server ให้) หรือกำหนดโฟลเดอร์ backend รุ่นใหม่ใน Settings" },

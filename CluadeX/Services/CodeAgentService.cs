@@ -1232,6 +1232,15 @@ public partial class CodeAgentService
 
     /// <summary>The name of the model a local provider runs — its configured id, else the loaded GGUF — so its size can
     /// be read from it ("llama3.2:3b", "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"). "" when nothing names it.</summary>
+    /// <summary>Where a local GGUF run's speed is kept: the log, the model file and the GPU (null for Ollama / API).</summary>
+    private static (Local.ModelSpeedLog Log, string Path, Func<string> Gpu, Func<Local.ModelSpeed?> Last)? LocalSpeedTarget(
+        Services.Providers.IAiProvider? p) => p switch
+    {
+        Services.Providers.LocalGgufProvider lg when lg.LoadedModelPath is { Length: > 0 } mp => (lg.Speed, mp, lg.GpuNow, () => lg.LastStepSpeed),
+        Services.Providers.LlamaServerProvider ls when ls.LoadedModelPath is { Length: > 0 } mp => (ls.Speed, mp, ls.GpuFingerprint, () => ls.LastStepSpeed),
+        _ => null,
+    };
+
     private string LocalModelNameFor(Services.Providers.IAiProvider? p)
     {
         string id = ModelIdFor(p);
@@ -3392,6 +3401,14 @@ public partial class CodeAgentService
             OnAgentStatus?.Invoke(capWarning);
             _debugLog?.Info("Agent", $"capability: {localCapability.Tier} ({localCapability.Billions}B) — warned before the run");
         }
+        // Measured too slow for agent work on this PC (same file, same card): say so with the numbers before it starts.
+        // Not a block — plain chat may be fine, and a faster run later clears it (ModelSpeedLog).
+        if (taskNonTrivial && loopIsLocal && LocalSpeedTarget(loopProvider) is { } speedAt
+            && speedAt.Log.FindSlow(speedAt.Path, speedAt.Gpu()) is { } slowBefore)
+        {
+            OnAgentStatus?.Invoke(Local.ModelSpeedLog.PreRunWarning(slowBefore, speedAt.Path, escalationProvider != null, isThai));
+            _debugLog?.Info("Agent", $"speed: {System.IO.Path.GetFileName(speedAt.Path)} was too slow here ({slowBefore.Reason}: {Local.ModelSpeedLog.Numbers(slowBefore, false)}) — warned before the run");
+        }
         // A long, multi-part brief earns a careful first (planning) step.
         bool bigSpec = taskNonTrivial && AutoEffortPolicy.OwnWords(userMessage).Length >= 1500;
         // Where "auto" starts: read from the task (a bug, a plan, several files, a long brief, a retry, a picture, a long
@@ -3816,6 +3833,8 @@ public partial class CodeAgentService
                         // A local model that cannot answer in time will not answer faster on a retry: the GPU/CPU is
                         // the limit. Stop with why and the ways out — never a silent "stopped" (Sudoku2, 2026-11-06).
                         _debugLog?.Error("Agent", $"step {iteration + 1}: local model gave no answer in {waited}s (budget {timeoutSec}s, ~{EstimateNativeTokens(outboundMessages)} prompt tok) — stopping");
+                        if (LocalSpeedTarget(loopProvider) is { } slowAt)
+                            try { slowAt.Log.RecordNoAnswer(slowAt.Path, slowAt.Gpu(), waited, EstimateNativeTokens(outboundMessages)); } catch { }
                         result.Steps.Add(step);
                         result.StopReason = "timeout";
                         result.Success = false;
@@ -3912,6 +3931,10 @@ public partial class CodeAgentService
             }
 
             step.ResponseText = response.TextContent ?? "";
+
+            if (loopIsLocal && LocalSpeedTarget(loopProvider)?.Last() is { } stepSpeed)
+                _debugLog?.Info("Agent", $"step {iteration + 1} speed: prompt {stepSpeed.PromptTokens} @ {stepSpeed.PromptTps:0.#} tok/s · gen {stepSpeed.GenTokens} @ {stepSpeed.GenTps:0.#} tok/s · {stepSpeed.StepSec:0.#} s"
+                    + (stepSpeed.IsSlow ? $" — too slow for agent work ({stepSpeed.Reason})" : ""));
 
             _debugLog?.Info("Agent", $"step {iteration + 1}: stop={response.StopReason} toolCalls={response.ToolCalls.Count} "
                 + $"textLen={(response.TextContent ?? "").Length} in={response.InputTokens} out={response.OutputTokens}"
