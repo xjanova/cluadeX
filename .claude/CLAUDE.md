@@ -216,7 +216,10 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   for the provider, the Setup row and the arch badge. Models page: card + button, badge on installed files, and a
   refused load offers the download (with size) and loads again. Setup ▸ llama-server row downloads in-app (was winget).
 - Proven by `tests/archtest` I1–I10 (localhost GitHub, fake zips, nothing started). `dotnet run -- --real-install <dir>`
-  does the real thing: 2026-11-06 b12144 CUDA 12, 648 MB, qwen35 known, CUDA0 = GTX 1070 Ti. No model was loaded.
+  does the real thing: 2026-11-06 b12144 CUDA 12, 648 MB, qwen35 known, CUDA0 = GTX 1070 Ti.
+- Real load (owner's OK): `dotnet run -- --real-load <gguf> <backend dir>` (ctx 4096). Qwen3.5-4B-Q6_K on that build:
+  GPU 999 layers + vision, ready in 5 s (35 s cold), ≈ 3.9 GB VRAM, answers. Its inline `<think>` block now goes to the
+  Thinking block (`Helpers/ThinkTags.cs` in `LlamaServerProvider`, stream + tool loop) — it used to land in the reply.
 
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).

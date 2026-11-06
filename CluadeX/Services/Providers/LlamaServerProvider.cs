@@ -536,6 +536,8 @@ public class LlamaServerProvider : ApiProviderBase
         // Parse SSE stream (OpenAI format: data: {...}\n\n)
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
+        // Inline <think>…</think> (Qwen 3.5, R1…) → "<thinking>…</thinking>" chunks the chat puts in the Thinking block.
+        var think = new CluadeX.Helpers.ThinkTagStream();
 
         // NOTE: never loop on reader.EndOfStream — it is a SYNCHRONOUS property that blocks the calling
         // thread on the network read until the next byte arrives. During a long local prefill (no bytes
@@ -592,10 +594,12 @@ public class LlamaServerProvider : ApiProviderBase
                 // tokens into content and even begin a fake next turn ("…GPT-4<|im_end|><|im_start|>").
                 // Cut at the first turn-end marker and strip any stray control tokens before display.
                 var (clean, stop) = CluadeX.Helpers.ModelOutputSanitizer.SanitizeStreamChunk(content);
-                if (!string.IsNullOrEmpty(clean)) yield return clean;
-                if (stop) yield break;
+                if (!string.IsNullOrEmpty(clean))
+                    foreach (var piece in think.Feed(clean)) yield return piece;
+                if (stop) break;
             }
         }
+        foreach (var piece in think.Flush()) yield return piece;
     }
 
     public override async Task<string> GenerateAsync(
@@ -683,7 +687,15 @@ public class LlamaServerProvider : ApiProviderBase
         }
 
         var responseText = await response.Content.ReadAsStringAsync(ct);
-        return ParseOpenAiToolResponse(responseText);
+        var parsed = ParseOpenAiToolResponse(responseText);
+        // The same inline <think> block, in a tool-loop reply: the answer without it, the thinking apart.
+        var (answer, thought) = CluadeX.Helpers.ThinkTagStream.Split(parsed.TextContent);
+        if (thought.Length > 0)
+        {
+            parsed.TextContent = answer;
+            parsed.ThinkingContent = string.IsNullOrEmpty(parsed.ThinkingContent) ? thought : parsed.ThinkingContent + "\n\n" + thought;
+        }
+        return parsed;
     }
 
     /// <summary>Turn llama-server's raw JSON error into a short, actionable message. The most common one for
