@@ -596,7 +596,7 @@ public partial class CodeAgentService
         // API providers and big-ctx locals (≥32k) keep the full prompt unchanged.
         bool compactLocal = (_providerManager.ActiveProviderType
                 is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
-            && _settingsService.Settings.ContextSize < 32000;
+            && LocalContextTokens() < 32000;
         if (compactLocal) return BuildCompactLocalBasePrompt(isThai, features);
 
         var sb = new StringBuilder();
@@ -1233,13 +1233,24 @@ public partial class CodeAgentService
     /// <summary>The name of the model a local provider runs — its configured id, else the loaded GGUF — so its size can
     /// be read from it ("llama3.2:3b", "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"). "" when nothing names it.</summary>
     /// <summary>Where a local GGUF run's speed is kept: the log, the model file and the GPU (null for Ollama / API).</summary>
-    private static (Local.ModelSpeedLog Log, string Path, Func<string> Gpu, Func<Local.ModelSpeed?> Last)? LocalSpeedTarget(
+    private static (Local.ModelSpeedLog Log, string Path, Func<string> Gpu, Func<Local.ModelSpeed?> Last, Func<bool> Tuned)? LocalSpeedTarget(
         Services.Providers.IAiProvider? p) => p switch
     {
-        Services.Providers.LocalGgufProvider lg when lg.LoadedModelPath is { Length: > 0 } mp => (lg.Speed, mp, lg.GpuNow, () => lg.LastStepSpeed),
-        Services.Providers.LlamaServerProvider ls when ls.LoadedModelPath is { Length: > 0 } mp => (ls.Speed, mp, ls.GpuFingerprint, () => ls.LastStepSpeed),
+        Services.Providers.LocalGgufProvider lg when lg.LoadedModelPath is { Length: > 0 } mp
+            => (lg.Speed, mp, lg.GpuNow, () => lg.LastStepSpeed, () => lg.TunedHere(mp)),
+        Services.Providers.LlamaServerProvider ls when ls.LoadedModelPath is { Length: > 0 } mp
+            => (ls.Speed, mp, ls.GpuFingerprint, () => ls.LastStepSpeed, () => ls.TunedHere(mp)),
         _ => null,
     };
+
+    /// <summary>The window the active local model really has: a tuned profile may run a smaller one than Settings.</summary>
+    private int LocalContextTokens()
+        => Math.Max(2048, _providerManager.ActiveProvider switch
+        {
+            Services.Providers.LocalGgufProvider lg when lg.LoadedContextSize is int c => c,
+            Services.Providers.LlamaServerProvider ls when ls.LoadedContextSize is int c => c,
+            _ => (int)_settingsService.Settings.ContextSize,
+        });
 
     private string LocalModelNameFor(Services.Providers.IAiProvider? p)
     {
@@ -1528,7 +1539,7 @@ public partial class CodeAgentService
         bool isLocalProvider = _providerManager.ActiveProviderType
             is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
         int contextTokens = isLocalProvider
-            ? Math.Max(2048, (int)_settingsService.Settings.ContextSize)
+            ? LocalContextTokens()
             : 1_000_000;
         // The legacy TEXT tool catalogue (~3k tokens) is only for the [ACTION:] loop. When native tool
         // use is on, schemas are sent via the API "tools" field (and rendered into the prompt by the
@@ -3407,7 +3418,14 @@ public partial class CodeAgentService
             && speedAt.Log.FindSlow(speedAt.Path, speedAt.Gpu()) is { } slowBefore)
         {
             OnAgentStatus?.Invoke(Local.ModelSpeedLog.PreRunWarning(slowBefore, speedAt.Path, escalationProvider != null, isThai));
-            _debugLog?.Info("Agent", $"speed: {System.IO.Path.GetFileName(speedAt.Path)} was too slow here ({slowBefore.Reason}: {Local.ModelSpeedLog.Numbers(slowBefore, false)}) — warned before the run");
+            _debugLog?.Info("Agent", $"speed: {System.IO.Path.GetFileName(speedAt.Path)} was too slow here even tuned ({slowBefore.Reason}: {Local.ModelSpeedLog.Numbers(slowBefore, false)}) — warned before the run");
+        }
+        else if (taskNonTrivial && loopIsLocal && LocalSpeedTarget(loopProvider) is { } tuneAt
+            && tuneAt.Log.FindNeedsTune(tuneAt.Path, tuneAt.Gpu()) is { } untuned)
+        {
+            // Slow once, on settings nobody tuned: the way out is the tune, not a verdict.
+            OnAgentStatus?.Invoke(Local.ModelSpeedLog.NeedsTuneWarning(untuned, tuneAt.Path, isThai));
+            _debugLog?.Info("Agent", $"speed: {System.IO.Path.GetFileName(tuneAt.Path)} ran slowly untuned ({untuned.Reason}) — suggested a tune");
         }
         // A long, multi-part brief earns a careful first (planning) step.
         bool bigSpec = taskNonTrivial && AutoEffortPolicy.OwnWords(userMessage).Length >= 1500;
@@ -3463,7 +3481,7 @@ public partial class CodeAgentService
         // every MCP tool the user had configured). The prompt's NOTE is derived from the same fit.
         bool isLocal = _providerManager.ActiveProviderType
             is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
-        int localCtxTokens = Math.Max(2048, (int)_settingsService.Settings.ContextSize);
+        int localCtxTokens = LocalContextTokens();
         int mcpKept = 0, mcpDropped = 0, reservedTokens = 0;
         // Count the brain recall tools BEFORE the fit, so the log can prove the
         // pin held. Without this the brain-first rule is unfalsifiable from the
@@ -3511,7 +3529,7 @@ public partial class CodeAgentService
             _debugLog?.Warn("Agent", $"{loopProvider.ProviderId}: {mcpDropped} MCP tool schema(s) left out (limit {MaxApiToolSchemas} per request)");
         }
 
-        _debugLog?.Info("Agent", $"native loop start · provider={loopProvider.ProviderId} ctx={_settingsService.Settings.ContextSize} "
+        _debugLog?.Info("Agent", $"native loop start · provider={loopProvider.ProviderId} ctx={(isLocal ? localCtxTokens : (int)_settingsService.Settings.ContextSize)} "
             + $"schemas={toolSchemas.Count}{(isLocal ? $" (fitted · mcp {mcpKept} kept/{mcpDropped} dropped · recall {toolSchemas.Count(t => IsPinnedMcpTool(t.Name))}/{recallOffered} pinned · ~{toolSchemas.Sum(EstimateSchemaTokens)}tok · reserved {reservedTokens}tok)" : " (full)")} "
             + $"sysPrompt~{CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)}tok");
         if (mcpDropped > 0)
@@ -3834,7 +3852,7 @@ public partial class CodeAgentService
                         // the limit. Stop with why and the ways out — never a silent "stopped" (Sudoku2, 2026-11-06).
                         _debugLog?.Error("Agent", $"step {iteration + 1}: local model gave no answer in {waited}s (budget {timeoutSec}s, ~{EstimateNativeTokens(outboundMessages)} prompt tok) — stopping");
                         if (LocalSpeedTarget(loopProvider) is { } slowAt)
-                            try { slowAt.Log.RecordNoAnswer(slowAt.Path, slowAt.Gpu(), waited, EstimateNativeTokens(outboundMessages)); } catch { }
+                            try { slowAt.Log.RecordNoAnswer(slowAt.Path, slowAt.Gpu(), waited, EstimateNativeTokens(outboundMessages), slowAt.Tuned()); } catch { }
                         result.Steps.Add(step);
                         result.StopReason = "timeout";
                         result.Success = false;

@@ -30,9 +30,17 @@ public sealed record ModelSpeed(
     int PromptTokens,
     int GenTokens,
     double StepSec,
-    SlowReason Reason)
+    SlowReason Reason,
+    /// <summary>Measured on tuned settings (a profile for this card existed, or this IS the tune's result). Only then is a
+    /// slow measurement a verdict; on untuned settings it is a "tune it first" suggestion.</summary>
+    bool Tuned = false,
+    /// <summary>What the tune tried and reached, one line per candidate ("" when there was no tune).</summary>
+    string Tried = "")
 {
-    public bool IsSlow => Reason != SlowReason.None;
+    /// <summary>The "ช้าบนเครื่องนี้" flag: slow even at the best settings found for this card.</summary>
+    public bool IsSlow => Reason != SlowReason.None && Tuned;
+    /// <summary>Slow at whatever settings it ran with, never tuned: suggest tuning, do not flag.</summary>
+    public bool NeedsTune => Reason != SlowReason.None && !Tuned;
 }
 
 /// <summary>
@@ -84,10 +92,12 @@ public sealed class ModelSpeedLog
         return SlowReason.None;
     }
 
-    /// <summary>A step finished: keep its numbers. A slow step sets the verdict; an acceptable one clears it — but only a
-    /// step big enough to tell (a 30-token answer to a 200-token prompt says nothing about an agent prompt).
+    /// <summary>A step finished: keep its numbers. A slow step sets the verdict (a flag when <paramref name="tuned"/>, a "tune
+    /// it" suggestion otherwise); an acceptable one clears it — but only a step big enough to tell (a 30-token answer to a
+    /// 200-token prompt says nothing about an agent prompt). A slow untuned step never replaces a flag set after a tune.
     /// Returns the record now kept (null when the step was too small to judge and nothing was kept before).</summary>
-    public ModelSpeed? Observe(string modelPath, string gpu, int promptTokens, double promptTps, int genTokens, double genTps, double stepSec)
+    public ModelSpeed? Observe(string modelPath, string gpu, int promptTokens, double promptTps, int genTokens, double genTps, double stepSec,
+        bool tuned = false)
     {
         var reason = Judge(promptTokens, promptTps, genTokens, genTps, stepSec);
         bool tellsEnough = reason != SlowReason.None || genTokens >= MinGenSample || promptTokens >= MinPromptSample;
@@ -97,24 +107,65 @@ public sealed class ModelSpeedLog
             string key = Key(modelPath);
             all.TryGetValue(key, out var old);
             if (!tellsEnough) return old;
+            if (reason != SlowReason.None && !tuned && old is { IsSlow: true } && SameCard(old, gpu)) return old;
             var rec = new ModelSpeed(modelPath, SizeOf(modelPath), gpu ?? "", DateTime.UtcNow,
-                Math.Round(promptTps, 1), Math.Round(genTps, 1), promptTokens, genTokens, Math.Round(stepSec, 1), reason);
+                Math.Round(promptTps, 1), Math.Round(genTps, 1), promptTokens, genTokens, Math.Round(stepSec, 1), reason,
+                tuned, reason != SlowReason.None && old is { Tuned: true } && SameCard(old, gpu) ? old.Tried : "");
             all[key] = rec;
             Save(all);
             return rec;
         }
     }
 
-    /// <summary>The run gave up waiting: no answer in <paramref name="waitedSec"/> seconds.</summary>
-    public ModelSpeed RecordNoAnswer(string modelPath, string gpu, double waitedSec, int promptTokens)
+    /// <summary>The run gave up waiting: no answer in <paramref name="waitedSec"/> seconds (a flag only when tuned).</summary>
+    public ModelSpeed RecordNoAnswer(string modelPath, string gpu, double waitedSec, int promptTokens, bool tuned = false)
     {
         lock (_gate)
         {
             var all = Load();
+            all.TryGetValue(Key(modelPath), out var old);
+            if (!tuned && old is { IsSlow: true } && SameCard(old, gpu)) return old;
             var rec = new ModelSpeed(modelPath, SizeOf(modelPath), gpu ?? "", DateTime.UtcNow, 0, 0, promptTokens, 0,
-                Math.Round(waitedSec, 1), SlowReason.NoAnswer);
+                Math.Round(waitedSec, 1), SlowReason.NoAnswer, tuned, old is { Tuned: true } ? old.Tried : "");
             all[Key(modelPath)] = rec;
             Save(all);
+            return rec;
+        }
+    }
+
+    /// <summary>The tune's verdict. Passed: the best numbers, not slow (clears a flag or a suggestion). Failed: the flag,
+    /// with what was tried — the only way an untuned model becomes "slow here".</summary>
+    public ModelSpeed RecordTune(string modelPath, string gpu, TuneBench? best, bool passed, string tried)
+    {
+        lock (_gate)
+        {
+            var all = Load();
+            SlowReason reason = SlowReason.None;
+            if (!passed)
+            {
+                reason = best is { Ok: true } b ? Judge(b.PromptN, b.PromptTps, b.GenN, b.GenTps, 0) : SlowReason.NoAnswer;
+                if (reason == SlowReason.None) reason = SlowReason.SlowGeneration;
+            }
+            var rec = new ModelSpeed(modelPath, SizeOf(modelPath), gpu ?? "", DateTime.UtcNow,
+                Math.Round(best?.PromptTps ?? 0, 1), Math.Round(best?.GenTps ?? 0, 1), best?.PromptN ?? 0, best?.GenN ?? 0,
+                0, reason, Tuned: true, Tried: tried);
+            all[Key(modelPath)] = rec;
+            Save(all);
+            return rec;
+        }
+    }
+
+    private static bool SameCard(ModelSpeed rec, string? gpu)
+        => rec.Gpu.Length == 0 || string.IsNullOrEmpty(gpu) || string.Equals(rec.Gpu, gpu, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A slow measurement on untuned settings, for this file and card: "tune it first".</summary>
+    public ModelSpeed? FindNeedsTune(string? modelPath, string? currentGpu)
+    {
+        if (string.IsNullOrEmpty(modelPath)) return null;
+        lock (_gate)
+        {
+            if (!Load().TryGetValue(Key(modelPath), out var rec) || !rec.NeedsTune) return null;
+            if (rec.FileSize != SizeOf(modelPath) || !SameCard(rec, currentGpu)) return null;
             return rec;
         }
     }
@@ -127,9 +178,7 @@ public sealed class ModelSpeedLog
         lock (_gate)
         {
             if (!Load().TryGetValue(Key(modelPath), out var rec) || !rec.IsSlow) return null;
-            if (rec.FileSize != SizeOf(modelPath)) return null;
-            if (rec.Gpu.Length > 0 && !string.IsNullOrEmpty(currentGpu)
-                && !string.Equals(rec.Gpu, currentGpu, StringComparison.OrdinalIgnoreCase)) return null;
+            if (rec.FileSize != SizeOf(modelPath) || !SameCard(rec, currentGpu)) return null;
             return rec;
         }
     }
@@ -181,15 +230,32 @@ public sealed class ModelSpeedLog
         _ => "",
     };
 
-    /// <summary>The tooltip / Models card text.</summary>
+    /// <summary>The tooltip / Models card text: the flag (after a tune, with what was tried) or the "tune it" suggestion.</summary>
     public static string Describe(ModelSpeed s, bool isThai)
     {
         string when = s.AtUtc.ToLocalTime().ToString("d MMM HH:mm", System.Globalization.CultureInfo.GetCultureInfo(isThai ? "th-TH" : "en-US"));
+        string on = s.Gpu.Length > 0 ? (isThai ? $" บน {s.Gpu}" : $" on {s.Gpu}") : "";
+        if (s.NeedsTune)
+            return isThai
+                ? $"ยังไม่ได้ปรับค่า — รอบที่รันช้า ({ReasonText(s.Reason, true)}) เมื่อ {when}{on}: {Numbers(s, true)}\n"
+                  + "ค่าที่ใช้ตอนนั้นอาจไม่เหมาะกับเครื่องนี้ กด \"ปรับค่าให้เหมาะ\" ให้ CluadeX ลองหาค่าที่ดีที่สุดก่อนตัดสิน"
+                : $"Not tuned yet — a run was slow ({ReasonText(s.Reason, false)}) on {when}{on}: {Numbers(s, false)}\n"
+                  + "The settings it used may not suit this PC: press \"Tune for this PC\" to let CluadeX find the best ones first";
+        string tried = s.Tried.Length > 0 ? (isThai ? $"\nลองแล้ว:\n{s.Tried}" : $"\nTried:\n{s.Tried}") : "";
         return isThai
-            ? $"ช้าเกินไปสำหรับงาน agent บนเครื่องนี้ — {ReasonText(s.Reason, true)}\nวัดเมื่อ {when}{(s.Gpu.Length > 0 ? $" บน {s.Gpu}" : "")}: {Numbers(s, true)}\n"
+            ? $"ช้าเกินไปสำหรับงาน agent บนเครื่องนี้ แม้ปรับค่าแล้ว — {ReasonText(s.Reason, true)}\nวัดเมื่อ {when}{on}: {Numbers(s, true)}{tried}\n"
               + "ยังโหลดและคุยธรรมดาได้ · ป้ายนี้หายเองเมื่อรอบหลังวัดได้เร็วพอ หรือเปลี่ยนการ์ดจอ"
-            : $"Too slow for agent work on this PC — {ReasonText(s.Reason, false)}\nMeasured {when}{(s.Gpu.Length > 0 ? $" on {s.Gpu}" : "")}: {Numbers(s, false)}\n"
+            : $"Too slow for agent work on this PC, even tuned — {ReasonText(s.Reason, false)}\nMeasured {when}{on}: {Numbers(s, false)}{tried}\n"
               + "It still loads and chats · this goes away when a later run measures fast enough, or with another graphics card";
+    }
+
+    /// <summary>Said before an agent run on a model that ran slowly on untuned settings.</summary>
+    public static string NeedsTuneWarning(ModelSpeed s, string modelName, bool isThai)
+    {
+        string name = System.IO.Path.GetFileNameWithoutExtension(modelName);
+        return isThai
+            ? $"🔧 {name} เคยรันช้าบนเครื่องนี้ ({Numbers(s, true)}) แต่ยังไม่ได้ปรับค่า — ลองกด \"ปรับค่าให้เหมาะ\" ในหน้า Models ก่อน (เช่น ให้ expert ของ MoE ไปอยู่ CPU, ลด ctx, KV q8)"
+            : $"🔧 {name} ran slowly on this PC ({Numbers(s, false)}) but was never tuned — try \"Tune for this PC\" on the Models page first (MoE experts on the CPU, a smaller ctx, a q8 KV cache)";
     }
 
     /// <summary>Said in the chat before an agent run on a model that was too slow here — with what to do instead.</summary>
@@ -197,10 +263,10 @@ public sealed class ModelSpeedLog
     {
         string name = System.IO.Path.GetFileNameWithoutExtension(modelName);
         if (isThai)
-            return $"🐢 {name} เคยช้าเกินไปสำหรับงาน agent บนเครื่องนี้ ({Numbers(s, true)}) — งานนี้อาจช้ามากหรือไม่เสร็จ\n"
+            return $"🐢 {name} ช้าเกินไปสำหรับงาน agent บนเครื่องนี้แม้ปรับค่าแล้ว ({Numbers(s, true)}) — งานนี้อาจช้ามากหรือไม่เสร็จ\n"
                 + (escalationOn ? "ถ้าติด จะส่งต่อให้โมเดลที่แรงกว่าตามที่ตั้งไว้ · " : "")
                 + "ทางเลือก: โมเดล local ที่เล็กพอให้อยู่ใน VRAM ทั้งหมด (ป้าย Fit ในหน้า Models), ลด Context Size, หรือใช้โมเดล API";
-        return $"🐢 {name} was too slow for agent work on this PC ({Numbers(s, false)}) — this task may be very slow or not finish.\n"
+        return $"🐢 {name} is too slow for agent work on this PC even tuned ({Numbers(s, false)}) — this task may be very slow or not finish.\n"
             + (escalationOn ? "If it stalls, the stronger model you set takes over · " : "")
             + "Options: a local model small enough to sit fully in VRAM (Fit badge on the Models page), a lower Context Size, or an API model";
     }

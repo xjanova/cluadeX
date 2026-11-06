@@ -100,6 +100,52 @@ public static class GgufMetadataReader
         }
     }
 
+    /// <summary>What the load tuner needs from a GGUF header: the architecture, layers, experts and KV width.</summary>
+    public sealed record ModelHeader(string Architecture, int BlockCount, int ExpertCount, int ExpertUsedCount,
+        int HeadCountKv, int KeyLength, int ValueLength, int EmbeddingLength, int HeadCount);
+
+    /// <summary>
+    /// Read the shape keys (<c>{arch}.block_count</c>, <c>.expert_count</c>, <c>.expert_used_count</c>,
+    /// <c>.attention.head_count_kv</c>, <c>.attention.key_length</c>, …). They sit before the tokenizer arrays, so the
+    /// walk stops after a few KB. Null when the file is not a GGUF or has no architecture; a missing key reads as 0.
+    /// </summary>
+    public static ModelHeader? TryReadHeader(string path)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            using var br = new BinaryReader(fs);
+            if (br.ReadUInt32() != 0x46554747u) return null;
+            if (br.ReadUInt32() < 2) return null;
+            br.ReadUInt64();
+            ulong kvCount = br.ReadUInt64();
+
+            string? arch = null;
+            var ints = new Dictionary<string, int>(StringComparer.Ordinal);
+            int scanned = 0;
+            while (kvCount-- > 0 && scanned++ < 512)
+            {
+                string key = ReadGgufString(br);
+                var type = (ValueType)br.ReadUInt32();
+                if (key == "general.architecture" && type == ValueType.String) { arch = ReadGgufString(br); continue; }
+                if (key.StartsWith("tokenizer.", StringComparison.Ordinal) && arch != null && ints.Count > 0) break; // the shape keys are behind us
+                if (type is ValueType.UInt32 or ValueType.Int32) { ints[key] = (int)br.ReadUInt32(); continue; }
+                if (type is ValueType.UInt64 or ValueType.Int64) { ints[key] = (int)Math.Min(int.MaxValue, br.ReadUInt64()); continue; }
+                if (type is ValueType.UInt16 or ValueType.Int16) { ints[key] = br.ReadUInt16(); continue; }
+                if (!SkipValue(br, type)) break;
+            }
+            if (string.IsNullOrEmpty(arch)) return null;
+            int I(string k) => ints.TryGetValue($"{arch}.{k}", out var v) ? v : 0;
+            return new ModelHeader(arch, I("block_count"), I("expert_count"), I("expert_used_count"),
+                I("attention.head_count_kv"), I("attention.key_length"), I("attention.value_length"),
+                I("embedding_length"), I("attention.head_count"));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// True if the in-process LLamaSharp llama.dll does not know the architecture. Read from the dll itself; the
     /// hardcoded list decides only when that dll is missing or unreadable.

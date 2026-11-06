@@ -196,7 +196,13 @@ try
         var log = new ModelSpeedLog(file);
         const string gtx = "NVIDIA GeForce GTX 1070 Ti 8 GB", rtx = "NVIDIA GeForce RTX 4090 24 GB";
         Check("S6 nothing measured → not slow", log.FindSlow(model, gtx) == null && log.FindSlow(null, gtx) == null);
-        var slow = log.Observe(model, gtx, 12000, 31.5, 250, 2.4, 290);
+        var untunedSlow = log.Observe(model, gtx, 12000, 31.5, 250, 2.4, 290);
+        Check("S6b a slow run on untuned settings is NOT the flag — it suggests a tune", untunedSlow is { IsSlow: false, NeedsTune: true }
+            && log.FindSlow(model, gtx) == null && log.FindNeedsTune(model, gtx) != null, untunedSlow?.ToString() ?? "null");
+        string tuneHint = ModelSpeedLog.NeedsTuneWarning(untunedSlow!, model, isThai: true);
+        Check("S6c the suggestion names the tune button and what it tries", tuneHint.Contains("ปรับค่าให้เหมาะ") && tuneHint.Contains("MoE") && tuneHint.Contains("2.4"), tuneHint);
+        Check("S6d the card text for it says not tuned yet", ModelSpeedLog.Describe(untunedSlow!, true).StartsWith("ยังไม่ได้ปรับค่า"));
+        var slow = log.Observe(model, gtx, 12000, 31.5, 250, 2.4, 290, tuned: true);
         Check("S7 a slow step sets the verdict", slow is { IsSlow: true, Reason: SlowReason.SlowGeneration } && log.FindSlow(model, gtx) != null, slow?.ToString() ?? "null");
         Check("S8 another card ignores it", log.FindSlow(model, rtx) == null);
         Check("S9 an unknown current card (UI before nvidia-smi) still shows it", log.FindSlow(model, "") != null);
@@ -207,7 +213,8 @@ try
         log.Observe(model, gtx, 9000, 700, 300, 22, 25);
         Check("S13 a later fast run on the same card clears it", log.FindSlow(model, gtx) == null && log.Find(model)?.GenTps == 22);
 
-        var none = log.RecordNoAnswer(model, gtx, 300, 12435);
+        Check("S14a no answer on untuned settings only suggests a tune", log.RecordNoAnswer(model, gtx, 300, 12435) is { NeedsTune: true, IsSlow: false });
+        var none = log.RecordNoAnswer(model, gtx, 300, 12435, tuned: true);
         Check("S14 no answer in the budget marks it slow", log.FindSlow(model, gtx) is { Reason: SlowReason.NoAnswer } && none.StepSec == 300);
         string nums = ModelSpeedLog.Numbers(none, true);
         Check("S15 the numbers say how long and how big", nums.Contains("5 นาที") && nums.Contains("12,435"), nums);
@@ -216,7 +223,7 @@ try
         File.WriteAllBytes(model, new byte[4096]);
         Check("S17 Clear forgets it (the pill's ×, Force load)", log.Clear(model) && log.FindSlow(model, gtx) == null && !log.Clear(model));
 
-        var rec = log.Observe(model, gtx, 12000, 31.5, 250, 2.4, 290)!;
+        var rec = log.Observe(model, gtx, 12000, 31.5, 250, 2.4, 290, tuned: true)!;
         string warnTh = ModelSpeedLog.PreRunWarning(rec, model, escalationOn: false, isThai: true);
         Check("S18 the pre-run warning names the model, the numbers and what to use instead", warnTh.Contains("Qwen3-Coder-30B-A3B-Instruct-Q4_K_M")
             && warnTh.Contains("2.4 tok/s") && warnTh.Contains("VRAM") && warnTh.Contains("API") && !warnTh.Contains("ส่งต่อ"), warnTh);
@@ -243,6 +250,162 @@ try
         Check("S25 the provider and its llama-server share one speed log", ReferenceEquals(server.Speed, mine));
         Check("S26 nothing loaded → no model path, no step speed", provider.LoadedModelPath == null && provider.LastStepSpeed == null && server.LoadedModelPath == null);
         Check("S27 the cached GPU is empty before anyone asked nvidia-smi (UI thread safe)", server.CachedGpuFingerprint == "");
+    }
+
+    // ─── T: tuning the load settings before any "slow here" flag (no model is loaded: fake shapes and fake benchmarks) ───
+    {
+        // a real GGUF header (no tensors): Qwen3-30B-A3B's shape keys
+        string gguf = Path.Combine(root, "shape-moe.gguf");
+        using (var bw = new BinaryWriter(File.Create(gguf)))
+        {
+            void Str(string v) { var b = System.Text.Encoding.UTF8.GetBytes(v); bw.Write((ulong)b.Length); bw.Write(b); }
+            var kv = new List<(string K, object V)>
+            {
+                ("general.architecture", "qwen3moe"), ("general.name", "Qwen3 Coder 30B A3B"),
+                ("qwen3moe.block_count", 48u), ("qwen3moe.expert_count", 128u), ("qwen3moe.expert_used_count", 8u),
+                ("qwen3moe.attention.head_count", 32u), ("qwen3moe.attention.head_count_kv", 4u),
+                ("qwen3moe.attention.key_length", 128u), ("qwen3moe.attention.value_length", 128u), ("qwen3moe.embedding_length", 2048u),
+                ("tokenizer.ggml.model", "gpt2"),
+            };
+            bw.Write(0x46554747u); bw.Write(3u); bw.Write(0UL); bw.Write((ulong)kv.Count);
+            foreach (var (k, v) in kv)
+            {
+                Str(k);
+                if (v is string sv) { bw.Write(8u); Str(sv); } else { bw.Write(4u); bw.Write((uint)v); }
+            }
+        }
+        var header = CluadeX.Services.GgufMetadataReader.TryReadHeader(gguf);
+        Check("T1 the GGUF header gives layers, experts and KV width", header is { Architecture: "qwen3moe", BlockCount: 48, ExpertCount: 128, ExpertUsedCount: 8, HeadCountKv: 4, KeyLength: 128 },
+            header?.ToString() ?? "null");
+        var shapeFile = LoadTuner.ShapeOf(gguf, 3.3 / 30.5);
+        Check("T2 its shape: MoE, 48 layers, KV width 4×(128+128)", shapeFile is { IsMoe: true, Layers: 48, KvWidth: 1024 }, shapeFile?.ToString() ?? "null");
+        double dense = LoadTuner.DenseShareOf(3.3 / 30.5, 128, 8);
+        Check("T3 30B-A3B is ≈ 5 % non-expert (catalog active ÷ total)", dense > 0.04 && dense < 0.06, dense.ToString("0.000"));
+        Check("T4 no catalog numbers → 8 % assumed", LoadTuner.DenseShareOf(null, 128, 8) == 0.08);
+        Check("T5 not a GGUF → no shape", LoadTuner.ShapeOf(FakeModel("junk.gguf", 64)) == null);
+
+        var moe30 = new ModelShape("qwen3moe", 18_556_689_568, 48, 128, 8, 1024, dense);
+        var dense7 = new ModelShape("qwen2", 4_683_073_184, 28, 0, 0, 1024, 1.0);
+        var dense14 = new ModelShape("qwen2", 8_988_110_976, 48, 0, 0, 1024, 1.0);
+        var gtx8 = new TuneHardware(7000, 8192, 6, CpuMoe: true, FlashAttn: true, SettingsContext: 16384, SettingsBatch: 2048);
+        var rtx24 = gtx8 with { FreeVramMb = 22000, TotalVramMb = 24576 };
+
+        var c8 = LoadTuner.Pick(moe30, gtx8);
+        Check("T6 30B-A3B on 8 GB: a few candidates, none over free VRAM − margin", c8.Count is >= 2 and <= LoadTuner.MaxCandidates
+            && c8.All(c => c.EstVramMb <= gtx8.FreeVramMb - LoadTuner.MarginMb), string.Join(" | ", c8.Select(c => $"{c.Summary(false)} {c.EstVramMb}MB")));
+        Check("T7 …attention on the GPU, experts of the first layers on the CPU", c8.All(c => c.GpuLayers == 999 && c.CpuMoeLayers > 0 && c.CpuMoeLayers < 48),
+            string.Join(",", c8.Select(c => c.CpuMoeLayers)));
+        Check("T8 …the owner's window first, then smaller, never below the agent floor", c8[0].Context == 16384 && c8.Any(c => c.Context == 8192)
+            && c8.All(c => c.Context >= LoadTuner.MinAgentContext) && c8.Zip(c8.Skip(1)).All(p => p.Second.Context <= p.First.Context));
+        Check("T9 …a smaller window puts more experts on the GPU", c8.Last(c => c.UBatch == 512).CpuMoeLayers <= c8[0].CpuMoeLayers);
+        Check("T10 …KV q8 + flash attention, physical cores", c8.All(c => c.KvQ8 && c.FlashAttn && c.Threads == 6));
+        var launchArgs = c8[0].Args();
+        Check("T11 the launch arguments carry --n-cpu-moe, -fa on, q8_0 KV, -ub", string.Join(" ", launchArgs).Contains($"--n-cpu-moe {c8[0].CpuMoeLayers}")
+            && string.Join(" ", launchArgs).Contains("-fa on") && string.Join(" ", launchArgs).Contains("-ctk q8_0 -ctv q8_0") && launchArgs.Contains("-ub"), string.Join(" ", launchArgs));
+
+        var c24 = LoadTuner.Pick(moe30, rtx24);
+        Check("T12 the same model on 24 GB: one candidate, all on the GPU", c24.Count == 1 && c24[0] is { GpuLayers: 999, CpuMoeLayers: 0, Context: 16384 },
+            string.Join(" | ", c24.Select(c => c.Summary(false))));
+        var c7 = LoadTuner.Pick(dense7, gtx8);
+        Check("T13 a dense 7B on 8 GB fits whole: one candidate", c7.Count == 1 && c7[0].GpuLayers == 999 && c7[0].CpuMoeLayers == 0);
+        var c14 = LoadTuner.Pick(dense14, gtx8);
+        Check("T14 a dense 14B on 8 GB offloads layers (no --n-cpu-moe for a dense model)", c14.Count >= 2 && c14.All(c => c.CpuMoeLayers == 0 && c.GpuLayers is > 0 and < 48)
+            && c14.All(c => c.EstVramMb <= gtx8.FreeVramMb - LoadTuner.MarginMb), string.Join(",", c14.Select(c => c.GpuLayers)));
+        Check("T15 …more layers on the GPU as the window shrinks", c14.Zip(c14.Skip(1)).All(p => p.Second.GpuLayers >= p.First.GpuLayers), string.Join(",", c14.Select(c => c.GpuLayers)));
+        var oldServer = gtx8 with { CpuMoe = false, FlashAttn = false };
+        var cOld = LoadTuner.Pick(moe30, oldServer);
+        Check("T16 a llama-server without --n-cpu-moe / -fa on: plain layer offload, f16 KV, no -fa", cOld.All(c => c.CpuMoeLayers == 0 && c.GpuLayers < 999 && !c.KvQ8)
+            && !cOld[0].Args().Contains("-fa"));
+        var tiny = LoadTuner.Pick(moe30, gtx8 with { FreeVramMb = 2000 });
+        Check("T17 little free VRAM: still never over it", tiny.All(c => c.EstVramMb <= 2000 - LoadTuner.MarginMb), string.Join(",", tiny.Select(c => c.EstVramMb)));
+
+        const string helpNew = "-fa,   --flash-attn [on|off|auto]       set Flash Attention use\n-ncmoe, --n-cpu-moe N   keep the MoE weights of the first N layers in the CPU";
+        Check("T18 the server's --help is read for --n-cpu-moe and -fa on", LoadTuner.ParseServerFeatures(helpNew) == (true, true)
+            && LoadTuner.ParseServerFeatures("-fa,    --flash-attn             enable Flash Attention") == (false, false)
+            && LoadTuner.ParseServerFeatures(null) == (false, false));
+
+        // ─── measuring (fake benchmarks) ───
+        TuneBench Slow() => new(true, 1500, 30, 96, 2.2, 20);
+        TuneBench Fast() => new(true, 1500, 300, 96, 9.5, 20);
+        var cands = c8;
+        int calls = 0;
+        var early = await LoadTuner.RunAsync(cands, (c, t) => { calls++; return Task.FromResult(calls == 2 ? Fast() : Slow()); }, () => 7000, null, true, CancellationToken.None);
+        Check("T19 it stops at the first candidate that passes", early.Passed && calls == 2 && early.Best == cands[1] && early.Measured == 2, $"calls {calls}, passed {early.Passed}");
+        var allSlow = await LoadTuner.RunAsync(cands, (c, t) => Task.FromResult(c == cands[^1] ? Slow() with { GenTps = 3.1 } : Slow()), () => 7000, null, true, CancellationToken.None);
+        Check("T20 nothing fast enough: every candidate measured, the best writer kept, not passed", !allSlow.Passed && allSlow.Measured == cands.Count && allSlow.Best == cands[^1]);
+        Check("T21 a failed load is a failed bench, the tune goes on", (await LoadTuner.RunAsync(cands, (c, t) => Task.FromResult(c == cands[0] ? TuneBench.Failed("cudaMalloc failed: out of memory") : Fast()),
+            () => 7000, null, true, CancellationToken.None)) is { Passed: true, Measured: 2 });
+        var skipped = await LoadTuner.RunAsync(cands, (c, t) => Task.FromResult(Fast()), () => 1500, null, true, CancellationToken.None);
+        Check("T22 free VRAM is read before every candidate: what does not fit is skipped, never loaded", skipped.Measured == 0 && skipped.Trials.All(t => t.Skipped.Contains("VRAM")));
+        int timed = 0;
+        var outOfTime = await LoadTuner.RunAsync(cands, async (c, t) => { timed++; await Task.Delay(60, t); return Slow(); }, () => 7000, null, true, CancellationToken.None, TimeSpan.FromMilliseconds(30));
+        Check("T23 the time budget ends the tune", outOfTime.OutOfTime && timed == 1, $"ran {timed}");
+        var progressLines = new List<string>();
+        await LoadTuner.RunAsync(cands.Take(1).ToList(), (c, t) => Task.FromResult(Fast()), () => 7000, new SyncProgress(progressLines), true, CancellationToken.None);
+        Check("T24 progress says which candidate runs", progressLines.Count == 1 && progressLines[0].StartsWith("ปรับค่า 1/1"), string.Join(" / ", progressLines));
+
+        using (var cts = new CancellationTokenSource())
+        {
+            bool threw = false;
+            try { await LoadTuner.RunAsync(cands, (c, t) => { cts.Cancel(); t.ThrowIfCancellationRequested(); return Task.FromResult(Fast()); }, () => 7000, null, true, cts.Token); }
+            catch (OperationCanceledException) { threw = true; }
+            Check("T25 cancelling throws (a cancel is not a verdict)", threw);
+        }
+
+        // ─── the provider: profile saved and reused, flag only after a tune ───
+        var settings = new SettingsService();
+        var server = new LlamaServerProvider(settings);
+        var provider = new LocalGgufProvider(new LlamaInferenceService(settings), server, settings)
+        {
+            Speed = new ModelSpeedLog(Path.Combine(root, "tune", "model-speed.json")),
+            Tunes = new TuneStore(Path.Combine(root, "tune", "model-tune.json")),
+            FreeVramMb = () => 7000,
+            CurrentGpu = () => "NVIDIA GeForce GTX 1070 Ti 8 GB",
+        };
+        const string gpu8 = "NVIDIA GeForce GTX 1070 Ti 8 GB";
+        var plan = new LocalGgufProvider.TunePlan(model, moe30, gtx8, cands, 6, gpu8);
+        int n = 0;
+        var good = await provider.RunTuneAsync(plan, null, CancellationToken.None, (c, t) => { n++; return Task.FromResult(n == 2 ? Fast() : Slow()); });
+        Check("T26 a tune that passes saves the profile for this file + card", good.Passed && provider.Tunes.SettingsFor(model, gpu8) == cands[1]);
+        Check("T27 …which the next load uses (the launcher asks SettingsFor), not on another card", provider.Tunes.SettingsFor(model, "NVIDIA GeForce RTX 4090 24 GB") == null
+            && provider.Tunes.SettingsFor(model, "") == cands[1]);
+        Check("T28 …no flag, the model counts as tuned here", provider.Speed.FindSlow(model, gpu8) == null && provider.Speed.FindNeedsTune(model, gpu8) == null && provider.TunedHere(model));
+        Check("T29 a re-downloaded file has no profile", WithSize(model, 8192, () => provider.Tunes.SettingsFor(model, gpu8) == null));
+
+        var bad = await provider.RunTuneAsync(plan, null, CancellationToken.None, (c, t) => Task.FromResult(Slow()));
+        var flag = provider.Speed.FindSlow(model, gpu8);
+        Check("T30 even the best candidate too slow → only now the flag, with what was tried", !bad.Passed && flag is { IsSlow: true, Tuned: true } && flag.Tried.Contains("ctx 16k"),
+            flag?.ToString() ?? "null");
+        Check("T31 a profile that failed is not applied to loads (Settings stay)", provider.Tunes.SettingsFor(model, gpu8) == null && provider.TunedHere(model));
+        string flagText = ModelSpeedLog.Describe(flag!, true);
+        Check("T32 the flag's text says it was tuned and lists the tries", flagText.Contains("แม้ปรับค่าแล้ว") && flagText.Contains("ลองแล้ว") && flagText.Contains("tok/s"), flagText);
+        provider.Speed.Observe(model, gpu8, 12000, 31, 200, 2.3, 300);
+        Check("T33 a later slow untuned step does not turn the flag back into a suggestion", provider.Speed.FindSlow(model, gpu8) != null);
+        provider.Speed.Observe(model, gpu8, 9000, 700, 300, 22, 25, tuned: true);
+        Check("T34 a later fast step on this card still clears the flag", provider.Speed.FindSlow(model, gpu8) == null);
+
+        provider.Tunes.Clear(model); provider.Speed.Clear(model);
+        using (var cts = new CancellationTokenSource())
+        {
+            bool threw = false;
+            try { await provider.RunTuneAsync(plan, null, cts.Token, (c, t) => { cts.Cancel(); t.ThrowIfCancellationRequested(); return Task.FromResult(Slow()); }); }
+            catch (OperationCanceledException) { threw = true; }
+            Check("T35 a cancelled tune saves nothing and flags nothing", threw && provider.Tunes.Find(model, gpu8) == null && provider.Speed.Find(model) == null && !provider.IsTuning);
+        }
+        var none2 = await provider.RunTuneAsync(plan with { }, null, CancellationToken.None, (c, t) => Task.FromResult(Fast()));
+        provider.Tunes.Clear(model); provider.Speed.Clear(model);
+        provider.FreeVramMb = () => 1000;
+        var noRoom = await provider.RunTuneAsync(plan, null, CancellationToken.None, (c, t) => Task.FromResult(Fast()));
+        Check("T36 all skipped for VRAM: no profile, no verdict", noRoom.Measured == 0 && provider.Tunes.Find(model, gpu8) == null && provider.Speed.Find(model) == null);
+        _ = none2;
+
+        string okMsg = LoadTuner.ResultMessage(good, "Qwen3-Coder-30B-A3B", true);
+        Check("T37 the result message: tuned, the settings and the numbers", okMsg.Contains("ปรับค่า Qwen3-Coder-30B-A3B แล้ว") && okMsg.Contains("9.5 tok/s") && okMsg.Contains("โหลดครั้งต่อไป"), okMsg);
+        string badMsg = LoadTuner.ResultMessage(bad, "Qwen3-Coder-30B-A3B", true);
+        Check("T38 …or slow even tuned, how many tried and the best reached", badMsg.Contains("แม้ปรับค่าแล้ว") && badMsg.Contains($"ลอง {bad.Measured} ชุด") && badMsg.Contains("2.2"), badMsg);
+        Check("T39 …or nothing could run for VRAM (no verdict)", LoadTuner.ResultMessage(noRoom, "X", true).Contains("ยังไม่ตัดสิน"));
+        string bench = LlamaServerProvider.BenchPrompt();
+        Check("T40 the benchmark prompt is fixed and about the planned size", bench == LlamaServerProvider.BenchPrompt() && bench.Length >= LoadTuner.BenchPromptTokens * 2.5 && bench.Length < LoadTuner.BenchPromptTokens * 4.5);
     }
 
     // ─── R: rescuing an overflowing context ───
@@ -298,3 +461,19 @@ finally
 Console.WriteLine();
 Console.WriteLine($"{pass} passed, {fail} failed");
 return fail == 0 ? 0 : 1;
+
+static bool WithSize(string path, int size, Func<bool> check)
+{
+    long before = new FileInfo(path).Length;
+    File.WriteAllBytes(path, new byte[size]);
+    try { return check(); }
+    finally { File.WriteAllBytes(path, new byte[before]); }
+}
+
+/// <summary>Progress&lt;T&gt; posts to a SynchronizationContext later; the check needs the lines now.</summary>
+sealed class SyncProgress : IProgress<string>
+{
+    private readonly List<string> _lines;
+    public SyncProgress(List<string> lines) => _lines = lines;
+    public void Report(string value) => _lines.Add(value);
+}

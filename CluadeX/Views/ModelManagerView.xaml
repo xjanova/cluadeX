@@ -1000,6 +1000,22 @@
                                                             <TextBlock Text="{services:Loc modelsm.failedBefore}" Style="{StaticResource PillText}" Foreground="{DynamicResource Status.Danger}"/>
                                                         </StackPanel>
                                                     </Border>
+                                                    <!-- Ran slowly on untuned settings: suggest the tune (no flag before a tune). -->
+                                                    <Border Style="{StaticResource AccentPill}" Visibility="{Binding NeedsTune, Converter={StaticResource BoolVis}}"
+                                                            ToolTip="{Binding NeedsTuneReason}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="&#xE90F;" Style="{StaticResource PillGlyph}"/>
+                                                            <TextBlock Text="{services:Loc modelsm.notTuned}" Style="{StaticResource PillText}"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                    <!-- Tuned for this PC and fast enough: the settings it loads with. -->
+                                                    <Border Style="{StaticResource SuccessPill}" Visibility="{Binding IsTuned, Converter={StaticResource BoolVis}}"
+                                                            ToolTip="{Binding TunedText}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="&#xE73E;" Style="{StaticResource PillGlyph}" Foreground="{DynamicResource Status.Success}"/>
+                                                            <TextBlock Text="{services:Loc modelsm.tuned}" Style="{StaticResource PillText}" Foreground="{DynamicResource Status.Success}"/>
+                                                        </StackPanel>
+                                                    </Border>
                                                     <!-- Measured too slow for agent work here (ModelSpeedLog): a warning, not a block. × forgets it. -->
                                                     <Border Style="{StaticResource Pill}" Background="{DynamicResource Status.Warning.Tint}" BorderBrush="{DynamicResource Status.Warning.Border}"
                                                             Visibility="{Binding IsSlow, Converter={StaticResource BoolVis}}" ToolTip="{Binding SlowReason}">
@@ -1048,6 +1064,19 @@
                                                         <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center"/>
                                                         <TextBlock Text="{services:Loc models.load}"/>
                                                     </StackPanel>
+                                                </Button>
+                                                <!-- Tune for this PC (LoadTuner): only from this click, after a confirm; Stop while it runs. -->
+                                                <Button Style="{StaticResource ActionButton}" Padding="9,7"
+                                                        Visibility="{Binding DataContext.IsTuning, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"
+                                                        ToolTip="{services:Loc modelsm.tune}"
+                                                        Command="{Binding DataContext.TuneModelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding LocalPath}">
+                                                    <TextBlock Text="&#xE9E9;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center"/>
+                                                </Button>
+                                                <Button Style="{StaticResource ActionButton}" Foreground="{DynamicResource Status.Warning}"
+                                                        Visibility="{Binding DataContext.IsTuning, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolVis}}"
+                                                        Command="{Binding DataContext.CancelTuneCommand, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                                    <TextBlock Text="{services:Loc modelsm.tuneCancel}"/>
                                                 </Button>
                                                 <!-- Failed on this PC before: Load is replaced by Force load (asks first, says why). -->
                                                 <Button Style="{StaticResource ActionButton}" Foreground="{DynamicResource Status.Danger}"
