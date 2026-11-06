@@ -233,6 +233,22 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   after xAI's API card. Locked while the chat's run works. Proven by `tests/chattest` PK/PR/PF/PKS.
 - Girls (owner 2026-11-06): a GGUF is CluadeX's purple girl, Ollama stays มายด์, Antigravity has her own, Grok = Grok.
 
+## Code boxes, question cards with steps, every kind of attachment (2026-11-06)
+- Code fences are found by `MarkdownHelper.FindCodeFences` (line scanner, not a regex): ``` or ~~~ of any length, any info
+  string (c#, c++, `python title=…`, `ts:file`, `{.rust}`), fences indented in a list (dedented), a fence at the end of a
+  sentence. An opening line counts only once its newline arrived (streaming). Every block gets the box with Copy.
+- The question card renders its text through the same Markdown (code in a question gets Copy). `ask_user` takes
+  `questions: [{question, options, multiSelect}]` on the native loop and the CLIs' MCP tool; Claude Code's AskUserQuestion
+  with >1 question or multiSelect uses the same card. One card, a step each (`ChatMessage.SetSteps`, `AskStepState`):
+  bar "2 / 3", ‹ Back / Next ›, tick buttons, a review, one numbered answer each (`AskStep.AnswersText`). Saved Content =
+  every question + answer; a reloaded card is the plain one.
+- Attachments: audio/video → `MediaInfo.Describe` (ffprobe if on PATH, else Windows' shell properties; never hex_read).
+  HEIC/AVIF/ICO/JXL → PNG through WIC when a codec exists, else a file with a localized reason. A picture dragged out of
+  a browser (`ChatViewModel.WebImageSource`: the drag's HTML `<img src>` against SourceURL, or an image link; http(s) and
+  data:image only, 20 MB / 20 s cap) is downloaded and attached; a text selection drag stays the text box's.
+- Proven by `tests/chattest` CF*/AS*/XM* (`CHATTEST_ONLY=UX`) and safetytest "steps:" (through the real --cx-tools).
+  Not yet driven by hand with a real browser drag or a real CLI asking several questions.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

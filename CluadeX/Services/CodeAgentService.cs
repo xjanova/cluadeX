@@ -2323,7 +2323,9 @@ public partial class CodeAgentService
                 // answers — the user's rules, "Allow in this chat", or the permission row in this chat.
                 delegated == AiProviderType.ClaudeDev ? _agentToolService.AuthorizeCliMcpCallAsync : null,
                 // A question from any CLI opens the same card as ask_user on the native loop.
-                _agentToolService.AskUserAsync, spawnGate)
+                _agentToolService.AskUserAsync, spawnGate,
+                // Several questions at once: one card with steps, Back / Next and a review — the same for every CLI.
+                _agentToolService.AskUserStepsAsync)
             : null;
         if (cliAgent)
         {
