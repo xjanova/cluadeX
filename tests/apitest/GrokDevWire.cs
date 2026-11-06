@@ -195,6 +195,12 @@ internal static class GrokDevWire
         check("gd-mcp", "a user config that already has [mcp_servers.cluadex] (or its env table) → nothing appended",
             GrokTurnHome.McpToml(bridge, "[mcp_servers.cluadex]\ncommand='y'") == null && GrokTurnHome.McpToml(bridge, "  [ mcp_servers.\"cluadex\" .env]") == null
             && GrokTurnHome.McpToml(bridge, "[mcp_servers.cluadex-other]") != null, "");
+        // Grok qualifies an MCP tool as <server>__<tool> and skips one whose name already holds "__" (brain note 2026-10-06,
+        // Grok Build 1.0.46: "invalid or ambiguous qualified name") — every chat tool must survive that.
+        var badNames = CluadeX.Services.Tools.ChatToolBridge.QualifiedToolNames.Select(n => n["mcp__cluadex__".Length..])
+            .Where(n => n.Contains("__") || !System.Text.RegularExpressions.Regex.IsMatch(n, "^[A-Za-z0-9_-]+$") || ("cluadex__" + n).Length > 64).ToList();
+        check("gd-mcp", "every chat tool keeps a name Grok admits (no \"__\", plain characters, ≤ 64 qualified)",
+            badNames.Count == 0 && CluadeX.Services.Tools.ChatToolBridge.QualifiedToolNames.Length > 5, string.Join(", ", badNames));
         check("gd-mcp", "no bridge config, or one that is not JSON → nothing", GrokTurnHome.McpToml(null, "") == null && GrokTurnHome.McpToml("{oops", "") == null, "");
         check("gd-mcp", "TOML strings: backslash, quote, line break and control characters escaped; Thai kept",
             GrokTurnHome.TomlString("a\\b\"c\nd\u0001ไทย") == "\"a\\\\b\\\"c\\nd\\u0001ไทย\"", GrokTurnHome.TomlString("a\\b\"c\nd\u0001ไทย"));
