@@ -17,7 +17,7 @@ public class LocalizationService
     static LocalizationService()
     {
         foreach (var extra in new[] { Localization.EditorKeys.Keys, Localization.ManagerKeys.Keys, Localization.ChatKeys.Keys,
-                                      Localization.SparkKeys.Keys, Localization.BrainKeys.Keys,
+                                      Localization.SparkKeys.Keys, Localization.BrainKeys.Keys, Localization.GpuShareKeys.Keys,
                                       Localization.BackgroundKeys.Keys, Localization.PreviewKeys.Keys, Localization.ChromeKeys.Keys,
                                       Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys, Localization.UsageKeys.Keys,
                                       Localization.DispatchKeys.Keys, Localization.DesktopKeys.Keys,

@@ -216,23 +216,27 @@ public class OllamaProvider : ApiProviderBase
         int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(messages));
         int numPredict = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
 
+        var chatOptions = new Dictionary<string, object>
+        {
+            ["temperature"] = (double)settings.Temperature,
+            ["top_p"] = (double)settings.TopP,
+            ["num_predict"] = numPredict,
+            ["repeat_penalty"] = (double)settings.RepeatPenalty,
+            ["repeat_last_n"] = settings.RepeatPenaltyTokens,
+            // Without num_ctx Ollama loads the model at its DEFAULT window (often 2048/4096) while
+            // all our budget math clamps against settings.ContextSize — the prompt silently truncated
+            // at the server even though the client believed it fit.
+            ["num_ctx"] = (int)settings.ContextSize,
+        };
+        // The owner's GPU share (status-bar slider): num_gpu = that share of the model's layers. Omitted at 100 %.
+        if (await NumGpuAsync(model, settings.GpuUsagePercent, ct) is int numGpuChat) chatOptions["num_gpu"] = numGpuChat;
+
         var requestObj = new
         {
             model,
             messages,
             stream = true,
-            options = new
-            {
-                temperature = (double)settings.Temperature,
-                top_p = (double)settings.TopP,
-                num_predict = numPredict,
-                repeat_penalty = (double)settings.RepeatPenalty,
-                repeat_last_n = settings.RepeatPenaltyTokens,
-                // Without num_ctx Ollama loads the model at its DEFAULT window (often 2048/4096) while
-                // all our budget math clamps against settings.ContextSize — the prompt silently truncated
-                // at the server even though the client believed it fit.
-                num_ctx = (int)settings.ContextSize,
-            },
+            options = chatOptions,
         };
 
         var body = JsonSerializer.Serialize(requestObj);
@@ -391,6 +395,57 @@ public class OllamaProvider : ApiProviderBase
         catch (JsonException) { return false; }
     }
 
+    // ─── GPU share → num_gpu (Services/Gpu/GpuShare.cs) ───
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _blocksByModel = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>num_gpu for this model at the owner's GPU share, or null to leave it out (100 %, or the layer count
+    /// could not be read). The block count comes from /api/show model_info "&lt;arch&gt;.block_count", asked once per model.</summary>
+    private async Task<int?> NumGpuAsync(string model, int percent, CancellationToken ct)
+    {
+        percent = Services.Gpu.GpuShare.Clamp(percent);
+        if (percent >= 100) return null;
+        if (percent == 0) return 0;
+        if (!_blocksByModel.TryGetValue(model, out int blocks))
+        {
+            blocks = await ReadBlockCountAsync(model, ct);
+            if (blocks > 0) _blocksByModel[model] = blocks;
+        }
+        return Services.Gpu.GpuShare.OllamaNumGpu(percent, blocks);
+    }
+
+    private async Task<int> ReadBlockCountAsync(string model, CancellationToken ct)
+    {
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(TimeSpan.FromSeconds(5));
+            var body = JsonSerializer.Serialize(new Dictionary<string, object> { ["model"] = model, ["name"] = model });
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{GetBaseUrl()}/api/show")
+            { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            using var resp = await _httpClient.SendAsync(req, limit.Token);
+            if (!resp.IsSuccessStatusCode) return 0;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(limit.Token));
+            return BlockCountFromShow(doc.RootElement);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return 0; }
+        catch (HttpRequestException) { return 0; }
+        catch (JsonException) { return 0; }
+    }
+
+    /// <summary>"&lt;arch&gt;.block_count" from an /api/show answer's model_info (arch = general.architecture). 0 = absent.</summary>
+    public static int BlockCountFromShow(JsonElement root)
+    {
+        if (!root.TryGetProperty("model_info", out var info) || info.ValueKind != JsonValueKind.Object) return 0;
+        string? arch = info.TryGetProperty("general.architecture", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
+        foreach (var p in info.EnumerateObject())
+        {
+            if (!p.Name.EndsWith(".block_count", StringComparison.Ordinal)) continue;
+            if (arch != null && p.Name != arch + ".block_count") continue;
+            if (p.Value.ValueKind == JsonValueKind.Number && p.Value.TryGetInt32(out int n) && n > 0) return n;
+        }
+        return 0;
+    }
+
     protected override ChatToolImageMode ToolImageMode =>
         SupportsToolResultImages("") ? ChatToolImageMode.OllamaImages : ChatToolImageMode.Omit;
 
@@ -427,6 +482,7 @@ public class OllamaProvider : ApiProviderBase
             ["repeat_penalty"] = (double)settings.RepeatPenalty,
             ["num_ctx"] = (int)settings.ContextSize, // same gap as the chat path: clamp math must match the server's real window
         };
+        if (await NumGpuAsync(model, settings.GpuUsagePercent, ct) is int numGpuTools) options["num_gpu"] = numGpuTools;
         var requestObj = new Dictionary<string, object>
         {
             ["model"] = model,

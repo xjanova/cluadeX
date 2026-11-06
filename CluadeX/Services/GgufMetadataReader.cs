@@ -101,6 +101,58 @@ public static class GgufMetadataReader
     }
 
     /// <summary>
+    /// Read <c>{arch}.block_count</c> (the number of transformer blocks) — what a GPU share is scaled from
+    /// (Services/Gpu/GpuShare.cs). Returns 0 on any error or when absent. Reads only the metadata head; stops at the key.
+    /// </summary>
+    public static int TryReadBlockCount(string path)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            using var br = new BinaryReader(fs);
+            if (br.ReadUInt32() != 0x46554747u) return 0;
+            if (br.ReadUInt32() < 2) return 0;
+            br.ReadUInt64();
+            ulong kvCount = br.ReadUInt64();
+            string? arch = null;
+            const int maxKvToScan = 512;
+            int scanned = 0;
+            while (kvCount-- > 0 && scanned++ < maxKvToScan)
+            {
+                string key = ReadGgufString(br);
+                var type = (ValueType)br.ReadUInt32();
+                if (key == "general.architecture" && type == ValueType.String) { arch = ReadGgufString(br); continue; }
+                bool isBlockCount = key.EndsWith(".block_count", StringComparison.Ordinal)
+                    && (arch == null || key == arch + ".block_count");
+                if (isBlockCount)
+                {
+                    long n = ReadInteger(br, type);
+                    return n is > 0 and < 100_000 ? (int)n : 0;
+                }
+                if (!SkipValue(br, type)) return 0;
+            }
+            return 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static long ReadInteger(BinaryReader br, ValueType type) => type switch
+    {
+        ValueType.UInt8 => br.ReadByte(),
+        ValueType.Int8 => br.ReadSByte(),
+        ValueType.UInt16 => br.ReadUInt16(),
+        ValueType.Int16 => br.ReadInt16(),
+        ValueType.UInt32 => br.ReadUInt32(),
+        ValueType.Int32 => br.ReadInt32(),
+        ValueType.UInt64 => (long)Math.Min(br.ReadUInt64(), long.MaxValue),
+        ValueType.Int64 => br.ReadInt64(),
+        _ => -1,
+    };
+
+    /// <summary>
     /// True if the in-process LLamaSharp llama.dll does not know the architecture. Read from the dll itself; the
     /// hardcoded list decides only when that dll is missing or unreadable.
     /// </summary>

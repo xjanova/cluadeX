@@ -7,6 +7,8 @@ public enum PetMoment
     LateNight, LongSession, Morning, FallAsleep, WakeUp, Hatched, EggPoked, EggIdle, EggAlmost, OnTaskbar, OnWindow, PutAway,
     // 2026-10-20: it steps out of the way, climbs the screen's edges, and (prank mode) poops and nibbles the screen.
     Dodge, Climb, Poop, Bite, Punished, Cleaned,
+    // 2026-11-06: tells the owner the status-bar VRAM graph opens the GPU share slider (until they have used it).
+    GpuShareHint,
 }
 
 /// <summary>
@@ -54,6 +56,12 @@ public static class PetLines
         [PetMoment.Punished] = (["ขอโทษค่ะ! ไม่ทำแล้ว", "งื้อ… คืนให้แล้ว", "*สำนึกผิด*", "เข็ดแล้ว เข็ดแล้ว"],
                                 ["Sorry! I'll stop", "Waah… put it all back", "*sulks, sorry*", "Okay okay, I learned"]),
         [PetMoment.Cleaned] = (["*อาย*", "ขอบคุณที่เก็บให้…", "แหะ ๆ"], ["*embarrassed*", "Thanks for cleaning up…", "Heh…"]),
+        [PetMoment.GpuShareHint] = (["รู้ไหม คลิกกราฟ VRAM ด้านล่าง แล้วเลื่อนกำหนดได้ว่าโมเดลใช้ GPU กี่ %",
+                                     "GPU ร้อนไป? คลิกกราฟ VRAM ที่แถบล่าง จำกัดเปอร์เซ็นต์ได้นะ",
+                                     "อยากเหลือ VRAM ให้เกม? กดกราฟ VRAM ข้างล่างดูสิ"],
+                                    ["Psst — click the VRAM graph down below to set how much GPU the model may use",
+                                     "GPU running hot? Click the VRAM graph in the bottom bar to cap it",
+                                     "Want VRAM left for a game? Try clicking the VRAM graph below"]),
     };
 
     static readonly Dictionary<PetPersonality, Dictionary<PetMoment, (string[] th, string[] en)>> ByPersonality = new()

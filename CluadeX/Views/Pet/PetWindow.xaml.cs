@@ -575,6 +575,7 @@ public partial class PetWindow : Window
                 case PetMoment.Error: SetFace(PetFace.Surprised, 2.5); break;
                 case PetMoment.Hatched: SetFace(PetFace.Love, 4); Hop(); break;
                 case PetMoment.PutAway: SetFace(PetFace.Happy, 2); break;
+                case PetMoment.GpuShareHint: SetFace(PetFace.Happy, 3); Hop(); break;
             }
             if (_act == Act.Sleep && m is not PetMoment.PutAway) { _sleepingForIdle = false; Do(Act.Idle, 2); }
         });

@@ -99,7 +99,7 @@ public partial class ChatViewModel
         var files = LocalModels.Where(m => !string.IsNullOrEmpty(m.LocalPath)).Select(m => m.LocalPath!).ToList();
         if (files.Count == 0) return;
         var s = _settingsService.Settings;
-        bool wantGpu = s.GpuLayerCount != 0 && !string.Equals(s.GpuBackend, "CPU", StringComparison.OrdinalIgnoreCase);
+        bool wantGpu = Services.Gpu.GpuShare.WantsGpu(s.GpuLayerCount, s.GpuBackend, s.GpuUsagePercent);
         string? serverExe = (_providerManager.GetProvider(AiProviderType.LlamaServer) as LlamaServerProvider)?.ServerExePath;
         var found = await Task.Run(() =>
         {
