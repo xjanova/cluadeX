@@ -1422,6 +1422,14 @@
                                                             <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Success}"/>
                                                             <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.done}"/>
                                                         </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="failed">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Danger}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.failed}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="stopped">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Danger.Soft}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.stopped}"/>
+                                                        </DataTrigger>
                                                     </DataTemplate.Triggers>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>

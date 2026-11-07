@@ -549,6 +549,7 @@ internal static class Program
         await BatchWire.Run(Check, Section);
         await ToolSearchWire.Run(Check, Section);
         await PricingWire.Run(Check, Section);
+        await RunBadgeWire.Run(Check, Section);
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);
         await Gpt6Wire.Run(Check, Section);

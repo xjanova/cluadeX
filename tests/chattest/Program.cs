@@ -282,6 +282,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=RB: just the sidebar run badges on real runs and the buddy's mood (RunBadgeTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "RB")
+        {
+            await TestRunBadges();
+            Log($"\n## Result (CHATTEST_ONLY=RB): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=SW: just a chat still loading when the user moves on (New Chat, delete, pipe / agent chats).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SW")
         {
@@ -453,6 +462,7 @@ internal static partial class Program
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
+        await TestRunBadges();                // RB: run badges on real runs (unread, failed, stopped, restart ledger), the buddy's mood
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
         await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card
