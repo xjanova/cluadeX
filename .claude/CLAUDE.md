@@ -281,6 +281,32 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
 - Proven by `tests/chattest` CF*/AS*/XM* (`CHATTEST_ONLY=UX`) and safetytest "steps:" (through the real --cx-tools).
   Not yet driven by hand with a real browser drag or a real CLI asking several questions.
 
+## Agent map = a node canvas, each agent has its own window (2026-11-07)
+- The chat's agent map card draws `Views/AgentGraph/AgentGraphView` (made only for an agent-map row): the main agent and
+  every sub-agent are nodes on a pannable, zoomable canvas. Layout and edges are pure (`Services/Agents/AgentGraphMath.cs`):
+  one row up to 5, then a grid; row 1 hangs on S-curves, deeper rows run down lanes in the column gaps and turn into the
+  node's side (no edge crosses a node, lanes ordered so no turn crosses a live lane); a dragged node gets a direct curve.
+- Wheel zooms toward the cursor (0.2–2.5; at a limit the wheel falls through to the chat), background drag pans (some of
+  the graph always stays on screen), node drag moves it, ⤢ fits (≤ 100 %), ↺ puts dragged nodes back. Zoom / pan /
+  dragged places live on the row (`ChatMessage.AgentGraph`), not the control, so a recycled row keeps them (not saved).
+- A running agent's edge carries one light (one shared `PulseLoop`, a Motion loop → stops off screen / minimised); done =
+  calm solid green, failed = dashed red, stopped = dashed muted.
+- A click opens `AgentDetailWindow` (one per agent, owned, never modal): task, model, time (ticks while it runs), tool
+  count, cost, what it does now / its report, and every step with its result. Steps come from `SubAgentEvent` "tool"
+  (with `CallId`) + the new "result" phase (`Result` ≤ 2000 chars, `Ok`) → `AgentNode.Activity` (≤ 300 steps, session only).
+  ClaudeDevStream sends results for the CLI's sub-agent tools too.
+- The window steers an agent CluadeX runs itself (agent_spawn on the native loop): `Services/Agents/SubAgentControl.cs`
+  (made per spawn in `RunRoutedSubAgentAsync`, its token linked to the run's, never the reverse; handed to the node on
+  "start"). **Stop** ends that agent only (asks first when it may edit; a second press is a no-op): the held loop's wrapper
+  turns that cancel into an ordinary tool result for the main agent and a "stopped" event → node "คุณสั่งหยุด". **Send**
+  queues a message (≤ 4000 chars, ≤ 20 waiting) read at its next step as a text block in the last user message; its row
+  goes ✓ "read at step N", or ✗ "not read" when the agent ended first (reported BEFORE done/stopped/failed — the map
+  closes steps still open at that event). Ended / stopping / a CLI's own agent / a dispatcher's worker: controls off and
+  one line says why. The wrapper also ends the node on the run's stop or a crash (`_subAgentLast` is an AsyncLocal set
+  inside the loop, so the router's own catch never saw it).
+- Proven by `tests/chattest` AG1–AG16 (`CHATTEST_ONLY=AG`, renders with `CHATTEST_RENDERS`; AG12–AG16 run the real held
+  loop with a scripted native provider through the real chat page); MO's clock counts follow.
+
 ## GPU share slider (2026-11-06)
 - Click the status-bar VRAM graph → vertical 0–100 % slider (`ViewModels/GpuShareViewModel.cs`, popups in
   `MainWindow.xaml` beside `GpuGraph` — not inside it: a click in a Popup bubbles to its parent's MouseBinding).

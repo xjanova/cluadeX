@@ -281,6 +281,10 @@ public class ChatMessage : INotifyPropertyChanged
     public bool AgentMapRunning => AgentNodes?.Any(x => x.IsRunning) == true;
     /// <summary>All came back and at least one failed: the header's line ends amber, not green.</summary>
     public bool AgentMapHasFailures => AgentNodes?.Any(x => x.IsFailed) == true;
+    private Services.Agents.AgentGraphState? _agentGraph;
+    /// <summary>The map's canvas view (zoom, pan, dragged nodes): on the row, not the control, so a row the chat list
+    /// recycles comes back as the owner left it. Not saved — a reloaded chat lays its map out afresh.</summary>
+    public Services.Agents.AgentGraphState AgentGraph => _agentGraph ??= new();
     /// <summary>A node changed state (ChatViewModel.OnSubAgentEvent): the card's live parts re-read.</summary>
     public void NotifyAgentMap()
     {
