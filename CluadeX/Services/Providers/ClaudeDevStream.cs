@@ -253,6 +253,7 @@ public sealed class ClaudeDevStreamTurn
             switch (type)
             {
                 case "assistant" when parent != null: OnSubAgentMessage(parent, root); break;
+                case "user" when parent != null: OnSubAgentResults(parent, root); break;
                 case "assistant": OnAssistant(root); break;
                 case "user" when parent == null: OnUser(root); break;
                 case "system": OnSystem(root); break;
@@ -445,7 +446,25 @@ public sealed class ClaudeDevStreamTurn
                 ?? map.Args.GetValueOrDefault("path") ?? map.Args.GetValueOrDefault("url") ?? map.Args.GetValueOrDefault("query") ?? "";
             sub = sub with { Phase = "tool", Detail = FirstLine((map.Name + " " + target).Trim(), 120), Steps = sub.Steps + 1 };
             _subAgents[parent] = sub;
-            SubAgent?.Invoke(sub);
+            SubAgent?.Invoke(sub with { CallId = Str(part, "id") is { Length: > 0 } callId ? callId : null });
+        }
+    }
+
+    /// <summary>A sub-agent's tool results (a user message under the Task call): each answers the call with its id, for
+    /// the agent's floating window. Hidden tools have no row there, so their results are skipped too.</summary>
+    private void OnSubAgentResults(string parent, JsonElement root)
+    {
+        if (!_subAgents.TryGetValue(parent, out var sub)) return;
+        if (!root.TryGetProperty("message", out var msg) || !msg.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Array) return;
+        foreach (var part in content.EnumerateArray())
+        {
+            if (Str(part, "type") != "tool_result") continue;
+            string id = Str(part, "tool_use_id");
+            if (id.Length == 0) continue;
+            bool isError = part.TryGetProperty("is_error", out var ie) && ie.ValueKind == JsonValueKind.True;
+            SubAgent?.Invoke(sub with { Phase = "result", Detail = "", CallId = id,
+                Result = CodeAgentService.ResultForMap(ResultText_(part)), Ok = !isError });
         }
     }
 

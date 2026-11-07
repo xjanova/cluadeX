@@ -84,15 +84,28 @@ public partial class CodeAgentService
         return all.Where(t => !SubAgentExcludedTools.Contains(t.Name) && resolve(t.Name) is { } type && allowedTypes.Contains(type)).ToList();
     }
 
-    /// <summary>What a sub-agent is doing, for the agent map: Phase "start" | "tool" | "done" | "failed" | "stopped".
+    /// <summary>What a sub-agent is doing, for the agent map: Phase "start" | "tool" | "result" | "done" | "failed" |
+    /// "stopped". A "tool" with a <paramref name="CallId"/> is answered by a "result" with the same id, its
+    /// <paramref name="Result"/> (trimmed) and <paramref name="Ok"/> — the agent's floating window lists both.
     /// Raised in the run's own flow (AgentRunScope.Current is the run that spawned it).</summary>
     public sealed record SubAgentEvent(int Id, string Label, string Kind, string Task, string Phase, string Detail, int Steps,
-        string? Model = null, decimal CostUsd = 0, string? WorkflowId = null);
+        string? Model = null, decimal CostUsd = 0, string? WorkflowId = null, string? CallId = null, string? Result = null, bool Ok = true,
+        Agents.SubAgentControl? Control = null);
+
+    /// <summary>A tool result as the agent window shows it: at most this many characters.</summary>
+    internal const int SubAgentEventResultChars = 2000;
+
+    internal static string ResultForMap(string? text)
+    {
+        text = (text ?? "").Trim();
+        return text.Length <= SubAgentEventResultChars ? text : text[..SubAgentEventResultChars] + "…";
+    }
 
     /// <summary>How one sub-agent runs when the dispatcher starts it: its map id and label, kind, routed model, own scope
     /// (its cost), its warm-start context; ReportOnDone = false for a fixer, whose "done" comes after the re-run.</summary>
     private sealed record SubAgentRunOptions(int Id, string Label, string Kind, string? Model, AgentRunScope? Scope,
-        string? Warm = null, bool ReportOnDone = true, SubAgentThread? Thread = null, string? WorkflowId = null);
+        string? Warm = null, bool ReportOnDone = true, SubAgentThread? Thread = null, string? WorkflowId = null,
+        Agents.SubAgentControl? Control = null);
 
     /// <summary>A sub-agent's conversation, so agent_spawn's continue_agent carries on with it. Finished: it ended with a
     /// report, so the conversation can take another message; one that failed mid-tool cannot.</summary>
@@ -176,7 +189,10 @@ public partial class CodeAgentService
             string label = (thai ? $"เอเจนต์ย่อย #{n}" : $"Sub-agent #{n}") + (specialist ? $" ({request.Type})" : "");
             var thread = earlier ?? new SubAgentThread { Request = request, Id = n };
             if (parent != null) _subAgentThreads.GetOrCreateValue(parent)[n] = thread;
-            string? report = await RunSubAgentCoreAsync(request, ct, new SubAgentRunOptions(n, label, request.Type, model, child, warm, Thread: thread));
+            // Its own stop (the owner's, from its window) and message queue: linked to the run's token, never the reverse.
+            using var control = new Agents.SubAgentControl(ct, canEdit);
+            string? report = await RunSubAgentCoreAsync(request, control.Token,
+                new SubAgentRunOptions(n, label, request.Type, model, child, warm, Thread: thread, Control: control));
             return report == null || parent == null || !thread.Finished ? report : $"{report}\n\n(Sub-agent {n}: agent_spawn with continue_agent {n} carries on with it.)";
         }
         catch (OperationCanceledException)
@@ -220,7 +236,52 @@ public partial class CodeAgentService
         finally { Agents.AgentLoad.Leave(); }
     }
 
+    /// <summary>One sub-agent's loop. With a <see cref="Agents.SubAgentControl"/>: the owner's Stop ends it with an ordinary
+    /// result for the main agent (not a cancel of the run), and a message it never read is reported as such.</summary>
     private async Task<string?> RunHeldSubAgentAsync(Providers.IAiProvider provider, SubAgentRequest request, CancellationToken ct, SubAgentRunOptions? opts)
+    {
+        var control = opts?.Control;
+        if (control == null) return await RunHeldSubAgentLoopAsync(provider, request, ct, opts);
+        bool thai = _localizationService.CurrentLanguage == "th";
+        try { return await RunHeldSubAgentLoopAsync(provider, request, ct, opts); }
+        catch (OperationCanceledException) when (control.StopRequested && !control.ParentCancelled)
+        {
+            _debugLog?.Info("SubAgent", $"{opts!.Label}: stopped by the owner");
+            ReportUnreadNotes(control, thai);
+            if (control.StartEvent is SubAgentEvent ev) RaiseSubAgent(ev with { Phase = "stopped", Detail = "", CostUsd = opts.Scope?.CostUsd ?? 0 });
+            if (opts.Thread != null) opts.Thread.Finished = false;
+            return $"[Sub-agent {opts.Id} was stopped by the user before it finished; it wrote no report. Do not start it again "
+                   + "unless the user asks — carry on with what you have.]";
+        }
+        // The run stopped, or the agent crashed: its node ends here. (RunRoutedSubAgentAsync's catch cannot do it — the
+        // _subAgentLast this loop sets is an AsyncLocal, and a callee's change never flows back to its caller.)
+        catch (OperationCanceledException)
+        {
+            ReportUnreadNotes(control, thai);
+            if (control.StartEvent is SubAgentEvent ev) RaiseSubAgent(ev with { Phase = "stopped", Detail = "", CostUsd = opts!.Scope?.CostUsd ?? 0 });
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ReportUnreadNotes(control, thai);
+            if (control.StartEvent is SubAgentEvent ev) RaiseSubAgent(ev with { Phase = "failed", Detail = Shorten(ex.Message, 120), CostUsd = opts!.Scope?.CostUsd ?? 0 });
+            throw;
+        }
+        finally { ReportUnreadNotes(control, thai); }
+    }
+
+    /// <summary>The agent ended: no more stops or messages, and each message it never read says so in its window. Called
+    /// before its done / stopped / failed event — the map closes a step still open at that event, so a later answer
+    /// would land on nothing. Once is enough: Close hands the queue over only the first time.</summary>
+    private void ReportUnreadNotes(Agents.SubAgentControl control, bool thai)
+    {
+        foreach (var (id, _) in control.Close())
+            if (control.StartEvent is SubAgentEvent ev)
+                RaiseSubAgent(ev with { Phase = "result", Detail = "", CallId = id, Ok = false,
+                    Result = thai ? "ไม่ได้อ่าน — เอเจนต์จบก่อน" : "not read — the agent ended first" });
+    }
+
+    private async Task<string?> RunHeldSubAgentLoopAsync(Providers.IAiProvider provider, SubAgentRequest request, CancellationToken ct, SubAgentRunOptions? opts)
     {
         string task = request.Task, context = request.Context, type = request.Type;
         bool thai = _localizationService.CurrentLanguage == "th";
@@ -253,7 +314,9 @@ public partial class CodeAgentService
         messages.Add(new NativeMessage { Role = "user", Content = { new ContentBlock { Type = "text", Text = first.ToString() } } });
 
         OnAgentStatus?.Invoke($"{label}: {(thai ? "เริ่มงาน" : "starting")} · {Shorten(task, 60)}");
-        var ev = new SubAgentEvent(n, label, opts?.Kind ?? type, Shorten(task, 160), "start", "", 0, opts?.Model, WorkflowId: opts?.WorkflowId);
+        var ev = new SubAgentEvent(n, label, opts?.Kind ?? type, Shorten(task, 160), "start", "", 0, opts?.Model, WorkflowId: opts?.WorkflowId,
+            Control: opts?.Control);
+        if (opts?.Control != null) opts.Control.StartEvent = ev with { Control = null };
         decimal Cost() => opts?.Scope?.CostUsd ?? 0;
         _subAgentLast.Value = ev;
         RaiseSubAgent(ev);
@@ -263,6 +326,15 @@ public partial class CodeAgentService
         for (int step = 1; step <= SubAgentMaxSteps; step++)
         {
             ct.ThrowIfCancellationRequested();
+            // What the owner typed into its window since the last step: read now, and its row says so.
+            if (opts?.Control is { PendingNotes: > 0 } ctl)
+            {
+                var notes = ctl.TakeNotes();
+                messages[^1].Content.Add(new ContentBlock { Type = "text", Text = Agents.SubAgentControl.NoteBlock(notes) });
+                foreach (var (id, _) in notes)
+                    RaiseSubAgent(ev with { Phase = "result", Detail = "", CallId = id, Ok = true, Steps = step, CostUsd = Cost(),
+                        Result = thai ? $"อ่านแล้วที่ขั้น {step}" : $"read at step {step}" });
+            }
             // The run's spend guard holds for its sub-agents too: past the budget, report now instead of spending on.
             bool overBudget = step > 1 && opts != null && RunBudgetSpent();
             bool lastStep = step == SubAgentMaxSteps || overBudget;
@@ -291,6 +363,7 @@ public partial class CodeAgentService
                     RaiseSubAgent(ev with { Phase = "tool", Detail = "→ Claude Dev (API quota)", Steps = step, CostUsd = Cost() });
                     string? cdReport = await RunSubAgentOnClaudeDevAsync(first.ToString(), canEdit, ct);
                     if (cdReport == null) throw;
+                    if (opts?.Control != null) ReportUnreadNotes(opts.Control, thai);
                     RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done", Detail = Shorten(cdReport, 140), Steps = step, CostUsd = Cost() });
                     return cdReport;
                 }
@@ -304,6 +377,7 @@ public partial class CodeAgentService
                 // The node shows the report's opening words — as text, not markdown (**, `, #, list bullets).
                 string gist = System.Text.RegularExpressions.Regex.Replace(report, @"[*`#>_]+|^\s*[-•]\s*", "",
                     System.Text.RegularExpressions.RegexOptions.Multiline);
+                if (opts?.Control != null) ReportUnreadNotes(opts.Control, thai);
                 RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done",
                     Detail = Shorten(gist, 140), Steps = step, CostUsd = Cost() });
                 if (opts?.Thread != null)
@@ -329,9 +403,11 @@ public partial class CodeAgentService
                     var call = new ToolCall { ToolName = runName, Type = c.type.Value, Arguments = ParseJsonInputToArgs(c.tc.Input) };
                     string doing = GetToolStatusMessage(c.tc.Name, call.Arguments);
                     OnAgentStatus?.Invoke($"{label}: {doing}");
-                    RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step, CostUsd = Cost() });
+                    RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step, CostUsd = Cost(), CallId = c.tc.Id });
                     var r = await _agentToolService.ExecuteToolAsync(call, ct);
                     string text = r.Success ? (r.Output ?? "") : $"Error: {r.Error ?? r.Output}";
+                    RaiseSubAgent(ev with { Phase = "result", Detail = "", Steps = step, CostUsd = Cost(), CallId = c.tc.Id,
+                        Result = ResultForMap(text), Ok = r.Success });
                     if (text.Length > SubAgentMaxResultChars)
                         text = text[..SubAgentMaxResultChars] + $"\n… (cut: {text.Length - SubAgentMaxResultChars} more characters — read a narrower range)";
                     return new ContentBlock { Type = "tool_result", ToolUseId = c.tc.Id, Content = text, IsError = !r.Success };
@@ -339,6 +415,8 @@ public partial class CodeAgentService
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    RaiseSubAgent(ev with { Phase = "result", Detail = "", Steps = step, CostUsd = Cost(), CallId = c.tc.Id,
+                        Result = ResultForMap("Error: " + ex.Message), Ok = false });
                     return new ContentBlock { Type = "tool_result", ToolUseId = c.tc.Id, IsError = true, Content = "Error: " + ex.Message };
                 }
             }
@@ -353,6 +431,7 @@ public partial class CodeAgentService
             messages.Add(assistant);
             messages.Add(results);
         }
+        if (opts?.Control != null) ReportUnreadNotes(opts.Control, thai);
         RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done",
             Detail = thai ? "ใช้ขั้นครบโดยไม่ได้สรุป" : "step budget used, no report", Steps = SubAgentMaxSteps, CostUsd = Cost() });
         return thai ? "(เอเจนต์ย่อยใช้ขั้นตอนครบโดยไม่ได้สรุป)" : "(the sub-agent used its step budget without a report)";

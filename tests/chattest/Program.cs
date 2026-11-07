@@ -270,6 +270,9 @@ internal static partial class Program
 
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "DESIGN") return await RunDesignOnly();
 
+        // CHATTEST_ONLY=AG: just the agent map node canvas and the agents' floating windows (AgentGraphTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "AG") return await RunAgentGraphOnly();
+
         // CHATTEST_ONLY=CP: just the UI Studio / Node Graph following the chat on screen.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "CP")
         {
@@ -400,6 +403,7 @@ internal static partial class Program
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
         await TestPlanAgentMotion();          // MO: plan steps and sub-agents animate by their real state
+        await TestAgentGraph();               // AG: the agent map as a node canvas, each agent's own window
         await TestFloatingPlan();             // MF: the floating plan card comes and goes by the chat's own card
         await TestOrchestrationViews();       // OR: workflow card, split chips, notices, next-step box, Ultra
         await TestToolGrouping();             // G: tool rows fold together
