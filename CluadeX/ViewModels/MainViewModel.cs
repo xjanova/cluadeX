@@ -184,6 +184,7 @@ public class MainViewModel : ViewModelBase
 
     private void RefreshNavLabels()
     {
+        RaiseSparkChip();
         OnPropertyChanged(nameof(MoreToolPages));
         OnPropertyChanged(nameof(NavChat));
         OnPropertyChanged(nameof(NavModels));
@@ -342,7 +343,7 @@ public class MainViewModel : ViewModelBase
         {
             items.Add(new PaletteItem
             {
-                Icon = "", Title = "DGX Spark", Subtitle = L("spark.paletteSubtitle"), Kind = "Page",
+                Icon = "", Logo = SparkLogo.Image, Title = "DGX Spark", Subtitle = L("spark.paletteSubtitle"), Kind = "Page",
                 KindToken = "Brand.Spark",
                 Haystack = "dgx spark nvidia ollama gpu 128gb",
                 Run = OpenDgxSpark,
@@ -398,6 +399,23 @@ public class MainViewModel : ViewModelBase
     /// <summary>The title-bar DGX Spark chip glows solid while CluadeX is running on a Spark.</summary>
     public bool IsSparkActive => _spark?.IsActive == true;
 
+    // ── DGX Spark chip (title bar): the live reading of the remembered Spark (DgxSparkService.LinkStatus) ──
+    private SparkLinkStatus SparkLink => _spark?.LinkStatus ?? SparkLinkStatus.None;
+    /// <summary>Not configured / connecting / online / in use / unreachable — the chip's dot colour.</summary>
+    public SparkLinkState SparkLinkState => SparkLink.State;
+    /// <summary>"DGX Spark", "DGX Spark · ออนไลน์", "DGX Spark · gpt-oss:120b" …</summary>
+    public string SparkChipText => SparkStatusText.Chip(_loc, SparkLink);
+    /// <summary>The full sentence, with the reason and what to do when the Spark doesn't answer.</summary>
+    public string SparkChipTip => SparkStatusText.Tip(_loc, SparkLink);
+
+    private void RaiseSparkChip()
+    {
+        OnPropertyChanged(nameof(SparkLinkState));
+        OnPropertyChanged(nameof(SparkChipText));
+        OnPropertyChanged(nameof(SparkChipTip));
+        OnPropertyChanged(nameof(IsSparkActive));
+    }
+
     // ── License chip (title bar): invites a key when there is none, counts a trial down, says Pro when bought ──
     private string _licenseChipText = "", _licenseChipTip = "", _licenseChipState = "none";
     public string LicenseChipText { get => _licenseChipText; private set => SetProperty(ref _licenseChipText, value); }
@@ -445,6 +463,9 @@ public class MainViewModel : ViewModelBase
         _activation = activation;
         _license = license;
         _spark = spark;
+        // The Spark's link status changes on the monitor's thread: the chip follows on the UI thread.
+        if (_spark != null)
+            _spark.LinkStatusChanged += _ => App.Current?.Dispatcher.BeginInvoke(RaiseSparkChip);
         _workspace = workspace;
         _log = log;
         ChatVM = chatVM;

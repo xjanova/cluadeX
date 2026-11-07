@@ -39,6 +39,8 @@ internal static class MockSpark
     static volatile TaskCompletionSource<bool> TagsHeld, TagsRelease;
     /// <summary>A refused pull whose error body stalls until this is set.</summary>
     static volatile TaskCompletionSource<bool> SlowBodyRelease;
+    /// <summary>While set, /api/version waits for it — a Spark that is there but never answers (the link-status timeout).</summary>
+    static volatile TaskCompletionSource<bool> VersionHold;
 
     static void ScriptTags(params string[] modes)
     {
@@ -133,6 +135,48 @@ internal static class MockSpark
         })
             check("spark", $"failure kind: {name}", DgxSparkService.Classify(ex) == want, DgxSparkService.Classify(ex).ToString());
 
+        // ── Why the Spark didn't answer, as finely as the socket says (the chip's and the window's sentence) ──
+        foreach (var (name, ex, want) in new (string, Exception, SparkFailure)[]
+        {
+            ("no such name (DNS)", new HttpRequestException("no such host", new SocketException((int)SocketError.HostNotFound)), SparkFailure.HostNotFound),
+            ("connection refused", new HttpRequestException("refused", new SocketException((int)SocketError.ConnectionRefused)), SparkFailure.Refused),
+            ("socket timed out", new HttpRequestException("timed out", new SocketException((int)SocketError.TimedOut)), SparkFailure.Timeout),
+            ("network unreachable", new HttpRequestException("unreachable", new SocketException((int)SocketError.NetworkUnreachable)), SparkFailure.Network),
+            ("HttpClient timeout", new TaskCanceledException("timeout", new TimeoutException()), SparkFailure.Timeout),
+            ("HTTP 500", new HttpRequestException("500", null, HttpStatusCode.InternalServerError), SparkFailure.Server),
+        })
+            check("spark-link", $"reach failure: {name}", DgxSparkService.ClassifyReach(ex) == want, DgxSparkService.ClassifyReach(ex).ToString());
+
+        var th = new LocalizationService();
+        th.SetLanguage("th");
+        var en = new LocalizationService();
+        en.SetLanguage("en");
+        DateTime t0 = DateTime.UtcNow;
+        foreach (var (name, st) in new (string, SparkLinkStatus)[]
+        {
+            ("not configured", SparkLinkStatus.None),
+            ("connecting", new(SparkLinkState.Checking, "spark.lan", null, null, SparkFailure.None, t0)),
+            ("online", new(SparkLinkState.Online, "spark.lan", null, "0.12.9", SparkFailure.None, t0)),
+            ("in use", new(SparkLinkState.InUse, "spark.lan", "gpt-oss:120b", "0.12.9", SparkFailure.None, t0)),
+            ("unreachable: no such name", new(SparkLinkState.Unreachable, "spark.lan", null, null, SparkFailure.HostNotFound, t0)),
+            ("unreachable: port closed", new(SparkLinkState.Unreachable, "spark.lan", null, null, SparkFailure.Refused, t0)),
+            ("unreachable: timeout", new(SparkLinkState.Unreachable, "spark.lan", null, null, SparkFailure.Timeout, t0)),
+            ("unreachable: not Ollama", new(SparkLinkState.Unreachable, "spark.lan", null, null, SparkFailure.Server, t0)),
+            ("unreachable: other", new(SparkLinkState.Unreachable, "spark.lan", null, null, SparkFailure.Network, t0)),
+        })
+        {
+            string chip = SparkStatusText.Chip(th, st), tip = SparkStatusText.Tip(th, st), tipEn = SparkStatusText.Tip(en, st);
+            bool thai = tip.Any(c => c >= '฀' && c <= '๿');
+            bool noRaw = !tip.Contains("Exception") && !tip.Contains("Socket") && !tip.Contains("{") && !tipEn.Contains("{");
+            bool names = st.Host == null || tip.Contains(st.Host);
+            bool model = st.Model == null || (chip.Contains(st.Model) && tip.Contains(st.Model));
+            check("spark-link", $"status text in Thai: {name}", chip.Length > 0 && thai && noRaw && names && model && tip != tipEn,
+                $"chip=\"{chip}\" tip=\"{tip}\"");
+        }
+        check("spark-link", "each reason has its own sentence",
+            new[] { SparkFailure.HostNotFound, SparkFailure.Refused, SparkFailure.Timeout, SparkFailure.Server, SparkFailure.Network }
+                .Select(r => SparkStatusText.Reason(th, "x", r)).Distinct().Count() == 5, "");
+
         int port = FreePort();
         using var listener = new HttpListener();
         listener.Prefixes.Add($"http://localhost:{port}/");
@@ -172,6 +216,9 @@ internal static class MockSpark
             OpenAiRelease?.TrySetResult(true);
             TagsRelease?.TrySetResult(true);
             SlowBodyRelease?.TrySetResult(true);
+            VersionHold?.TrySetResult(true);
+            VersionHold = null;
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS", null);
             ScriptTags();
             Environment.SetEnvironmentVariable("CLUADEX_SPARK_ERRBODY_TIMEOUT_MS", null);
             svc.UpdateSettings(s =>
@@ -206,6 +253,9 @@ internal static class MockSpark
         check("spark", "probe lists the installed models", p.Models.SequenceEqual(Installed), string.Join(", ", p.Models));
         var gone = await spark.ProbeAsync("no-such-spark.invalid");
         check("spark", "a host that doesn't exist is unreachable, not an exception", !gone.Reachable && gone.Error == "unreachable", gone.Error ?? "");
+        check("spark-link", "…and the probe says why: the name doesn't resolve", gone.Reason == SparkFailure.HostNotFound, gone.Reason.ToString());
+
+        await LinkStatusChecks(check, svc, spark, port);
 
         // ── Download onto the Spark ──
         var reports = new List<(string Status, double? Fraction)>();
@@ -288,6 +338,9 @@ internal static class MockSpark
         check("spark", "use → window raised to 32k, old size remembered (own write not undone)",
             s1.ContextSize == DgxSparkService.SparkContextSize && s1.DgxSparkSavedContextSize == 12288, $"{s1.ContextSize} saved={s1.DgxSparkSavedContextSize}");
         check("spark", "use → IsActive", spark.IsActive && s1.DgxSparkHost == "localhost", s1.DgxSparkHost ?? "");
+        check("spark-link", "use → the chip says connected, in use, with the model (no wait for the next poll)",
+            spark.LinkStatus.State == SparkLinkState.InUse && spark.LinkStatus.Model == "qwen3-coder:30b" && spark.LinkStatus.Host == "localhost",
+            spark.LinkStatus.ToString());
 
         // ── The Ollama provider's connection test asks /api/tags itself: a list that didn't come is a failure ──
         var ollamaP = (OllamaProvider)mgr.GetProvider(AiProviderType.Ollama);
@@ -565,6 +618,16 @@ internal static class MockSpark
             string wantNote = en.T("spark.contextRestored", N(12288), N(32768));
             check("spark", "switching away → the window explains the smaller context window", vm.ContextNote == wantNote && !vm.HasActiveLine
                 && vm.Models.All(m => !m.IsInUse) && svc.Settings.ContextSize == 12288, vm.ContextNote);
+            check("spark-link", "switching away → in use becomes online, the window's header says the same",
+                spark.LinkStatus.State == SparkLinkState.Online && vm.LinkState == SparkLinkState.Online
+                && vm.LinkText == SparkStatusText.Chip(en, spark.LinkStatus), $"{spark.LinkStatus.State} · window {vm.LinkState} \"{vm.LinkText}\"");
+
+            // The window's Connect to a name that doesn't resolve says so (type the IP), not a generic "nothing answered".
+            vm.HostInput = "no-such-spark.invalid";
+            vm.ConnectCommand.Execute(null);
+            await WaitUntil(() => !vm.IsProbing, 10000);
+            check("spark-link", "window: a name that doesn't resolve → \"type the IP instead\"",
+                vm.StatusIsError && vm.Status == en.T("spark.reason.hostNotFound", "no-such-spark.invalid"), vm.Status);
             var vm2 = new DgxSparkViewModel(spark, svc, new LocalizationService());
             check("spark", "…and a window opened later still says so", vm2.ContextNote == wantNote, vm2.ContextNote);
             vm2.Detach();
@@ -574,6 +637,119 @@ internal static class MockSpark
             HoldPulls?.TrySetResult(true);
             HoldPulls = null;
             vm.Detach();
+        }
+    }
+
+    /// <summary>
+    /// The title-bar chip's live status of the remembered Spark: not configured → connecting → online / unreachable
+    /// with the reason (no such name, Ollama's port closed, no answer in time), re-checks that don't flash, a cancel
+    /// that leaves the last reading, and an old slow answer that never overwrites a newer one.
+    /// </summary>
+    static async Task LinkStatusChecks(Action<string, string, bool, string> check, SettingsService svc, DgxSparkService spark, int port)
+    {
+        var events = new List<SparkLinkStatus>();
+        void OnLink(SparkLinkStatus s) { lock (events) events.Add(s); }
+        int Count() { lock (events) return events.Count; }
+        string Trail() { lock (events) return string.Join(" → ", events.Select(e => e.State)); }
+        spark.LinkStatusChanged += OnLink;
+        try
+        {
+            svc.UpdateSettings(s => s.DgxSparkHost = null);
+            var l0 = await spark.CheckLinkAsync();
+            check("spark-link", "no Spark remembered → not configured, nothing asked", l0.State == SparkLinkState.NotConfigured && l0.Host == null, l0.ToString());
+
+            svc.UpdateSettings(s => s.DgxSparkHost = "localhost");   // the new address starts a check by itself
+            var l1 = await spark.CheckLinkAsync();
+            check("spark-link", "remembered Spark answers → online with Ollama's version (Local still in use)",
+                l1.State == SparkLinkState.Online && l1.Host == "localhost" && l1.Version == "0.12.9-mock" && l1.Model == null, l1.ToString());
+            bool sawChecking;
+            lock (events) sawChecking = events.Any(e => e.State == SparkLinkState.Checking && e.Host == "localhost");
+            check("spark-link", "a Spark's first check shows \"connecting…\" first", sawChecking, Trail());
+
+            await Task.Delay(200);   // the check the settings change started by itself has finished (and was dropped as older)
+            int before = Count();
+            var l2 = await spark.CheckLinkAsync();
+            check("spark-link", "a re-check that finds the same raises nothing (no \"connecting…\" flash)",
+                l2.State == SparkLinkState.Online && Count() == before, $"{Count() - before} event(s) · {Trail()}");
+
+            // Ollama's port closed: nothing listens there.
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS", "10000");   // refused, not our own timeout
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_OLLAMA_PORT", FreePort().ToString());
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            SparkLinkStatus l3;
+            try { l3 = await spark.CheckLinkAsync(); }
+            finally { Environment.SetEnvironmentVariable("CLUADEX_SPARK_OLLAMA_PORT", port.ToString()); }
+            check("spark-link", "Ollama's port closed → unreachable, reason \"refused\" (OLLAMA_HOST hint)",
+                l3.State == SparkLinkState.Unreachable && l3.Reason == SparkFailure.Refused && sw.Elapsed < TimeSpan.FromSeconds(8),
+                $"{l3.State}/{l3.Reason} after {sw.ElapsedMilliseconds} ms");
+            var l4 = await spark.CheckLinkAsync();
+            check("spark-link", "it answers again → online again", l4.State == SparkLinkState.Online, l4.ToString());
+
+            // There, but never answering: our own limit ends it (not the app hanging on it).
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS", "600");
+            VersionHold = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            sw.Restart();
+            var l5 = await spark.CheckLinkAsync();
+            check("spark-link", "no answer → unreachable, reason \"timeout\", given up on in time",
+                l5.State == SparkLinkState.Unreachable && l5.Reason == SparkFailure.Timeout && sw.Elapsed < TimeSpan.FromSeconds(4),
+                $"{l5.State}/{l5.Reason} after {sw.ElapsedMilliseconds} ms");
+            VersionHold.TrySetResult(true);
+            VersionHold = null;
+            var l6 = await spark.CheckLinkAsync();
+            check("spark-link", "answers again → online (control)", l6.State == SparkLinkState.Online, l6.ToString());
+
+            // Cancelled mid-check (the app closing): the last reading stays, no "connecting…" left behind.
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS", "10000");
+            VersionHold = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+            {
+                sw.Restart();
+                var l7 = await spark.CheckLinkAsync(showChecking: true, ct: cts.Token);
+                check("spark-link", "cancelled check → the reading before it stays (online), not stuck on \"connecting…\"",
+                    l7.State == SparkLinkState.Online && spark.LinkStatus.State == SparkLinkState.Online && sw.Elapsed < TimeSpan.FromSeconds(3),
+                    $"{l7.State} / now {spark.LinkStatus.State} after {sw.ElapsedMilliseconds} ms");
+            }
+
+            // An older, slower check must not overwrite a newer one: A hangs (held) until its 6 s limit, B (port closed,
+            // ~2 s per address on Windows) answers first. A's "timeout" lands after B's "refused" and is dropped.
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS", "6000");
+            var a = spark.CheckLinkAsync();
+            await Task.Delay(100);
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS", "10000");
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_OLLAMA_PORT", FreePort().ToString());
+            SparkLinkStatus lb;
+            try { lb = await spark.CheckLinkAsync(); }
+            finally { Environment.SetEnvironmentVariable("CLUADEX_SPARK_OLLAMA_PORT", port.ToString()); }
+            var la = await a;
+            check("spark-link", "a slow old answer never overwrites a newer reading",
+                lb.Reason == SparkFailure.Refused && spark.LinkStatus.State == SparkLinkState.Unreachable && spark.LinkStatus.Reason == SparkFailure.Refused,
+                $"newer={lb.Reason} older returned {la.State}/{la.Reason} now={spark.LinkStatus.State}/{spark.LinkStatus.Reason}");
+            VersionHold.TrySetResult(true);
+            VersionHold = null;
+
+            // A name this PC can't resolve: the sentence tells the user to type the IP.
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS", "8000");
+            svc.UpdateSettings(s => s.DgxSparkHost = "no-such-spark.invalid");
+            var l8 = await spark.CheckLinkAsync();
+            var th = new LocalizationService();
+            th.SetLanguage("th");
+            string tip = SparkStatusText.Tip(th, l8);
+            check("spark-link", "a name that doesn't resolve → unreachable, reason \"host not found\", Thai tip says use the IP",
+                l8.State == SparkLinkState.Unreachable && l8.Reason == SparkFailure.HostNotFound && l8.Host == "no-such-spark.invalid"
+                && tip == th.T("spark.link.tip.unreachable", th.T("spark.reason.hostNotFound", "no-such-spark.invalid")), $"{l8.Reason} · {tip}");
+
+            svc.UpdateSettings(s => s.DgxSparkHost = null);
+            check("spark-link", "Spark forgotten → not configured at once (no request needed)",
+                spark.LinkStatus.State == SparkLinkState.NotConfigured, spark.LinkStatus.ToString());
+        }
+        finally
+        {
+            spark.LinkStatusChanged -= OnLink;
+            VersionHold?.TrySetResult(true);
+            VersionHold = null;
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS", null);
+            Environment.SetEnvironmentVariable("CLUADEX_SPARK_OLLAMA_PORT", port.ToString());
+            svc.UpdateSettings(s => s.DgxSparkHost = null);
         }
     }
 
@@ -653,7 +829,12 @@ internal static class MockSpark
         try
         {
             string path = ctx.Request.Url!.AbsolutePath;
-            if (path == "/api/version") { await Json(res, "{\"version\":\"0.12.9-mock\"}"); return; }
+            if (path == "/api/version")
+            {
+                if (VersionHold is { } hold) await hold.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                await Json(res, "{\"version\":\"0.12.9-mock\"}");
+                return;
+            }
             if (path == "/api/tags")
             {
                 string mode;
