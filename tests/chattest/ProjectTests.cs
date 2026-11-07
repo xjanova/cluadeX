@@ -414,7 +414,7 @@ internal static partial class Program
             : Regex.Matches(xaml[start..end], @"\{Binding (\w+)[,}]").Select(m => m.Groups[1].Value).Distinct()
                 .Where(p => !projProps.Contains(p) && p != "IsMouseOver" && p != "DataContext").ToList();
         Check("PJ static: every binding in the project rows is a ChatProject property", badProj.Count == 0, string.Join(", ", badProj));
-        var known = new[] { typeof(MainViewModel), typeof(ChatViewModel), typeof(ChatSession), typeof(ChatProject), typeof(SearchResult), typeof(PaletteItem),
+        var known = new[] { typeof(MainViewModel), typeof(MainViewModel.ToolPage), typeof(ChatViewModel), typeof(ChatSession), typeof(ChatProject), typeof(SearchResult), typeof(PaletteItem),
                 typeof(System.Windows.Data.CollectionViewGroup), typeof(FrameworkElement), typeof(Button) }
             .SelectMany(t => t.GetProperties().Select(p => p.Name)).ToHashSet();
         var badAny = Regex.Matches(xaml, @"\{Binding (?:Path=)?([\w]+)[,}.]").Select(m => m.Groups[1].Value).Distinct().Where(p => !known.Contains(p)).ToList();

@@ -385,7 +385,7 @@ public sealed class BuildProblemsService : IAppShutdownHook, IDisposable
         return (r.ExitCode, r.Output, r.TimedOut);
     }
 
-    private static string? OnPath(params string[] names)
+    internal static string? OnPath(params string[] names)
     {
         foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             foreach (var name in names)
@@ -402,6 +402,26 @@ public sealed class BuildProblemsService : IAppShutdownHook, IDisposable
 
     /// <summary>How to start Python here (quoted, ready for a command line), or null. The WindowsApps python.exe is the
     /// Store's "get Python" stub unless the Store's Python is installed next to it; then the py launcher.</summary>
+    /// <summary>The python.exe to start directly (not quoted, no launcher arguments), or null. Same Store-stub rule as
+    /// <see cref="FindPython"/>.</summary>
+    internal static string? FindPythonExe()
+    {
+        foreach (var raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                string dir = raw.Trim().Trim('"');
+                string p = Path.Combine(dir, "python.exe");
+                if (!File.Exists(p)) continue;
+                if (dir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase)
+                    && !Directory.EnumerateDirectories(dir, "PythonSoftwareFoundation.Python.*").Any()) continue;
+                return p;
+            }
+            catch { /* a malformed PATH entry */ }
+        }
+        return null;
+    }
+
     private static string? FindPython()
     {
         foreach (var raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))

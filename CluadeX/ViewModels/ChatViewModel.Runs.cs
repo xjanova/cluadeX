@@ -510,9 +510,9 @@ public partial class ChatViewModel
             leftover = run.Scope?.DrainUserNotes();
             // the owner's words typed into this turn are used up with it (a leftover note keeps the turn's decision instead)
             Services.Agents.DesignGate.EndOwnerTurn(run.Session.Id);
-            // A step the run left "in progress" keeps its colour but stops turning: nothing works on it any more.
-            if (run.TodoMsg?.PlanItems is { } planCard)
-                foreach (var item in planCard) item.IsLive = false;
+            // A step the run left "in progress" keeps its colour but stops turning: nothing works on it any more. The
+            // header says the run ended and the clock shows its whole time.
+            ClosePlanCard(run);
             _runs.Remove(run);
             DropDraft(run);
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
