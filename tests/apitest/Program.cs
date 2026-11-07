@@ -560,6 +560,7 @@ internal static class Program
         await GrokDevWire.Run(Check, Section);
         await CliParityWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
+        await FailoverWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
         await UpdateDownloadWire.Run(Check, Section);
         await UpdateProgressWire.Run(Check, Section);
