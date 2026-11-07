@@ -354,7 +354,9 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   EndTurn); nobody works there → a turn starts in that chat (`ContinueChatForPipeAsync(..., fromWatch: true)`: not
   marked FromPipe, off screen in its own list). Settings ▸ Agent ▸ `WatchAutoContinue` off, or more than `MaxWakes` (6)
   such turns in 2 h (reset when the owner writes there) = a notice only. Ctrl+Alt+End and deleting the chat cancel watches.
-- Proven by `tests/watchtest` (93 checks; `--live` = real gh, read-only, on this repo's PR 91 and commit ddbd141) and
+- Dry-run (`ProcessLaunchPolicy`, every host but CluadeX.exe) blocks gh here too (`GhCiProbe.GhBlocked`): the probe answers
+  a fatal `[dry-run]` and `watch_ci` skips `gh pr view` — a harness never polls GitHub unless it adds gh.exe to `Allowed`.
+- Proven by `tests/watchtest` (92 offline + 4 `--live` = real gh, read-only, on this repo's PR 91 and commit ddbd141) and
   `tests/chattest` WJ0–WJ14 (`CHATTEST_ONLY=WJ`, the real chat page + native loop + real `cmd` background processes).
   Not yet: a real CI watch woken in the running app, and a CLI agent (Claude Dev / Codex) calling watch_ci for real.
 

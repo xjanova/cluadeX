@@ -30,9 +30,15 @@ public sealed partial class GhCiProbe : ICiProbe
 
     private const int TimeoutMs = 30_000;
 
+    /// <summary>gh may not start here (dry-run, and gh.exe not in <see cref="Safety.ProcessLaunchPolicy.Allowed"/>).</summary>
+    public static bool GhBlocked => Safety.ProcessLaunchPolicy.Blocks("gh.exe");
+
     public async Task<CiProbeResult> ProbeAsync(WatchJob job, CancellationToken ct)
     {
         if (CheckArgs(job.Repo, job.Pr, job.Branch, job.Commit) is { } bad) return new(Array.Empty<CiCheck>(), bad, Fatal: true);
+        // Dry-run (every host but CluadeX.exe, like the gh_* tools): gh is not started, so the watch ends at once, saying so
+        // — never a harness polling GitHub in the background. A harness that wants the real gh names gh.exe in Allowed.
+        if (GhBlocked) return new(Array.Empty<CiCheck>(), Safety.ProcessLaunchPolicy.Report($"gh (the checks of {job.Target})"), Fatal: true);
         var repo = job.Repo is { Length: > 0 } r ? new[] { "--repo", r } : Array.Empty<string>();
         if (job.Pr is { Length: > 0 } pr)
         {

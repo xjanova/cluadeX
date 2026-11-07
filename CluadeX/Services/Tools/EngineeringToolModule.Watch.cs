@@ -64,8 +64,10 @@ public sealed partial class EngineeringToolModule
         if (pr.Length == 0 && branch.Length == 0 && commit.Length == 0)
         {
             if (repo.Length > 0) return Fail(call, "With repo, say what to watch there: pr, branch or commit.");
-            // The current branch's PR, else the commit at HEAD.
-            var view = await RunProcessAsync("gh", new[] { "pr", "view", "--json", "number", "--jq", ".number" }, ctx.WorkingDirectory!, 30_000, ct);
+            // The current branch's PR, else the commit at HEAD. Dry-run: gh is not asked (straight to HEAD).
+            var view = GhCiProbe.GhBlocked
+                ? new ProcessOutcome(-1, "", "", NotFound: false, TimedOut: false)
+                : await RunProcessAsync("gh", new[] { "pr", "view", "--json", "number", "--jq", ".number" }, ctx.WorkingDirectory!, 30_000, ct);
             if (view.NotFound) return Fail(call, "The GitHub CLI (gh) is not installed — install it (winget install --id GitHub.cli), run `gh auth login`, then try again.");
             if (view.ExitCode == 0 && view.Text.Trim() is { Length: > 0 } n && n.All(char.IsDigit))
             {

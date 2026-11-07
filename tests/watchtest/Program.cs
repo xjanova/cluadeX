@@ -116,6 +116,17 @@ try
         Check("A5 two targets at once are refused", GhCiProbe.CheckArgs(null, "12", "main", null) != null);
     }
 
+    // ─── D: dry-run (this harness is not CluadeX.exe, so it is on): gh is never started for a watch ───
+    {
+        Check("D1 dry-run is on in a harness, and blocks gh", CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun && GhCiProbe.GhBlocked);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var dry = await new GhCiProbe().ProbeAsync(new WatchJob { Kind = WatchKind.Ci, Cwd = Environment.CurrentDirectory, Repo = "xjanova/cluadeX", Pr = "91" }, default);
+        Check("D2 the real probe under dry-run starts no gh: a fatal [dry-run] answer at once (the watch ends saying so)",
+            dry.Fatal && dry.Error!.StartsWith("[dry-run]") && dry.Checks.Count == 0 && sw.ElapsedMilliseconds < 1000, dry.Error + $" {sw.ElapsedMilliseconds} ms");
+        var badDry = await new GhCiProbe().ProbeAsync(new WatchJob { Kind = WatchKind.Ci, Cwd = Environment.CurrentDirectory, Pr = "--repo=x/y" }, default);
+        Check("D3 …the argument check still comes first", badDry.Fatal && badDry.Error!.StartsWith("pr must be"), badDry.Error);
+    }
+
     // ─── S: the service, CI scripted ───
     {
         var probe = new ScriptProbe();
@@ -395,6 +406,7 @@ try
     // ─── G (--live): the real gh, read-only, against this repository's own merged PR and its merge commit ───
     if (args.Contains("--live"))
     {
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("gh.exe");   // read-only gh, on purpose
         string repoDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         var gh = new GhCiProbe();
         var pr = await gh.ProbeAsync(new WatchJob { Kind = WatchKind.Ci, Cwd = repoDir, Repo = "xjanova/cluadeX", Pr = "91" }, default);
