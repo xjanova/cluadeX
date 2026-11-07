@@ -1225,6 +1225,7 @@ public partial class App : Application
         {
             var settings = _serviceProvider?.GetService<SettingsService>();
             settings?.Save();
+            try { Services.Agents.ToolTrackRecord.Shared.Save(); } catch { /* advice only: never block exit */ }
 
             var chatVm = _serviceProvider?.GetService<ChatViewModel>();
             chatVm?.SaveNow();

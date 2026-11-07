@@ -68,6 +68,31 @@ public partial class CodeAgentService
         "skill_invoke",
     };
 
+    /// <summary>What the user reads under an answer whose files still do not parse (the model was asked twice to fix them).</summary>
+    private string BrokenFilesWarning(IReadOnlyList<Agents.FileCheckIssue> issues, bool thai)
+    {
+        string root = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+        var lines = issues.Take(3).Select(i => $"- `{Agents.WrittenFileCheck.Shown(i.Path, root)}{(i.Line > 0 ? $":{i.Line}" : "")}` — {i.Message}");
+        string head = thai
+            ? "⚠️ CluadeX ตรวจแล้ว: ไฟล์ที่ AI เขียนยังมีข้อผิดพลาด (AI ถูกขอให้แก้ 2 ครั้งแล้วแต่ยังไม่แก้) — งานนี้ยังไม่เสร็จจริง:"
+            : "⚠️ CluadeX checked: a file the AI wrote still has errors (it was asked twice to fix them) — this is not really done:";
+        return head + "\n" + string.Join("\n", lines);
+    }
+
+    /// <summary>A tool result's path (as the model wrote it, often relative) as a full path, or null when it cannot be
+    /// placed: inside the project through the same resolver the file tools use, else an absolute path as given (the
+    /// agent scratch folder).</summary>
+    private string? FullPathOf(string path)
+    {
+        try
+        {
+            if (_fileSystemService.HasWorkingDirectory) return _fileSystemService.ResolveSafePath(path);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException or ArgumentException or System.IO.IOException) { }
+        try { return System.IO.Path.IsPathRooted(path) ? System.IO.Path.GetFullPath(path) : null; }
+        catch { return null; }
+    }
+
     // ─── Local tool-catalogue fit ───────────────────────────────────────────────────────────────
     private static bool IsMcpToolName(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
 
@@ -2855,6 +2880,8 @@ public partial class CodeAgentService
     {
         var result = new AgentLoopResult();
         string systemPrompt = await GetSystemPromptAsync();
+        if (Agents.ToolTrackRecord.Shared.HintsFor(ModelLabelFor(_providerManager.ActiveProvider)) is { } textTrackHint)
+            systemPrompt += "\n\n" + textTrackHint;
 
         // Effort "auto" on an API model that fell back to the [ACTION:] protocol: the task's own level (no per-step climb
         // here), so the request still carries a real pick instead of the model's default.
@@ -3102,6 +3129,10 @@ public partial class CodeAgentService
             if (AgentRunScope.Current?.TakeUserNotes() is { } typedMidRun) toolFeedback += "\n\n" + typedMidRun;
 
             var textVerdict = textLoopGuard.Observe(toolResults.Select(GuardCallOf).ToList());
+            // Same track record as the native loop; ToolName here is always a resolved tool (unknown names never run).
+            string textTrackModel = ModelLabelFor(_providerManager.ActiveProvider);
+            foreach (var tr in toolResults.Where(r => !string.IsNullOrEmpty(r.ToolName)))
+                Agents.ToolTrackRecord.Shared.Record(textTrackModel, tr.ToolName, tr.Success, tr.Success ? null : tr.Error);
             if (textVerdict.Action == Agents.LoopGuardAction.Nudge)
                 toolFeedback += "\n\n" + Agents.AgentLoopGuard.NudgeText(textVerdict);
             else if (textVerdict.Action == Agents.LoopGuardAction.Stop)
@@ -3423,6 +3454,8 @@ public partial class CodeAgentService
         int unresolvedGuards = 0;                // how many times we've blocked a finish on an unresolved file
         var writtenPathsThisTurn = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // files actually written this turn
         int describedNotDoneGuards = 0;          // blocks on "showed the code but never wrote it"
+        var brokenFiles = new Dictionary<string, List<Agents.FileCheckIssue>>(StringComparer.OrdinalIgnoreCase); // written files that do not parse (WrittenFileCheck)
+        int brokenFileGuards = 0;                // how many times we've blocked a finish on a file that does not parse
         bool lastBuildFailed = false;            // the build/tests are currently RED
         string lastBuildError = "";              // …and this is what they said
         string lastBuildPath = "build";          // "build" or "tests" — for the message wording
@@ -3584,6 +3617,16 @@ public partial class CodeAgentService
             toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out mcpDropped, ManagedMcpServers());
             _debugLog?.Warn("Agent", $"{loopProvider.ProviderId}: {mcpDropped} MCP tool schema(s) left out (limit {MaxApiToolSchemas} per request)");
         }
+
+        // ─── This model's track record with its tools here (Agents/ToolTrackRecord.cs) ───
+        // A few lines for the tools this model keeps getting wrong on this PC, each with the way that works.
+        string trackModel = ModelLabelFor(loopProvider);
+        if (Agents.ToolTrackRecord.Shared.HintsFor(trackModel, toolSchemas.Select(t => t.Name)) is { } trackHint)
+        {
+            systemPrompt += "\n\n" + trackHint;
+            _debugLog?.Info("Agent", $"tool track record: {trackHint.Split('\n').Length - 2} hint(s) for {trackModel}");
+        }
+        var offeredToolNames = new HashSet<string>(toolSchemas.Select(t => t.Name), StringComparer.OrdinalIgnoreCase);
 
         _debugLog?.Info("Agent", $"native loop start · provider={loopProvider.ProviderId} ctx={_settingsService.Settings.ContextSize} "
             + $"schemas={toolSchemas.Count}{(isLocal ? $" (fitted · mcp {mcpKept} kept/{mcpDropped} dropped · recall {toolSchemas.Count(t => IsPinnedMcpTool(t.Name))}/{recallOffered} pinned · ~{toolSchemas.Sum(EstimateSchemaTokens)}tok · reserved {reservedTokens}tok)" : " (full)")} "
@@ -4240,6 +4283,42 @@ public partial class CodeAgentService
                     continue;
                 }
 
+                // ─── Broken-file guard ───
+                // A file this run wrote still does not parse (WrittenFileCheck, after the step that wrote it). Same rule as a
+                // red build: what a parser says outranks the model's opinion that it is done. Twice at most.
+                if (brokenFileGuards < 2 && brokenFiles.Count > 0 && iteration < MaxAgentIterations - 1)
+                {
+                    brokenFileGuards++;
+                    var still = brokenFiles.Values.SelectMany(v => v).Take(5).ToList();
+                    string root = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+                    string first = Agents.WrittenFileCheck.Shown(still[0].Path, root);
+                    _debugLog?.Warn("Agent", $"broken-file guard at step {iteration + 1}: {brokenFiles.Count} file(s) still do not parse ({first}) — refusing to finish (guard {brokenFileGuards}/2)");
+                    OnAgentStatus?.Invoke(isThai ? $"{first} ยังมีข้อผิดพลาด — ให้แก้ต่อ..." : $"{first} still has errors — fixing...");
+                    result.Steps.Add(step);
+                    var brokenAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    brokenAssistant.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent,
+                    });
+                    nativeMessages.Add(brokenAssistant);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = "STOP — do not summarise. " + Agents.WrittenFileCheck.Note(still, root)
+                                 + "\nFix it: read_file the file, then edit it (or write_file the COMPLETE corrected content).",
+                        } },
+                    });
+                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                    forceToolNextStep = "required";
+                    wrapUpForced = false;
+                    stepsSinceMutation = 0;
+                    continue;
+                }
+
                 // ─── Described-but-not-done guard ───
                 // The weak-model failure that no build check can catch: it does step 1, then WRITES OUT
                 // steps 2-4 as prose ("Now let's add the call in Program.cs: ```csharp …```") and stops.
@@ -4415,6 +4494,10 @@ public partial class CodeAgentService
 
                 result.Steps.Add(step);
                 result.FinalResponse = KeepAnswerOverRemark(answerBeforeBrainGuard, textContent);
+                // The broken-file guard gave up (it asks twice): the user hears it from CluadeX, not only the model's "done".
+                if (brokenFiles.Count > 0)
+                    result.FinalResponse = (result.FinalResponse ?? "").TrimEnd() + "\n\n"
+                        + BrokenFilesWarning(brokenFiles.Values.SelectMany(v => v).ToList(), isThai);
                 result.Success = true;
                 result.StopReason = response.StopReason;
                 break;
@@ -4599,6 +4682,9 @@ public partial class CodeAgentService
                     guardCalls.Add(new Agents.AgentLoopGuard.Call(toolCall.Name,
                         toolCall.Input.ValueKind == System.Text.Json.JsonValueKind.Undefined ? "" : toolCall.Input.GetRawText(),
                         !isError, isError ? resultContent : "", mutatedFile, isError ? "" : resultContent + imageSig));
+                // Only tools this run offered: a made-up name has its own nudge and is not a tool to keep a record of.
+                if (offeredToolNames.Contains(toolCall.Name))
+                    Agents.ToolTrackRecord.Shared.Record(ModelLabelFor(loopProvider), toolCall.Name, !isError, isError ? resultContent : null);
             }
 
             // Run read-only tools in parallel
@@ -4645,7 +4731,8 @@ public partial class CodeAgentService
                 else if (loopProvider.ProviderId is "OpenAI" or "Gemini" && toolSchemas.Count > MaxApiToolSchemas)
                     toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out _, ManagedMcpServers());
                 blindHint = Vision.ToolImageWire.BlindHint(toolSchemas.Select(t => t.Name));
-                _debugLog?.Info("Agent", $"project opened mid-run · {_fileSystemService.WorkingDirectory} · schemas={toolSchemas.Count}");
+                offeredToolNames.UnionWith(toolSchemas.Select(t => t.Name));
+                _debugLog?.Info("Agent", $"project opened mid-run ·{_fileSystemService.WorkingDirectory} · schemas={toolSchemas.Count}");
             }
 
             // ─── Auto-verify after edits (in-loop reflexion) ───
@@ -4721,6 +4808,36 @@ public partial class CodeAgentService
                     unresolvedEditPaths.Remove(w.FilePath!);
                     writtenPathsThisTurn.Add(System.IO.Path.GetFileName(w.FilePath!));
                 }
+
+            // ─── Written-file check (Agents/WrittenFileCheck.cs) ───
+            // The build above only covers a project with a build. A page whose script does not parse, a JSON config with
+            // a stray comma, a Python script with a syntax error all used to end "done" (Sudoku, 2026-11-06). Parse what
+            // this step wrote — nothing of the project runs — and tell the model at once; the broken-file guard below
+            // refuses to finish while one is still broken.
+            if (_settingsService.Settings.AutoVerifyAfterEditEnabled && !ct.IsCancellationRequested && mutatedThisStep)
+            {
+                var written = toolResults.Where(r => r.Success && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit
+                        && !string.IsNullOrEmpty(r.FilePath))
+                    .Select(r => FullPathOf(r.FilePath!)).Where(p => p != null && Agents.WrittenFileCheck.Covers(p)).Select(p => p!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (written.Count > 0)
+                {
+                    try
+                    {
+                        var issues = await Agents.WrittenFileCheck.CheckAsync(written, Agents.WrittenFileCheck.FindTool, null, ct);
+                        foreach (var p in written) brokenFiles.Remove(p);
+                        foreach (var g in issues.GroupBy(i => i.Path, StringComparer.OrdinalIgnoreCase)) brokenFiles[g.Key] = g.ToList();
+                        if (issues.Count > 0)
+                        {
+                            string root = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+                            userResultMsg.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = Agents.WrittenFileCheck.Note(issues, root) });
+                            _debugLog?.Warn("Agent", $"file-check at step {iteration + 1}: {issues.Count} issue(s) in {brokenFiles.Count} file(s) · first={issues[0].Message}");
+                        }
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { _debugLog?.Warn("Agent", $"file-check failed: {ex.Message}"); }
+                }
+            }
 
             // ─── Build-state bookkeeping ───
             // A red build is the strongest signal we have that the work is NOT done. Track it so the
@@ -4887,6 +5004,7 @@ public partial class CodeAgentService
                     // The same 128-tool cap the loop start applies — an OpenAI/Gemini target rejects more.
                     if (loopProvider.ProviderId is "OpenAI" or "Gemini" && toolSchemas.Count > MaxApiToolSchemas)
                         toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out _, ManagedMcpServers());
+                    offeredToolNames.UnionWith(toolSchemas.Select(t => t.Name));
                     // A different model: images from here on follow ITS eyesight (earlier ones a blind local model
                     // never had are gone; their files are named in the text).
                     loopSeesImages = await ProviderSeesImagesAsync(loopProvider, ct);

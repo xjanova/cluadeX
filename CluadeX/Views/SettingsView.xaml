@@ -1245,7 +1245,34 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- More tools: the pages that left the activity bar (still on Ctrl+K and their Ctrl+number keys) -->
+                        <!-- More tools: the pages that left the activity bar (also on the rail's ⋯ button, Ctrl+K and their
+                             Ctrl+number keys). It was removed with the "dead options" on 2026-10-16, which left Skills and the
+                             rest with no button at all (owner 2026-11-07: "ส่วนจัดการ skill ยังไม่เห็น เมนู"). The list is
+                             MainViewModel.MoreToolPages, the same one the rail's menu shows. -->
+                        <Border Style="{StaticResource Card}" x:Name="MoreToolsCard">
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc settings.card.moreTools}" Style="{StaticResource CardTitle}"/>
+                                <TextBlock Text="{services:Loc settings.moreToolsDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
+                                <ItemsControl ItemsSource="{Binding DataContext.MoreToolPages, RelativeSource={RelativeSource AncestorType=Window}}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                                    Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding Target}" ToolTip="{Binding Tip}"
+                                                    AutomationProperties.Name="{Binding Title}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>

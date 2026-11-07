@@ -629,8 +629,8 @@
                                           Focusable="False" PanningMode="VerticalOnly">
                             <!-- Only the places you work in (owner 2026-10-11: "อันไหนใช้ไม่ได้จริงบ้างหรือไม่จำเป็นต้องมี ให้เอาออกเลย").
                                  Skills, Subagents, Instincts, Hooks, Plugins, Permissions, Features, Security Shield,
-                                 Hex Editor and Debug Log live under Settings › General › More tools, Ctrl+K and their
-                                 Ctrl+number keys; the agent still opens Hex Editor itself. -->
+                                 Hex Editor and Debug Log live under the ⋯ button at the bottom of this bar, Settings › General ›
+                                 More tools, Ctrl+K and their Ctrl+number keys; the agent still opens Hex Editor itself. -->
                             <StackPanel Margin="0,8,0,8">
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Tag="chat" Content="&#xE8BD;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
@@ -697,8 +697,38 @@
                             </StackPanel>
                             </ScrollViewer>
 
-                            <!-- Bottom: Settings -->
+                            <!-- Bottom: More tools (⋯ → the pages that are not on the rail: Skills, Subagents, Plugins …) and
+                                 Settings. Lit while one of those pages is on screen. Its own group, so a click never
+                                 unchecks the page on screen; the menu's items navigate (MainViewModel.MoreToolPages). -->
                             <StackPanel Grid.Row="2" Margin="0,4,0,12">
+                                <RadioButton x:Name="MoreToolsButton" Style="{StaticResource ActivityBarButton}" Tag="moretools" Content="&#xE712;"
+                                             IsChecked="{Binding IsMoreToolPage, Mode=OneWay}"
+                                             GroupName="MoreTools" Click="MoreToolsButton_Click"
+                                             ToolTip="{services:Loc nav.moreToolsTip}" AutomationProperties.Name="More tools">
+                                    <RadioButton.ContextMenu>
+                                        <ContextMenu x:Name="MoreToolsMenu" Placement="Right" Closed="MoreToolsMenu_Closed"
+                                                     ItemsSource="{Binding MoreToolPages}">
+                                            <!-- The menu takes the button's DataContext (MainViewModel) when it opens. -->
+                                            <ContextMenu.ItemContainerStyle>
+                                                <Style TargetType="MenuItem">
+                                                    <Setter Property="ToolTip" Value="{Binding Tip}"/>
+                                                    <Setter Property="Command" Value="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <Setter Property="CommandParameter" Value="{Binding Target}"/>
+                                                    <Setter Property="AutomationProperties.Name" Value="{Binding Title}"/>
+                                                </Style>
+                                            </ContextMenu.ItemContainerStyle>
+                                            <ContextMenu.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                                                   Width="22" VerticalAlignment="Center"/>
+                                                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ContextMenu.ItemTemplate>
+                                        </ContextMenu>
+                                    </RadioButton.ContextMenu>
+                                </RadioButton>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Tag="settings" Content="&#xE713;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Settings, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Settings"

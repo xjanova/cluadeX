@@ -324,6 +324,153 @@ Call Write(string path) => new("write_file", $"{{\"path\":\"{path}\",\"content\"
     Check("F9.2 and is not the user's real data folder", !cpRoot.StartsWith(real, StringComparison.OrdinalIgnoreCase), cpRoot);
 }
 
+// ─── W: WrittenFileCheck — what an agent wrote must parse (nothing of the project runs) ───
+{
+    string dir = Path.Combine(Path.GetTempPath(), "cx-filecheck-" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(dir);
+    string F(string name, string text) { string p = Path.Combine(dir, name); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, text); return p; }
+    async Task<IReadOnlyList<FileCheckIssue>> Chk(Func<string, string?> find, WrittenFileCheck.Runner? run, params string[] files)
+        => await WrittenFileCheck.CheckAsync(files, find, run, CancellationToken.None);
+    Func<string, string?> none = _ => null;
+    try
+    {
+        var j1 = await Chk(none, null, F("package.json", "{\n  \"name\": \"x\",\n}"));
+        Check("W1.1 a trailing comma in package.json is invalid JSON, at its line", j1.Count == 1 && j1[0].Line == 3 && j1[0].Message.StartsWith("invalid JSON"),
+            string.Join(" | ", j1.Select(i => $"{i.Line}:{i.Message}")));
+        Check("W1.2 the same in tsconfig.json (comments + trailing commas allowed) is fine",
+            (await Chk(none, null, F("tsconfig.json", "{\n // c\n \"compilerOptions\": {\"strict\": true,},\n}"))).Count == 0);
+        Check("W1.3 an empty JSON file is reported", (await Chk(none, null, F("data.json", "  "))).Count == 1);
+        Check("W1.4 good JSON says nothing", (await Chk(none, null, F("ok.json", "{\"a\":[1,2]}"))).Count == 0);
+        var x1 = await Chk(none, null, F("App.xaml", "<Window>\n  <Grid>\n</Window>"));
+        Check("W2.1 a mismatched XAML tag is invalid XML at its line", x1.Count == 1 && x1[0].Line == 3, string.Join(" | ", x1.Select(i => $"{i.Line}:{i.Message}")));
+        Check("W2.2 a DTD is refused quietly (no entity expansion), not called broken",
+            (await Chk(none, null, F("evil.xml", "<?xml version=\"1.0\"?><!DOCTYPE a [<!ENTITY x \"y\">]><a>&x;</a>"))).Count == 0);
+        Check("W2.3 a file of a kind it does not know is skipped", (await Chk(none, null, F("notes.txt", "{{{"))).Count == 0 && !WrittenFileCheck.Covers("a.cs"));
+
+        // node --check, scripted (the parse of node's answer), then the real node when installed.
+        string? seen = null;
+        WrittenFileCheck.Runner fakeNode = (exe, args, ct) =>
+        {
+            seen = string.Join(" ", args);
+            string file = args[^1];
+            string text = File.ReadAllText(file);
+            if (text.Contains("<div>")) return Task.FromResult((1, $"{file}:2\n  return <div/>;\n         ^\nSyntaxError: Unexpected token '<'\n", false));
+            if (text.Contains("export ") && !file.EndsWith(".mjs")) return Task.FromResult((1, $"{file}:1\nexport const a = 1;\n^^^^^^\nSyntaxError: Unexpected token 'export'\n", false));
+            int at = text.IndexOf("function (", StringComparison.Ordinal);
+            if (at >= 0) return Task.FromResult((1, $"{file}:{text[..at].Count(c => c == '\n') + 1}\nfunction (\n         ^\n\nSyntaxError: Function statements require a function name\n    at wrapSafe\n", false));
+            return Task.FromResult((0, "", false));
+        };
+        Func<string, string?> fakeFind = n => n == "node" ? "node.exe" : null;
+        var js1 = await Chk(fakeFind, fakeNode, F("bad.js", "let a = 1;\n\nfunction (\n"));
+        Check("W3.1 a JS syntax error: node's line and message", js1.Count == 1 && js1[0].Line == 3 && js1[0].Message.StartsWith("SyntaxError: Function statements")
+            && seen!.StartsWith("--check "), string.Join(" | ", js1.Select(i => $"{i.Line}:{i.Message}")));
+        Check("W3.2 JSX in a .js is not node's to judge: nothing said", (await Chk(fakeFind, fakeNode, F("comp.js", "function A(){\n  return <div/>;\n}"))).Count == 0);
+        Check("W3.3 an ES module in a .js is checked again as a module, and passes", (await Chk(fakeFind, fakeNode, F("mod.js", "export const a = 1;"))).Count == 0);
+        Check("W3.4 with no node installed a script is skipped, never reported", (await Chk(none, fakeNode, F("bad2.js", "function ("))).Count == 0);
+
+        string page = F("index.html", "<!doctype html>\n<html><head>\n<link rel=\"stylesheet\" href=\"style.css\">\n<link rel=\"canonical\" href=\"/about\">\n"
+            + "<script src=\"https://cdn.example/x.js\"></script>\n<script src=\"game.js?v=2\"></script>\n</head><body>\n<img src=\"{{ logo }}\">\n<img src=\"data:image/png;base64,AA\">\n"
+            + "<script>\nlet x = 1;\nfunction (\n</script>\n<script type=\"application/json\">{bad json</script>\n</body></html>");
+        F("style.css", "body{}");
+        var h1 = await Chk(fakeFind, fakeNode, page);
+        Check("W4.1 a page: the missing local script is named at its line; the CDN, canonical, template and data: links are not",
+            h1.Any(i => i.Line == 6 && i.Message.Contains("game.js?v=2") && i.Message.Contains("does not exist"))
+            && !h1.Any(i => i.Message.Contains("style.css") || i.Message.Contains("cdn.example") || i.Message.Contains("about") || i.Message.Contains("logo")),
+            string.Join(" | ", h1.Select(i => $"{i.Line}:{i.Message}")));
+        Check("W4.2 …its inline script's syntax error is at the page's own line; a JSON block is not checked as script",
+            h1.Count(i => i.Message.StartsWith("inline <script>")) == 1 && h1.First(i => i.Message.StartsWith("inline <script>")).Line == 12,
+            string.Join(" | ", h1.Select(i => $"{i.Line}:{i.Message}")));
+        Check("W4.3 no temp copy of a script is left behind",
+            !Directory.EnumerateFiles(Path.GetTempPath(), "cluadex-filecheck-*").Any());
+        string note = WrittenFileCheck.Note(h1, dir);
+        Check("W4.4 the note names the file relative to the project and stays short",
+            note.StartsWith("[file-check] ✗") && note.Contains("- index.html:6:") && note.Length < 600, note);
+
+        // The real node, when this PC has one (the house standard: the real tool, not only a script of it).
+        if (WrittenFileCheck.FindTool("node") is { } realNode)
+        {
+            // Its own folder: node reads the package.json above a file, and W1.1 left a broken one in `dir`.
+            string realDir = Path.Combine(Path.GetTempPath(), "cx-filecheck-real-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(realDir);
+            string F2(string name, string text) { string p = Path.Combine(realDir, name); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, text); return p; }
+            var brokenPkg = await Chk(WrittenFileCheck.FindTool, null, F("beside-broken-pkg.js", "const a = 1;\n"));
+            Check("W5.0 real node: a good script beside a broken package.json is not blamed (the JSON check reports the JSON)", brokenPkg.Count == 0,
+                string.Join(" | ", brokenPkg.Select(i => $"{i.Line}:{i.Message}")));
+            try
+            {
+            var r1 = await Chk(WrittenFileCheck.FindTool, null, F2("real-bad.js", "const a = 1;\nif (a {\n}\n"));
+            Check("W5.1 real node --check finds the error and its line", r1.Count == 1 && r1[0].Line == 2 && r1[0].Message.StartsWith("SyntaxError"),
+                string.Join(" | ", r1.Select(i => $"{i.Line}:{i.Message}")));
+            Check("W5.2 real node: a good script says nothing", (await Chk(WrittenFileCheck.FindTool, null, F2("real-ok.js", "const a = [1,2].map(x => x * 2);\nconsole.log(a);\n"))).Count == 0);
+            Check("W5.3 real node: an ES module .js passes (re-checked as .mjs)", (await Chk(WrittenFileCheck.FindTool, null, F2("real-mod.js", "import fs from 'fs';\nexport const a = 1;\n"))).Count == 0);
+            string sudoku = F2("sudoku\\index.html", "<html><body>\n<div id=b></div>\n<script>\nfunction solve(board) {\n  for (let i = 0; i < 81; i++ {\n  }\n}\n</script>\n</body></html>");
+            var r2 = await Chk(WrittenFileCheck.FindTool, null, sudoku);
+            Check("W5.4 real node: the page's inline script error is at the page's line", r2.Count == 1 && r2[0].Line == 5 && r2[0].Message.Contains("SyntaxError"),
+                string.Join(" | ", r2.Select(i => $"{i.Line}:{i.Message}")));
+            Check("W5.5 checking does not run the script (a script that would write a file did not)",
+                (await Chk(WrittenFileCheck.FindTool, null, F2("side.js", $"require('fs').writeFileSync({System.Text.Json.JsonSerializer.Serialize(Path.Combine(realDir, "ran.txt"))}, 'x');"))).Count == 0
+                && !File.Exists(Path.Combine(realDir, "ran.txt")));
+            }
+            finally { try { Directory.Delete(realDir, true); } catch { } }
+        }
+        else Console.WriteLine("SKIP W5 (node is not installed)");
+        if (WrittenFileCheck.FindTool("python") is { })
+        {
+            var py = await Chk(WrittenFileCheck.FindTool, null, F("bad.py", "def f(:\n    pass\n"), F("ok.py", "print(1)\n"));
+            Check("W6.1 real Python: the syntax error and its line, the good file says nothing", py.Count == 1 && py[0].Line == 1 && py[0].Path.EndsWith("bad.py"),
+                string.Join(" | ", py.Select(i => $"{i.Path}:{i.Line}:{i.Message}")));
+        }
+        else Console.WriteLine("SKIP W6 (no real Python — the Store stub is not one)");
+        Check("W8 a file over 2 MB (a bundle, a dump) is not checked", (await Chk(none, null, F("huge.json", "{" + new string(' ', 2 * 1024 * 1024 + 10)))).Count == 0);
+        Check("W7 at most 10 issues, whatever was written", (await Chk(none, null, Enumerable.Range(0, 15).Select(i => F($"b{i}.json", "{")).ToArray())).Count == WrittenFileCheck.MaxIssues);
+    }
+    finally { try { Directory.Delete(dir, true); } catch { } }
+}
+
+// ─── T: ToolTrackRecord — the next run of a model hears what it keeps getting wrong here ───
+{
+    string file = Path.Combine(Path.GetTempPath(), "cx-track-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+    try
+    {
+        var rec = new ToolTrackRecord(file);
+        const string M = "Ollama · qwen3.5:4b";
+        Check("T1 no record: no hint", rec.HintsFor(M) == null);
+        for (int i = 0; i < 7; i++) rec.Record(M, "edit_file", false, "Text not found in app.js. Matching is newline- and whitespace-tolerant, but the lines must exist.");
+        for (int i = 0; i < 5; i++) rec.Record(M, "edit_file", true, null);
+        for (int i = 0; i < 4; i++) rec.Record(M, "read_file", false, @"File not found: D:\p\sudoku.cs");
+        for (int i = 0; i < 20; i++) rec.Record(M, "read_file", true, null);
+        for (int i = 0; i < 10; i++) rec.Record(M, "run_command", false, "The user denied this command.");
+        rec.Record(M, "run_command", true, null);
+        string? h = rec.HintsFor(M);
+        Check("T2 7 of 12 edits failed on 'text not found': hint with the counts and the read-first / write_file advice",
+            h != null && h.Contains("edit_file: failed 7 of 12") && h.Contains("read_file the exact lines") && h.Contains("write_file"), h);
+        Check("T3 4 of 24 reads failed (17%, under 30%): no hint for read_file", h != null && !h.Contains("read_file: failed"), h);
+        Check("T4 the user's refusals are not the model's mistakes: not counted", rec.StatsFor(M)["run_command"] is { Calls: 1, Fails: 0 });
+        Check("T5 another model has its own record", rec.HintsFor("Anthropic · claude-opus-5-5") == null);
+        Check("T6 a tool not offered this run is not hinted", rec.HintsFor(M, ["read_file", "write_file"]) == null);
+        Check("T7 the kinds", ToolTrackRecord.Classify("must read the file first") == "must-read"
+            && ToolTrackRecord.Classify("Absolute paths are not allowed. Use relative paths") == "outside-project"
+            && ToolTrackRecord.Classify("'query' is required") == "bad-args"
+            && ToolTrackRecord.Classify("Command timed out after 120 s") == "timeout"
+            && ToolTrackRecord.Classify("something odd") == "other");
+        rec.Save();
+        var again = new ToolTrackRecord(file);
+        Check("T8 the record survives a restart (atomic file)", again.HintsFor(M) == h && !File.Exists(file + ".tmp"));
+        for (int i = 0; i < 200; i++) again.Record(M, "edit_file", true, null);
+        var st = again.StatsFor(M)["edit_file"];
+        Check("T9 past 200 calls the counts halve: a model that learned is not reminded forever", st.Calls < 200 && st.Fails <= 4 && again.HintsFor(M) == null,
+            $"{st.Calls}/{st.Fails}");
+        File.WriteAllText(file, "{ not json");
+        Check("T10 an unreadable file starts a fresh record, never fails", new ToolTrackRecord(file).HintsFor(M) == null);
+        File.WriteAllText(file, "{\"Version\":1,\"Models\":{\"m\":{\"edit_file\":{\"Calls\":2,\"Fails\":9,\"Kinds\":{}}}}}");
+        Check("T11 a hand-edited impossible count (fails > calls) is dropped", new ToolTrackRecord(file).StatsFor("m").Count == 0);
+        var many = new ToolTrackRecord(null);
+        for (int i = 0; i < ToolTrackRecord.MaxModels + 5; i++) many.Record("model-" + i, "read_file", true, null);
+        Check("T12 at most 60 models are kept (the oldest goes)", many.StatsFor("model-0").Count == 0 && many.StatsFor("model-64").Count == 1);
+    }
+    finally { try { File.Delete(file); } catch { } }
+}
+
 Console.WriteLine($"\n{pass} passed, {fail} failed");
 return fail == 0 ? 0 : 1;
 
