@@ -132,8 +132,10 @@ public class LlamaServerProvider : ApiProviderBase
                 "or run Scripts/update-llama-backend.ps1 to download it.");
 
         var settings = _settingsService.Settings;
-        int gpuLayers = settings.GpuLayerCount == -1 ? 999 : settings.GpuLayerCount;
-        if (settings.GpuBackend == "CPU") gpuLayers = 0;
+        // The owner's GPU share (status-bar slider) scales -ngl from the model's real layer count; 100 % = as before.
+        int blockCount = settings.GpuUsagePercent < 100 ? GgufMetadataReader.TryReadBlockCount(modelPath) : 0;
+        int gpuLayers = Services.Gpu.GpuShare.EffectiveNgl(settings.GpuLayerCount, settings.GpuBackend,
+            settings.GpuUsagePercent, blockCount, allValue: 999);
 
         // ─── Multi-GPU tensor split ───
         // If the user has more than one NVIDIA card, proportionally split the model

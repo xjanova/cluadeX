@@ -31,6 +31,15 @@ public class AppSettings
     // actually finish a task; the extra KV cache is ~0.3 GB on a 7B Q4 model.
     public uint ContextSize { get; set; } = 12288;
     public int GpuLayerCount { get; set; } = -1; // -1 = auto (all layers)
+    /// <summary>How much of the GPU local models may take, 0–100 % (the vertical slider on the status-bar VRAM graph).
+    /// Scales the layers sent to the GPU: llama-server / LLamaSharp -ngl, Ollama num_gpu (Services/Gpu/GpuShare.cs).
+    /// 100 = no cap (as before). Takes effect on the next model load (Ollama: the next request).</summary>
+    public int GpuUsagePercent { get; set; } = 100;
+    /// <summary>The owner has used the GPU slider (or closed its hint): the hint never floats up again.</summary>
+    public bool GpuShareHintDone { get; set; }
+    /// <summary>How many times the GPU-slider hint has been shown, and when last (GpuShareHint caps both).</summary>
+    public int GpuShareHintShown { get; set; }
+    public DateTime? GpuShareHintLastUtc { get; set; }
     public float Temperature { get; set; } = 0.6f;
     public float TopP { get; set; } = 0.9f;
     public int MaxTokens { get; set; } = 4096;
