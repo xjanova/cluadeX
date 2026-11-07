@@ -251,12 +251,17 @@ internal sealed class NativeScript : FakeProvider, IAiProvider
 {
     public readonly Queue<Func<List<NativeMessage>, CancellationToken, Task<NativeToolResponse>>> Steps = new();
     public readonly List<string> Texts = new();
+    /// <summary>The system prompt of each call, and the tool_choice it was sent with.</summary>
+    public readonly List<string> Prompts = new();
+    public readonly List<string> Choices = new();
     public bool SupportsNativeToolUse => true;
 
     public async Task<NativeToolResponse> ChatWithToolsAsync(List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools,
         Action<string> onTextDelta = null, CancellationToken ct = default, string toolChoice = null)
     {
         Texts.Add(string.Join("\n", messages[^1].Content.Where(b => b.Type == "text").Select(b => b.Text)));
+        Prompts.Add(systemPrompt ?? "");
+        Choices.Add(toolChoice ?? "");
         var step = Steps.Count > 0 ? Steps.Dequeue() : (_, _) => Task.FromResult(new NativeToolResponse { TextContent = "ok" });
         return await step(messages, ct);
     }

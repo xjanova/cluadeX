@@ -300,6 +300,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=DC: just the done-check (a written file must parse before "done") and the tool track record hints.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "DC")
+        {
+            await TestDoneCheck();
+            Log($"\n## Result (CHATTEST_ONLY=DC): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=COP: just a CLI agent opening a folder for the task (asked once, then it carries on there).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "COP")
         {
@@ -418,6 +427,7 @@ internal static partial class Program
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
+        await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
         await TestSwitchRace();               // SW: a chat still loading never lands over New Chat / delete; pipe and agent chats don't cancel a pick
