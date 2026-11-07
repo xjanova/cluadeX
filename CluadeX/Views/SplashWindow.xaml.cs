@@ -61,9 +61,10 @@ public partial class SplashWindow : Window
         VersionText.Text = "v" + (info.Length > 0 ? info.Replace("+", " · ") : asm.GetName().Version?.ToString(3));
         HeadText.Text = CheckingHead;
         EnterTitle.Text = T("เข้าใช้งาน", "Enter");
-        // A different girl each start (never the last one); the original splash girl when the build has none.
+        // A different girl each start (never the last one), in either of her poses; the original splash girl when the
+        // build has none.
         string? girl = GirlArt.PickName(sp.GetService<SettingsService>() is { } ss ? System.IO.Path.Combine(ss.DataRoot, "splash-girl.txt") : null);
-        if (GirlArt.Image(girl) is { } art)
+        if (GirlArt.PoseImage(girl, GirlArt.PickPose()) is { } art)
         {
             SplashGirl.Source = art;
             SplashGirlGlow.Color = GirlArt.Glow(girl);
