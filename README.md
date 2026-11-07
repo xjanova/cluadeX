@@ -25,7 +25,8 @@
   <img src="docs/art/girls-lineup-21x9.jpg" alt="The CluadeX girls: Claude, Codex, Gemini, Antigravity, Grok, Mind, CluadeX, BrainX"/>
 </p>
 
-Each provider answers as its own girl (`Services/ChatCharacter.cs`, cut-outs in `CluadeX/Assets/Girls/`).
+Each provider answers as its own girl (`Services/ChatCharacter.cs`, cut-outs in `CluadeX/Assets/Girls/`, two poses
+each: `{name}.png` and `Pose2/{name}.png`; the owner's art, sources in `design/girls-v2/`).
 Left to right / จากซ้ายไปขวา:
 
 | Girl | Provider |

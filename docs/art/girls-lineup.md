@@ -10,6 +10,10 @@
 
 ## References
 
+> Made from the **first** cut-out set (820 px, replaced on 2026-11-07 by the owner's two-pose art in
+> `design/girls-v2/`). Faces and outfits match the new set, but the lineup was not redrawn from it.
+
+
 The eight cut-outs from `CluadeX/Assets/Girls/` (claude, codex, gemini, antigravity, grok, mai, cluadex, brainx),
 each flattened onto light grey, attached in that order.
 

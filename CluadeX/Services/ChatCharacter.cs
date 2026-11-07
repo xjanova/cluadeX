@@ -36,8 +36,9 @@ public sealed class ChatCharacter
 
     /// <summary>Where her face is in her full-figure picture: its centre (fractions of the width / height).</summary>
     private readonly double _faceX, _faceY;
-    /// <summary>The side of the square around her face, as a fraction of the picture's height.</summary>
-    private const double FaceSide = 0.108;
+    /// <summary>The side of the square around her face, as a fraction of the picture's height (forehead to chin, on the
+    /// 1000 px cut-outs of 2026-11-07).</summary>
+    private const double FaceSide = 0.12;
     private ImageBrush? _faceBrush;
 
     /// <summary>Her face, filling a round portrait (owner 2026-10-18: "รูปในวงกลม อวาต้า ให้โฟกัส หน้าเป็นหลัก"): a square
@@ -93,18 +94,19 @@ public sealed class ChatCharacter
 
     // ─── the girls ───
 
-    // The last two numbers: her face's centre in her picture (fraction of width, of height), measured on each PNG.
-    public static readonly ChatCharacter Claude = new("claude", "Claude", Color.FromRgb(0xF0, 0x84, 0x3C), 0.53, 0.095);    // the orange girl
-    public static readonly ChatCharacter Codex = new("codex", "Codex", Color.FromRgb(0x3C, 0xA8, 0xFF), 0.50, 0.107);
-    public static readonly ChatCharacter Gemini = new("gemini", "Gemini", Color.FromRgb(0xA8, 0x8C, 0xFF), 0.50, 0.114);
-    public static readonly ChatCharacter Grok = new("grok", "Grok", Color.FromRgb(0xA3, 0xE6, 0x35), 0.53, 0.090);
-    public static readonly ChatCharacter Mind = new("mai", "มายด์", Color.FromRgb(0xC3, 0x9B, 0xFF), 0.52, 0.100);
-    public static readonly ChatCharacter BrainX = new("brainx", "BrainX", Color.FromRgb(0x3E, 0x9B, 0xFF), 0.46, 0.120);
-    public static readonly ChatCharacter CluadeX = new("cluadex", "CluadeX", Color.FromRgb(0xB9, 0x8C, 0xFF), 0.52, 0.128);
+    // The last two numbers: her face's centre in her picture (fraction of width, of height), measured on each PNG
+    // (pose 1, the owner's 2026-11-07 art, cropped to the figure and 1000 px tall).
+    public static readonly ChatCharacter Claude = new("claude", "Claude", Color.FromRgb(0xF0, 0x84, 0x3C), 0.51, 0.110);    // the orange girl
+    public static readonly ChatCharacter Codex = new("codex", "Codex", Color.FromRgb(0x3C, 0xA8, 0xFF), 0.55, 0.120);
+    public static readonly ChatCharacter Gemini = new("gemini", "Gemini", Color.FromRgb(0xA8, 0x8C, 0xFF), 0.52, 0.125);
+    public static readonly ChatCharacter Grok = new("grok", "Grok", Color.FromRgb(0xA3, 0xE6, 0x35), 0.545, 0.115);
+    public static readonly ChatCharacter Mind = new("mai", "มายด์", Color.FromRgb(0xC3, 0x9B, 0xFF), 0.49, 0.110);
+    public static readonly ChatCharacter BrainX = new("brainx", "BrainX", Color.FromRgb(0x3E, 0x9B, 0xFF), 0.46, 0.125);
+    public static readonly ChatCharacter CluadeX = new("cluadex", "CluadeX", Color.FromRgb(0xB9, 0x8C, 0xFF), 0.50, 0.115);
 
     // Owner 2026-11-06: "ขาดสาวคนไหน ไปสร้างมา" — Antigravity (agy) shared Gemini's girl; she has her own now (Grok Imagine,
     // cut out with rembg isnet-anime like the others).
-    public static readonly ChatCharacter Antigravity = new("antigravity", "Antigravity", Color.FromRgb(0x2D, 0xD4, 0xBF), 0.55, 0.110);
+    public static readonly ChatCharacter Antigravity = new("antigravity", "Antigravity", Color.FromRgb(0x2D, 0xD4, 0xBF), 0.57, 0.120);
 
     public static IReadOnlyList<ChatCharacter> All { get; } = [Claude, Codex, Gemini, Grok, Mind, BrainX, CluadeX, Antigravity];
 
