@@ -1956,6 +1956,16 @@ public partial class CodeAgentService
         catch { return null; }
     }
 
+    /// <summary>The turn's message with the plan the chat's last turn left open at its end (PlanRecord.CarryNote), so the
+    /// model carries it on — or replaces it for a new request — instead of starting a second plan beside it. Only on the
+    /// run's own first message (the run's plan came over and this run has not touched it); never in the system prompt.</summary>
+    public static string WithCarriedPlan(string message)
+    {
+        var run = AgentRunScope.Current;
+        if (run == null || run.Parent != null || !run.PlanCarried || run.PlanTouched || run.Todos.Count == 0) return message;
+        return message + "\n\n" + Agents.PlanRecord.CarryNote(run.Todos.ToList());
+    }
+
     /// <summary>The turn's message with the [git status] block at its end (unchanged when there is none).</summary>
     public static string WithGitStatus(string? message, string? note) =>
         string.IsNullOrEmpty(note) ? message ?? "" : $"{message}\n\n{note}";
@@ -3082,7 +3092,7 @@ public partial class CodeAgentService
 
         // The working tree's state rides on the turn, not in the system prompt (GitStatusTurnNote) — after the mentioned-file
         // scan above, which would otherwise load every file a status line names.
-        string currentMessage = WithGitStatus(enrichedMessage, await Task.Run(GitStatusTurnNote, ct));
+        string currentMessage = WithCarriedPlan(WithGitStatus(enrichedMessage, await Task.Run(GitStatusTurnNote, ct)));
         int maxTokenRecoveryCount = 0;
         bool hasAttemptedReactiveCompact = false;
         const int MaxOutputTokenRecoveries = 3;
@@ -3795,7 +3805,7 @@ public partial class CodeAgentService
         }
         // The working tree's state rides on the turn, not in the system prompt (GitStatusTurnNote). Added to the block
         // only — userMessage is still read for mentioned files and task size above and below, and a status line names files.
-        currentUserBlock.Text = WithGitStatus(currentUserBlock.Text, await Task.Run(GitStatusTurnNote, ct));
+        currentUserBlock.Text = WithCarriedPlan(WithGitStatus(currentUserBlock.Text, await Task.Run(GitStatusTurnNote, ct)));
         nativeMessages.Add(new Services.Providers.NativeMessage
         {
             Role = "user",
@@ -5229,8 +5239,8 @@ public partial class CodeAgentService
                 {
                     Type = "text",
                     Text = isThai
-                        ? "[เตือน: งานนี้ยังไม่มีแผน — เรียก todo_write ครั้งเดียวในขั้นถัดไป โดยส่ง todos เป็นแผนทั้งชุด 3-7 ข้อ ข้อที่กำลังทำเป็น in_progress แล้วส่งใหม่ทั้งชุดเมื่อแต่ละข้อเสร็จ ผู้ใช้ดูความคืบหน้าจากแผนนี้]"
-                        : "[Reminder: this task has no plan yet — in your next step call todo_write ONCE with `todos` = the whole plan (3-7 items, the current one in_progress), and send the whole list again as items finish. The user follows your progress through this plan.]",
+                        ? "[เตือน: งานนี้ยังไม่มีแผน — เรียก todo_write ครั้งเดียวในขั้นถัดไป โดยส่ง todos เป็นแผนทั้งชุด 3-7 ข้อ ข้อที่กำลังทำเป็น in_progress พร้อม scope แล้วส่ง advance: true เมื่อแต่ละข้อเสร็จ ผู้ใช้ดูความคืบหน้าจากแผนนี้]"
+                        : "[Reminder: this task has no plan yet — in your next step call todo_write ONCE with `todos` = the whole plan (3-7 items, the current one in_progress), and scope; then advance: true as each item finishes. The user follows your progress through this plan.]",
                 });
                 _debugLog?.Info("Agent", "plan-first: no plan by step 3 — reminder sent with the tool results");
             }

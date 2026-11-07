@@ -40,6 +40,9 @@ public partial class ChatViewModel
         /// <summary>"⏵ writing file x — 3,200 chars…" while the model still streams a long tool input.</summary>
         public ChatMessage? DraftRow;
         public ChatMessage? TodoMsg;
+        /// <summary>The chat's last plan card with work left when this run began: its plan came over into the run
+        /// (PlanRecord.CarryNote), and the card carries on in place unless the model starts a new task.</summary>
+        public ChatMessage? CarriedPlanMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
         /// <summary>This command's split-chat chips (made with its first new_chat).</summary>
@@ -487,6 +490,7 @@ public partial class ChatViewModel
         run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;
         foreach (var extra in session.ExtraFolders.ToList())
             if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);
+        CarryPlanOver(run);
         _runs.Add(run);
         AgentRunScope.Enter(run.Scope);
         // The app-wide key too (code that runs outside the scope — a UI-thread callback — keys by the latest chat).

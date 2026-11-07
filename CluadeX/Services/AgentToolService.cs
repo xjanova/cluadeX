@@ -112,7 +112,7 @@ public class AgentToolService : IDisposable
         var copy = items.Select(t => new TodoItem { Content = t.Content, Status = t.Status }).ToList();
         _todoItems.Clear();
         _todoItems.AddRange(copy);
-        TodoChanged?.Invoke();
+        PlanChanged();
     }
 
     // ─── REPL Session State ───
@@ -1314,10 +1314,11 @@ public class AgentToolService : IDisposable
         // Meta tools
         // 'action' was missing from the schema, so completing/listing/clearing todos was
         // unreachable and "mark done" silently appended a duplicate instead.
-        schemas.Add(new() { Name = "todo_write", Description = "Your plan, shown to the user as a live checklist pinned under the latest message. Send the WHOLE list once with `todos` (it replaces the plan); then move along with `advance: true` (finish the current item, start the next) or `done` + `start`, instead of resending the list. One item in_progress at a time; what runs under the active item (sub-agents, workflows, background commands) is shown to the user automatically.",
+        schemas.Add(new() { Name = "todo_write", Description = "Your plan, shown to the user as a live checklist pinned under the latest message. Send the WHOLE list once with `todos` (it replaces the plan); then move along with `advance: true` (finish the current item, start the next) or `done` + `start`, instead of resending the list. Exactly one item in_progress while work is left; a changed plan (also after the user interrupts) is sent whole again and replaces the list; what runs under the active item (sub-agents, workflows, background commands) is shown to the user automatically. wrap_up checks off what is left at the end of the turn.",
             InputSchema = MakeSchema(("todos", "array", "The whole plan, e.g. [{\"content\":\"Read the client\",\"status\":\"completed\"},{\"content\":\"Fix the timeout\",\"status\":\"in_progress\"},{\"content\":\"Run the tests\",\"status\":\"pending\"}]", false),
                 ("advance", "boolean", "true: finish the item in progress and start the next pending one (no need to resend the list)", false),
                 ("done", "array", "Step numbers (1-based) to mark finished, e.g. [2]", false), ("start", "integer", "Step number (1-based) to start now", false),
+                ("scope", "string", "With each new whole list: first_task (nothing finished in this chat yet), continuation (builds on this chat's work: a follow-up, the next iteration, acting on what you just found) or new_task (unrelated to anything done here)", false),
                 ("action", "string", "Without todos: add|complete|list|clear (default add)", false), ("content", "string", "Without todos: the item text (add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
         schemas.Add(new() { Name = "ask_user", Description = AskUserDescription, InputSchema = System.Text.Json.JsonDocument.Parse(AskUserSchemaJson).RootElement.Clone() });
@@ -1713,6 +1714,7 @@ public class AgentToolService : IDisposable
                 Or the whole plan, then step along (also named update_plan):
                 [ACTION: update_plan]
                 todos: [{"content":"Read the client","status":"in_progress"},{"content":"Fix it","status":"pending"}]
+                scope: first_task
                 [/ACTION]
                 [ACTION: update_plan]
                 advance: true
@@ -3701,8 +3703,31 @@ public class AgentToolService : IDisposable
     // TODO & Plan Mode Tools
     // ════════════════════════════════════════════
 
+    /// <summary>The plan changed in this run: wrap_up may check it off, and the card follows.</summary>
+    private void PlanChanged()
+    {
+        if (AgentRunScope.Current is { } run) run.PlanTouched = true;
+        TodoChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// wrap_up was called: the turn is over, so the plan this run worked on is checked off (Claude Code's wrap_up "also
+    /// checks off the task list"). Only the run's own plan, and only one it wrote or moved itself — a plan carried over
+    /// from the last turn that this turn never touched is a different request's and stays as it was; a sub-agent's
+    /// wrap_up does not finish its parent's plan. Returns how many items it finished.
+    /// </summary>
+    public int FinishPlanAtWrapUp()
+    {
+        int n = Agents.PlanOps.FinishForWrapUp(AgentRunScope.Current);
+        if (n > 0) TodoChanged?.Invoke();
+        return n;
+    }
+
     private ToolResult ExecuteTodoWrite(ToolCall call)
     {
+        // What the request is to the chat (Claude Code's update_plan scope): the card's chip.
+        if (Agents.PlanOps.Scope(call.GetArg("scope")) is { } planScope && AgentRunScope.Current is { } scoped)
+            scoped.PlanScope = planScope;
         // The whole plan in one call (Claude Code's TodoWrite): five separate "add" calls used to be the only way to
         // write a five-item plan (Reverse X run, 2026-10-16).
         string todosJson = call.GetArg("todos", call.GetArg("items"));
@@ -3713,7 +3738,7 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrWhiteSpace(todosJson) && (advance || doneSteps.Count > 0 || startStep != null))
         {
             if (Agents.PlanOps.Apply(_todoItems, advance, doneSteps, startStep) is { } refusal) return Fail(call, refusal);
-            TodoChanged?.Invoke();
+            PlanChanged();
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -3747,12 +3772,14 @@ public class AgentToolService : IDisposable
             // Whole list plus a step operation in one call ("here is the plan, start step 1").
             if (advance || doneSteps.Count > 0 || startStep != null)
                 Agents.PlanOps.Apply(_todoItems, advance, doneSteps, startStep);
-            TodoChanged?.Invoke();
+            // One step in progress while work is left — the card shows one turning ring, never two or none.
+            string fixedUp = Agents.PlanOps.Normalize(_todoItems);
+            PlanChanged();
             int doneCount = items.Count(t => t.Status == "completed");
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = Agents.PlanOps.Describe(items),
+                Output = Agents.PlanOps.Describe(items) + (fixedUp.Length > 0 ? $" ({fixedUp})" : ""),
                 Summary = $"Plan: {doneCount}/{items.Count}",
             };
         }
@@ -3767,7 +3794,7 @@ public class AgentToolService : IDisposable
                 if (string.IsNullOrEmpty(content))
                     return Fail(call, "Missing 'content' for todo item");
                 _todoItems.Add(new TodoItem { Content = content, Status = status });
-                TodoChanged?.Invoke();
+                PlanChanged();
                 return new ToolResult
                 {
                     Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -3780,7 +3807,7 @@ public class AgentToolService : IDisposable
                 if (idx >= 0 && idx < _todoItems.Count)
                 {
                     _todoItems[idx].Status = "completed";
-                    TodoChanged?.Invoke();
+                    PlanChanged();
                     return new ToolResult
                     {
                         Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -3794,7 +3821,7 @@ public class AgentToolService : IDisposable
                 if (match != null)
                 {
                     match.Status = "completed";
-                    TodoChanged?.Invoke();
+                    PlanChanged();
                     return new ToolResult
                     {
                         Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -3828,7 +3855,7 @@ public class AgentToolService : IDisposable
 
             case "clear":
                 _todoItems.Clear();
-                TodoChanged?.Invoke();
+                PlanChanged();
                 return new ToolResult
                 {
                     Type = call.Type, ToolName = call.ToolName, Success = true,

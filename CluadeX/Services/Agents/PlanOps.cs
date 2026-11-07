@@ -36,6 +36,54 @@ public static class PlanOps
         return null;
     }
 
+    /// <summary>
+    /// A whole list sent with <c>todos</c>, brought to the rule the card shows: exactly one item in progress while any work
+    /// is left. A second "in_progress" goes back to pending (the first one wins); no item in progress while some are
+    /// pending starts the first pending one. Returns what was changed ("" = nothing), for the tool's answer.
+    /// </summary>
+    public static string Normalize(List<TodoItem> items)
+    {
+        var notes = new List<string>();
+        int first = items.FindIndex(t => t.Status == "in_progress");
+        int extra = 0;
+        for (int i = first + 1; first >= 0 && i < items.Count; i++)
+            if (items[i].Status == "in_progress") { items[i].Status = "pending"; extra++; }
+        if (extra > 0) notes.Add($"{extra + 1} items were in_progress; kept step {first + 1}, the others are pending");
+        if (first < 0 && items.FindIndex(t => t.Status == "pending") is int p and >= 0)
+        {
+            items[p].Status = "in_progress";
+            notes.Add($"no item was in_progress, so step {p + 1} started");
+        }
+        return string.Join("; ", notes);
+    }
+
+    /// <summary>wrap_up: the turn is over, so every item still open is checked off (Claude Code's wrap_up does the same,
+    /// "no closing update_plan is needed"). Returns how many items it finished.</summary>
+    public static int FinishAll(List<TodoItem> items)
+    {
+        int n = 0;
+        foreach (var t in items.Where(t => t.Status != "completed")) { t.Status = "completed"; n++; }
+        return n;
+    }
+
+    /// <summary>wrap_up in <paramref name="run"/>: its plan is checked off only when it is the run's own (not a sub-agent's
+    /// parent's) and this run wrote or moved it — a plan carried over from the last turn that this turn never touched
+    /// belongs to another request and stays as it was. Returns how many items it finished.</summary>
+    public static int FinishForWrapUp(AgentRunScope? run)
+        => run == null || run.Parent != null || !run.PlanTouched ? 0 : FinishAll(run.Todos);
+
+    /// <summary>What the request is to the chat, as the plan's <c>scope</c> says it.</summary>
+    public const string FirstTask = "first_task", Continuation = "continuation", NewTask = "new_task";
+
+    /// <summary>"first_task" / "first" / "continuation" / "continue" / "new_task" / "new" → the tag; anything else → null.</summary>
+    public static string? Scope(string? raw) => (raw ?? "").Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_') switch
+    {
+        "first_task" or "first" => FirstTask,
+        "continuation" or "continue" or "continued" => Continuation,
+        "new_task" or "new" => NewTask,
+        _ => null,
+    };
+
     /// <summary>"[1,3]", "1, 3", "2" → numbers; anything unreadable is left out.</summary>
     public static List<int> Numbers(string raw)
     {

@@ -1314,12 +1314,42 @@
                                         Visibility="{Binding IsPlan, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                     <StackPanel>
                                         <Grid>
-                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                             <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Status.Success}"
                                                        VerticalAlignment="Center" Margin="0,0,8,0"/>
                                             <TextBlock Grid.Column="1" Text="{Binding PlanHeader}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                            <TextBlock Grid.Column="2" Text="{Binding PlanElapsed}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
+                                            <!-- what the request is to the chat (todo_write scope): first task / continuation / new task -->
+                                            <Border Grid.Column="2" CornerRadius="9" Padding="7,1" Margin="10,0,0,0" VerticalAlignment="Center" BorderThickness="1"
+                                                    Background="{DynamicResource State.Fill.Faint}" BorderBrush="{DynamicResource Border.Subtle}"
+                                                    ToolTip="{services:Loc plan.scope.tip}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PlanScope}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock FontSize="10.5" Foreground="{DynamicResource Text.Muted}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="{services:Loc plan.scope.continuation}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding PlanScope}" Value="first_task">
+                                                                    <Setter Property="Text" Value="{services:Loc plan.scope.first_task}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding PlanScope}" Value="new_task">
+                                                                    <Setter Property="Text" Value="{services:Loc plan.scope.new_task}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
+                                            <TextBlock Grid.Column="3" Text="{Binding PlanElapsed}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
                                                        Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         </Grid>
                                         <!-- how far the plan is: the same gliding line as the floating card (Views/Motion.Fraction) -->
@@ -1357,6 +1387,10 @@
                                                             <TextBlock Text="{Binding Running}" Margin="27,1,0,1" FontSize="11"
                                                                        Foreground="{DynamicResource Accent.1}"
                                                                        Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
+                                                            <!-- the step its run was on when it ended (Stop, or a chat read back later) -->
+                                                            <TextBlock Text="{services:Loc plan.step.stopped}" Margin="27,1,0,1" FontSize="11"
+                                                                       Foreground="{DynamicResource Status.Warning}"
+                                                                       Visibility="{Binding IsStopped, Converter={StaticResource BoolVis}}"/>
                                                         </StackPanel>
                                                     </ContentControl>
                                                 </DataTemplate>

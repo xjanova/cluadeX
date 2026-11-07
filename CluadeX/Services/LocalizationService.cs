@@ -34,7 +34,8 @@ public class LocalizationService
                                       Localization.LspKeys.Keys,
                                       Localization.PopOutKeys.Keys,
                                       Localization.ModelPickerKeys.Keys,
-                                      Localization.MediaKeys.Keys })
+                                      Localization.MediaKeys.Keys,
+                                      Localization.PlanKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

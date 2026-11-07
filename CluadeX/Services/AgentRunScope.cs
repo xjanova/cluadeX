@@ -144,6 +144,13 @@ public sealed class AgentRunScope
     /// <summary>The run's plan checklist (todo_write).</summary>
     public List<TodoItem> Todos { get; } = new();
 
+    /// <summary>The plan's scope tag as the model last gave it (first_task / continuation / new_task), or null.</summary>
+    public string? PlanScope { get; set; }
+    /// <summary>The model wrote or moved the plan in this run (wrap_up checks off only a plan this run worked on).</summary>
+    public bool PlanTouched { get; set; }
+    /// <summary>The plan came over from the chat's last turn with work left (PlanRecord.CarryNote tells the model).</summary>
+    public bool PlanCarried { get; set; }
+
     private readonly object _costLock = new();
     private decimal _costUsd;
 
