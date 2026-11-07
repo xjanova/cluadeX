@@ -732,8 +732,14 @@ internal static partial class Program
             var r = await T("wrap_up", ("recap", "Done the thing. Not verified live."), ("ask", "Ship it?"), ("actions", """["Yes","Not yet"]"""));
             Check("N2a wrap_up hands the box to its own chat and tells the model to write its closing message",
                 r.Success && got.Count == 1 && got[0].Chat == chat && got[0].Step.Ask == "Ship it?" && r.Output.Contains("closing message"), Seen(r));
-            var bad = await T("next_step", ("recap", "x"), ("actions", "a|b|c"));
-            Check("N2b a box that cannot be shown as written fails with why (and shows nothing)", !bad.Success && got.Count == 1, Seen(bad));
+            // Buttons with no question are dropped, not refused: the refusal made models redo the whole task to
+            // "try again" (smallbench, 2026-11-08). The box shows its recap and the reply says not to redo anything.
+            var fixedUp = await T("next_step", ("recap", "x"), ("actions", "a|b|c"));
+            Check("N2b buttons with no question: the box shows without them, and the reply says what was left out and not to redo work",
+                fixedUp.Success && got.Count == 2 && got[1].Step.Actions.Count == 0 && got[1].Step.Ask == null
+                && fixedUp.Output.Contains("left out") && fixedUp.Output.Contains("do not redo"), Seen(fixedUp));
+            var bad = await T("next_step", ("recap", " "), ("ask", "Ship it?"), ("actions", "[\"Yes\"]"));
+            Check("N2c a box with no recap still fails with why (and shows nothing)", !bad.Success && got.Count == 2, Seen(bad));
         }
         finally
         {

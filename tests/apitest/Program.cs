@@ -548,6 +548,7 @@ internal static class Program
         await PromptCacheReuse.Run(Check, Section);
         await BatchWire.Run(Check, Section);
         await ToolSearchWire.Run(Check, Section);
+        SmallModelWire.Run(Check, Section);
         await PricingWire.Run(Check, Section);
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);

@@ -181,13 +181,14 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
         if (call.Type == ToolType.WrapUp)
         {
-            var step = NextStep.FromArgs(call.GetArg("recap"), call.GetArg("ask"), call.GetArg("actions"), out var err);
+            var step = NextStep.FromArgsRepaired(call.GetArg("recap"), call.GetArg("ask"), call.GetArg("actions"), out var err, out var repaired);
             if (step == null) return Fail(err!);
             NextStepRequested?.Invoke(Chat, step);
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = "The next-step box will show under your closing message. Now write that message (your answer in full) and end the turn; do not repeat the box's question in prose.",
+                Output = (repaired != null ? repaired + " Nothing else is needed: do not redo any work. " : "")
+                    + "The next-step box will show under your closing message. Now write that message (your answer in full) and end the turn; do not repeat the box's question in prose.",
                 Summary = "⏭ " + (step.Ask ?? step.Recap),
             };
         }

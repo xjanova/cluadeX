@@ -1006,6 +1006,9 @@ internal static class ImageWire
             Check("loop", "plan-first control: the screenshot question above (not a work task) got no plan reminder",
                 bodies.Count >= 5 && !Plain(bodies[4]).Contains(planNote), "");
 
+            await SmallModelWire.LoopChecks((name, ok, detail) => Check("loop", name, ok, detail), anth, () => anth.Count,
+                () => anth.Bodies(), Plain, ToolUseSse, TextSse, fs, project, agent, Turn);
+
             // ── overflow: a prompt-too-long with images present drops the images before compacting ──
             k = 0;
             anth.Responder = _ => Interlocked.Increment(ref k) switch

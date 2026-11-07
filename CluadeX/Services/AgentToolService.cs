@@ -1134,14 +1134,7 @@ public class AgentToolService : IDisposable
         foreach (var r in results)
         {
             sb.AppendLine($"--- {r.ToolName} ({(r.Success ? "OK" : "ERROR")}) ---");
-            if (r.Success)
-            {
-                sb.AppendLine(r.Output);
-            }
-            else
-            {
-                sb.AppendLine($"Error: {r.Error}");
-            }
+            sb.AppendLine(r.Success ? r.Output : $"Error: {ModelText(r)}");
             sb.AppendLine();
         }
 
@@ -2913,6 +2906,48 @@ public class AgentToolService : IDisposable
         };
     }
 
+    /// <summary>Starts the error of a run_build / run_tests that found nothing to run ("couldn't detect a build system …").
+    /// The agent loop reads it: such a result is not a red build (<see cref="FoundNothingToRun"/>).</summary>
+    public const string NothingToRunMarker = "couldn't detect a";
+
+    /// <summary>run_tests with no test runner in the project. Says there are no tests and how to check the change
+    /// instead. The old "pass an explicit 'command'" sent gpt-4o-mini hunting: pytest (exit 127), unittest (exit 5,
+    /// no tests ran) six times in a row until the loop guard stopped it (smallbench T05/T07/T11, 2026-11-08).</summary>
+    public static string NoTestsMessage(string? projectDir)
+    {
+        bool python = projectDir != null && FileSystemService.PythonCompileCommand(projectDir) != null;
+        string example = python
+            ? " e.g. run_command `python -c \"from pkg.module import thing; print(thing(...))\"` with your own module and inputs"
+            : "";
+        return $"run_tests: {NothingToRunMarker} test runner in the project or the folders below it (no test project, " +
+               "Cargo.toml, go.mod, pyproject, package.json, pom.xml…). This project has no tests, so nothing was run. " +
+               "Do not look for or install a test runner (pytest, unittest, jest…): there are no tests for it to find. " +
+               $"To check your change, run the code you changed once and read what it prints{example}. " +
+               "If you did run it already and it printed what you expected, the change is checked: finish.";
+    }
+
+    /// <summary>The text a model gets back for one tool result. A failure carries its output too: a failed
+    /// run_command used to reach the model as just "Exit code: 1", without the compiler's own SyntaxError line, so
+    /// gpt-4o-mini never learned which file was broken and went through lsp/pyflakes/flake8/pylint instead
+    /// (smallbench T04, 2026-11-08).</summary>
+    public static string ModelText(ToolResult r)
+    {
+        if (r.Success) return r.Output ?? "";
+        string err = (r.Error ?? "").Trim();
+        string output = (r.Output ?? "").Trim();
+        if (output.Length == 0) return err;
+        if (err.Length == 0 || output.Contains(err, StringComparison.Ordinal)) return output;
+        return err + "\n" + output;
+    }
+
+    /// <summary>A run_build / run_tests that ran nothing because no build system or test runner was found. It is not a
+    /// failing build: counting it as one made the red-build guard refuse every finish on a project with no build
+    /// (small-model bench 2026-11-08, Python repo: 3 of 5 edit tasks fixed at step 2, then forced to rewrite the whole
+    /// file at steps 9-10 to "fix" a build that never existed).</summary>
+    public static bool FoundNothingToRun(ToolResult r) =>
+        r.Type is ToolType.RunBuild or ToolType.RunTests && !r.Success
+        && (r.Error ?? "").Contains(": " + NothingToRunMarker, StringComparison.Ordinal);
+
     private async Task<ToolResult> ExecuteRunBuildAsync(ToolCall call, CancellationToken ct)
         => (await RunBuildCoreAsync(call, call.GetArg("command"), IsTrue(call.GetArg("scratch")), ct)).Result;
 
@@ -2944,7 +2979,7 @@ public class AgentToolService : IDisposable
         }
         BuildRun Failed(string msg) => new(Fail(call, msg), "", "", Array.Empty<CluadeX.Helpers.LockedFiles.LockedOutput>(), null);
         if (string.IsNullOrEmpty(cmd))
-            return Failed($"{call.ToolName}: couldn't detect a build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
+            return Failed($"{call.ToolName}: {NothingToRunMarker} build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/*.py…). Nothing was built, so this says nothing about your change. Pass an explicit 'command', or use run_command.");
 
         string? scratchDir = null;
         if (scratch)
@@ -3018,7 +3053,7 @@ public class AgentToolService : IDisposable
             if (detected != null) { cmd = detected.Command; foundIn = detected.FoundIn; }
         }
         if (string.IsNullOrEmpty(cmd))
-            return (Fail(call, "run_tests: couldn't detect a test runner in the project or the folders below it (no test project, Cargo.toml, go.mod, pyproject, package.json, pom.xml…). Pass an explicit 'command', or use run_command."), "");
+            return (Fail(call, NoTestsMessage(_fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null)), "");
 
         var danger = CheckDangerousCommand(cmd, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell));
         if (danger != null) return (Fail(call, danger), "");

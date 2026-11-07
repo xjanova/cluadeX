@@ -3449,12 +3449,16 @@ public partial class CodeAgentService
     }
 
     /// <summary>
-    /// <summary>
-    /// File names the model's answer talks about that really exist in the project. Used to catch
+    /// File names the model's answer shows code FOR that really exist in the project. Used to catch
     /// "here is the updated Program.cs: ```…```" when Program.cs was never written. Only names that
     /// resolve to an actual file are returned, so prose mentioning a made-up path is ignored.
+    /// <para>A file counts only when it is named just before a code block (the 160 characters ahead of the
+    /// opening fence) or on the fence line itself ("```python cart.py"). Any file named anywhere in an answer
+    /// that held a code block used to count: a summary that showed the new cart.py and said "the bug was the
+    /// call into pricing.py" was sent back to write pricing.py, and the model's reply ("I did not change
+    /// pricing.py") replaced the summary (small-model bench T11, 2026-11-08).</para>
     /// </summary>
-    internal static HashSet<string> ExtractMentionedProjectFiles(string text, string workingDir)
+    public static HashSet<string> ExtractMentionedProjectFiles(string text, string workingDir)
     {
         var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrEmpty(workingDir) || !System.IO.Directory.Exists(workingDir)) return found;
@@ -3463,8 +3467,9 @@ public partial class CodeAgentService
         // discussion, not a claim to have edited it.
         if (!text.Contains("```")) return found;
 
+        foreach (string window in TextLeadingIntoCodeBlocks(text))
         foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
-                     text, @"[\w\-.]+\.(cs|csx|ts|tsx|js|jsx|py|java|kt|go|rb|php|cpp|c|h|hpp|xaml|json|md|html|css|sql)\b"))
+                     window, @"[\w\-.]+\.(cs|csx|ts|tsx|js|jsx|py|java|kt|go|rb|php|cpp|c|h|hpp|xaml|json|md|html|css|sql)\b"))
         {
             string name = m.Value;
             try
@@ -3475,6 +3480,27 @@ public partial class CodeAgentService
             catch { /* unreadable tree — skip */ }
         }
         return found;
+    }
+
+    /// <summary>For each OPENING code fence: the 160 characters before it plus the fence line itself (where
+    /// "here is the new X.cs:" and "```python X.py" live). Closing fences are skipped.</summary>
+    public static IEnumerable<string> TextLeadingIntoCodeBlocks(string text)
+    {
+        bool open = false;
+        int pos = 0, lastClose = 0;
+        while ((pos = text.IndexOf("```", pos, StringComparison.Ordinal)) >= 0)
+        {
+            int lineEnd = text.IndexOf('\n', pos);
+            if (lineEnd < 0) lineEnd = text.Length;
+            if (!open)
+            {
+                int from = Math.Max(lastClose, pos - 160);   // never reach back into the previous block's code
+                yield return text[from..lineEnd];
+            }
+            else lastClose = lineEnd;
+            open = !open;
+            pos = lineEnd;
+        }
     }
 
     /// <summary>
@@ -4756,7 +4782,7 @@ public partial class CodeAgentService
 
                     // Per-tool and aggregate budget enforcement — on TEXT only. Images never enter resultContent,
                     // so these cuts can't split a base64 string; they ride on the block's Images below.
-                    resultContent = (toolResult.Success ? toolResult.Output : toolResult.Error) ?? string.Empty;
+                    resultContent = AgentToolService.ModelText(toolResult);
                     // A failure with no error text: its output, else a line saying so — never an empty failure.
                     if (!toolResult.Success && string.IsNullOrWhiteSpace(resultContent))
                         resultContent = !string.IsNullOrWhiteSpace(toolResult.Output) ? toolResult.Output
@@ -4986,7 +5012,9 @@ public partial class CodeAgentService
             // turn cannot end while it is red, and so re-running the build without editing anything
             // gets called out. (Observed: the model watched run_build fail four times in a row, never
             // touched the file, and the wandering breaker then let it finish claiming success.)
-            var buildResults = toolResults.Where(r => r.Type is ToolType.RunBuild or ToolType.RunTests).ToList();
+            // A build that found nothing to run is not red — it says nothing about the change (AgentToolService.FoundNothingToRun).
+            var buildResults = toolResults.Where(r => r.Type is ToolType.RunBuild or ToolType.RunTests
+                && !AgentToolService.FoundNothingToRun(r)).ToList();
             if (buildResults.Count > 0)
             {
                 var last = buildResults[^1];
