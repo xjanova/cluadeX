@@ -1142,6 +1142,8 @@ public partial class App : Application
         // brain via MCP. Pushes STRONG instincts as `coding-lesson` notes so
         // the knowledge survives across machines / Claude Code sessions.
         services.AddSingleton<BrainSyncService>();
+        services.AddSingleton<Services.Skills.SkillBrainIndex>(sp => new Services.Skills.SkillBrainIndex(
+            sp.GetRequiredService<SettingsService>(), sp.GetService<BrainSyncService>(), sp.GetService<DebugLogService>()));
         // SecurityShieldService — Sprint 3 #1: static-analysis scanner with
         // 25 ship-1 OWASP-style rules. Drives the SecurityShield page.
         services.AddSingleton<SecurityShieldService>();

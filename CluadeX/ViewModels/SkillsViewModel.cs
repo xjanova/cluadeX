@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services;
+using CluadeX.Services.Skills;
 
 namespace CluadeX.ViewModels;
 
@@ -18,6 +19,7 @@ public class SkillItem : ViewModelBase
         _service = service;
         _onToggled = onToggled;
         _isEnabled = service.IsEnabled(def.Name);
+        _isPinned = service.IsPinned(def.Name);
     }
 
     public SkillDefinition Definition { get; }
@@ -50,6 +52,43 @@ public class SkillItem : ViewModelBase
     }
 
     public double CardOpacity => _isEnabled ? 1.0 : 0.5;
+
+    // ── what it costs (SkillBudget) and whether every turn offers it ──
+
+    private string _costText = "";
+    /// <summary>"≈ 40 tok per turn · ≈ 600 tok when it runs".</summary>
+    public string CostText { get => _costText; private set => SetProperty(ref _costText, value); }
+
+    private bool _isHeavy;
+    /// <summary>Its prompt alone takes over a tenth of the model's window.</summary>
+    public bool IsHeavy { get => _isHeavy; private set => SetProperty(ref _isHeavy, value); }
+
+    public int ListingTokens { get; private set; }
+
+    public void RefreshCost(int contextWindow, bool isThai, Func<string, string> t)
+    {
+        ListingTokens = SkillBudget.ListingTokens(Definition, isThai);
+        CostText = string.Format(t("skill.cost"), ListingTokens.ToString("N0"), SkillBudget.LoadTokens(Definition).ToString("N0"));
+        IsHeavy = SkillBudget.HeavyToLoad(Definition, contextWindow);
+    }
+
+    private bool _isPinned;
+    /// <summary>"Every task": offered on every turn while smart picking is on.</summary>
+    public bool IsPinned
+    {
+        get => _isPinned;
+        set
+        {
+            if (!SetProperty(ref _isPinned, value)) return;
+            _service.SetPinned(Name, value);
+        }
+    }
+
+    public void SyncPinned()
+    {
+        _isPinned = _service.IsPinned(Name);
+        OnPropertyChanged(nameof(IsPinned));
+    }
 
     private string _usageText = "";
     public string UsageText { get => _usageText; set => SetProperty(ref _usageText, value); }
@@ -98,8 +137,108 @@ public class SkillsViewModel : ViewModelBase
     private readonly SettingsService? _settings;
     private readonly LocalizationService _loc;
     private readonly DebugLogService _log;
+    private readonly ContextMemoryService? _context;
+    private readonly AgentToolService? _tools;
+    private readonly SkillBrainIndex? _brainIndex;
 
     public ObservableCollection<SkillItem> Skills { get; } = new();
+
+    // ── the gauge: what the switched-on skills cost per turn, against the model's ceiling ──
+
+    private SkillBudget.Gauge _gauge = new(0, 250, 0, 0, SkillBudget.Level.Empty, 0);
+    public SkillBudget.Gauge Gauge { get => _gauge; private set => SetProperty(ref _gauge, value); }
+    /// <summary>"Empty" | "Light" | "Near" | "Over" — the bar's colour.</summary>
+    public string GaugeLevel => _gauge.Level.ToString();
+    public double GaugeFill => _gauge.Fill;
+    private string _gaugeUsedText = "", _gaugeCapText = "", _gaugeLevelText = "", _gaugeNote = "", _brainStatusText = "";
+    public string GaugeUsedText { get => _gaugeUsedText; private set => SetProperty(ref _gaugeUsedText, value); }
+    public string GaugeCapText { get => _gaugeCapText; private set => SetProperty(ref _gaugeCapText, value); }
+    public string GaugeLevelText { get => _gaugeLevelText; private set => SetProperty(ref _gaugeLevelText, value); }
+    public string GaugeNote { get => _gaugeNote; private set => SetProperty(ref _gaugeNote, value); }
+    public string BrainStatusText { get => _brainStatusText; private set => SetProperty(ref _brainStatusText, value); }
+
+    /// <summary>Smart picking: the default for every chat (each chat's composer switch overrides it).</summary>
+    public bool AutoPickEnabled
+    {
+        get => _settings?.Settings.SkillAutoPickEnabled ?? true;
+        set
+        {
+            if (_settings == null || _settings.Settings.SkillAutoPickEnabled == value) return;
+            _settings.UpdateSettings(x => x.SkillAutoPickEnabled = value);
+            SkillPickGate.DefaultChanged();
+            OnPropertyChanged();
+            RefreshGauge();
+        }
+    }
+
+    /// <summary>Let the brain's semantic search help pick (cards in Notes/CluadeX-Skills).</summary>
+    public bool BrainIndexEnabled
+    {
+        get => _settings?.Settings.SkillBrainIndexEnabled ?? true;
+        set
+        {
+            if (_settings == null || _settings.Settings.SkillBrainIndexEnabled == value) return;
+            _settings.UpdateSettings(x => x.SkillBrainIndexEnabled = value);
+            OnPropertyChanged();
+            RefreshGauge();
+        }
+    }
+
+    /// <summary>Re-measure the gauge, every row's cost and the brain line (the model or the switches changed).</summary>
+    public void RefreshGauge()
+    {
+        bool isThai = _loc.CurrentLanguage == "th";
+        int window = _context?.MaxContextTokens ?? 200_000;
+        foreach (var s in Skills) s.RefreshCost(window, isThai, _loc.T);
+        // What the prompt really lists: switched on, user-invocable, with a tool that can run (AgentToolService).
+        var offered = _tools?.GetAdvertisedSkills() ?? Skills.Where(s => s.IsEnabled).Select(s => s.Definition).ToList();
+        var g = SkillBudget.Measure(offered, isThai, window);
+        Gauge = g;
+        OnPropertyChanged(nameof(GaugeLevel));
+        OnPropertyChanged(nameof(GaugeFill));
+        string model = ModelLabel();
+        GaugeUsedText = string.Format(_loc.T("skill.gauge.used"), g.Count, g.Used.ToString("N0"),
+            g.PercentOfWindow.ToString("0.#"), model, window.ToString("N0"));
+        GaugeCapText = string.Format(_loc.T("skill.gauge.cap"), g.Cap.ToString("N0"));
+        GaugeLevelText = _loc.T(g.Level switch
+        {
+            SkillBudget.Level.Empty => "skill.gauge.empty",
+            SkillBudget.Level.Light => "skill.gauge.light",
+            SkillBudget.Level.Near => "skill.gauge.near",
+            _ => AutoPickEnabled ? "skill.gauge.overPicking" : "skill.gauge.over",
+        });
+        var notes = new List<string>();
+        int max = Math.Clamp(_settings?.Settings.SkillPickMax ?? SkillPicker.DefaultMax, 1, 20);
+        if (AutoPickEnabled) notes.Add(string.Format(_loc.T("skill.gauge.picking"), max, g.Cap.ToString("N0")));
+        var provider = _settings?.Settings.ActiveProvider;
+        if (provider is Models.AiProviderType.ClaudeDev or Models.AiProviderType.GeminiDev or Models.AiProviderType.AntigravityDev
+            or Models.AiProviderType.OpenAIDev or Models.AiProviderType.GrokDev)
+            notes.Add(_loc.T("skill.gauge.cli"));
+        else if (provider is Models.AiProviderType.Local or Models.AiProviderType.LlamaServer or Models.AiProviderType.Ollama
+                 && (_settings?.Settings.ContextSize ?? 0) < 32000)
+            notes.Add(_loc.T("skill.gauge.local"));
+        int heavy = Skills.Count(s => s.IsEnabled && s.IsHeavy);
+        if (heavy > 0) notes.Add(string.Format(_loc.T("skill.gauge.heavy"), heavy));
+        GaugeNote = string.Join(Environment.NewLine, notes);
+
+        if (!BrainIndexEnabled) BrainStatusText = _loc.T("skill.brain.off");
+        else if (_brainIndex == null || !_brainIndex.BrainReady) BrainStatusText = _loc.T("skill.brain.notConnected");
+        else
+        {
+            int stale = _brainIndex.Stale(offered).Count;
+            BrainStatusText = stale == 0
+                ? string.Format(_loc.T("skill.brain.ready"), offered.Count)
+                : string.Format(_loc.T("skill.brain.pending"), stale);
+        }
+    }
+
+    private string ModelLabel()
+    {
+        var st = _settings?.Settings;
+        if (st == null) return "-";
+        string? id = st.ProviderConfigs.TryGetValue(st.ActiveProvider.ToString(), out var cfg) ? cfg.EffectiveModelId : null;
+        return string.IsNullOrWhiteSpace(id) ? st.ActiveProvider.ToString() : id!;
+    }
 
     private SkillItem? _selected;
     public SkillItem? Selected
@@ -216,8 +355,12 @@ public class SkillsViewModel : ViewModelBase
     private CancellationTokenSource? _previewCts;
 
     public SkillsViewModel(SkillService service, LocalizationService loc, DebugLogService log,
-                           SkillInstaller? installer = null, SettingsService? settings = null)
+                           SkillInstaller? installer = null, SettingsService? settings = null,
+                           ContextMemoryService? context = null, AgentToolService? tools = null, SkillBrainIndex? brainIndex = null)
     {
+        _context = context;
+        _tools = tools;
+        _brainIndex = brainIndex;
         _service = service;
         _installer = installer;
         _settings = settings;
@@ -228,12 +371,14 @@ public class SkillsViewModel : ViewModelBase
             OnPropertyChanged(nameof(SelectedToolsDisplay));
             OnPropertyChanged(nameof(SelectedSource));
             foreach (var s in Skills) s.RefreshUsage(_loc.T);
+            RefreshGauge();
         };
         _service.UsageChanged += () => OnUi(() => { foreach (var s in Skills) s.RefreshUsage(_loc.T); });
         _service.EnabledChanged += () => OnUi(() =>
         {
-            foreach (var s in Skills) s.SyncEnabled();
+            foreach (var s in Skills) { s.SyncEnabled(); s.SyncPinned(); }
             OnPropertyChanged(nameof(EnabledCount));
+            RefreshGauge();
         });
 
         RefreshCommand = new RelayCommand(Refresh);
@@ -315,6 +460,7 @@ public class SkillsViewModel : ViewModelBase
                    ?? Skills.FirstOrDefault();
         StatusMessage = string.Format(_loc.T("skill.summary"), Skills.Count, BuiltInCount, CustomCount)
                         + " · " + string.Format(_loc.T("skill.enabledSummary"), EnabledCount);
+        RefreshGauge();
     }
 
     private void OnToggled(SkillItem item, bool enabled)

@@ -3270,6 +3270,15 @@
                                     </StackPanel>
                                 </CheckBox>
 
+                                <!-- Smart skills: each turn offers only the skills that fit it (on by default; the Skills page sets the default) -->
+                                <CheckBox x:Name="SkillPickToggle" IsChecked="{Binding IsSkillAutoPick}" Foreground="{DynamicResource Accent.2}"
+                                          VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{Binding SkillPickTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE734;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{services:Loc chat.skillPick}" FontSize="12" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
+
                                 <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center"
                                             Visibility="{Binding EffortVisible, Converter={StaticResource BoolVis}}">
                                     <TextBlock x:Name="EffortLabel" Text="{services:Loc chat.effort}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
