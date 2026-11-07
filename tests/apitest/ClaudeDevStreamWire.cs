@@ -133,10 +133,12 @@ internal static class ClaudeDevStreamWire
             && plan[2].Content == "Commit" && plan[2].Status == "pending", string.Join(" | ", plan.Select(p => $"{p.Status}:{p.Content}")));
         check("cd-stream", "the todo row says how far the plan is", log.Done.First(r => r.ToolName == "todo_write").Summary == "Plan: 1/3", "");
 
-        check("cd-stream", "a Task call opens the sub-agent map: start → its own tool → done with its report",
-            log.Sub.Select(e => e.Phase).SequenceEqual(new[] { "start", "tool", "done" })
+        check("cd-stream", "a Task call opens the sub-agent map: start → its own tool → that tool's result (same id) → done with its report",
+            log.Sub.Select(e => e.Phase).SequenceEqual(new[] { "start", "tool", "result", "done" })
             && log.Sub[0].Task == "Find the flaky test" && log.Sub[0].Kind == "explore"
-            && log.Sub[1].Detail.StartsWith("grep Flaky") && log.Sub[1].Steps == 1 && log.Sub[2].Detail.Contains("tests/A.cs:3"),
+            && log.Sub[1].Detail.StartsWith("grep Flaky") && log.Sub[1].Steps == 1 && log.Sub[1].CallId == "tu_sub"
+            && log.Sub[2].CallId == "tu_sub" && log.Sub[2].Ok && log.Sub[2].Result == "tests/A.cs:3"
+            && log.Sub[3].Detail.Contains("tests/A.cs:3"),
             string.Join(" | ", log.Sub.Select(e => $"{e.Phase}:{e.Detail}")));
 
         check("cd-stream", "steps carry their calls and results (brain-save, cost summary, handoff see the work)",

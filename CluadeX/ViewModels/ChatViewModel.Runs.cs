@@ -569,6 +569,7 @@ public partial class ChatViewModel
             node = new AgentNode { Id = e.Id, Label = e.Label, Kind = e.Kind, Task = e.Task };
             nodes.Add(node);
         }
+        if (e.Phase == "start" && e.Control != null) node.Control = e.Control;   // its window can stop it / write to it
         var took = DateTime.Now - node.StartedAt;
         node.Elapsed = took.TotalMinutes >= 1 ? $"{(int)took.TotalMinutes}m {took.Seconds}s" : $"{Math.Max(0, took.Seconds)}s";
         if (e.Steps > 0) node.Steps = e.Steps;
@@ -577,10 +578,17 @@ public partial class ChatViewModel
         switch (e.Phase)
         {
             case "start": node.Action = Loc("agentmap.starting"); break;
-            case "tool": node.ToolCalls++; node.Action = e.Detail; break;
-            case "done": node.State = "done"; node.Action = e.Detail; break;
-            case "failed": node.State = "failed"; node.Action = e.Detail; break;
-            case "stopped": node.State = "stopped"; node.Action = Loc("agentmap.stopped"); break;
+            case "tool": node.ToolCalls++; node.Action = e.Detail; node.BeginStep(e.CallId, e.Detail); break;
+            // A tool came back: its row in the agent's window gets the result; the card's line keeps what runs now.
+            case "result": node.EndStep(e.CallId, e.Ok, e.Result); break;
+            case "done": node.State = "done"; node.Action = e.Detail; node.CloseSteps(); break;
+            case "failed": node.State = "failed"; node.Action = e.Detail; node.CloseSteps(); break;
+            case "stopped":
+                node.StoppedByOwner = node.Control?.StopRequested == true && node.Control.ParentCancelled == false;
+                node.State = "stopped";
+                node.Action = Loc(node.StoppedByOwner ? "agentmap.stoppedByYou" : "agentmap.stopped");
+                node.CloseSteps();
+                break;
         }
         int running = nodes.Count(x => x.IsRunning), done = nodes.Count(x => x.IsDone);
         map.NotifyAgentMap();
