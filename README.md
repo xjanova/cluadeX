@@ -19,6 +19,30 @@
 
 ---
 
+## The girls / สาวๆ ประจำ provider
+
+<p align="center">
+  <img src="docs/art/girls-lineup-21x9.jpg" alt="The CluadeX girls: Claude, Codex, Gemini, Antigravity, Grok, Mind, CluadeX, BrainX"/>
+</p>
+
+Each provider answers as its own girl (`Services/ChatCharacter.cs`, cut-outs in `CluadeX/Assets/Girls/`).
+Left to right / จากซ้ายไปขวา:
+
+| Girl | Provider |
+|------|----------|
+| **Claude** (orange) | Anthropic API, Claude Dev |
+| **Codex** (blue) | OpenAI API, OpenAI Dev (Codex CLI) |
+| **Gemini** (silver-lavender) | Gemini API, Gemini Dev |
+| **Antigravity** (teal) | Antigravity |
+| **Grok** (lime) | Grok (xAI API), Grok Dev |
+| **มายด์ / Mind** (lavender) | Ollama |
+| **CluadeX** (purple) | GGUF on this PC (in-process, llama-server), other OpenAI-compatible services |
+| **BrainX** (blue/brown) | the BrainX cowork room |
+
+How the picture was made: [docs/art/girls-lineup.md](docs/art/girls-lineup.md).
+
+---
+
 ## Features / ฟีเจอร์ทั้งหมด
 
 CluadeX is a full-featured AI coding assistant that runs on your desktop with support for both local and cloud AI models. Every feature is listed below.
