@@ -309,6 +309,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=SP: just smart skill picking (a turn gets the skills that fit it; the composer's switch).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SP")
+        {
+            await TestSkillPick();
+            Log($"{Environment.NewLine}## Result (CHATTEST_ONLY=SP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PC: just the plan card's clock and how it closes when the run ends.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PC")
         {
@@ -438,6 +447,7 @@ internal static partial class Program
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
         await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card
+        await TestSkillPick();                // SP: each turn is given only the skills that fit it; the composer's switch
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
         await TestSwitchRace();               // SW: a chat still loading never lands over New Chat / delete; pipe and agent chats don't cancel a pick
@@ -859,7 +869,8 @@ internal static partial class Program
         int callsBefore = Fake.Calls.Count;
         Vm.RetryMessageCommand.Execute(err);
         await WaitIdle();
-        Check("L10 retrying the latest failure re-runs that question", Fake.Calls.Count == callsBefore + 1 && Fake.Calls.Last().Input == "first question");
+        Check("L10 retrying the latest failure re-runs that question", Fake.Calls.Count == callsBefore + 1 && WithoutSkills(Fake.Calls.Last().Input) == "first question",
+            Fake.Calls.LastOrDefault()?.Input);
         Check("L10 …without a duplicate question bubble", Vm.Messages.Count(m => m.Role == MessageRole.User && m.Content == "first question") == 1);
         Check("L10 …and the error bubble is replaced by the answer", !Vm.Messages.Contains(err) && Vm.Messages.Last(m => m.Role == MessageRole.Assistant).Content == "first answer");
 
@@ -874,7 +885,7 @@ internal static partial class Program
         Fake.Script.Enqueue(FakeStep.Reply("old answer"));
         Vm.RetryMessageCommand.Execute(oldErr);
         await WaitIdle();
-        Check("L10 retrying an older failure asks THAT question again", Fake.Calls.Last().Input == "old question", Fake.Calls.Last().Input);
+        Check("L10 retrying an older failure asks THAT question again", WithoutSkills(Fake.Calls.Last().Input) == "old question", Fake.Calls.Last().Input);
 
         // Tool rows: no Retry button
         var toolRow = new ChatMessage { Role = MessageRole.ToolAction, Content = "run_command failed", ToolName = "Ran npm test", HasError = true, ToolSuccess = false, IsHovered = true };

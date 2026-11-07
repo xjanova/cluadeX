@@ -130,7 +130,72 @@ public class SkillService
         public int Pipe { get; set; }
         public int Refused { get; set; }
         public DateTime? LastUsed { get; set; }
+        /// <summary>Words of the turns that ran it (Skills/SkillPicker terms → how many turns), the picker's learned hint.</summary>
+        public Dictionary<string, int> Terms { get; set; } = new();
         public int Total => Slash + Tool + Pipe;
+    }
+
+    /// <summary>Most words a skill keeps; the rarest go first when it is full.</summary>
+    public const int MaxLearnedTerms = 40;
+
+    /// <summary>The words of a turn that ran <paramref name="name"/> (its first 12 distinct terms) are remembered for it:
+    /// a later task said the same way finds it even when its description uses other words.</summary>
+    public void LearnTerms(string name, string? text)
+    {
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(text)) return;
+        var terms = Skills.SkillPicker.Terms(text).Take(12).ToList();
+        if (terms.Count == 0) return;
+        lock (_usageLock)
+        {
+            var all = LoadUsage();
+            string key = name.Trim().ToLowerInvariant();
+            if (!all.TryGetValue(key, out var u)) all[key] = u = new SkillUsage();
+            u.Terms ??= new();
+            foreach (var t in terms) u.Terms[t] = u.Terms.TryGetValue(t, out var c) ? c + 1 : 1;
+            if (u.Terms.Count > MaxLearnedTerms)
+                u.Terms = u.Terms.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                    .Take(MaxLearnedTerms).ToDictionary(kv => kv.Key, kv => kv.Value);
+            SaveUsage(all);
+        }
+    }
+
+    /// <summary>Forget the words learned for <paramref name="name"/> (all skills when null).</summary>
+    public void ForgetLearnedTerms(string? name = null)
+    {
+        lock (_usageLock)
+        {
+            var all = LoadUsage();
+            foreach (var (k, u) in all)
+                if (name == null || k == name.Trim().ToLowerInvariant()) u.Terms = new();
+            SaveUsage(all);
+        }
+    }
+
+    /// <summary>The words learned for <paramref name="name"/> (empty when none).</summary>
+    public IReadOnlyDictionary<string, int> LearnedTerms(string name)
+    {
+        lock (_usageLock)
+            return LoadUsage().TryGetValue(name.Trim().ToLowerInvariant(), out var u) && u.Terms != null
+                ? new Dictionary<string, int>(u.Terms) : new Dictionary<string, int>();
+    }
+
+    // ── pinned ─────────────────────────────────────────────────────────────
+
+    public bool IsPinned(string name) =>
+        _settingsService.Settings.PinnedSkills.Any(d => d.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Pin a skill (offered on every turn while picking is on) or unpin it.</summary>
+    public bool SetPinned(string name, bool pinned)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        if (IsPinned(name) == pinned) return true;
+        bool ok = _settingsService.UpdateSettings(s =>
+        {
+            s.PinnedSkills.RemoveAll(d => d.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (pinned) s.PinnedSkills.Add(name);
+        });
+        EnabledChanged?.Invoke();
+        return ok;
     }
 
     private string UsagePath => Path.Combine(_settingsService.DataRoot, "skill-usage.json");
@@ -152,16 +217,21 @@ public class SkillService
                 case UseKind.Refused: u.Refused++; break;
             }
             if (kind != UseKind.Refused) u.LastUsed = DateTime.Now;
-            try
-            {
-                Directory.CreateDirectory(_settingsService.DataRoot);
-                string tmp = UsagePath + ".tmp";
-                File.WriteAllText(tmp, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }));
-                File.Move(tmp, UsagePath, overwrite: true);
-            }
-            catch { /* a count that is not saved must never break a run */ }
+            SaveUsage(all);
         }
         UsageChanged?.Invoke();
+    }
+
+    private void SaveUsage(Dictionary<string, SkillUsage> all)
+    {
+        try
+        {
+            Directory.CreateDirectory(_settingsService.DataRoot);
+            string tmp = UsagePath + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, UsagePath, overwrite: true);
+        }
+        catch { /* a count that is not saved must never break a run */ }
     }
 
     public SkillUsage GetUsage(string name)

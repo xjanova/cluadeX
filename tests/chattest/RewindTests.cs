@@ -247,7 +247,7 @@ internal static partial class Program
                 answered && Vm.Messages.Any(m => m.Content.Contains("carried on by the new model")), Vm.StatusText);
             Check("MS2 the old model did not finish its reply", !Vm.Messages.Any(m => m.Content.Contains("[MS] the rest")));
             Check("MS3 the new model is told to go on, with what was said so far",
-                answered && other.Calls[0].Input == L("chat.pause.resumeText") && other.Calls[0].History.Any(h => h.Content.Contains("long task")),
+                answered && WithoutSkills(other.Calls[0].Input) == L("chat.pause.resumeText") && other.Calls[0].History.Any(h => h.Content.Contains("long task")),
                 answered ? other.Calls[0].Input : "no call");
             Check("MS3 the chat says what happened", Vm.Messages.Any(m => m.Role == MessageRole.System && m.Content.Contains("new-model")));
             Check("MS4 the box shows the model that answers", Vm.SelectedChatModel?.Model == "new-model" && Providers.ActiveProviderType == AiProviderType.Ollama,

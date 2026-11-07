@@ -20,6 +20,7 @@ public partial class CodeAgentService
     private readonly SettingsService _settingsService;
     private readonly SmartEditingService _smartEditingService;
     private readonly ContextMemoryService _contextMemoryService;
+    private readonly Skills.SkillBrainIndex? _skillBrainIndex;
     private readonly LocalizationService _localizationService;
     private readonly ActivationService _activationService;
     private readonly MemoryService _memoryService;
@@ -987,18 +988,30 @@ public partial class CodeAgentService
         try
         {
             var allSkills = _agentToolService?.GetAdvertisedSkills();
-            if (allSkills is { Count: > 0 })
+            if (allSkills is { Count: > 0 } && AgentRunScope.Current?.SkillPick != null)
+            {
+                // Smart picking (Skills/SkillPicker): the turn's message carries the skills that fit it. This text never
+                // changes between turns, so the prompt cache of the turns before stays valid whatever each one picks.
+                sb.AppendLine();
+                sb.AppendLine(isThai ? "# Skill" : "# Skills");
+                sb.AppendLine(isThai
+                    ? "CluadeX เลือก skill ที่เข้ากับแต่ละงานแนบมากับข้อความของผู้ใช้ (บล็อก [Skill ที่เข้ากับงานนี้ …]) เรียกด้วย `skill_invoke` "
+                      + "เมื่อตัวไหนเหมาะ หรือเมื่อผู้ใช้พิมพ์ /command — `skill_invoke` แบบไม่ใส่ชื่อจะแสดง skill ที่เปิดไว้ทั้งหมด"
+                    : "CluadeX attaches the skills that fit each task to the user's message (a [Skills that fit this task …] block). Run one "
+                      + "with `skill_invoke` when it fits or the user types /command — `skill_invoke` with no name lists every switched-on skill.");
+                sb.AppendLine();
+            }
+            else if (allSkills is { Count: > 0 })
             {
                 sb.AppendLine();
                 sb.AppendLine(isThai ? "# Skill ที่ใช้ได้" : "# Available Skills");
                 sb.AppendLine(isThai
                     ? "คุณสามารถเรียกใช้ skill ผ่านเครื่องมือ `skill_invoke` เมื่อผู้ใช้พิมพ์ /command หรือเมื่อ skill เหมาะกับงาน:"
                     : "You can invoke skills via the `skill_invoke` tool when the user types /command or when a skill fits the task:");
-                // whenToUse is what lets the model pick a skill by itself, not only on /command.
+                // whenToUse is what lets the model pick a skill by itself, not only on /command. The line is
+                // SkillBudget's, so the Skills page's gauge measures exactly this text.
                 foreach (var s in allSkills)
-                    sb.AppendLine(string.IsNullOrWhiteSpace(s.WhenToUse)
-                        ? $"- `{s.Name}`: {s.Description}"
-                        : $"- `{s.Name}`: {s.Description} ({(isThai ? "ใช้เมื่อ" : "use when")}: {s.WhenToUse})");
+                    sb.AppendLine(Skills.SkillBudget.ListingLine(s, isThai));
                 sb.AppendLine();
             }
         }
@@ -1189,8 +1202,10 @@ public partial class CodeAgentService
         DebugLogService? debugLog = null,
         IEnumerable<Tools.IPromptSectionProvider>? promptSections = null,
         Mcp.McpServerManager? mcpManager = null,
-        PermissionService? permissionService = null)
+        PermissionService? permissionService = null,
+        Skills.SkillBrainIndex? skillBrainIndex = null)
     {
+        _skillBrainIndex = skillBrainIndex;
         _mcpManager = mcpManager;
         _permissionService = permissionService;
         _promptSections = promptSections?.Where(p => p != null).ToArray() ?? Array.Empty<Tools.IPromptSectionProvider>();
@@ -2107,8 +2122,26 @@ public partial class CodeAgentService
             return await RunDelegatedTurnAsync(_providerManager.ActiveProvider, _providerManager.ActiveProviderType,
                 history, userMessage ?? "", ct, progress);
 
+        // ─── Smart skill picking, part 1: ask the brain which skill cards fit, beside the recall below ───
+        // The owner's own words: the chat page sets them (without the folders line, notices or attachments it adds);
+        // any other caller's message is taken as it is.
+        var pickScope = AgentRunScope.Current;
+        string ownerText = pickScope?.TurnText is { Length: > 0 } typed ? typed : userMessage ?? "";
+        if (pickScope != null) pickScope.TurnText = ownerText;
+        bool pickOn = pickScope != null
+            && Skills.SkillPickGate.IsOn(pickScope.SessionKey, _settingsService.Settings.SkillAutoPickEnabled);
+        bool pickSkills = pickOn && !pickScope!.NoSkillPick;
+        // Picking is on but this turn takes none (a /command runs its own skill): an empty pick, so the system prompt keeps
+        // its one fixed line instead of the full list — the same text as every other turn of the chat, the cache holds.
+        if (pickOn && !pickSkills) pickScope!.SkillPick = new Skills.SkillPick(Array.Empty<Skills.SkillPickEntry>(), 0, 0, 0);
+        Task<IReadOnlyList<string>>? brainRank = pickSkills && _skillBrainIndex != null && WorthBrainRank(ownerText)
+            ? _skillBrainIndex.RankAsync(ownerText, ct) : null;
+
         // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
         userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
+
+        // ─── Smart skill picking, part 2: the skills that fit this turn ride on its message ───
+        if (pickSkills) userMessage = await PickSkillsForTurnAsync(pickScope!, ownerText, userMessage, brainRank, ct);
         RememberRecallForSubAgents(userMessage);   // sub-agents start warm with it (CodeAgentService.Dispatch.cs)
 
         // ─── Dual-mode dispatch: Native tool_use vs legacy [ACTION:] ───
@@ -2707,6 +2740,66 @@ public partial class CodeAgentService
     /// user message is untouched). Best-effort: gated by setting, 3s timeout, silent on any failure so
     /// the task never stalls on the brain.
     /// </summary>
+    /// <summary>A message worth asking the brain about skills: two task words, or a sentence (not "hi" / "ok").</summary>
+    private static bool WorthBrainRank(string text) =>
+        text.Trim().Length >= 25 || Skills.SkillPicker.Terms(text).Count >= 2;
+
+    /// <summary>
+    /// Pick the switched-on skills that fit this turn (owner 2026-11-07) and add them after the turn's message. Uses the
+    /// owner's words, the brain's recall already fetched for the turn, words learned from earlier turns, pins, and — when a
+    /// brain is connected — its semantic ranking of the skill cards (started before the recall, so it costs no extra wait).
+    /// Never throws: a failure here leaves the message as it was and the run goes on.
+    /// </summary>
+    private async Task<string> PickSkillsForTurnAsync(AgentRunScope scope, string ownerText, string userMessage,
+        Task<IReadOnlyList<string>>? brainRank, CancellationToken ct)
+    {
+        try
+        {
+            var offered = _agentToolService.GetAdvertisedSkills();
+            IReadOnlyList<string> ranked = Array.Empty<string>();
+            if (brainRank != null)
+            {
+                try { ranked = await brainRank; }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+                catch (Exception ex) when (ex is not OperationCanceledException) { _debugLog?.Warn("Skills", "brain ranking failed: " + ex.Message); }
+            }
+            // Cards that are missing or changed go to the brain in the background, for the next turns.
+            if (_skillBrainIndex is { Enabled: true, BrainReady: true } index && offered.Count > 0)
+                _ = Task.Run(() => index.EnsureIndexedAsync(offered));
+
+            bool isThai = _localizationService.CurrentLanguage == "th";
+            int window = _contextMemoryService.MaxContextTokens;
+            bool smallLocal = (_providerManager.ActiveProviderType
+                    is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
+                && _settingsService.Settings.ContextSize < 32000;
+            var set = _settingsService.Settings;
+            // What the brain's recall added around the owner's words (it may go before or after them).
+            string recall = "";
+            int at = userMessage.IndexOf(ownerText, StringComparison.Ordinal);
+            if (ownerText.Length > 0 && at >= 0) recall = userMessage[..at] + userMessage[(at + ownerText.Length)..];
+            var store = _agentToolService.Skills;
+            int cap = Skills.SkillBudget.CapFor(window);
+            var pick = Skills.SkillPicker.Pick(new Skills.SkillPicker.Input(
+                ownerText, recall, offered, set.PinnedSkills, name => store.LearnedTerms(name),
+                BudgetTokens: smallLocal ? Math.Min(200, cap) : cap,
+                Max: smallLocal ? 2 : Math.Clamp(set.SkillPickMax, 1, 20),
+                IsThai: isThai, BrainRanked: ranked));
+            scope.SkillPick = pick;
+            _debugLog?.Info("Skills", $"picked {pick.Picked.Count}/{pick.Offered} for the turn · ~{pick.TokensPicked} tok instead of ~{pick.TokensAll}"
+                + (ranked.Count > 0 ? $" · brain ranked {string.Join(",", ranked.Take(3))}" : "")
+                + (pick.Picked.Count > 0 ? " · " + string.Join(", ", pick.Picked.Select(p => $"{p.Skill.Name}({p.Reason})")) : ""));
+            try { scope.SkillsPicked?.Invoke(pick); } catch { /* the chat's row must never stop the run */ }
+            string block = pick.BlockFor(isThai);
+            return block.Length == 0 ? userMessage : userMessage + "\n\n" + block;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _debugLog?.Warn("Skills", "skill picking failed — every switched-on skill stays listed: " + ex.Message);
+            scope.SkillPick = null;
+            return userMessage;
+        }
+    }
+
     private async Task<string> MaybePrependBrainContextAsync(string userMessage, IProgress<string>? progress, CancellationToken ct)
     {
         if (_brainSync == null || !_settingsService.Settings.BrainAutoRecallEnabled) return userMessage;

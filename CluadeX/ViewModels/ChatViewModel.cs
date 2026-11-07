@@ -1284,6 +1284,7 @@ public partial class ChatViewModel : ViewModelBase
         // the next-step box (ChatViewModel.Orchestration.cs).
         InitOrchestration();
         InitDesign();
+        InitSkillPick();
 
         // Agent map: every sub-agent this command started, live, as one tree card per command.
         _agentService.OnSubAgentEvent += e =>
@@ -1939,6 +1940,7 @@ public partial class ChatViewModel : ViewModelBase
         for (int i = Sessions.Count - 1; i >= 0; i--)
             if (Sessions[i].Id == left.Id) Sessions.RemoveAt(i);
         Services.Agents.DesignGate.Forget(left.Id);
+        Services.Skills.SkillPickGate.Forget(left.Id);
     }
 
     /// <summary>
@@ -2013,6 +2015,7 @@ public partial class ChatViewModel : ViewModelBase
         _persistenceService.DeleteSession(sessionId);
         await CleanUpSessionAsync(sessionId, deleteImages: false);   // DeleteSession already removed its screenshots
         Services.Agents.DesignGate.Forget(sessionId);
+        Services.Skills.SkillPickGate.Forget(sessionId);
 
         if (_settingsService.Settings.PinnedChatIds.Contains(sessionId))
         {
@@ -3650,6 +3653,8 @@ public partial class ChatViewModel : ViewModelBase
             {
                 activeSkill = skill;
                 _skillService.RecordUse(skill.Name, SkillService.UseKind.Slash);
+                // What the owner asked it for is remembered for it (the picker finds it for a task said that way).
+                if (!string.IsNullOrWhiteSpace(skillArgs)) _skillService.LearnTerms(skill.Name, skillArgs);
                 // Replace input with skill prompt + user args
                 skillPromptOverride = skill.PromptContent;
                 if (!string.IsNullOrEmpty(skillArgs))
@@ -3884,6 +3889,21 @@ public partial class ChatViewModel : ViewModelBase
             input += "\n\n[Open folders — main: " + _fileSystemService.AppWorkingDirectory + "; also open: "
                 + string.Join(", ", withExtras.ExtraFolders) + ". Relative paths are in the main folder; use absolute paths for the others.]";
         var turn = BeginTurn();
+        // A /command turn already runs its skill: its input is the skill's prompt, nothing to pick from. Otherwise the
+        // skill picker reads what the owner typed — not the folders line, a notice or an attachment's text added below.
+        if (FlowRun is { } pickRun)
+        {
+            if (isSkill) pickRun.Scope.NoSkillPick = true;
+            else if (userMsg.Content == Loc("chat.pause.resumeText"))
+            {
+                // "Continue the paused task…" is the app's wording: the skills are the ones the task itself asked for —
+                // its last request in this chat (none = no pick).
+                string? task = pickRun.Messages.LastOrDefault(m => m.Role == MessageRole.User && !ReferenceEquals(m, userMsg)
+                    && !string.IsNullOrWhiteSpace(m.Content) && m.Content != userMsg.Content && !m.Content.StartsWith('/'))?.Content;
+                if (task != null) pickRun.Scope.TurnText = task; else pickRun.Scope.NoSkillPick = true;
+            }
+            else if (!string.IsNullOrWhiteSpace(userMsg.Content)) pickRun.Scope.TurnText = userMsg.Content;
+        }
         if (design && CurrentSession is { } designChat)
         {
             // what the model is told rides on this turn's input (the first request reads it; the shared system prompt
