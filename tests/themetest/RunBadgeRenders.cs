@@ -64,6 +64,30 @@ internal static partial class Program
         // Her moods, one frame each, side by side (the theme last applied).
         var buddy = FindAll<CluadexBuddy>(MainWin).FirstOrDefault();
         Check("buddy: the activity bar shows น้อง CluadeX", buddy != null);
+        // A click on her goes Home (owner 2026-11-08: "กดที่ไอค่อนแมว หรือ หน้า น้อง cluadex ควรเป็นการกลับไปหน้า home"): she sits in a
+        // Button bound to ChatVM.GoHomeCommand — hand cursor, a tooltip that says so, a tab stop, Enter works.
+        var home = buddy == null ? null : Ancestors(buddy).OfType<System.Windows.Controls.Button>().FirstOrDefault();
+        Check("buddy: she is a button", home != null);
+        if (home != null)
+        {
+            Check("buddy: the button goes Home", ReferenceEquals(home.Command, chat.GoHomeCommand), home.Command?.GetType().Name ?? "none");
+            Check("buddy: a hand cursor", home.Cursor == System.Windows.Input.Cursors.Hand, $"{home.Cursor}");
+            Check("buddy: her tooltip says a click goes Home", home.ToolTip is string tip && tip.Contains(chat.BuddyMoodTip) && tip.Contains("Home"), $"{home.ToolTip}");
+            Check("buddy: reachable with Tab", home.Focusable && System.Windows.Input.KeyboardNavigation.GetIsTabStop(home) && home.IsEnabled, "");
+            // Enter on the focused button runs its command (a stand-in command here, so the run below keeps its project)
+            int ran = 0;
+            home.Command = new CluadeX.ViewModels.RelayCommand(() => ran++);
+            home.Focus();
+            await Idle(60);
+            var src = PresentationSource.FromVisual(home);
+            if (src != null)
+                home.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, src, 0, System.Windows.Input.Key.Enter)
+                    { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent });
+            await Idle(60);
+            Check("buddy: Enter on her goes Home", ran == 1, $"{ran} (focused={home.IsKeyboardFocused})");
+            home.SetBinding(System.Windows.Controls.Primitives.ButtonBase.CommandProperty, new System.Windows.Data.Binding("ChatVM.GoHomeCommand"));
+            Check("buddy: …and the real command is back", ReferenceEquals(home.Command, chat.GoHomeCommand), "");
+        }
         if (buddy != null)
         {
             var moods = new[] { BuddyMood.Idle, BuddyMood.Working, BuddyMood.Waiting, BuddyMood.Happy, BuddyMood.Sad, BuddyMood.Sleep };
@@ -100,6 +124,11 @@ internal static partial class Program
             yield return c;
             foreach (var d in VisualChildren(c)) yield return d;
         }
+    }
+
+    static IEnumerable<DependencyObject> Ancestors(DependencyObject e)
+    {
+        for (var p = VisualTreeHelper.GetParent(e); p != null; p = VisualTreeHelper.GetParent(p)) yield return p;
     }
 
     static List<T> FindAll<T>(DependencyObject root) where T : DependencyObject

@@ -23,5 +23,8 @@ internal static class RunBadgeKeys
         ["buddy.mood.happy"] = new() { ["en"] = "Done!", ["th"] = "เสร็จแล้ว!" },
         ["buddy.mood.sad"] = new() { ["en"] = "Something went wrong", ["th"] = "มีบางอย่างผิดพลาด" },
         ["buddy.mood.sleep"] = new() { ["en"] = "Nothing to do — CluadeX is napping", ["th"] = "ไม่มีงาน — น้อง CluadeX งีบอยู่ zzz" },
+        // clicking her: back to Home (a new chat with no project open); chats that run keep running
+        ["buddy.goHome"] = new() { ["en"] = "Click: back to Home — running chats keep going", ["th"] = "คลิก: กลับหน้า Home — แชทที่รันอยู่ยังทำงานต่อ" },
+        ["buddy.goHomeName"] = new() { ["en"] = "CluadeX — Home", ["th"] = "น้อง CluadeX — หน้า Home" },
     };
 }

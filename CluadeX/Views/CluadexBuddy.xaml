@@ -1,11 +1,11 @@
 <!-- น้อง CluadeX at the top of the activity bar, in place of the cat logo (owner 2026-11-08: "ไอค่อนแมวตัวล่างควรเป็นหน้าของ
      น้อง cluadex ผู้หญิงน่ารักขยับยุกยิกได้ตามงานในขณะนั้น … ไม่มีไรทำก็ทำหลับ"). DataContext: ChatViewModel (BuddyMoodState,
-     BuddyMoodTip). The motion is code-behind (CluadexBuddy.xaml.cs): one set of storyboards per mood, low frame rates,
+     BuddyMoodTip; the tooltip and the click to Home are on the Button around her in MainWindow). The motion is code-behind (CluadexBuddy.xaml.cs): one set of storyboards per mood, low frame rates,
      paused while the window is minimised or hidden, and while it is in the background when she has nothing to do. -->
 <UserControl x:Class="CluadeX.Views.CluadexBuddy"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             Width="36" Height="36" Focusable="False" ToolTip="{Binding BuddyMoodTip}">
+             Width="36" Height="36" Focusable="False">
     <Grid>
         <!-- the rim: the theme's accent; amber while she waits for the owner, red for a moment after a failure -->
         <Ellipse x:Name="Rim" Width="36" Height="36" StrokeThickness="1.5" Stroke="{DynamicResource Accent.2}" Opacity="0.55"/>

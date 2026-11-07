@@ -613,8 +613,33 @@
                                             </EventTrigger>
                                         </Ellipse.Triggers>
                                     </Ellipse>
-                                    <!-- น้อง CluadeX, moving with the work: busy, waiting for you, pleased, asleep when idle -->
-                                    <views:CluadexBuddy DataContext="{Binding ChatVM}"/>
+                                    <!-- น้อง CluadeX, moving with the work: busy, waiting for you, pleased, asleep when idle.
+                                         A click (or Tab to her + Enter/Space) goes Home: the Chat page, an empty chat, no
+                                         folder open; running chats carry on in the background. -->
+                                    <Button Width="36" Height="36" Cursor="Hand"
+                                            Command="{Binding ChatVM.GoHomeCommand}" ToolTip="{Binding ChatVM.BuddyTip}"
+                                            AutomationProperties.Name="{services:Loc buddy.goHomeName}"
+                                            AutomationProperties.HelpText="{Binding ChatVM.BuddyMoodTip}">
+                                        <!-- keyboard focus only (not after a mouse click): a ring just outside her rim -->
+                                        <Button.FocusVisualStyle>
+                                            <Style>
+                                                <Setter Property="Control.Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate>
+                                                            <Ellipse Margin="-3" StrokeThickness="1.5" Stroke="{DynamicResource Accent.1}"/>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </Button.FocusVisualStyle>
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Grid Background="Transparent">
+                                                    <views:CluadexBuddy DataContext="{Binding ChatVM}"/>
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
                                 </Grid>
                                 <Border Width="28" Height="1" Margin="0,10,0,0" Background="{DynamicResource ActivityBar.Logo.Divider}"/>
                             </StackPanel>

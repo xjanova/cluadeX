@@ -21,11 +21,27 @@ public partial class ChatViewModel
     public string BuddyMoodState
     {
         get => _buddyMood;
-        private set { if (_buddyMood != value) { _buddyMood = value; OnPropertyChanged(); OnPropertyChanged(nameof(BuddyMoodTip)); } }
+        private set { if (_buddyMood != value) { _buddyMood = value; OnPropertyChanged(); OnPropertyChanged(nameof(BuddyMoodTip)); OnPropertyChanged(nameof(BuddyTip)); } }
     }
 
-    /// <summary>Her tooltip: what she is up to, in the UI language.</summary>
+    /// <summary>What she is up to, in the UI language.</summary>
     public string BuddyMoodTip => Loc("buddy.mood." + _buddyMood);
+
+    /// <summary>Her tooltip in the activity bar: her mood, then what a click does.</summary>
+    public string BuddyTip => BuddyMoodTip + "\n" + Loc("buddy.goHome");
+
+    private System.Windows.Input.ICommand? _goHomeCommand;
+    /// <summary>Clicking her (owner 2026-11-08: "กดที่ไอค่อนแมว หรือ หน้า น้อง cluadex ควรเป็นการกลับไปหน้า home ตอนรอเปิดโปรเจค"):
+    /// the same path as the title bar's New Chat — the Chat page with an empty chat and no folder open, where the starters
+    /// ask which project. A chat that is running carries on in the background (NewSession leaves its run alone); an
+    /// untouched chat on screen is reused, so clicking her twice stacks nothing.</summary>
+    public System.Windows.Input.ICommand GoHomeCommand => _goHomeCommand ??= new RelayCommand(GoHome);
+
+    private void GoHome()
+    {
+        NudgeBuddy();   // the owner is here: she wakes up
+        _ = NewChatAndShowAsync();
+    }
 
     /// <summary>The ledger beside codex.db (made with the chat store).</summary>
     private void InitLiveRuns(string? dataRoot) => _liveRuns ??= new LiveRunLedger(dataRoot);

@@ -93,5 +93,44 @@ internal static partial class Program
         Vm.UserInput = "hello?";
         Check("RB5b typing wakes her", Mood(BuddyMood.Idle), $"{Vm.BuddyMoodState} · {OtherRuns()} other runs");
         Vm.UserInput = "";
+
+        // RB6 — clicking her goes Home (owner 2026-11-08: "กดที่ไอค่อนแมว หรือ หน้า น้อง cluadex ควรเป็นการกลับไปหน้า home ตอนรอเปิด
+        // โปรเจค"): the Chat page, an empty chat, no folder open — and the chat that was running keeps running.
+        await FreshChat();
+        Vm.SetWorkingDirectory(ProjA);
+        var busy = Vm.CurrentSession!;
+        var gate6 = new SemaphoreSlim(0);
+        Fake.ScriptFor["[RB6]"] = new Queue<FakeStep>([FakeStep.Gated(["RB6 working"], gate6, [" — RB6 done."])]);
+        await Send("[RB6] long job, then go home");
+        await WaitUntil(() => busy.RunStatus == RunBadge.Working && Vm.Messages.Any(m => m.Content.StartsWith("RB6 working")));
+        int shown = 0;
+        void OnShow() => shown++;
+        Vm.NavigateToChatRequested += OnShow;
+        try
+        {
+            Vm.GoHomeCommand.Execute(null);
+            await Render();
+            var home = Vm.CurrentSession;
+            Check("RB6a Home: a new empty chat on screen", home != null && !ReferenceEquals(home, busy) && Vm.Messages.Count == 0,
+                $"{home?.Title} · {Vm.Messages.Count} rows");
+            Check("RB6b …with no folder open (the page that asks which project)", string.IsNullOrEmpty(Vm.WorkingDirectory), Vm.WorkingDirectory);
+            Check("RB6c …and the Chat page is brought forward", shown == 1, $"{shown}");
+            Check("RB6d the chat that was running is still running", busy.RunStatus == RunBadge.Working, busy.RunStatus);
+            Check("RB6e …and still in the sidebar", Vm.Sessions.Any(s => s.Id == busy.Id), busy.Id);
+            Vm.GoHomeCommand.Execute(null);
+            await Render();
+            Check("RB6f clicking her again stacks no second empty chat", ReferenceEquals(Vm.CurrentSession, home)
+                && Vm.Sessions.Count(s => s.Id == home!.Id) == 1, Vm.CurrentSession?.Id);
+            Check("RB6g the tooltip says what a click does", Vm.BuddyTip.Contains(Vm.BuddyMoodTip) && Vm.BuddyTip.Contains("Home"), Vm.BuddyTip);
+            gate6.Release();
+            bool finished = await WaitUntil(() => busy.RunStatus == RunBadge.Done, 15000);
+            Check("RB6h it finishes in the background: an unread result", finished, busy.RunStatus);
+            await Open(busy.Id);
+            await Render();
+            Check("RB6i opening it shows the whole reply — nothing lost by going Home",
+                Vm.Messages.Any(m => m.Content.Contains("RB6 working") && m.Content.Contains("RB6 done")),
+                string.Join(" | ", Vm.Messages.Select(m => m.Role + ":" + m.Content)));
+        }
+        finally { Vm.NavigateToChatRequested -= OnShow; gate6.Release(); Vm.SetWorkingDirectory(""); }
     }
 }
