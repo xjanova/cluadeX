@@ -27,6 +27,15 @@ public class LlamaServerProvider : ApiProviderBase
     public bool IsServerRunning => _serverProcess is { HasExited: false };
     public string? LoadedModelName => _loadedModelPath != null ? Path.GetFileNameWithoutExtension(_loadedModelPath) : null;
 
+    /// <summary>The chat requests' client: no HttpClient ceiling. The base client's 5-minute Timeout cut a big model's
+    /// prompt processing on a small GPU (Qwen3-Coder-30B-A3B, 12k prompt, CPU offload — 2026-11-06) although the agent
+    /// loop gives a local model 10 minutes, and the TaskCanceledException it threw read as "stopped by the user".
+    /// The caller's token is the budget (the loop's per-call timeout, the Stop button); a dead server closes the socket.</summary>
+    private static readonly HttpClient ChatClient = new(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(15) })
+    {
+        Timeout = System.Threading.Timeout.InfiniteTimeSpan,
+    };
+
     public LlamaServerProvider(SettingsService settingsService, GpuDetectionService? gpuDetection = null) : base(settingsService)
     {
         _gpuDetection = gpuDetection;
@@ -107,6 +116,192 @@ public class LlamaServerProvider : ApiProviderBase
 
     /// <summary>Last stderr lines of the current/last server process (the projector error is usually among them).</summary>
     private readonly System.Collections.Concurrent.ConcurrentQueue<string> _lastStderr = new();
+
+    /// <summary>The server's last stderr lines — where "cudaMalloc failed: out of memory" and friends are.</summary>
+    public IReadOnlyList<string> RecentStderr => _lastStderr.ToArray();
+
+    /// <summary>The server died on its own after it was ready (model path, exit code) — not our own stop.</summary>
+    public event Action<string, int>? OnServerDied;
+
+    /// <summary>The cards in this PC, for the model health log ("" when unknown). Asks nvidia-smi once per run of the
+    /// app (a card is not swapped while Windows runs): never call the first time on the UI thread.</summary>
+    public string GpuFingerprint()
+    {
+        if (_gpuPrint != null) return _gpuPrint;
+        try { return _gpuPrint = Local.ModelHealthLog.GpuFingerprint(_gpuDetection?.DetectAllNvidiaGpus()); }
+        catch { return ""; }
+    }
+    private string? _gpuPrint;
+    /// <summary>The NVIDIA cards now, with free VRAM (nvidia-smi: not on the UI thread). Empty without a reader.</summary>
+    public List<GpuInfo> DetectGpus() => _gpuDetection?.DetectAllNvidiaGpus() ?? new List<GpuInfo>();
+    /// <summary>The fingerprint if it was already read, else "" — safe on the UI thread.</summary>
+    public string CachedGpuFingerprint => _gpuPrint ?? "";
+
+    /// <summary>The GGUF the server runs (null when none).</summary>
+    public string? LoadedModelPath => _loadedModelPath;
+
+    /// <summary>How fast each model runs on this PC, from the timings llama-server returns. Replaced by the harness.</summary>
+    public Local.ModelSpeedLog Speed { get; set; } = Local.ModelSpeedLog.Default;
+
+    /// <summary>Tuned load settings per model and card (LoadTuner). A load uses the one that passed. Replaced by the harness.</summary>
+    public Local.TuneStore Tunes { get; set; } = Local.TuneStore.Default;
+
+    /// <summary>The tuned settings the running server was started with (null = the Settings page's).</summary>
+    public Local.TuneCandidate? AppliedTune { get; private set; }
+
+    /// <summary>The window the running server really has (a tuned profile may use a smaller one than Settings).</summary>
+    public int? LoadedContextSize { get; private set; }
+
+    /// <summary>The window requests must fit: the running server's, else Settings.</summary>
+    private int EffectiveContext => LoadedContextSize ?? (int)_settingsService.Settings.ContextSize;
+
+    /// <summary>Has this model been tuned on this card (passed or not)? Then a slow run is a verdict, not a suggestion.</summary>
+    public bool TunedHere(string modelPath) => Tunes.Find(modelPath, GpuFingerprint()) != null;
+
+    // ─── in use (the tuner must never take the server away from a running agent) ───
+    private int _inFlight;
+    private DateTime _lastRequestUtc = DateTime.MinValue;
+    /// <summary>A request is running, or one ended less than 90 s ago (an agent between two steps).</summary>
+    public bool InUse => Volatile.Read(ref _inFlight) > 0 || DateTime.UtcNow - _lastRequestUtc < TimeSpan.FromSeconds(90);
+    private sealed class BusyMark : IDisposable
+    {
+        private readonly LlamaServerProvider _p;
+        public BusyMark(LlamaServerProvider p) { _p = p; Interlocked.Increment(ref p._inFlight); p._lastRequestUtc = DateTime.UtcNow; }
+        public void Dispose() { Interlocked.Decrement(ref _p._inFlight); _p._lastRequestUtc = DateTime.UtcNow; }
+    }
+
+    // ─── tuning ───
+    private Local.TuneCandidate? _benchOverride;
+    private volatile bool _benchmarking;
+    public bool IsBenchmarking => _benchmarking;
+
+    /// <summary>Load the model with one candidate's settings, run the fixed benchmark, stop the server. A load or answer
+    /// that fails is a failed bench (the tune goes on to the next candidate), never a health record: an aggressive
+    /// candidate that runs out of memory says nothing about the model. Cancelling throws.</summary>
+    public async Task<Local.TuneBench> BenchmarkAsync(string modelPath, Local.TuneCandidate candidate, CancellationToken ct)
+    {
+        var watch = Stopwatch.StartNew();
+        _benchOverride = candidate;
+        _benchmarking = true;
+        try
+        {
+            try { await LaunchAsync(modelPath, null, null, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { return Local.TuneBench.Failed(Local.ModelHealthLog.Describe(ex, RecentStderr), watch.Elapsed.TotalSeconds); }
+            double loadSec = watch.Elapsed.TotalSeconds;
+
+            var body = JsonSerializer.Serialize(new
+            {
+                prompt = BenchPrompt(),
+                n_predict = Local.LoadTuner.BenchGenTokens,
+                temperature = 0,
+                cache_prompt = false,
+                ignore_eos = true,
+            });
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromMinutes(3));
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/completion")
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                };
+                using var resp = await ChatClient.SendAsync(req, cts.Token);
+                string text = await resp.Content.ReadAsStringAsync(cts.Token);
+                if (!resp.IsSuccessStatusCode) return Local.TuneBench.Failed($"HTTP {(int)resp.StatusCode}: {(text.Length > 200 ? text[..200] : text)}", loadSec);
+                if (ParseTimings(text) is not { } t) return Local.TuneBench.Failed("the server reported no timings", loadSec);
+                return new Local.TuneBench(true, t.PromptN, t.PromptTps, t.GenN, t.GenTps, loadSec);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return Local.TuneBench.Failed("no answer within 3 minutes", loadSec);
+            }
+            catch (HttpRequestException ex)
+            {
+                return Local.TuneBench.Failed(Local.ModelHealthLog.Describe(ex, RecentStderr), loadSec);
+            }
+        }
+        finally
+        {
+            await StopServerAsync();
+            _benchOverride = null;
+            _benchmarking = false;
+        }
+    }
+
+    /// <summary>≈ <see cref="Local.LoadTuner.BenchPromptTokens"/> tokens of ordinary code, the same every time.</summary>
+    public static string BenchPrompt()
+    {
+        const string block =
+            "public static int SumOfSquares(IEnumerable<int> values)\n{\n    int total = 0;\n    foreach (var v in values)\n" +
+            "        total += v * v; // square and add\n    return total;\n}\n\n";
+        var sb = new StringBuilder("Read this C# code, then continue it with more methods of the same kind.\n\n");
+        while (sb.Length < Local.LoadTuner.BenchPromptTokens * 3) sb.Append(block);
+        return sb.ToString();
+    }
+
+    private static readonly Dictionary<string, (bool CpuMoe, bool FlashAttnOn)> FeatureCache = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>What this llama-server accepts (--n-cpu-moe, -fa on), from its --help (no model is loaded). Cached per exe build.</summary>
+    public (bool CpuMoe, bool FlashAttnOn) ServerFeatures()
+    {
+        string? exe = FindServerExe();
+        if (exe == null) return (false, false);
+        string key;
+        try { var fi = new FileInfo(exe); key = $"{exe}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}"; } catch { key = exe; }
+        lock (FeatureCache) if (FeatureCache.TryGetValue(key, out var hit)) return hit;
+        string help = "";
+        try
+        {
+            var psi = new ProcessStartInfo(exe, "--help")
+            {
+                UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
+            };
+            psi.EnvironmentVariables["PATH"] = Path.GetDirectoryName(exe) + ";" + (psi.EnvironmentVariables["PATH"] ?? "");
+            using var p = Process.Start(psi)!;
+            var o = p.StandardOutput.ReadToEndAsync();
+            var e = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(10_000)) { try { p.Kill(true); } catch { } }
+            help = (o.Wait(2000) ? o.Result : "") + (e.Wait(2000) ? e.Result : "");
+        }
+        catch { }
+        var f = Local.LoadTuner.ParseServerFeatures(help);
+        lock (FeatureCache) FeatureCache[key] = f;
+        return f;
+    }
+
+    /// <summary>llama-server's "timings" object: prompt tokens read and their speed, tokens written and their speed.
+    /// Null when the answer carries none (an older build, or not JSON).</summary>
+    public static (int PromptN, double PromptTps, int GenN, double GenTps)? ParseTimings(string? responseJson)
+    {
+        if (string.IsNullOrEmpty(responseJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(responseJson);
+            if (!doc.RootElement.TryGetProperty("timings", out var t) || t.ValueKind != JsonValueKind.Object) return null;
+            static double D(JsonElement o, string name) => o.TryGetProperty(name, out var v) && v.TryGetDouble(out var d) ? d : 0;
+            return ((int)D(t, "prompt_n"), D(t, "prompt_per_second"), (int)D(t, "predicted_n"), D(t, "predicted_per_second"));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The last agent step's measured speed (the agent loop logs it).</summary>
+    public Local.ModelSpeed? LastStepSpeed { get; private set; }
+
+    /// <summary>One agent step finished: keep its speed (never throws — measuring must not break a run).</summary>
+    private void ObserveSpeed(string responseJson, TimeSpan took)
+    {
+        try
+        {
+            LastStepSpeed = null;
+            if (_loadedModelPath is not { } path || ParseTimings(responseJson) is not { } t) return;
+            LastStepSpeed = new Local.ModelSpeed(path, 0, "", DateTime.UtcNow, Math.Round(t.PromptTps, 1), Math.Round(t.GenTps, 1),
+                t.PromptN, t.GenN, Math.Round(took.TotalSeconds, 1),
+                Local.ModelSpeedLog.Judge(t.PromptN, t.PromptTps, t.GenN, t.GenTps, took.TotalSeconds));
+            string gpu = GpuFingerprint();
+            Speed.Observe(path, gpu, t.PromptN, t.PromptTps, t.GenN, t.GenTps, took.TotalSeconds, tuned: Tunes.Find(path, gpu) != null);
+        }
+        catch { }
+    }
 
     private async Task LaunchAsync(string modelPath, string? projector, IProgress<string>? progress, CancellationToken ct)
     {
@@ -216,8 +411,31 @@ public class LlamaServerProvider : ApiProviderBase
         {
             args.AddRange(new[] { "--tensor-split", tensorSplit });
         }
+
+        // Tuned for this model on this card (LoadTuner), or the candidate a tune is measuring: its -ngl / -c / -b / -t
+        // replace the Settings page's, plus --n-cpu-moe, -ub, -fa, the KV cache type.
+        var tune = _benchOverride;
+        if (tune == null && settings.GpuBackend != "CPU")
+        {
+            string gpuNow = "";
+            try { gpuNow = await Task.Run(GpuFingerprint, ct); } catch (OperationCanceledException) { throw; } catch { }
+            tune = Tunes.SettingsFor(modelPath, gpuNow);
+        }
+        if (tune != null)
+        {
+            foreach (string flag in new[] { "-ngl", "-c", "-b", "-t" })
+            {
+                int i = args.IndexOf(flag);
+                if (i >= 0 && i + 1 < args.Count) args.RemoveRange(i, 2);
+            }
+            args.AddRange(tune.Args());
+            gpuLayers = tune.GpuLayers;
+        }
+        AppliedTune = _benchOverride == null ? tune : null;
+        int ctxNow = tune?.Context ?? (int)settings.ContextSize;
+        LoadedContextSize = ctxNow;
         // Vision needs a multimodal projector; without one, tool images are omitted (and the model is told).
-        args.AddRange(VisionArgs(modelPath, projector, freeVramMB, (int)settings.ContextSize, gpuLayers >= 999));
+        args.AddRange(VisionArgs(modelPath, projector, freeVramMB, ctxNow, gpuLayers >= 999));
         _launchedWithMmproj = args.Any(a => a.StartsWith("--mmproj", StringComparison.OrdinalIgnoreCase));
 
         string fileName = Path.GetFileName(modelPath);
@@ -244,10 +462,18 @@ public class LlamaServerProvider : ApiProviderBase
             _serverProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
             // Crash detection: without this the UI kept showing "Ready" against a DEAD server and the
             // next request failed with a vague connection error (audit: "no Exited handler, stale Ready").
-            _serverProcess.Exited += (_, _) =>
+            _serverProcess.Exited += (sender, _) =>
             {
                 if (_stoppingIntentionally) return; // our own StopServerAsync kill — not a crash
+                bool wasReady = IsReady;
                 IsReady = false;
+                if (_benchmarking) return;          // a tune candidate that died is a failed bench, not a model failure
+                if (wasReady)
+                {
+                    int code = 0;
+                    try { code = (sender as Process)?.ExitCode ?? 0; } catch { }
+                    try { OnServerDied?.Invoke(modelPath, code); } catch { }
+                }
                 SetStatus("llama-server exited unexpectedly");
                 RaiseError("llama-server stopped (crashed or was killed). Reload the model from the Models page.");
             };
@@ -304,8 +530,8 @@ public class LlamaServerProvider : ApiProviderBase
                 SetStatus($"Ready: {Path.GetFileNameWithoutExtension(modelPath)} [{backendInfo}]");
                 progress?.Report($"llama-server ready! [{backendInfo}]");
 
-                // Update settings
-                _settingsService.UpdateSettings(s =>
+                // Update settings (not for a tune's benchmark: it is not the owner's choice of model)
+                if (!_benchmarking) _settingsService.UpdateSettings(s =>
                 {
                     s.SelectedModelPath = modelPath;
                     s.SelectedModelName = Path.GetFileNameWithoutExtension(modelPath);
@@ -451,6 +677,8 @@ public class LlamaServerProvider : ApiProviderBase
 
         _stoppingIntentionally = false;
         _loadedModelPath = null;
+        AppliedTune = null;
+        LoadedContextSize = null;
         LoadedProjectorPath = null;
         _launchedWithMmproj = false;
         SetStatus("llama-server stopped");
@@ -508,7 +736,7 @@ public class LlamaServerProvider : ApiProviderBase
         // Clamp generation budget so the prompt isn't starved of the window (the reopened chat-hang on the
         // GPU path: ctx=4096 + max_tokens=4096 reserves the whole window for output). See TokenBudget.
         int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(messages));
-        int maxTokens = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
+        int maxTokens = CluadeX.Helpers.TokenBudget.ClampMaxTokens(EffectiveContext, approxPromptTokens, settings.MaxTokens);
 
         var requestObj = new
         {
@@ -524,7 +752,8 @@ public class LlamaServerProvider : ApiProviderBase
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/v1/chat/completions");
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var busy = new BusyMark(this);
+        using var response = await ChatClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -666,13 +895,15 @@ public class LlamaServerProvider : ApiProviderBase
         // schemas are rendered into the prompt by --jinja, so they count toward the window too).
         int approxPromptTokens = Math.Max(0, CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj))
             + ToolImageTokenAdjustment(messages));
-        requestObj["max_tokens"] = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
+        requestObj["max_tokens"] = CluadeX.Helpers.TokenBudget.ClampMaxTokens(EffectiveContext, approxPromptTokens, settings.MaxTokens);
 
         var body = JsonSerializer.Serialize(requestObj);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/v1/chat/completions");
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        var stepWatch = Stopwatch.StartNew();
+        using var busy = new BusyMark(this);
+        using var response = await ChatClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(ct);
@@ -687,6 +918,7 @@ public class LlamaServerProvider : ApiProviderBase
         }
 
         var responseText = await response.Content.ReadAsStringAsync(ct);
+        ObserveSpeed(responseText, stepWatch.Elapsed);
         var parsed = ParseOpenAiToolResponse(responseText);
         // The same inline <think> block, in a tool-loop reply: the answer without it, the thinking apart.
         var (answer, thought) = CluadeX.Helpers.ThinkTagStream.Split(parsed.TextContent);
@@ -713,7 +945,7 @@ public class LlamaServerProvider : ApiProviderBase
                 if (type.Contains("context", StringComparison.OrdinalIgnoreCase)
                     || msg.Contains("context size", StringComparison.OrdinalIgnoreCase))
                 {
-                    int nCtx = err.TryGetProperty("n_ctx", out var c) && c.TryGetInt32(out var ci) ? ci : (int)_settingsService.Settings.ContextSize;
+                    int nCtx = err.TryGetProperty("n_ctx", out var c) && c.TryGetInt32(out var ci) ? ci : EffectiveContext;
                     int nPrompt = err.TryGetProperty("n_prompt_tokens", out var p) && p.TryGetInt32(out var pi) ? pi : 0;
                     int suggest = Math.Max(8192, nPrompt > 0 ? ((nPrompt + 2048 + 4095) / 4096) * 4096 : 8192);
                     return $"⚠ Context window too small: this request needs ~{nPrompt} tokens but the model is "

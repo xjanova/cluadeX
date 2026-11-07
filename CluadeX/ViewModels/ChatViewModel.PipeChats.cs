@@ -438,7 +438,8 @@ public partial class ChatViewModel
         {
             Exception? failure = null;
             try { run.LoopResult = await Task.Run(() => RunAgentLoopAsync(history, text, maxSteps, linked!.Token), CancellationToken.None); }
-            catch (OperationCanceledException) { /* the stop line below */ }
+            // Only a real stop (the caller went, or Stop) is a stop line: any other cancellation is a failure to show and log.
+            catch (OperationCanceledException) when (linked!.IsCancellationRequested) { /* the stop line below */ }
             catch (Exception ex) { failure = ex; }
 
             await dispatcher.InvokeAsync(() =>

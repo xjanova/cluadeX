@@ -10,6 +10,20 @@ public class ModelInfo
     /// <summary>Can a llama.cpp of this copy load it (LlamaBackendInfo.SupportsArchitecture)? null = could not tell.</summary>
     public bool? ArchSupported { get; set; }
     public bool NeedsNewerBackend => ArchSupported == false;
+    /// <summary>Why this model failed on this PC before (ModelHealthLog), localized; empty = never failed. While set, Load
+    /// is refused and the card offers Force load.</summary>
+    public string FailedReason { get; set; } = "";
+    public bool HasFailed => FailedReason.Length > 0;
+    /// <summary>Measured too slow for agent work on this PC (ModelSpeedLog), with the numbers; empty = not slow. Loading
+    /// is NOT refused — the card only warns.</summary>
+    public string SlowReason { get; set; } = "";
+    public bool IsSlow => SlowReason.Length > 0 && !HasFailed;
+    /// <summary>Ran slowly on settings nobody tuned: the card suggests the tune instead of a flag.</summary>
+    public string NeedsTuneReason { get; set; } = "";
+    public bool NeedsTune => NeedsTuneReason.Length > 0 && !IsSlow && !HasFailed;
+    /// <summary>Tuned for this PC and fast enough (LoadTuner profile), with the settings and numbers; empty = not tuned.</summary>
+    public string TunedText { get; set; } = "";
+    public bool IsTuned => TunedText.Length > 0 && !IsSlow && !HasFailed;
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;

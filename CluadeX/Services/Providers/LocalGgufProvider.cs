@@ -73,6 +73,7 @@ public class LocalGgufProvider : IAiProvider
         _serverProvider.OnStatusChanged += _serverStatusHandler;
         _serverProvider.OnLoadingChanged += _serverLoadingHandler;
         _serverProvider.OnError += _serverErrorHandler;
+        _serverProvider.OnServerDied += OnServerDied;
     }
 
     public Task InitializeAsync(CancellationToken ct = default)
@@ -81,12 +82,193 @@ public class LocalGgufProvider : IAiProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>Models that failed on this PC (load or mid-answer). Replaced by the test harness.</summary>
+    public Local.ModelHealthLog Health { get; set; } = Local.ModelHealthLog.Default;
+
+    /// <summary>The cards in this PC now; the harness replaces it (the real one asks nvidia-smi once, then caches).</summary>
+    public Func<string>? CurrentGpu { get; set; }
+    private string Gpu() => (CurrentGpu ?? _serverProvider.GpuFingerprint)();
+    /// <summary>The GPU fingerprint (asks nvidia-smi the first time: not on the UI thread).</summary>
+    public string GpuNow() => Gpu();
+    /// <summary>The fingerprint if already known, else "" — for the UI thread.</summary>
+    public string CachedGpu => CurrentGpu != null ? CurrentGpu() : _serverProvider.CachedGpuFingerprint;
+
+    /// <summary>The GGUF loaded now (either backend), null when none.</summary>
+    public string? LoadedModelPath => _activeBackend == Backend.None ? null : _loadedModelPath;
+
+    /// <summary>How fast each model ran on this PC (shared with the llama-server backend, which measures it).</summary>
+    public Local.ModelSpeedLog Speed { get => _serverProvider.Speed; set => _serverProvider.Speed = value; }
+
+    /// <summary>The last agent step's measured speed (llama-server only; LLamaSharp reports no timings).</summary>
+    public Local.ModelSpeed? LastStepSpeed => _activeBackend == Backend.LlamaServer ? _serverProvider.LastStepSpeed : null;
+
+    /// <summary>Tuned load settings (shared with the llama-server backend, which applies them).</summary>
+    public Local.TuneStore Tunes { get => _serverProvider.Tunes; set => _serverProvider.Tunes = value; }
+    /// <summary>The window the loaded model really has (a tuned profile may be smaller than Settings); null = Settings.</summary>
+    public int? LoadedContextSize => _activeBackend == Backend.LlamaServer ? _serverProvider.LoadedContextSize : null;
+    /// <summary>The tuned settings the loaded model runs with (null = the Settings page's).</summary>
+    public Local.TuneCandidate? AppliedTune => _activeBackend == Backend.LlamaServer ? _serverProvider.AppliedTune : null;
+    public bool TunedHere(string modelPath) => _serverProvider.TunedHere(modelPath);
+
+    // ─── load tuning (LoadTuner) — only ever from the owner's click on the Models page ───
+
+    /// <summary>What a tune of this model would do, decided without loading anything: the candidates, how many loads and
+    /// about how long. Null with a reason when it cannot be tuned here. Reads the GGUF header, nvidia-smi and the
+    /// server's --help: call it off the UI thread.</summary>
+    public sealed record TunePlan(string ModelPath, Local.ModelShape Shape, Local.TuneHardware Hardware,
+        IReadOnlyList<Local.TuneCandidate> Candidates, int EstimatedMinutes, string Gpu);
+
+    public bool IsTuning { get; private set; }
+
+    public (TunePlan? Plan, string Refusal) PlanTune(string modelPath)
+    {
+        bool th = IsThai;
+        if (!_serverProvider.IsServerBackendAvailable)
+            return (null, th ? "ปรับค่าได้เฉพาะเมื่อมี llama-server (ดาวน์โหลด llama.cpp ในหน้า Models ก่อน)"
+                             : "Tuning needs llama-server (get llama.cpp on the Models page first)");
+        var cat = HuggingFaceService.Catalog.FirstOrDefault(m =>
+            string.Equals(m.FileName, Path.GetFileName(modelPath), StringComparison.OrdinalIgnoreCase)
+            || m.Quants.Any(q => string.Equals(q.FileName, Path.GetFileName(modelPath), StringComparison.OrdinalIgnoreCase)));
+        double? activeShare = cat is { TotalParamsB: > 0, ActiveParamsB: > 0 } ? cat.ActiveParamsB / cat.TotalParamsB : null;
+        var shape = Local.LoadTuner.ShapeOf(modelPath, activeShare);
+        if (shape == null)
+            return (null, th ? "อ่านโครงสร้างโมเดลจากไฟล์ไม่ได้ (ไม่ใช่ GGUF หรือไฟล์เสีย)" : "Cannot read the model's shape from the file (not a GGUF, or damaged)");
+        var gpus = SafeGpus();
+        var (cpuMoe, fa) = _serverProvider.ServerFeatures();
+        var s = _settingsService.Settings;
+        var hw = new Local.TuneHardware(gpus.Sum(g => g.VramFreeMB), gpus.Sum(g => g.VramTotalMB), Local.LoadTuner.PhysicalCores(),
+            cpuMoe, fa, (int)s.ContextSize, (int)s.BatchSize);
+        var cands = Local.LoadTuner.Pick(shape, hw);
+        if (cands.Count == 0)
+            return (null, th ? "ไม่มีชุดค่าที่ลงใน VRAM ที่ว่างได้" : "No candidate fits the free VRAM");
+        int minutes = Math.Min((int)Local.LoadTuner.Budget.TotalMinutes, (int)Math.Ceiling(cands.Count * 1.5));
+        return (new TunePlan(modelPath, shape, hw, cands, minutes, Local.ModelHealthLog.GpuFingerprint(gpus)), "");
+    }
+
+    private List<Models.GpuInfo> SafeGpus()
+    {
+        try { return _serverProvider.DetectGpus(); } catch { return new(); }
+    }
+    /// <summary>The GPU reader the tuner asks for free VRAM before every candidate; the harness replaces it.</summary>
+    public Func<int>? FreeVramMb { get; set; }
+
+    /// <summary>Run a planned tune: the loaded model is unloaded first, each candidate loads, runs the benchmark and stops.
+    /// The result is kept as the model's profile for this card (a load then uses it); only a tune that found nothing fast
+    /// enough sets the "slow here" flag. Cancel = no verdict, no profile. Refused while the model serves a request.</summary>
+    public async Task<Local.TuneResult> RunTuneAsync(TunePlan plan, IProgress<string>? progress, CancellationToken ct,
+        Func<Local.TuneCandidate, CancellationToken, Task<Local.TuneBench>>? bench = null)
+    {
+        bool th = IsThai;
+        if (IsTuning) throw new InvalidOperationException(th ? "กำลังปรับค่าอยู่แล้ว" : "A tune is already running");
+        if (IsLoading) throw new InvalidOperationException(th ? "กำลังโหลดโมเดลอยู่ รอให้เสร็จก่อน" : "A model is loading, wait for it");
+        if (_serverProvider.InUse)
+            throw new InvalidOperationException(th ? "โมเดลกำลังถูกใช้งาน (มีงาน AI รันอยู่หรือเพิ่งจบ) — รอให้ว่างก่อนแล้วค่อยปรับค่า"
+                                                   : "The model is in use (an AI run is working or just ended) — wait until it is idle, then tune");
+        IsTuning = true;
+        try
+        {
+            await UnloadAsync();
+            Func<int> free = FreeVramMb ?? (() =>
+            {
+                Thread.Sleep(1500);   // the stopped server's VRAM takes a moment to come back
+                return SafeGpus().Sum(g => g.VramFreeMB);
+            });
+            var result = await Local.LoadTuner.RunAsync(plan.Candidates,
+                bench ?? ((c, t) => _serverProvider.BenchmarkAsync(plan.ModelPath, c, t)), free, progress, th, ct);
+            if (result.Measured == 0 && !result.Trials.Any(t => t.Bench != null))
+                return result;   // everything skipped (VRAM taken by something else): no verdict
+            string tried = Local.LoadTuner.TriedSummary(result, th);
+            if (result.Best != null || !result.Passed)
+                Tunes.Save(new Local.TuneProfile(plan.ModelPath, SizeOf(plan.ModelPath), plan.Gpu, DateTime.UtcNow,
+                    result.Best ?? plan.Candidates[0], result.BestBench?.PromptTps ?? 0, result.BestBench?.GenTps ?? 0,
+                    result.Passed, result.Measured, tried));
+            Speed.RecordTune(plan.ModelPath, plan.Gpu, result.BestBench, result.Passed, tried);
+            return result;
+        }
+        finally
+        {
+            IsTuning = false;
+        }
+    }
+
+    private static long SizeOf(string path)
+    {
+        try { return new FileInfo(path).Length; } catch { return -1; }
+    }
+    private bool IsThai => string.Equals(_settingsService.Settings.Language, "th", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
-    /// Load a GGUF model. Picks the right backend based on the model's architecture:
-    /// known-supported archs (llama, qwen2, gemma2, mistral, phi3 etc.) go to LLamaSharp;
-    /// newer architectures route to llama-server.exe.
+    /// Load a GGUF model — unless it failed on this PC before: then refuse with why and what to do
+    /// (<see cref="Local.ModelBlockedException"/>) until the owner presses Force load (<paramref name="force"/>).
+    /// A load that fails is recorded with its reason (memory, crash, damaged file…) and explained
+    /// (<see cref="Local.ModelLoadFailedException"/>); one that works clears the record.
     /// </summary>
-    public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default)
+    public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default, bool force = false)
+    {
+        bool th = IsThai;
+
+        // The last load never finished (in-process crash, the PC restarted): that model failed, whatever it was.
+        if (Health.TakeInterruptedLoad() is { } lost)
+            OnError?.Invoke(Local.ModelHealthLog.FailedMessage(lost, th));
+
+        if (!force && Health.Find(modelPath) is { } past)
+        {
+            string gpuThen = "";
+            try { gpuThen = await Task.Run(Gpu, ct); } catch { }
+            string msg = Local.ModelHealthLog.BlockedMessage(past, gpuThen, th, out string shortMsg);
+            OnStatusChanged?.Invoke(shortMsg);
+            throw new Local.ModelBlockedException(past, msg, shortMsg);
+        }
+
+        string gpuNow = "";
+        try { gpuNow = await Task.Run(Gpu, ct); } catch { }   // nvidia-smi: not on the UI thread
+        Health.MarkLoading(modelPath, gpuNow);
+        try
+        {
+            await LoadModelCoreAsync(modelPath, progress, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException
+                                       and not ModelArchitectureNotSupportedException   // its own way out: get a newer llama.cpp
+                                       and not FileNotFoundException)
+        {
+            Health.EndLoading();
+            string detail = Local.ModelHealthLog.Describe(ex, _serverProvider.RecentStderr);
+            var kind = Local.ModelHealthLog.Classify(detail);
+            var failure = Health.Record(modelPath, kind, detail, gpuNow, duringRun: false);
+            string msg = Local.ModelHealthLog.FailedMessage(failure, th);
+            OnStatusChanged?.Invoke(th ? "โหลดโมเดลไม่สำเร็จ — " + Local.ModelHealthLog.ReasonText(kind, true)
+                                       : "Model load failed — " + Local.ModelHealthLog.ReasonText(kind, false));
+            throw new Local.ModelLoadFailedException(failure, msg, ex);
+        }
+        catch
+        {
+            Health.EndLoading();
+            throw;
+        }
+        Health.EndLoading();
+        Health.Clear(modelPath);
+    }
+
+    /// <summary>The server died while a model was loaded and answering: remember it, and say why.</summary>
+    private void OnServerDied(string modelPath, int exitCode)
+    {
+        try
+        {
+            var lines = _serverProvider.RecentStderr;
+            string telling = string.Join(" | ", lines.Where(l => Local.ModelHealthLog.Classify(l) != Local.ModelFailureKind.Unknown)
+                .Select(l => l.Trim()).TakeLast(3));
+            var kind = Local.ModelHealthLog.Classify(telling, exitCode);
+            // Exit 0 with nothing telling = closed from outside (Task Manager, another tool), not the model's fault.
+            if (exitCode == 0 && kind == Local.ModelFailureKind.Unknown) return;
+            if (kind == Local.ModelFailureKind.Unknown) kind = Local.ModelFailureKind.Crash;
+            string detail = $"llama-server exited with code 0x{unchecked((uint)exitCode):X8}" + (telling.Length > 0 ? " | " + telling : "");
+            var failure = Health.Record(modelPath, kind, detail, Gpu(), duringRun: true);
+            OnError?.Invoke(Local.ModelHealthLog.FailedMessage(failure, IsThai));
+        }
+        catch { /* the crash message from the server itself still reaches the owner */ }
+    }
+
+    private async Task LoadModelCoreAsync(string modelPath, IProgress<string>? progress, CancellationToken ct)
     {
         var settings = _settingsService.Settings;
 

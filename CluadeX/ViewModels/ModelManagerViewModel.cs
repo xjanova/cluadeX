@@ -203,6 +203,16 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand RefreshLocalModelsCommand { get; }
     public ICommand RefreshHardwareCommand { get; }
     public ICommand LoadModelCommand { get; }
+    /// <summary>Load a model that failed here before, after the owner confirms (ModelHealthLog blocks it otherwise).</summary>
+    public ICommand ForceLoadModelCommand { get; }
+    /// <summary>Forget a model's "too slow here" measurement (the × on its pill).</summary>
+    public ICommand ForgetSlowCommand { get; }
+    /// <summary>Tune the load settings for this PC (LoadTuner) — only from this click, after a confirm.</summary>
+    public ICommand TuneModelCommand { get; }
+    public ICommand CancelTuneCommand { get; }
+    private CancellationTokenSource? _tuneCts;
+    private bool _isTuning;
+    public bool IsTuning { get => _isTuning; private set => SetProperty(ref _isTuning, value); }
     public ICommand GetLlamaCppCommand { get; }
     public ICommand UnloadModelCommand { get; }
     public ICommand DownloadRecommendedCommand { get; }
@@ -256,7 +266,16 @@ public class ModelManagerViewModel : ViewModelBase
 
         RefreshLocalModelsCommand = new RelayCommand(RefreshLocalModels);
         RefreshHardwareCommand = new RelayCommand(() => DetectHardwareAsync(clearCache: true), () => !IsDetecting);
-        LoadModelCommand = new AsyncRelayCommand<string>(LoadModel);
+        LoadModelCommand = new AsyncRelayCommand<string>(p => LoadModel(p));
+        ForceLoadModelCommand = new AsyncRelayCommand<string>(ForceLoadModel);
+        TuneModelCommand = new AsyncRelayCommand<string>(TuneModel);
+        CancelTuneCommand = new RelayCommand(() => _tuneCts?.Cancel());
+        ForgetSlowCommand = new RelayCommand<string>(p =>
+        {
+            if (string.IsNullOrEmpty(p)) return;
+            _localProvider.Speed.Clear(p);
+            RefreshLocalModels();
+        });
         // One button: get / update, and cancel while it downloads.
         GetLlamaCppCommand = new AsyncRelayCommand(() =>
         {
@@ -639,8 +658,23 @@ public class ModelManagerViewModel : ViewModelBase
     private void ShowLocalModels(List<ModelInfo> models)
     {
         LocalModels.Clear();
+        bool th = string.Equals(_settingsService.Settings.Language, "th", StringComparison.OrdinalIgnoreCase);
         foreach (var model in models)
         {
+            model.FailedReason = !string.IsNullOrEmpty(model.LocalPath) && _localProvider.Health.Find(model.LocalPath) is { } failed
+                ? CluadeX.Services.Local.ModelHealthLog.BlockedMessage(failed, "", th, out _)
+                : "";
+            // The GPU fingerprint only if already read (nvidia-smi is never asked on the UI thread): unknown = still shown.
+            string gpuKnown = _localProvider.CachedGpu;
+            model.SlowReason = !string.IsNullOrEmpty(model.LocalPath) && _localProvider.Speed.FindSlow(model.LocalPath, gpuKnown) is { } slow
+                ? CluadeX.Services.Local.ModelSpeedLog.Describe(slow, th)
+                : "";
+            model.NeedsTuneReason = !string.IsNullOrEmpty(model.LocalPath) && _localProvider.Speed.FindNeedsTune(model.LocalPath, gpuKnown) is { } untuned
+                ? CluadeX.Services.Local.ModelSpeedLog.Describe(untuned, th)
+                : "";
+            model.TunedText = !string.IsNullOrEmpty(model.LocalPath) && _localProvider.Tunes.Find(model.LocalPath, gpuKnown) is { Passed: true } tuned
+                ? CluadeX.Services.Local.LoadTuner.ProfileText(tuned, th)
+                : "";
             model.IsLoaded = SamePath(model.LocalPath, SelectedModelPath) && _localProvider.IsReady;
             DescribeFile(model);
             LocalModels.Add(model);
@@ -652,7 +686,72 @@ public class ModelManagerViewModel : ViewModelBase
         RefreshLlamaCppCard();
     }
 
-    private async Task LoadModel(string? path)
+    /// <summary>Force load: the model failed on this PC before. Say why once more and let the owner decide — a model
+    /// that ran the GPU out of memory can take the whole PC down with it.</summary>
+    private async Task ForceLoadModel(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || _localProvider.IsLoading) return;
+        bool th = string.Equals(_settingsService.Settings.Language, "th", StringComparison.OrdinalIgnoreCase);
+        if (_localProvider.Health.Find(path) is { } failed)
+        {
+            string why = CluadeX.Services.Local.ModelHealthLog.ReasonText(failed.Kind, th);
+            var answer = MessageBox.Show(_loc.T("modelsm.forceLoadConfirm", Path.GetFileNameWithoutExtension(path), why),
+                "CluadeX", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+        // A fresh start for this model: its speed is measured again and its tuned settings are dropped too.
+        _localProvider.Speed.Clear(path);
+        _localProvider.Tunes.Clear(path);
+        await LoadModel(path, force: true);
+    }
+
+    /// <summary>Tune: plan without loading, say how many loads and how long and that it works the GPU hard, then — only on
+    /// Yes — measure the candidates. A cancel leaves no verdict and no profile.</summary>
+    private async Task TuneModel(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || IsTuning || _localProvider.IsLoading || IsLoadingModel) return;
+        bool th = string.Equals(_settingsService.Settings.Language, "th", StringComparison.OrdinalIgnoreCase);
+        string name = Path.GetFileNameWithoutExtension(path);
+        ModelLoadStatus = th ? $"กำลังดูว่าจะลองค่าอะไรบ้างสำหรับ {name}…" : $"Working out what to try for {name}…";
+        var (plan, refusal) = await Task.Run(() => _localProvider.PlanTune(path));
+        if (plan == null) { ModelLoadStatus = refusal; return; }
+
+        string list = string.Join("\n", plan.Candidates.Select((c, i) => $"{i + 1}. {c.Summary(th)} (≈ {c.EstVramMb:N0} MB)"));
+        var answer = MessageBox.Show(_loc.T("modelsm.tuneConfirm", name, plan.Candidates.Count, plan.EstimatedMinutes, list),
+            "CluadeX", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) { ModelLoadStatus = ""; return; }
+
+        _tuneCts = new CancellationTokenSource();
+        IsTuning = true;
+        IsLoadingModel = true;
+        var progress = new Progress<string>(s => ModelLoadStatus = s);
+        try
+        {
+            var result = await Task.Run(() => _localProvider.RunTuneAsync(plan, progress, _tuneCts.Token));
+            ModelLoadStatus = CluadeX.Services.Local.LoadTuner.ResultMessage(result, name, th);
+            _log?.Info("Models", $"tune {name}: passed={result.Passed} measured={result.Measured}/{plan.Candidates.Count} best={result.Best?.Summary(false) ?? "-"} "
+                + $"gen={result.BestBench?.GenTps:0.#} prompt={result.BestBench?.PromptTps:0} outOfTime={result.OutOfTime}");
+        }
+        catch (OperationCanceledException)
+        {
+            ModelLoadStatus = th ? $"หยุดปรับค่า {name} แล้ว — ไม่ได้บันทึกผลหรือปักธงอะไร" : $"Stopped tuning {name} — nothing was saved or flagged";
+        }
+        catch (Exception ex)
+        {
+            ModelLoadStatus = ex is InvalidOperationException ? ex.Message : (th ? $"ปรับค่าไม่สำเร็จ: {ex.Message}" : $"Tuning failed: {ex.Message}");
+            _log?.Warn("Models", $"tune {name} failed", ex);
+        }
+        finally
+        {
+            _tuneCts.Dispose();
+            _tuneCts = null;
+            IsTuning = false;
+            IsLoadingModel = false;
+            RefreshLocalModels();
+        }
+    }
+
+    private async Task LoadModel(string? path, bool force = false)
     {
         if (string.IsNullOrEmpty(path) || _localProvider.IsLoading) return;
         string name = Path.GetFileNameWithoutExtension(path);
@@ -669,7 +768,7 @@ public class ModelManagerViewModel : ViewModelBase
 
             // Route through LocalGgufProvider — it inspects the GGUF arch and
             // transparently picks LLamaSharp or llama-server.exe (Gemma 4 etc.)
-            await _localProvider.LoadModelAsync(path, progress);
+            await _localProvider.LoadModelAsync(path, progress, force: force);
 
             SelectedModelPath = path;
             ModelLoadStatus = _localProvider.LoadedProjectorPath != null ? _loc.T("modelsm.loadedVision", name)
@@ -692,6 +791,9 @@ public class ModelManagerViewModel : ViewModelBase
             {
                 // Already localized, and it names the ways out (Ollama, a custom backend folder, the update script).
                 ModelArchitectureNotSupportedException arch => arch.Message,
+                // Failed here before / failed just now: why, what to do, and that Force load is the way back.
+                CluadeX.Services.Local.ModelBlockedException blocked => blocked.Message,
+                CluadeX.Services.Local.ModelLoadFailedException failedNow => failedNow.Message,
                 FileNotFoundException => _loc.T("modelsm.loadFailedMissing", name),
                 OutOfMemoryException or InsufficientMemoryException => _loc.T("modelsm.loadFailedMemory", name),
                 _ => _loc.T("modelsm.loadFailed", name),

@@ -1240,6 +1240,10 @@ public partial class App : Application
             _serviceProvider?.GetService<DebugLogService>()?.Flush();   // the log gathers lines for half a second
 
             _serviceProvider?.GetService<CostTrackingService>()?.FlushLedger();   // today's spend survives the restart
+
+            // Closing the app in the middle of a model load is not a crash: only a load the process did not live
+            // through may leave the marker that blocks the model at the next start (ModelHealthLog.TakeInterruptedLoad).
+            _serviceProvider?.GetService<Services.Providers.LocalGgufProvider>()?.Health.EndLoading();
         }
         catch (Exception ex)
         {
