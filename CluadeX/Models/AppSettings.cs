@@ -247,6 +247,10 @@ public class AppSettings
     /// </summary>
     public bool AutoVerifyAfterEditEnabled { get; set; } = true;
 
+    /// <summary>A watch the AI started (watch_ci / watch_process) that ends while nobody works in its chat starts a new turn
+    /// there with the result. Off = a notice row only, and the owner sends when they want.</summary>
+    public bool WatchAutoContinue { get; set; } = true;
+
     // ─── Model-escalation ladder (local → stronger API model) ───
     /// <summary>
     /// Escalate to a stronger API model when the LOCAL model stalls (hits max iterations OR repeats the same

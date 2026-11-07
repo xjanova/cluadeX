@@ -835,7 +835,9 @@ public static class ChatToolBridge
           .Append($"{T("checkpoint_list")}, {T("checkpoint_diff")} and {T("checkpoint_restore")} show or undo what the AI changed ")
           .Append($"in this chat; {T("git_blame")}, {T("git_show")}, {T("gh_pr_view")}, {T("gh_pr_checks")} and {T("gh_run_log")} ")
           .Append($"read history, pull requests and CI; {T("debug")} runs a debugger; {T(AutoComment.AutoCommentToolModule.ToolName)} ")
-          .Append("adds comments to existing code without changing the code.");
+          .Append("adds comments to existing code without changing the code. ")
+          .Append($"To wait for CI or a background process, call {T("watch_ci")} / {T("watch_process")} and END your turn — ")
+          .Append($"CluadeX starts your next turn with the result; never poll or sleep ({T("watch_list")}, {T("watch_cancel")}).");
         return sb.ToString();
     }
 

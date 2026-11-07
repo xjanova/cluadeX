@@ -28,6 +28,7 @@ public class LocalizationService
                                       Localization.GitPanelKeys.Keys,
                                       Localization.OrchestrationKeys.Keys,
                                       Localization.DesignKeys.Keys,
+                                      Localization.WatchKeys.Keys,
                                       Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
                                       Localization.AggregatorKeys.Keys,
                                       Localization.LspKeys.Keys,

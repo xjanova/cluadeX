@@ -187,6 +187,11 @@ public enum ToolType
     // Orchestration (Services/Tools/OrchestrationToolModule) — appended last: a ToolType is stored by number
     Workflow,            // A declarative multi-agent workflow (opt-in: the chat's Ultra switch or the owner's words)
     WrapUp,              // The next-step box at the end of a turn: recap, one question, one or two answer buttons
+    // Watches (Services/Watch, tools in EngineeringToolModule.Watch) — appended last: a ToolType is stored by number
+    WatchCi,             // Watch a PR's / commit's / branch's CI; the chat is told (and woken) when it ends
+    WatchProcess,        // Watch a background process until it exits; the chat is told (and woken)
+    WatchList,           // This chat's watches
+    WatchCancel,         // Stop one of this chat's watches (or all)
 }
 
 /// <summary>
@@ -227,7 +232,9 @@ public class ToolCall
         or ToolType.BrowserRead or ToolType.BrowserFind
         or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead
         or ToolType.FindReferences or ToolType.ImpactOf or ToolType.CheckpointList or ToolType.CheckpointDiff
-        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow => true,
+        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow
+        // a watch only reads CI / a process list on a timer: nothing in the project or on the PC changes
+        or ToolType.WatchCi or ToolType.WatchProcess or ToolType.WatchList or ToolType.WatchCancel => true,
         _ => false,
     };
 
@@ -248,7 +255,9 @@ public class ToolCall
         or ToolType.BrowserRead or ToolType.BrowserFind
         or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead
         or ToolType.FindReferences or ToolType.ImpactOf or ToolType.CheckpointList or ToolType.CheckpointDiff
-        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow => true,
+        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow
+        // a watch only reads CI / a process list on a timer: nothing in the project or on the PC changes
+        or ToolType.WatchCi or ToolType.WatchProcess or ToolType.WatchList or ToolType.WatchCancel => true,
         _ => false,
     };
 }

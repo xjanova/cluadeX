@@ -227,8 +227,12 @@ internal static partial class Program
     static Task SchemaCases(IServiceProvider sp, SettingsService settings, LocalizationService loc)
     {
         var schemas = Module.GetToolSchemas().ToList();
-        Check("S1", "9 desktop_* schemas, every name resolves to its own tool type, all deferred (tool search)",
-            schemas.Count == 9 && schemas.All(s => Module.ResolveToolType(s.Name) is { } t && Module.ToolTypes.Contains(t) && s.DeferLoading),
+        // One schema per tool type the module owns (13 since desktop_mouse / window / read / clipboard joined the first 9).
+        var schemaTypes = schemas.Select(s => Module.ResolveToolType(s.Name)).ToList();
+        Check("S1", "a desktop_* schema for every tool type of the module, each name its own type, all deferred (tool search)",
+            schemas.Count >= 13 && schemas.All(s => s.Name.StartsWith("desktop_") && s.DeferLoading)
+            && schemaTypes.All(t => t is { } x && Module.ToolTypes.Contains(x)) && schemaTypes.Distinct().Count() == schemas.Count
+            && Module.ToolTypes.All(t => schemaTypes.Contains(t)),
             string.Join(", ", schemas.Select(s => s.Name + (s.DeferLoading ? "" : "(not deferred)"))));
         Check("S1b", "the agent's resolver routes desktop_act / desktop_click to the module",
             Svc.ResolveToolTypePublic("desktop_act") == ToolType.DesktopAct && Svc.ResolveToolTypePublic("desktop_click") == ToolType.DesktopAct

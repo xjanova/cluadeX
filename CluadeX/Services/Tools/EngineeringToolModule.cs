@@ -64,6 +64,10 @@ public sealed partial class EngineeringToolModule : IAgentToolModule
         [ToolType.GitBlame] = "git_blame",
         [ToolType.GitShow] = "git_show",
         [ToolType.Debug] = "debug",
+        [ToolType.WatchCi] = "watch_ci",
+        [ToolType.WatchProcess] = "watch_process",
+        [ToolType.WatchList] = "watch_list",
+        [ToolType.WatchCancel] = "watch_cancel",
     };
 
     public IReadOnlyCollection<ToolType> ToolTypes { get; } = Names.Keys.ToArray();
@@ -87,6 +91,10 @@ public sealed partial class EngineeringToolModule : IAgentToolModule
         "git_blame" or "blame" => ToolType.GitBlame,
         "git_show" or "show_commit" or "git_show_commit" => ToolType.GitShow,
         "debug" or "debugger" or "debug_session" or "dap" => ToolType.Debug,
+        "watch_ci" or "wait_for_ci" or "watch_checks" or "ci_watch" or "monitor_ci" => ToolType.WatchCi,
+        "watch_process" or "wait_for_process" or "bg_watch" or "watch_bg" or "monitor_process" => ToolType.WatchProcess,
+        "watch_list" or "list_watches" or "watches" => ToolType.WatchList,
+        "watch_cancel" or "cancel_watch" or "unwatch" or "stop_watch" => ToolType.WatchCancel,
         _ => null,
     };
 
@@ -189,6 +197,7 @@ public sealed partial class EngineeringToolModule : IAgentToolModule
             ("rev", "string", "Commit, tag or branch (default HEAD)", false),
             ("path", "string", "A file: show its content at rev", false),
             ("stat_only", "string", "\"true\" = message and file list only, no patch", false));
+        foreach (var w in WatchSchemas()) yield return w;
         yield return Schema("debug",
             "Drive a debugger (Python via debugpy, C#/.NET via netcoredbg). action: adapters (what is installed — and the install "
             + "command when not), start (path of the .py or a .cs in the project to run, breakpoints \"12,40\"; it runs to the first "
@@ -208,7 +217,9 @@ public sealed partial class EngineeringToolModule : IAgentToolModule
     {
         switch (type)
         {
-            case ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog:
+            case ToolType.WatchCi or ToolType.WatchProcess or ToolType.WatchList or ToolType.WatchCancel when WatchRefusal() is { } noWatch:
+                return noWatch;
+            case ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.WatchCi:
                 // Same gate as gh_pr_list: the GitHub features of the Features page and the license.
                 bool on = _settings?.Settings.Features.GitHubIntegration != false
                           && _activation?.IsFeatureUnlocked("feature.github") != false;
@@ -283,6 +294,10 @@ public sealed partial class EngineeringToolModule : IAgentToolModule
             ToolType.GitBlame => await GitBlameAsync(call, context, ct),
             ToolType.GitShow => await GitShowAsync(call, context, ct),
             ToolType.Debug => await DebugAsync(call, context, ct),
+            ToolType.WatchCi => await WatchCiAsync(call, context, ct),
+            ToolType.WatchProcess => WatchProcess(call, context),
+            ToolType.WatchList => WatchList(call),
+            ToolType.WatchCancel => WatchCancel(call),
             _ => Fail(call, string.Format(L("tool.module.unavailable"), call.ToolName, Id)),
         };
     }
@@ -296,7 +311,8 @@ public sealed partial class EngineeringToolModule : IAgentToolModule
             + "says what was NOT verified — report that list honestly. Before renaming or changing a widely used symbol, use "
             + "impact_of / find_references, and rename_symbol (preview, then apply with expected_edits) instead of editing each "
             + "file. checkpoint_list / checkpoint_diff / checkpoint_restore rewind your own edits. For CI: gh_pr_checks, then "
-            + "gh_run_log on the failed run; git_blame / git_show for history. debug runs a Python or C# program under a debugger.";
+            + "gh_run_log on the failed run; to wait for CI or a background process, watch_ci / watch_process and end your turn "
+            + "(CluadeX starts your next turn with the result — never poll or sleep); git_blame / git_show for history. debug runs a Python or C# program under a debugger.";
         if (context.NativeTools) return text;
         // The [ACTION:] protocol: the model only knows a tool's arguments from an example.
         return text + """

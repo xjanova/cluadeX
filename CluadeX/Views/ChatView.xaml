@@ -1429,6 +1429,32 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- ═══ Watch card (watch_ci / watch_process): what it waits for, where it stands, Cancel ═══ -->
+                                <Border Grid.Row="1" Margin="20,6,0,4" Padding="12,8" CornerRadius="8" BorderThickness="1"
+                                        Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}"
+                                        Visibility="{Binding ShowsWatchCard, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <Grid DataContext="{Binding WatchCard}">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Glyph}" FontSize="15" VerticalAlignment="Top" Margin="0,0,10,0"/>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="SemiBold" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource Text.Primary}"/>
+                                            <TextBlock Text="{Binding StateText}" FontSize="11.5" TextWrapping="Wrap" Margin="0,2,0,0"
+                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                            <TextBlock Text="{Binding Times}" FontSize="11" Margin="0,2,0,0" Foreground="{DynamicResource Text.Faint}"
+                                                       Visibility="{Binding IsActive, Converter={StaticResource BoolVis}}"/>
+                                            <TextBlock FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" Foreground="{DynamicResource Text.Muted}"
+                                                       Visibility="{Binding HasNote, Converter={StaticResource BoolVis}}">
+                                                <Run Text="{services:Loc watch.card.note}"/><Run Text="{Binding Note, Mode=OneWay}"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                        <Button Grid.Column="2" Content="{services:Loc watch.cancel}" ToolTip="{services:Loc watch.cancelTip}"
+                                                Command="{Binding CancelCommand}" Padding="10,3" Margin="10,0,0,0" VerticalAlignment="Top" Cursor="Hand"
+                                                AutomationProperties.AutomationId="WatchCancel"
+                                                Visibility="{Binding IsActive, Converter={StaticResource BoolVis}}"/>
+                                    </Grid>
+                                </Border>
+
                                 <!-- ═══ Next-step box (wrap_up): recap, one question, one or two answers ═══ -->
                                 <Border Grid.Row="1" Margin="20,8,0,4" Padding="14,10" CornerRadius="10" BorderThickness="1"
                                         Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1.Border.Soft}"

@@ -550,6 +550,15 @@
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding AutoVerifyAfterEditEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.watchAutoContinue}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.watchAutoContinueDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding WatchAutoContinue}" VerticalAlignment="Center" Margin="16,0,0,0"
+                                              AutomationProperties.AutomationId="WatchAutoContinue"/>
+                                </Grid>
                                 <StackPanel Margin="0,0,0,16">
                                     <TextBlock Text="{services:Loc settings.verifyCommand}" Style="{StaticResource SettingLabel}"/>
                                     <TextBlock Text="{services:Loc settings.verifyCommandTip}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
