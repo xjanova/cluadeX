@@ -49,7 +49,7 @@ internal static partial class Program
             map.NotifyAgentMap();
             await Render(); await Task.Delay(250); await Render();
             int threeRunning = EndlessRunning();
-            Check("MO a running sub-agent animates (ring, line, rim, foot: 4 endless clocks each)", threeRunning - idle >= 12, $"{idle} → {threeRunning}");
+            Check("MO a running sub-agent animates (ring, edge light, rim, foot: 4 endless clocks each)", threeRunning - idle >= 12, $"{idle} → {threeRunning}");
 
             done.State = "done"; done.Action = "แก้แล้ว: friction 0.96 · bounce 0.85";
             failed.State = "failed"; failed.Action = "Cannot create agent worktree: fatal: 'E:/proj-agent-3' already exists";
@@ -177,14 +177,14 @@ internal static partial class Program
             map.NotifyAgentMap();
             await Render(); await Task.Delay(150);
             int live = EndlessRunning();
-            if (live - idle != 6) DumpEndless("node added on screen");
-            // Its line, rim, ring and foot (4) and the root's halo and line (2) — each begun once: a trigger that entered
+            if (live - idle != 5) DumpEndless("node added on screen");
+            // Its edge's light, rim, ring and foot (4) and the main agent's halo (1) — each begun once: a trigger that entered
             // again used to leave the clock before it ticking until the GC.
-            Check("MO a node added to a map on screen begins each loop once (6 clocks, no orphans)", live - idle == 6, $"{idle} → {live}");
+            Check("MO a node added to a map on screen begins each loop once (5 clocks, no orphans)", live - idle == 5, $"{idle} → {live}");
             map.IsAgentMapOpen = false; await Render(); await Task.Delay(150);
             map.IsAgentMapOpen = true; await Render(); await Task.Delay(150);
             live = EndlessRunning();
-            Check("MO folding and unfolding it again still leaves one clock per loop", live - idle == 6, $"{idle} → {live}");
+            Check("MO folding and unfolding it again still leaves one clock per loop", live - idle == 5, $"{idle} → {live}");
             AmbientAnimation.SetMinimized(Win, true);
             await Task.Delay(150);   // a pause lands on the next frame
             int whileMin = EndlessRunning();

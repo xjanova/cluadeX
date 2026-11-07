@@ -268,6 +268,104 @@ public sealed class AgentNode : System.ComponentModel.INotifyPropertyChanged
     /// <summary>The avatar's Segoe MDL2 glyph: a magnifier for explore, a wrench for general, a star for a specialist.</summary>
     public string KindGlyph => KindClass switch { "explore" => "\uE721", "general" => "\uE90F", _ => "\uE734" };
 
+    private Services.Agents.SubAgentControl? _control;
+    /// <summary>The owner's hold on it (stop, messages) — only for a sub-agent CluadeX runs itself; null for a CLI's own
+    /// sub-agent and the dispatcher's workers, which cannot be steered from here.</summary>
+    public Services.Agents.SubAgentControl? Control { get => _control; set { _control = value; Raise(nameof(Control)); } }
+    private bool _stoppedByOwner;
+    /// <summary>It ended because the owner pressed Stop in its window.</summary>
+    public bool StoppedByOwner { get => _stoppedByOwner; set { _stoppedByOwner = value; Raise(nameof(StoppedByOwner)); } }
+
+    /// <summary>What it ran, in order, with each result as it came back \u2014 the floating agent window lists these. Kept for
+    /// the session only (a reloaded chat's node has none); the oldest finished ones go past <see cref="MaxActivity"/>.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<AgentActivityStep> Activity { get; } = new();
+    public const int MaxActivity = 300;
+
+    /// <summary>A tool started (or another step of its work). A step with no call id ends when the next one starts:
+    /// nothing will report its result.</summary>
+    public AgentActivityStep BeginStep(string? callId, string text)
+    {
+        foreach (var open in Activity)
+            if (open.IsRunning && open.CallId == null) open.Finish("done", null);
+        var step = new AgentActivityStep { CallId = string.IsNullOrEmpty(callId) ? null : callId, Text = text ?? "" };
+        Activity.Add(step);
+        while (Activity.Count > MaxActivity && Activity.FirstOrDefault(a => !a.IsRunning) is { } old) Activity.Remove(old);
+        return step;
+    }
+
+    /// <summary>A tool's result came back (its call id names it). False when no running step has that id.</summary>
+    public bool EndStep(string? callId, bool ok, string? result)
+    {
+        if (string.IsNullOrEmpty(callId)) return false;
+        var step = Activity.LastOrDefault(a => a.CallId == callId && a.IsRunning);
+        if (step == null) return false;
+        step.Finish(ok ? "ok" : "error", result);
+        return true;
+    }
+
+    /// <summary>The agent ended: a step still open stops with it ("done" when it finished, else "stopped").</summary>
+    public void CloseSteps()
+    {
+        foreach (var open in Activity)
+            if (open.IsRunning) open.Finish(IsDone ? "done" : "stopped", null);
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void Raise(string p) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));
+}
+
+/// <summary>One step of a sub-agent's work in its window: what it ran and, once back, how it went and what it returned.</summary>
+public sealed class AgentActivityStep : System.ComponentModel.INotifyPropertyChanged
+{
+    /// <summary>The tool call's id when the engine knows it (its result is matched by it); null for a progress line.</summary>
+    public string? CallId { get; init; }
+    public string Text { get; init; } = "";
+    public DateTime StartedAt { get; init; } = DateTime.Now;
+    public const int MaxResultChars = 4000;
+
+    private string _state = "running", _result = "";
+    private DateTime _endedAt;
+    private bool _expanded;
+    /// <summary>"running", "ok", "error", "done" (ended, no result known) or "stopped".</summary>
+    public string State => _state;
+    public string Result => _result;
+    public bool HasResult => _result.Length > 0;
+    public bool IsRunning => _state == "running";
+    public bool IsOk => _state is "ok" or "done";
+    public bool IsError => _state is "error" or "stopped";
+    /// <summary>Its first line, for the row (the whole result opens under it).</summary>
+    public string ResultPreview
+    {
+        get
+        {
+            string first = _result.TrimStart().Split('\n', 2)[0].Trim();
+            return first.Length > 140 ? first[..140] + "\u2026" : first;
+        }
+    }
+    public string DurationText
+    {
+        get
+        {
+            if (_endedAt == default) return "";
+            var d = _endedAt - StartedAt;
+            return d.TotalSeconds < 1 ? $"{Math.Max(0, d.TotalMilliseconds):0} ms"
+                : d.TotalMinutes >= 1 ? $"{(int)d.TotalMinutes}m {d.Seconds}s" : $"{d.TotalSeconds:0.0} s";
+        }
+    }
+    /// <summary>Its whole result is open in the window.</summary>
+    public bool IsExpanded { get => _expanded; set { _expanded = value; Raise(nameof(IsExpanded)); } }
+
+    internal void Finish(string state, string? result)
+    {
+        _state = state;
+        _endedAt = DateTime.Now;
+        if (!string.IsNullOrEmpty(result))
+            _result = result.Length > MaxResultChars ? result[..MaxResultChars] + $"\n\u2026 (+{result.Length - MaxResultChars:N0})" : result;
+        foreach (var p in new[] { nameof(State), nameof(Result), nameof(HasResult), nameof(IsRunning), nameof(IsOk), nameof(IsError),
+                     nameof(ResultPreview), nameof(DurationText) })
+            Raise(p);
+    }
+
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     private void Raise(string p) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));
 }
