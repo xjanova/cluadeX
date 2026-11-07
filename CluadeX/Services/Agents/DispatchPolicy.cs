@@ -49,6 +49,8 @@ public sealed record DispatchDecision(
 {
     /// <summary>The policy is off: everything as before (sub-agents allowed, no worktrees, no routing).</summary>
     public bool Legacy { get; init; }
+    /// <summary>The run's or the day's spend guard is nearly used: every sub-agent runs cheap (<see cref="DispatchPolicy.TierFor"/>).</summary>
+    public bool BudgetCapped { get; init; }
 }
 
 /// <summary>
@@ -108,23 +110,25 @@ public static class DispatchPolicy
         if (rank == 0) return Single(par, "effort low — the main loop does it alone");
 
         // ── spend guards ──
+        bool low = false;
         if (i.RunBudgetUsd > 0)
         {
             decimal budget = i.RunBudgetUsd + i.BudgetGrantedUsd;
             decimal left = budget - i.RunSpentUsd;
             if (left <= 0) return Single(par, $"run budget used (${i.RunSpentUsd:0.00} of ${budget:0.00})");
-            if (left < budget * LowBudgetShare) rank = Math.Min(rank, 1);
+            if (left < budget * LowBudgetShare) { rank = Math.Min(rank, 1); low = true; }
         }
         if (i.DailyBudgetUsd > 0)
         {
             if (i.TodaySpentUsd >= i.DailyBudgetUsd) return Single(par, $"daily cap reached (${i.TodaySpentUsd:0.00} of ${i.DailyBudgetUsd:0.00})");
-            if (i.TodaySpentUsd >= i.DailyBudgetUsd * (1 - LowBudgetShare)) rank = Math.Min(rank, 1);
+            if (i.TodaySpentUsd >= i.DailyBudgetUsd * (1 - LowBudgetShare)) { rank = Math.Min(rank, 1); low = true; }
         }
         bool capped = rank < Rank(i.Effort);
 
         if (rank == 1)
             return new DispatchDecision(DispatchStrategy.FanOut, true, true, false, false, false, par, 0,
-                capped ? "budget nearly used — read-only fan-out only" : "effort medium — read-only fan-out on the cheapest model");
+                capped ? "budget nearly used — read-only fan-out only" : low ? "budget nearly used — sub-agents run cheap"
+                    : "effort medium — read-only fan-out on the cheapest model") { BudgetCapped = low };
 
         // high and up: workers and fixers edit in git worktrees — they need a repo and the right to edit.
         if (!i.IsGitRepo || !i.CanEditProject)
@@ -212,6 +216,217 @@ public static class DispatchPolicy
     }
 
     static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    // ── tier routing (owner, 2026-11-08: "เรียกเอเจนย่อย ฉลาดในการเรียกใช้โมเดล หรือ effort ที่อ่อนกว่าเพื่อประหยัดโทเค็น") ──
+
+    /// <summary>A middle model of a provider: good enough for a scoped edit or a review, a fraction of the top one.
+    /// Null = no routing (local models, the CLIs: the loaded / logged-in model).</summary>
+    public static string? MidModel(AiProviderType p) => p switch
+    {
+        AiProviderType.Anthropic => "claude-sonnet-5-5",
+        AiProviderType.OpenAI => "gpt-6.1-sol",
+        AiProviderType.Gemini => "gemini-3.8-flash",
+        _ => null,
+    };
+
+    /// <summary>How strong a model is within its provider: 0 = the cheap class, 1 = the middle, 2 = the top. An id this
+    /// table does not know counts as the top, so routing may still go down from it, never up past it.</summary>
+    public static int ClassOf(AiProviderType p, string? model)
+    {
+        string m = (model ?? "").ToLowerInvariant();
+        return p switch
+        {
+            AiProviderType.Anthropic => m.Contains("haiku") ? 0 : m.Contains("sonnet") ? 1 : 2,
+            AiProviderType.OpenAI => m.Contains("luna") || m.Contains("mini") || m.Contains("nano") ? 0
+                : m.Contains("sol") || m.Contains("terra") ? 1 : 2,
+            AiProviderType.Gemini => m.Contains("flash-lite") ? 0 : m.Contains("flash") ? 1 : 2,
+            _ => 2,
+        };
+    }
+
+    /// <summary>A tier written as text ("cheap", "mid", "deep", case-insensitive; "low"/"medium"/"high" also read); null
+    /// = none or unknown — the sub-agent's kind decides then.</summary>
+    public static SubAgentTier? ParseTier(string? s) => (s ?? "").Trim().ToLowerInvariant() switch
+    {
+        "cheap" or "low" or "light" => SubAgentTier.Cheap,
+        "mid" or "medium" => SubAgentTier.Mid,
+        "deep" or "high" or "hard" => SubAgentTier.Deep,
+        _ => null,
+    };
+
+    /// <summary>
+    /// The tier a sub-agent runs at: the one it asked for (agent_spawn's tier, a specialist's file), else by kind —
+    /// read-only work is cheap, editing work deep (the run's model, as before tiers). Near or past the spend guard
+    /// (<see cref="DispatchDecision.BudgetCapped"/>) everything is cheap.
+    /// </summary>
+    public static SubAgentTier TierFor(SubAgentKind kind, SubAgentTier? asked, bool budgetCapped)
+    {
+        if (budgetCapped) return SubAgentTier.Cheap;
+        if (asked is { } t) return t;
+        return kind == SubAgentKind.Explore ? SubAgentTier.Cheap : SubAgentTier.Deep;
+    }
+
+    /// <summary>
+    /// The model a sub-agent at <paramref name="tier"/> runs on. In order: the agent file's own model (an alias
+    /// opus/sonnet/haiku, or an id of the active provider — one of another provider is ignored); Settings' override for
+    /// the tier ("cheap"/"mid"/"deep"); then cheap → the provider's cheapest (the "explore" override still applies to
+    /// read-only work), mid → its middle model, deep → as <see cref="ModelFor"/>. Cheap and mid never go above the
+    /// run's own model (a run on Haiku keeps its mid sub-agents on Haiku). Null = the run's own model.
+    /// </summary>
+    public static string? ModelForTier(SubAgentTier tier, SubAgentKind kind, AiProviderType provider, string? runModel,
+        string? agentModel = null, IReadOnlyDictionary<string, string>? overrides = null, bool budgetCapped = false)
+    {
+        if (!budgetCapped && ResolveAgentModel(provider, agentModel) is { } own) return own;
+        // Settings' overrides are the user's own pick: they stand as written (no clamp below).
+        if (Override(overrides, tier.ToString().ToLowerInvariant()) is { } byTier) return byTier;
+        if (tier == SubAgentTier.Cheap && kind == SubAgentKind.Explore && Override(overrides, "explore") is { } byKind) return byKind;
+        // deep = the run's own model; for editing work the per-kind pick ("code") still stands
+        if (tier == SubAgentTier.Deep)
+            return kind == SubAgentKind.Explore ? NullIfEmpty(runModel) : ModelFor(kind, provider, runModel, overrides);
+        string? pick = tier == SubAgentTier.Cheap ? CheapestModel(provider) : MidModel(provider);
+        if (pick == null) return NullIfEmpty(runModel);
+        // never up past the run's model (tier deep and the hard-fix step-up are the only climbs)
+        if (!string.IsNullOrWhiteSpace(runModel) && ClassOf(provider, pick) > ClassOf(provider, runModel)) return NullIfEmpty(runModel);
+        return pick;
+    }
+
+    /// <summary>Auto model off: the user's per-kind model when one is set, else the run's own (no routing down).</summary>
+    public static string? ManualModelFor(SubAgentKind kind, string? runModel, IReadOnlyDictionary<string, string>? overrides = null)
+        => Override(overrides, kind.ToString().ToLowerInvariant()) ?? NullIfEmpty(runModel);
+
+    static string? Override(IReadOnlyDictionary<string, string>? overrides, string key) =>
+        overrides != null && overrides.TryGetValue(key, out var o) && !string.IsNullOrWhiteSpace(o) ? o.Trim() : null;
+
+    /// <summary>An agent file's <c>model:</c> as an id the active provider takes: opus / sonnet / haiku on Anthropic, or
+    /// a full id of that provider. Null = none, or one this provider cannot run (the tier decides then).</summary>
+    public static string? ResolveAgentModel(AiProviderType p, string? model)
+    {
+        string m = (model ?? "").Trim();
+        if (m.Length == 0) return null;
+        string l = m.ToLowerInvariant();
+        if (p == AiProviderType.Anthropic)
+        {
+            string? alias = l switch
+            {
+                "opus" => "claude-opus-5-5", "sonnet" => "claude-sonnet-5-5", "haiku" => "claude-haiku-5-5", _ => null,
+            };
+            return alias ?? (l.StartsWith("claude-", StringComparison.Ordinal) ? m : null);
+        }
+        return p switch
+        {
+            AiProviderType.OpenAI => l.StartsWith("gpt-", StringComparison.Ordinal) || (l.Length > 1 && l[0] == 'o' && char.IsDigit(l[1])) ? m : null,
+            AiProviderType.Gemini => l.StartsWith("gemini-", StringComparison.Ordinal) ? m : null,
+            _ => null,
+        };
+    }
+
+    /// <summary>The most effort a sub-agent at <paramref name="tier"/> may think with: cheap → low, mid → medium, deep →
+    /// no cap (the run's own). It is a ceiling, read by <see cref="EffortLevels.Effective"/>: it never raises a level.</summary>
+    public static string? EffortCapFor(SubAgentTier tier) => tier switch
+    {
+        SubAgentTier.Cheap => "low",
+        SubAgentTier.Mid => "medium",
+        _ => null,
+    };
+
+    /// <summary>The steps a sub-agent at <paramref name="tier"/> may take (of <paramref name="max"/>, the deep budget):
+    /// a cheap model that loops spends a cheap tier's worth, then reports (and may climb one tier).</summary>
+    public static int MaxStepsFor(SubAgentTier tier, int max) => tier switch
+    {
+        SubAgentTier.Cheap => Math.Max(1, Math.Min(max, 16)),
+        SubAgentTier.Mid => Math.Max(1, Math.Min(max, 24)),
+        _ => Math.Max(1, max),
+    };
+
+    /// <summary>Fewer runs than this in the window: too little to judge, the tier stands.</summary>
+    public const int StartTierMinRuns = 4;
+    /// <summary>This share of climbs or more: start one tier up (the cheap attempt mostly paid twice).</summary>
+    public const double StartTierClimbShare = 0.4;
+
+    /// <summary>
+    /// The tier to start at, given how this kind of sub-agent did when it started at <paramref name="proposed"/>
+    /// (<see cref="TierHistory"/>): when it had to climb in at least <see cref="StartTierClimbShare"/> of the last runs
+    /// (and there were at least <see cref="StartTierMinRuns"/>), start one tier up — doing it twice costs more than doing
+    /// it once on the stronger model. The spend guard still wins: near the limit it stays cheap.
+    /// </summary>
+    public static SubAgentTier StartTier(SubAgentTier proposed, int runs, int climbs, bool budgetCapped)
+    {
+        if (budgetCapped || proposed == SubAgentTier.Deep || runs < StartTierMinRuns) return proposed;
+        return (double)climbs / runs >= StartTierClimbShare ? NextTier(proposed) : proposed;
+    }
+
+    /// <summary>What the next tier gets from a weak attempt, so it does not read everything again: the attempt's report
+    /// and the tool calls it made (at most <paramref name="maxCalls"/>, newest last). Empty when there is nothing.</summary>
+    public static string CarryOver(string? report, IReadOnlyList<string> toolCalls, int maxCalls = 25)
+    {
+        var sb = new System.Text.StringBuilder();
+        string r = (report ?? "").Trim();
+        if (r.Length > 1500) r = r[..1500] + "…";
+        if (toolCalls.Count > 0)
+        {
+            sb.Append("An earlier, cheaper attempt at this task fell short. It already ran:\n");
+            foreach (var c in toolCalls.Skip(Math.Max(0, toolCalls.Count - maxCalls))) sb.Append("- ").Append(c).Append('\n');
+        }
+        if (r.Length > 0) sb.Append(sb.Length == 0 ? "An earlier, cheaper attempt at this task fell short. " : "").Append("It reported:\n").Append(r).Append('\n');
+        if (sb.Length > 0) sb.Append("Use what helps, check what it could not, and finish the task.");
+        return sb.ToString();
+    }
+
+    /// <summary>The next tier up; deep stays deep.</summary>
+    public static SubAgentTier NextTier(SubAgentTier t) => t == SubAgentTier.Cheap ? SubAgentTier.Mid : SubAgentTier.Deep;
+
+    /// <summary>Climbs at most this many tiers for one request (cheap → mid → deep).</summary>
+    public const int MaxEscalations = 2;
+
+    private static readonly string[] FailurePhrases =
+    [
+        "could not find", "couldn't find", "unable to find", "was unable to", "i was not able", "not able to locate",
+        "no relevant", "nothing relevant", "could not determine", "couldn't determine", "i don't have enough",
+        "ไม่พบ", "หาไม่เจอ", "ไม่สามารถ", "ไม่เจอ",
+    ];
+
+    /// <summary>
+    /// The report says the work did not get done: none at all, a placeholder the engine wrote (in parentheses — "wrote
+    /// no report", "used its step budget"), very short, or a short report that says it could not find / was unable to.
+    /// A long report that mentions "not found" on the way is a real report, and so is a short one that names a path,
+    /// a file:line or code. A stop by the owner or the run ("[…]") is not
+    /// a weak report — it must not climb.
+    /// </summary>
+    public static bool ReportLooksWeak(string? report)
+    {
+        string r = (report ?? "").Trim();
+        if (r.Length == 0) return true;
+        if (r.StartsWith('[')) return false;
+        if (r.StartsWith('(') && r.EndsWith(')')) return true;
+        // short but concrete ("in src/Bar.cs:42", "`Foo()`") is a real answer: redoing it would pay twice for nothing
+        if (r.Length < 40) return !LooksConcrete(r);
+        if (r.Length > 600) return false;
+        string l = r.ToLowerInvariant();
+        return FailurePhrases.Any(p => l.Contains(p, StringComparison.Ordinal));
+    }
+
+    /// <summary>A short report that names something real: a path, a file:line, or code in backticks.</summary>
+    static bool LooksConcrete(string r) =>
+        r.Contains('/') || r.Contains('\\') || r.Contains('`')
+        || System.Text.RegularExpressions.Regex.IsMatch(r, @"\w\.\w{1,8}(:\d+)?|:\d+");
+
+    /// <summary>Run it again one tier up? Only with auto-model and climbing on, below deep, not past
+    /// <see cref="MaxEscalations"/>, not when the owner stopped it, the spend guard is nearly used, or it was a
+    /// carried-on conversation (its thread belongs to the model it ran on).</summary>
+    public static bool ShouldEscalate(SubAgentTier tier, string? report, int escalations, bool escalateOn, bool stoppedByOwner,
+        bool budgetCapped, bool continuation)
+        => escalateOn && tier != SubAgentTier.Deep && escalations < MaxEscalations && !stoppedByOwner && !budgetCapped
+           && !continuation && ReportLooksWeak(report);
+
+    /// <summary>
+    /// A cheap read-only sub-agent goes to the model on this machine instead of the API: the owner turned it on, the run
+    /// is on an API model (a run already local stays as it is), and a local model that can run a tool loop is already
+    /// loaded — never one this would have to load (it would take the GPU from whatever holds it).
+    /// </summary>
+    public static bool UseLocalForCheap(bool settingOn, SubAgentTier tier, bool canEdit, bool runIsLocal,
+        bool localReady, bool localToolUse, ModelCapability.Tier localSize)
+        => settingOn && tier == SubAgentTier.Cheap && !canEdit && !runIsLocal && localReady && localToolUse
+           && localSize == ModelCapability.Tier.Capable;
 
     /// <summary>The kind an agent_spawn / subagent_invoke request is.</summary>
     public static SubAgentKind KindOf(bool canEdit) => canEdit ? SubAgentKind.Code : SubAgentKind.Explore;

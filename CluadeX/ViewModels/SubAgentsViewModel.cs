@@ -17,6 +17,40 @@ public class SubAgentsViewModel : ViewModelBase
     private readonly SubAgentService _service;
     private readonly LocalizationService _loc;
     private readonly DebugLogService _log;
+    private readonly SettingsService? _settings;
+
+    /// <summary>A choice in the tier picker: "" = the agent file's own tier.</summary>
+    public sealed record TierChoice(string Key, string Label);
+    /// <summary>The picker's choices, in the app's language (the file's tier first).</summary>
+    public List<TierChoice> TierChoices =>
+    [
+        new("", _selected == null ? _loc.T("subag.tierFile") : string.Format(_loc.T("subag.tierFileIs"), _selected.Tier.ToString().ToLowerInvariant())),
+        new("cheap", _loc.T("usage.tier.cheap")),
+        new("mid", _loc.T("usage.tier.mid")),
+        new("deep", _loc.T("usage.tier.deep")),
+    ];
+    /// <summary>The tier the selected agent runs on when auto model is on (owner 2026-11-08: a tier per agent on the
+    /// Sub-agents page). Saved at once in SubAgentTierOverrides; "" removes the override.</summary>
+    public string? SelectedTierOverride
+    {
+        get => _selected == null ? "" : _settings?.Settings.SubAgentTierOverrides?.GetValueOrDefault(_selected.Name) ?? "";
+        set
+        {
+            // null = the ComboBox dropped its selection while its choices were rebuilt (another agent picked, the
+            // language switched) — not the owner's choice, so it must not wipe the saved tier.
+            if (value == null || _selected == null || _settings == null) return;
+            string name = _selected.Name, tier = value is "cheap" or "mid" or "deep" ? value : "";
+            if (tier == SelectedTierOverride) return;
+            bool ok = _settings.UpdateSettings(st =>
+            {
+                var map = new Dictionary<string, string>(st.SubAgentTierOverrides ?? new(), StringComparer.OrdinalIgnoreCase);
+                if (tier.Length == 0) map.Remove(name); else map[name] = tier;
+                st.SubAgentTierOverrides = map;
+            });
+            StatusMessage = ok ? string.Format(_loc.T("subag.tierSaved"), name) : _loc.T("subag.tierSaveFailed");
+            OnPropertyChanged();
+        }
+    }
 
     public ObservableCollection<SubAgentDefinition> Agents { get; } = new();
 
@@ -31,6 +65,8 @@ public class SubAgentsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(HasSelection));
                 OnPropertyChanged(nameof(SelectedToolsDisplay));
                 OnPropertyChanged(nameof(SelectedInvokeSnippet));
+                OnPropertyChanged(nameof(TierChoices));
+                OnPropertyChanged(nameof(SelectedTierOverride));
             }
         }
     }
@@ -68,12 +104,13 @@ public class SubAgentsViewModel : ViewModelBase
     public ICommand CopyInvokeCommand { get; }
     public ICommand OpenUserAgentsFolderCommand { get; }
 
-    public SubAgentsViewModel(SubAgentService service, LocalizationService loc, DebugLogService log)
+    public SubAgentsViewModel(SubAgentService service, LocalizationService loc, DebugLogService log, SettingsService? settings = null)
     {
         _service = service;
         _loc = loc;
         _log = log;
-        _loc.LanguageChanged += () => OnPropertyChanged(nameof(SelectedToolsDisplay));
+        _settings = settings;
+        _loc.LanguageChanged += () => { OnPropertyChanged(nameof(SelectedToolsDisplay)); OnPropertyChanged(nameof(TierChoices)); };
         RefreshCommand = new RelayCommand(Refresh);
         SelectCommand = new RelayCommand<SubAgentDefinition>(a => { if (a != null) Selected = a; });
         CopyInvokeCommand = new RelayCommand(() =>

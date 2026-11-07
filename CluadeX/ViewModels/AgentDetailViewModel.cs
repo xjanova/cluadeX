@@ -30,6 +30,7 @@ public sealed class AgentDetailViewModel : ViewModelBase, IDisposable
         if (node.IsRunning) _clock.Start();
         StopCommand = new RelayCommand(() => Stop(), () => CanStop);
         SendCommand = new RelayCommand(() => Send(), () => CanSend && Draft.Trim().Length > 0);
+        UpgradeCommand = new RelayCommand(() => Upgrade(), () => CanUpgrade);
     }
 
     // ─── steering it (owner 2026-11-07: "สั่งยกเลิกหรือหยุดเอเจนต์ หรือพิมพ์แทรกคำสั่งเข้าไปในเอเจนต์นั้นได้") ───
@@ -41,6 +42,9 @@ public sealed class AgentDetailViewModel : ViewModelBase, IDisposable
 
     public RelayCommand StopCommand { get; }
     public RelayCommand SendCommand { get; }
+    /// <summary>Moves a cheap/mid agent onto the run's own model from its next step (owner 2026-11-08: an Upgrade
+    /// button in the agent window).</summary>
+    public RelayCommand UpgradeCommand { get; }
 
     private string _draft = "";
     /// <summary>The message being typed for it.</summary>
@@ -62,6 +66,20 @@ public sealed class AgentDetailViewModel : ViewModelBase, IDisposable
     private bool Steerable => Node.IsRunning && Node.Control is { IsClosed: false, StopRequested: false };
     public bool CanStop => Steerable;
     public bool CanSend => Steerable;
+    /// <summary>It runs on a cheaper tier and can still be moved up (once).</summary>
+    public bool CanUpgrade => Steerable && Node.CanUpgrade && Node.Control?.UpgradeRequested != true;
+    /// <summary>The upgrade was asked for and its next step has not picked it up yet.</summary>
+    public bool UpgradePending => Node.IsRunning && Node.Control?.UpgradeRequested == true;
+
+    /// <summary>Ask it to move to the run's model from its next step. False when it cannot (already deep, ended,
+    /// stopping, or asked before).</summary>
+    public bool Upgrade()
+    {
+        if (!CanUpgrade || Node.Control is not { } ctl) return false;
+        bool asked = ctl.RequestUpgrade();
+        RaiseControl();
+        return asked;
+    }
     public bool StopPending => Node.IsRunning && Node.Control?.StopRequested == true;
     /// <summary>Why it cannot be steered (empty while it can): ended, stopping, or not run by CluadeX itself.</summary>
     public string ControlNote
@@ -115,6 +133,8 @@ public sealed class AgentDetailViewModel : ViewModelBase, IDisposable
     {
         OnPropertyChanged(nameof(CanStop));
         OnPropertyChanged(nameof(CanSend));
+        OnPropertyChanged(nameof(CanUpgrade));
+        OnPropertyChanged(nameof(UpgradePending));
         OnPropertyChanged(nameof(StopPending));
         OnPropertyChanged(nameof(ControlNote));
         OnPropertyChanged(nameof(HasControlNote));
@@ -168,6 +188,7 @@ public sealed class AgentDetailViewModel : ViewModelBase, IDisposable
                 RaiseControl();
                 break;
             case nameof(AgentNode.Control):
+            case nameof(AgentNode.CanUpgrade):
             case nameof(AgentNode.StoppedByOwner): RaiseControl(); break;
             case nameof(AgentNode.Elapsed): OnPropertyChanged(nameof(ElapsedText)); break;
             case nameof(AgentNode.Model): OnPropertyChanged(nameof(ModelText)); break;

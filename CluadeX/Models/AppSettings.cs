@@ -147,8 +147,21 @@ public class AppSettings
     public int SpeculativeFixCount { get; set; } = 3;
     /// <summary>How long a speculative-fix race may take before the main loop gets the build back.</summary>
     public int SpeculativeFixMinutes { get; set; } = 6;
-    /// <summary>Model per sub-agent kind ("explore", "code", "review", "fix", "hardfix"); empty = the policy's choice.</summary>
+    /// <summary>Model per sub-agent kind ("explore", "code", "review", "fix", "hardfix") or tier ("cheap", "mid", "deep");
+    /// empty = the policy's choice.</summary>
     public Dictionary<string, string> SubAgentModelOverrides { get; set; } = new();
+
+    // ─── Sub-agent auto model (owner 2026-11-08: "เรียกเอเจนย่อย ฉลาดในการเรียกใช้โมเดล หรือ effort ที่อ่อนกว่าเพื่อประหยัดโทเค็น"
+    //     · "ทำให้เลือกได้ว่า จะเปิดโหมด auto model นี้ด้วยไหม") — Services/Agents/DispatchPolicy.cs, tier routing ───
+    /// <summary>Each sub-agent runs on the model and effort its tier needs (cheap / mid / deep). Off: every sub-agent on
+    /// the run's own model and effort (Settings' per-kind models still apply).</summary>
+    public bool SubAgentAutoModel { get; set; } = true;
+    /// <summary>A sub-agent whose report says it did not get it done runs once more one tier up (at most cheap → deep).</summary>
+    public bool SubAgentEscalate { get; set; } = true;
+    /// <summary>Cheap read-only sub-agents go to the local model already loaded on this machine (≥ 7B, tool use) — free.</summary>
+    public bool SubAgentLocalCheap { get; set; } = false;
+    /// <summary>The tier per specialist (its name → "cheap" / "mid" / "deep"), set on the Sub-agents page; overrides its file.</summary>
+    public Dictionary<string, string> SubAgentTierOverrides { get; set; } = new();
     /// <summary>When the agent mutates a file while the user is on the Chat page, auto-switch to the
     /// Code Editor page so the edit is visible live (the editor embeds the same chat docked right).
     /// Off by default since 2026-10-20 (owner: "ไม่จำเป็นต้องสลับไปดูแบบ real time อัตโนมัติแล้ว แต่ให้อัพเดทตามกันจริงๆ

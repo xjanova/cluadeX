@@ -74,6 +74,13 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(CodeModelOverride)] = (vm, s) => SetOverride(s, "code", vm.CodeModelOverride),
         [nameof(ReviewModelOverride)] = (vm, s) => SetOverride(s, "review", vm.ReviewModelOverride),
         [nameof(HardFixModelOverride)] = (vm, s) => SetOverride(s, "hardfix", vm.HardFixModelOverride),
+        // Sub-agent tiers (auto model: cheap / mid / deep)
+        [nameof(SubAgentAutoModel)] = (vm, s) => s.SubAgentAutoModel = vm.SubAgentAutoModel,
+        [nameof(SubAgentEscalate)] = (vm, s) => s.SubAgentEscalate = vm.SubAgentEscalate,
+        [nameof(SubAgentLocalCheap)] = (vm, s) => s.SubAgentLocalCheap = vm.SubAgentLocalCheap,
+        [nameof(CheapModelOverride)] = (vm, s) => SetOverride(s, "cheap", vm.CheapModelOverride),
+        [nameof(MidModelOverride)] = (vm, s) => SetOverride(s, "mid", vm.MidModelOverride),
+        [nameof(DeepModelOverride)] = (vm, s) => SetOverride(s, "deep", vm.DeepModelOverride),
         [nameof(SemanticSearchEnabled)] = (vm, s) => s.SemanticSearchEnabled = vm.SemanticSearchEnabled,
         [nameof(EmbeddingModel)] = (vm, s) => s.EmbeddingModel = vm.EmbeddingModel?.Trim() ?? "",
         [nameof(InstinctLearningEnabled)] = (vm, s) => s.InstinctLearningEnabled = vm.InstinctLearningEnabled,
@@ -187,6 +194,20 @@ public partial class SettingsViewModel : ViewModelBase
     public string CodeModelOverride { get => _codeModel; set => SetProperty(ref _codeModel, value); }
     public string ReviewModelOverride { get => _reviewModel; set => SetProperty(ref _reviewModel, value); }
     public string HardFixModelOverride { get => _hardFixModel; set => SetProperty(ref _hardFixModel, value); }
+
+    // ── Agent ▸ sub-agent tiers (owner 2026-11-08: "ทำให้เลือกได้ว่า จะเปิดโหมด auto model นี้ด้วยไหม") ──
+    private bool _subAgentAutoModel = true, _subAgentEscalate = true, _subAgentLocalCheap;
+    private string _cheapModel = "", _midModel = "", _deepModel = "";
+    /// <summary>Each sub-agent runs on the cheapest tier that fits its work (off = every one on the run's model, as before).</summary>
+    public bool SubAgentAutoModel { get => _subAgentAutoModel; set => SetProperty(ref _subAgentAutoModel, value); }
+    /// <summary>A weak report from a cheap/mid agent is redone one tier up.</summary>
+    public bool SubAgentEscalate { get => _subAgentEscalate; set => SetProperty(ref _subAgentEscalate, value); }
+    /// <summary>A local model that is already loaded (tool-capable, 7B+) takes read-only cheap work.</summary>
+    public bool SubAgentLocalCheap { get => _subAgentLocalCheap; set => SetProperty(ref _subAgentLocalCheap, value); }
+    /// <summary>Model per tier; empty = the policy's choice (cheapest / one class down / the run's own).</summary>
+    public string CheapModelOverride { get => _cheapModel; set => SetProperty(ref _cheapModel, value); }
+    public string MidModelOverride { get => _midModel; set => SetProperty(ref _midModel, value); }
+    public string DeepModelOverride { get => _deepModel; set => SetProperty(ref _deepModel, value); }
 
     private static void SetOverride(AppSettings s, string kind, string? model)
     {
@@ -716,6 +737,12 @@ public partial class SettingsViewModel : ViewModelBase
         CodeModelOverride = ov.GetValueOrDefault("code") ?? "";
         ReviewModelOverride = ov.GetValueOrDefault("review") ?? "";
         HardFixModelOverride = ov.GetValueOrDefault("hardfix") ?? "";
+        CheapModelOverride = ov.GetValueOrDefault("cheap") ?? "";
+        MidModelOverride = ov.GetValueOrDefault("mid") ?? "";
+        DeepModelOverride = ov.GetValueOrDefault("deep") ?? "";
+        SubAgentAutoModel = src.SubAgentAutoModel;
+        SubAgentEscalate = src.SubAgentEscalate;
+        SubAgentLocalCheap = src.SubAgentLocalCheap;
         SemanticSearchEnabled = src.SemanticSearchEnabled;
         EmbeddingModel = src.EmbeddingModel ?? "";
         InstinctLearningEnabled = src.InstinctLearningEnabled;

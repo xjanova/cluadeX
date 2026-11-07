@@ -577,10 +577,17 @@ public partial class ChatViewModel
         if (e.Steps > 0) node.Steps = e.Steps;
         if (!string.IsNullOrEmpty(e.Model)) node.Model = e.Model;
         if (e.CostUsd > node.CostUsd) node.CostUsd = e.CostUsd;
+        if (!string.IsNullOrEmpty(e.Tier)) node.Tier = e.Tier;     // its routing tier (deep once the owner upgraded it)
+        if (!string.IsNullOrEmpty(e.Color)) node.Color = e.Color;
+        node.RefreshUpgrade();
         switch (e.Phase)
         {
             case "start": node.Action = Loc("agentmap.starting"); break;
-            case "tool": node.ToolCalls++; node.Action = e.Detail; node.BeginStep(e.CallId, e.Detail); break;
+            case "tool":
+                // a tool call: the avatar shows that tool; a note from the loop itself (the upgrade) is a step, not a call
+                if (!string.IsNullOrEmpty(e.Tool)) { node.ToolCalls++; node.CurrentTool = e.Tool; }
+                node.Action = e.Detail; node.BeginStep(e.CallId, e.Detail);
+                break;
             // A tool came back: its row in the agent's window gets the result; the card's line keeps what runs now.
             case "result": node.EndStep(e.CallId, e.Ok, e.Result); break;
             case "done": node.State = "done"; node.Action = e.Detail; node.CloseSteps(); break;

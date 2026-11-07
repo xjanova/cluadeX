@@ -664,6 +664,48 @@
                                     <TextBox Text="{Binding HardFixModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
                                              FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
                                 </StackPanel>
+                                <!-- sub-agent tiers: auto model picks cheap / mid / deep per sub-agent -->
+                                <TextBlock Text="{services:Loc settings.tiers}" Style="{StaticResource SettingLabel}" Margin="0,8,0,0"/>
+                                <TextBlock Text="{services:Loc settings.tiersDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,4"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.autoModel}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.autoModelDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SubAgentAutoModel}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.tierEscalate}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.tierEscalateDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SubAgentEscalate}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.tierLocalCheap}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.tierLocalCheapDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SubAgentLocalCheap}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <StackPanel Margin="0,0,0,10" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <TextBlock Text="{services:Loc settings.modelCheap}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding CheapModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,0,10" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <TextBlock Text="{services:Loc settings.modelMid}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding MidModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,0,10" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <TextBlock Text="{services:Loc settings.modelDeep}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding DeepModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

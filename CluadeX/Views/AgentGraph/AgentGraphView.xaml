@@ -163,44 +163,16 @@
                     <StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <!-- avatar: what kind of agent (explore = magnifier, general = wrench, a specialist = star)
-                             on its colour; a ring arc turns round it while it works; the end as a badge -->
+                        <!-- avatar: what it is doing right now (the tool's glyph, popping in on each change; its kind's glyph
+                             between tools) on its kind's colour; a ring arc turns round it while it works; the end as a badge -->
                         <Grid Width="26" Height="26" VerticalAlignment="Center" Margin="0,0,8,0">
-                            <Ellipse>
-                                <Ellipse.Style>
-                                    <Style TargetType="Ellipse">
-                                        <Setter Property="Fill" Value="{DynamicResource Accent.1.Tint}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding KindClass}" Value="explore">
-                                                <Setter Property="Fill" Value="{DynamicResource Status.Info.Tint}"/>
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding KindClass}" Value="specialist">
-                                                <Setter Property="Fill" Value="{DynamicResource Accent.3.Tint}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Ellipse.Style>
-                            </Ellipse>
-                            <TextBlock Text="{Binding KindGlyph}" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding KindClass}" Value="explore">
-                                                <Setter Property="Foreground" Value="{DynamicResource Status.Info}"/>
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding KindClass}" Value="specialist">
-                                                <Setter Property="Foreground" Value="{DynamicResource Accent.3}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
+                            <Ellipse Style="{StaticResource AgentAvatar.Disc}"/>
+                            <TextBlock Text="{Binding AvatarGlyph, NotifyOnTargetUpdated=True}" FontSize="12"
+                                       Style="{StaticResource AgentAvatar.Glyph}"/>
                             <Ellipse Margin="-3" StrokeThickness="2" StrokeDashArray="7 100" StrokeDashCap="Round"
-                                     RenderTransformOrigin="0.5,0.5" Stroke="{DynamicResource Accent.1}" IsHitTestVisible="False">
+                                     RenderTransformOrigin="0.5,0.5" IsHitTestVisible="False">
                                 <Ellipse.Style>
-                                    <Style TargetType="Ellipse">
+                                    <Style TargetType="Ellipse" BasedOn="{StaticResource AgentAvatar.Ring}">
                                         <!-- NodeSpin: begun once by Motion while LoopOn and on screen, removed when either ends -->
                                         <Setter Property="views:Motion.Loop">
                                             <Setter.Value>
@@ -271,8 +243,25 @@
                                 </Border.Style>
                             </Border>
                         </Grid>
-                        <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                        <DockPanel Grid.Column="1" VerticalAlignment="Center" LastChildFill="True">
+                            <!-- the routing tier it runs on (ถูก / กลาง / ลึก) -->
+                            <Border DockPanel.Dock="Right" CornerRadius="6" Padding="5,0" Margin="6,0,0,0" VerticalAlignment="Center"
+                                    Background="{DynamicResource Accent.2.Tint}">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasTier}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock Style="{StaticResource AgentTier.Text}" FontSize="9.5"/>
+                            </Border>
+                            <TextBlock Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                        </DockPanel>
                         <Border Grid.Column="2" CornerRadius="6" Padding="5,0" Margin="6,0,0,0" VerticalAlignment="Center"
                                 Background="{DynamicResource Surface.Raised}">
                             <TextBlock Text="{Binding Kind}" FontSize="9.5" FontFamily="{DynamicResource Font.Mono}"
