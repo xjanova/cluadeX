@@ -172,6 +172,28 @@ internal static class PlanWire
         string without = module.GetPromptSection(new PromptSectionContext { OfferedToolNames = new[] { "wrap_up" }, NativeTools = true }) ?? "";
         check("plan", "PL16 prompt: plan first, with scope", withPlan.Contains("FIRST tool call is todo_write") && withPlan.Contains("first_task")
               && withPlan.Contains("checks off") && !without.Contains("PLAN:"), withPlan.Length + " chars");
+
+        string local = module.GetPromptSection(new PromptSectionContext { OfferedToolNames = new[] { "todo_write", "wrap_up" }, NativeTools = true, IsLocalModel = true }) ?? "";
+        check("plan", "PL17L a local model gets the short plan rule",
+            local.Contains(OrchestrationToolModule.PlanGuideShort) && !local.Contains(OrchestrationToolModule.PlanGuide)
+            && OrchestrationToolModule.PlanGuideShort.Length * 3 < OrchestrationToolModule.PlanGuide.Length
+            && OrchestrationToolModule.PlanGuideShort.Contains("advance") && OrchestrationToolModule.PlanGuideShort.Contains("new_task"),
+            $"{OrchestrationToolModule.PlanGuideShort.Length} vs {OrchestrationToolModule.PlanGuide.Length} chars");
+
+        // The step-3 reminder: no plan → write one; a carried plan this turn has not touched → carry it on or replace it.
+        var fresh = new AgentRunScope("chat-r", null);
+        var carriedRun = new AgentRunScope("chat-r", null) { PlanCarried = true };
+        carriedRun.Todos.AddRange(items);
+        var workedRun = new AgentRunScope("chat-r", null) { PlanCarried = true, PlanTouched = true };
+        var sub = carriedRun.CreateChild();
+        sub.PlanCarried = true;
+        string? noPlan = PlanOps.Reminder(fresh, 0, thai: false);
+        string? carriedNudge = PlanOps.Reminder(carriedRun, 3, thai: true);
+        check("plan", "PL18L step-3 reminder: none, carried, worked on",
+            noPlan != null && noPlan.Contains("no plan yet") && carriedNudge != null && carriedNudge.Contains("แผนจากเทิร์นก่อน")
+            && PlanOps.Reminder(workedRun, 3, thai: false) == null && PlanOps.Reminder(fresh, 2, thai: false) == null
+            && PlanOps.Reminder(sub, 1, thai: false) == null,
+            $"{noPlan} · {carriedNudge}");
     }
 
     static void Buttons(Action<string, string, bool, string> check)

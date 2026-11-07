@@ -72,6 +72,24 @@ public static class PlanOps
     public static int FinishForWrapUp(AgentRunScope? run)
         => run == null || run.Parent != null || !run.PlanTouched ? 0 : FinishAll(run.Todos);
 
+    /// <summary>
+    /// The step-3 plan reminder (CodeAgentService), or null when the run needs none: no plan at all → write one; a plan
+    /// carried over from the last turn that this run has not touched → carry it on or replace it. A plan this run wrote or
+    /// moved needs nothing. <paramref name="todoCount"/> is the plan the tool sees (the app's list outside a run).
+    /// </summary>
+    public static string? Reminder(AgentRunScope? run, int todoCount, bool thai)
+    {
+        if (todoCount == 0)
+            return thai
+                ? "[เตือน: งานนี้ยังไม่มีแผน — เรียก todo_write ครั้งเดียวในขั้นถัดไป โดยส่ง todos เป็นแผนทั้งชุด 3-7 ข้อ ข้อที่กำลังทำเป็น in_progress พร้อม scope แล้วส่ง advance: true เมื่อแต่ละข้อเสร็จ ผู้ใช้ดูความคืบหน้าจากแผนนี้]"
+                : "[Reminder: this task has no plan yet — in your next step call todo_write ONCE with `todos` = the whole plan (3-7 items, the current one in_progress), and scope; then advance: true as each item finishes. The user follows your progress through this plan.]";
+        if (run is { Parent: null, PlanCarried: true, PlanTouched: false })
+            return thai
+                ? "[เตือน: แผนจากเทิร์นก่อนยังค้างอยู่ และเทิร์นนี้ยังไม่ได้แตะ — ถ้างานนี้ต่อจากแผนนั้น เรียก todo_write advance: true (scope continuation) ถ้าเป็นงานใหม่ ส่ง todos ทั้งชุดใหม่พร้อม scope new_task ผู้ใช้ดูความคืบหน้าจากแผนนี้]"
+                : "[Reminder: the plan from the last turn is still open and this turn has not touched it — if this work continues it, call todo_write advance: true (scope continuation); if it is a new task, send a new whole list with scope new_task. The user follows your progress through this plan.]";
+        return null;
+    }
+
     /// <summary>What the request is to the chat, as the plan's <c>scope</c> says it.</summary>
     public const string FirstTask = "first_task", Continuation = "continuation", NewTask = "new_task";
 

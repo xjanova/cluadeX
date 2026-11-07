@@ -238,6 +238,12 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         + "replaces the old one. Do not write the plan as a numbered list in your reply — the card is the plan. A one-step "
         + "answer or pure conversation needs no plan.";
 
+    /// <summary>The same rule for a local model (small context, every token counts — the 2026-11-06 Sudoku run overflowed):
+    /// about a fifth of <see cref="PlanGuide"/>, and only what it must do.</summary>
+    public const string PlanGuideShort =
+        "PLAN: a task with several steps → first call todo_write {todos:[{content,status}], scope} (scope: first_task / "
+        + "continuation / new_task), one step in_progress; then todo_write {advance:true} as each step finishes.";
+
     public IReadOnlyCollection<string> LocalCoreToolNames { get; } = Array.Empty<string>();
 
     public string? GetPromptSection(PromptSectionContext context)
@@ -246,7 +252,7 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         string s = "";
         // The plan card (Claude Code's update_plan): the user follows the work through it, so it comes first, not by step 3.
         if (context.OfferedToolNames.Contains("todo_write") || context.OfferedToolNames.Contains("update_plan"))
-            s = PlanGuide + "\n";
+            s = (context.IsLocalModel ? PlanGuideShort : PlanGuide) + "\n";
         s += "At the end of a turn that did multi-step work, call wrap_up once (recap, and at most one question with 1-2 "
            + "buttons when the next move is the user's; it also checks off the plan's remaining steps), then write your closing message.";
         if (!context.NativeTools)

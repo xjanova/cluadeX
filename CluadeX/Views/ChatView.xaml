@@ -2559,6 +2559,10 @@
                                             <TextBlock Text="{Binding Running}" Margin="27,1,0,1" FontSize="11" TextTrimming="CharacterEllipsis"
                                                        Foreground="{Binding (views:Motion.Accent), RelativeSource={RelativeSource Self}}"
                                                        Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
+                                            <!-- the chat's run ended on this step (Stop, or it finished without ticking it) -->
+                                            <TextBlock Text="{services:Loc plan.step.stopped}" Margin="27,1,0,1" FontSize="11"
+                                                       Foreground="{DynamicResource Status.Warning}"
+                                                       Visibility="{Binding IsStopped, Converter={StaticResource BoolVis}}"/>
                                         </StackPanel>
                                     </ContentControl>
                                 </DataTemplate>
