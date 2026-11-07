@@ -338,6 +338,30 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   click opens its menu) and the Settings ▸ General ▸ More tools card. Proven by `tests/pagestest` MT1–MT6
   (`dotnet run -- --tools`, the shipping MainWindow).
 
+## Smart skill picking + the token gauge (2026-11-07)
+- Every switched-on skill used to cost its line in the system prompt on every turn. Now, per chat (composer switch
+  "Skill อัตโนมัติ", default from Skills page ▸ `SkillAutoPickEnabled`, overrides in `skill-pick-chats.json` via
+  `Services/Skills/SkillPickGate`), `CodeAgentService.PickSkillsForTurnAsync` picks the skills that fit the turn **before**
+  the model starts and appends them to the turn's message (`SkillPick.BlockFor`). The system prompt then carries one fixed
+  line, so a different pick each turn never breaks the prompt cache. Off = the old full list (`SkillBudget.ListingLine`).
+- `Skills/SkillPicker` (pure): the owner's typed words (`AgentRunScope.TurnText`, set by the chat page, without the folders
+  line / notices / attachments), a Thai→English word table, words learned from turns that ran a skill
+  (`SkillService.LearnTerms`, ≤ 40 per skill in skill-usage.json), pins ("ใช้ทุกงาน", `PinnedSkills`), the turn's brain
+  recall text (weak), and the brain's ranking. Rare words weigh more (idf); ≥ 3.0 and ≥ 35 % of the best match; ≤ `SkillPickMax`
+  (5) and ≤ the ceiling; named (/name, `commit` as a word) and pinned always. Small local window: ≤ 2, ≤ 200 tok. A /command
+  turn picks nothing (`NoSkillPick`). The chat shows a ✦ row under the message (nothing fitted = no row, the tooltip says so).
+- The brain's half (`Skills/SkillBrainIndex`, `SkillBrainIndexEnabled`): with BrainX connected, one card note per skill in
+  `Notes/CluadeX-Skills`, tag `cluadex-skill` (name, description, when to use — **never the prompt**; a skill always runs from
+  its file here). Written in the background when missing/changed (state `skill-brain-index.json`, found by exact title first
+  so a reinstall does not duplicate, a refused card is not retried until restart). Each turn `brain_semantic_search` with
+  `tag` runs beside the auto-recall (4 s cap): its first place counts on its own, later ones need a word of the task too.
+- Gauge (`Skills/SkillBudget`, Skills page header): per-turn tokens of the offered list vs the ceiling = 1 % of the active
+  model's window (250–4000), the ceiling at mid-bar; each row shows ≈ per turn / ≈ when it runs, "หนัก" when its prompt is
+  over a tenth of the window. CLI agents use their own skills (noted, not counted).
+- Proven by `tests/skilltest` K*/A*/L*/G*/B*/S*/V13–14 (99 checks) and `tests/chattest` SP1–SP7 (`CHATTEST_ONLY=SP`, the real
+  chat page + native loop). **Not yet with a live brain**: the card writing and ranking were only checked against the brain's
+  answer shape, not run by the app against BrainX.
+
 ## Watches: the AI waits for CI / a background process and is woken with the result (2026-11-07)
 - Tools `watch_ci` (pr / commit / branch / repo; none = the current branch's PR, else HEAD), `watch_process` (bg id),
   `watch_list`, `watch_cancel` live in `EngineeringToolModule.Watch.cs`, so every CLI agent gets them over ChatToolBridge

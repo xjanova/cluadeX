@@ -89,6 +89,17 @@
                         <TextBlock Text="{Binding UsageText}" FontSize="9" Margin="0,4,0,0"
                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                    Foreground="{DynamicResource Text.Faint}" TextTrimming="CharacterEllipsis"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                            <TextBlock Text="{Binding CostText}" FontSize="9" FontFamily="{DynamicResource Font.Mono.Display}"
+                                       Foreground="{DynamicResource Text.Faint}" TextTrimming="CharacterEllipsis"
+                                       ToolTip="{services:Loc skills.costTip}"/>
+                            <TextBlock Text="{services:Loc skills.heavy}" FontSize="9" Margin="6,0,0,0" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource Status.Warning}"
+                                       Visibility="{Binding IsHeavy, Converter={StaticResource BoolVis}}"/>
+                            <TextBlock Text="&#xE840;" FontFamily="Segoe MDL2 Assets" FontSize="9" Margin="6,1,0,0"
+                                       Foreground="{DynamicResource Accent.1}" ToolTip="{services:Loc skills.pinTip}"
+                                       Visibility="{Binding IsPinned, Converter={StaticResource BoolVis}}"/>
+                        </StackPanel>
                     </StackPanel>
 
                     <CheckBox Grid.Column="2" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
@@ -172,6 +183,7 @@
             <!-- Header -->
             <Border Grid.Row="0" Padding="24,16" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}"
                     Background="{DynamicResource Page.Header.Background}">
+                <StackPanel>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -228,6 +240,90 @@
                         </Button>
                     </StackPanel>
                 </Grid>
+
+                <!-- The gauge (owner 2026-11-07): what the switched-on skills cost on every turn, against the model's ceiling -->
+                <Border x:Name="SkillGauge" Margin="0,14,0,0" Padding="14,10" CornerRadius="10"
+                        Background="{DynamicResource State.Fill.Faint}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
+                        Visibility="{Binding IsBrowseMode, Converter={StaticResource BoolVis}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" Text="{Binding GaugeLevelText}" FontSize="11" FontWeight="SemiBold"
+                                           TextWrapping="Wrap" MaxWidth="420" TextAlignment="Right" x:Name="GaugeLevelLabel">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding GaugeLevel}" Value="Near">
+                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding GaugeLevel}" Value="Over">
+                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding GaugeLevel}" Value="Empty">
+                                                    <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{services:Loc skills.gaugeTitle}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                           FontSize="10" FontWeight="Bold" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <!-- the bar: the ceiling sits in the middle, so a full bar is twice the ceiling -->
+                            <Grid Margin="0,8,0,4" Height="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <ProgressBar x:Name="GaugeBar" Grid.ColumnSpan="2" Minimum="0" Maximum="1" Value="{Binding GaugeFill, Mode=OneWay}"
+                                             Height="10" BorderThickness="0" Background="{DynamicResource Surface.Raised}">
+                                    <ProgressBar.Style>
+                                        <Style TargetType="ProgressBar">
+                                            <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding GaugeLevel}" Value="Near">
+                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding GaugeLevel}" Value="Over">
+                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ProgressBar.Style>
+                                </ProgressBar>
+                                <Border Grid.Column="1" Width="2" HorizontalAlignment="Left" Margin="-1,-3,0,-3"
+                                        Background="{DynamicResource Text.Primary}" ToolTip="{Binding GaugeCapText}"/>
+                            </Grid>
+                            <TextBlock Text="{Binding GaugeUsedText}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding GaugeCapText}" FontSize="10" Foreground="{DynamicResource Text.Muted}" Margin="0,2,0,0"/>
+                            <TextBlock Text="{Binding GaugeNote}" FontSize="10" Foreground="{DynamicResource Text.Muted}" Margin="0,4,0,0"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center" MaxWidth="340">
+                            <StackPanel Orientation="Horizontal" ToolTip="{services:Loc skills.autoPickTip}">
+                                <CheckBox x:Name="AutoPickSwitch" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                                          IsChecked="{Binding AutoPickEnabled, Mode=TwoWay}"/>
+                                <TextBlock Text="{services:Loc skills.autoPick}" Margin="8,0,0,0" FontSize="12" TextWrapping="Wrap"
+                                           MaxWidth="290" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0" ToolTip="{services:Loc skills.brainIndexTip}">
+                                <CheckBox x:Name="BrainIndexSwitch" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                                          IsChecked="{Binding BrainIndexEnabled, Mode=TwoWay}"/>
+                                <TextBlock Text="{services:Loc skills.brainIndex}" Margin="8,0,0,0" FontSize="12" TextWrapping="Wrap"
+                                           MaxWidth="290" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
+                            </StackPanel>
+                            <TextBlock Text="{Binding BrainStatusText}" FontSize="10" Margin="48,3,0,0" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Muted}"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                </StackPanel>
             </Border>
 
             <!-- Body: list + detail -->
@@ -280,7 +376,14 @@
                                           IsChecked="{Binding Selected.IsEnabled, Mode=TwoWay}"/>
                                 <TextBlock Text="{services:Loc skills.enabledLabel}" Margin="8,0,0,0" FontSize="12"
                                            VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
+                                <CheckBox Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center" Margin="24,0,0,0"
+                                          IsChecked="{Binding Selected.IsPinned, Mode=TwoWay}" ToolTip="{services:Loc skills.pinTip}"/>
+                                <TextBlock Text="{services:Loc skills.pin}" Margin="8,0,0,0" FontSize="12" ToolTip="{services:Loc skills.pinTip}"
+                                           VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
                             </StackPanel>
+                            <TextBlock Text="{Binding Selected.CostText}" FontSize="11" Margin="0,0,0,12"
+                                       FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Muted}"
+                                       ToolTip="{services:Loc skills.costTip}"/>
 
                             <Border Padding="12" CornerRadius="6" Margin="0,0,0,12"
                                     Background="{DynamicResource State.Fill.Faint}"

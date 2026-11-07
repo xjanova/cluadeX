@@ -59,6 +59,9 @@ public class AgentToolService : IDisposable
         return type != null && allowed.Any(t => ResolveToolType(t) == type);
     }
 
+    /// <summary>The skill store (pins, learned words) — for the turn's skill picker in CodeAgentService.</summary>
+    public SkillService Skills => _skillService;
+
     /// <summary>Returns list of available skill names + descriptions for system prompt injection.</summary>
     public List<(string Name, string Description)> GetAvailableSkillNames() =>
         GetAdvertisedSkills().Select(s => (s.Name, s.Description)).ToList();
@@ -4906,6 +4909,8 @@ public class AgentToolService : IDisposable
             return Fail(call, $"Skill '{skill.Name}' is switched off by the user (Skills page). Do the task without it, or ask the user to switch it on.");
         }
         _skillService.RecordUse(skill.Name, SkillService.UseKind.Tool);
+        // The model chose it for this turn's task: the task's words are remembered for it, so the picker finds it next time.
+        _skillService.LearnTerms(skill.Name, AgentRunScope.Current?.TurnText);
 
         string args = call.GetArg("args", "");
 

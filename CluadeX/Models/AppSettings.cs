@@ -409,6 +409,21 @@ public class AppSettings
     /// Nothing outside this list is ever fetched.</summary>
     public List<string> TrustedSkillSources { get; set; } = new() { "https://github.com/anthropics/skills" };
 
+    /// <summary>Smart skill picking, the default for every chat (owner 2026-11-07): each turn offers the model only the
+    /// switched-on skills that fit it, in the turn's message, instead of listing them all in the system prompt. The
+    /// composer's switch overrides it per chat (Services/Skills/SkillPickGate).</summary>
+    public bool SkillAutoPickEnabled { get; set; } = true;
+
+    /// <summary>The most skills one turn's pick offers (named and pinned ones always come on top).</summary>
+    public int SkillPickMax { get; set; } = 5;
+
+    /// <summary>With a BrainX brain connected, keep a short card per skill in it (Notes/CluadeX-Skills, tag cluadex-skill)
+    /// and let its semantic search help each turn's pick (Services/Skills/SkillBrainIndex).</summary>
+    public bool SkillBrainIndexEnabled { get; set; } = true;
+
+    /// <summary>Skills offered on every turn while picking is on ("ใช้ทุกงาน" on the Skills page).</summary>
+    public List<string> PinnedSkills { get; set; } = new();
+
     // UI settings
     public double FontSize { get; set; } = 14;
     public bool StreamOutput { get; set; } = true;

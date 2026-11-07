@@ -92,6 +92,20 @@ public sealed class AgentRunScope
     /// over gets this as "the task": after a compaction the model's view holds only a summary that cuts it short.</summary>
     public string? TaskRequest { get; set; }
 
+    /// <summary>The owner's words of the turn this run is doing (before brain recall or a skill list was added), what a
+    /// skill that runs in it learns its words from (SkillService.LearnTerms).</summary>
+    public string? TurnText { get; set; }
+
+    /// <summary>The skills this turn offered the model (Skills/SkillPicker), or null when smart picking was off for it —
+    /// then the system prompt lists every switched-on skill, as before.</summary>
+    public Skills.SkillPick? SkillPick { get; set; }
+
+    /// <summary>This turn already runs a skill (/command): no pick.</summary>
+    public bool NoSkillPick { get; set; }
+
+    /// <summary>Told once the turn's skills were picked, before the model starts (the chat shows what was picked).</summary>
+    public Action<Skills.SkillPick>? SkillsPicked { get; set; }
+
     private readonly List<string> _extraFolders = new();
     /// <summary>Related project folders opened beside <see cref="WorkingDirectory"/> (open_project add=true, or the
     /// chat naming another project). Tools reach them by absolute path; relative paths stay in the main folder.</summary>
