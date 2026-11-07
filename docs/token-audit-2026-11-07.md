@@ -17,6 +17,19 @@
 
 ---
 
+## สถานะการแก้ (อัปเดต 2026-11-07 หลังเจ้าของสั่ง "ทำเลย")
+
+| ข้อ | สถานะ | แก้ที่ | พิสูจน์ด้วย |
+|---|---|---|---|
+| 2 breakpoint ที่จุดตัด microcompact | ✅ ทำแล้ว | `NativeMessage.CacheMark`, `CodeAgentService.SetCompactCacheMarks`, `AnthropicProvider.MarkConversationCache(…, marks)` | `tests/apitest` cache-mark: ส่งจริง system 1 + messages 3 = 4 breakpoint; ทุกครั้งที่จุดตัดขยับยังอ่าน prefix เดิมได้ (ทางเก่า miss ทุกครั้ง) |
+| 3 ตัดภาพเฉพาะตอน compact | ✅ ทำแล้ว | `CodeAgentService.StepImagePrune` (API เท่านั้น; local ใช้แบบเดิม) ตัดพร้อม compact หรือเมื่อเกิน keep + 12 และไม่แตะก่อนจุดตัดเดิม; slack 0 ยังตัดทุก step ตามที่ตั้ง | ตัวจำลอง cache ในเทสต์ (40 ขั้น มีภาพทุกขั้น เกิน 90k): เขียน cache 3.69M → 1.90M ตัวอักษร ค่า cache รวมลดราว 38% |
+| 1a git status ออกจาก system prompt | ✅ ทำแล้ว | system prompt เหลือ `- Git Branch:` + บรรทัดคงที่; `[git status]` ต่อท้ายข้อความของเทิร์น (`GitStatusTurnNote`) ใน native loop, `[ACTION:]` loop และ ChatStreamAsync — ต่อหลังสแกนชื่อไฟล์ เพื่อไม่ให้ไฟล์ใน status ถูกโหลดเป็น context | `tests/tokenaudit`: แก้ไฟล์ / commit → system prompt "no change" (เดิม CHANGED ทุกครั้ง) |
+| 1b LIVE STATUS + Related projects คงที่ | ✅ ทำแล้ว | `BrainSyncService.PromptStatusLine` (ตอน CONNECTED ไม่มีจำนวน tool / error เก่า; คำถาม "ต่อ brain ไหม" ยังตอบจากบรรทัดเต็ม), `ProjectRegistryService.ByName` | `tests/apitest` prompt-stable |
+| ผลพลอยได้ | ✅ แก้บั๊ก | `MicrocompactUpTo` ไม่คัด `Effort` ของ per-message effort ไปด้วย → พอจุดตัดผ่าน การเปลี่ยน effort หายจาก wire | — |
+
+ที่ยังเหลือ (ให้เจ้าของเลือก): ข้อ 1 ส่วน tree/map (เพิ่มไฟล์ใหม่ยังเปลี่ยน PROJECT STRUCTURE), 4, 6, 7, 8.
+ยังไม่ได้ลองกับ API จริง (ไม่มี request ที่เสียเงิน) — ดูผลจริงได้จาก `cacheR=/cacheW=` ใน log รอบถัดไป.
+
 ## สรุปสั้น
 
 - ใน request ที่คิดเงินจริง 554 ครั้ง (ทั้งหมด $52.28) **เงินก้อนใหญ่ที่สุดคือค่าเขียน cache ($21.75–34.79)**

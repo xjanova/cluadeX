@@ -97,9 +97,14 @@ public sealed class ProjectRegistryService
     /// <summary>The prompt lines for a chat with no folder open: "- Atmos — D:\Code\Atmos". Empty when none.</summary>
     public string PromptList(int max = 10)
     {
-        var recent = Recent(max);
+        var recent = ByName(Recent(max));
         if (recent.Count == 0) return "";
-        return "Projects opened before (most recent first) — when the user names one, call open_project with its path directly:\n"
+        return "Projects opened before — when the user names one, call open_project with its path directly:\n"
             + string.Join("\n", recent.Select(e => $"- {e.Name} — {e.Path}"));
     }
+
+    /// <summary>The prompt's order: by name, not by when each was last opened. The list sits in the system prompt, and a
+    /// recency order moved with every project opened, which rewrote the whole prompt cache on the next request.</summary>
+    public static List<Entry> ByName(IEnumerable<Entry> entries) =>
+        entries.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ThenBy(e => e.Path, StringComparer.OrdinalIgnoreCase).ToList();
 }
