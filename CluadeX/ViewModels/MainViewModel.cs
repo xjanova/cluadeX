@@ -121,7 +121,11 @@ public class MainViewModel : ViewModelBase
     }
 
     public ViewModelBase? CurrentView { get => _currentView; set => SetProperty(ref _currentView, value); }
-    public string SelectedNavItem { get => _selectedNavItem; set => SetProperty(ref _selectedNavItem, value); }
+    public string SelectedNavItem
+    {
+        get => _selectedNavItem;
+        set { if (SetProperty(ref _selectedNavItem, value)) OnPropertyChanged(nameof(IsMoreToolPage)); }
+    }
 
     // System menu collapse state — default collapsed so chat history dominates the sidebar.
     // Persisted via SettingsService so the user's choice survives restarts.
@@ -152,8 +156,35 @@ public class MainViewModel : ViewModelBase
     public string NavMcpServers => _loc.T("nav.mcpServers");
     public string TitleSubtitle => _loc.T("title.subtitle");
 
+    /// <summary>A page that is not on the activity bar: its button in Settings ▸ More tools and in the rail's ⋯ menu.</summary>
+    public sealed record ToolPage(string Target, string Glyph, string Title, string Tip);
+
+    /// <summary>The pages that left the activity bar (owner 2026-10-11), each one click away again. Settings ▸ More tools
+    /// was their only button and it was removed on 2026-10-16, so Skills and the rest could be reached only by Ctrl+K or
+    /// their Ctrl+number key (owner 2026-11-07: "ส่วนจัดการ skill ยังไม่เห็น เมนู"). One list for both places.</summary>
+    public static readonly (string Target, string Glyph, string TitleKey, string TipKey)[] MoreToolTargets =
+    {
+        ("Skills", "", "nav.skills", "nav.skillsTip"),
+        ("SubAgents", "", "nav.subagents", "nav.subagentsTip"),
+        ("Plugins", "", "nav.plugins", "nav.pluginsTip"),
+        ("HookLibrary", "", "nav.hookLibrary", "nav.hooksTip"),
+        ("Instincts", "", "nav.instincts", "nav.instinctsTip"),
+        ("Permissions", "", "nav.permissions", "nav.permissionsTip"),
+        ("Features", "", "nav.features", "nav.featuresTip"),
+        ("SecurityShield", "", "nav.securityShield", "nav.shieldTip"),
+        ("HexEditor", "", "nav.hexEditor", "nav.hexTip"),
+        ("DebugLog", "", "nav.debugLog", "nav.debugLogTip"),
+    };
+
+    public IReadOnlyList<ToolPage> MoreToolPages =>
+        MoreToolTargets.Select(t => new ToolPage(t.Target, t.Glyph, _loc.T(t.TitleKey), _loc.T(t.TipKey))).ToList();
+
+    /// <summary>The page on screen is one of them: the rail's ⋯ button lights up.</summary>
+    public bool IsMoreToolPage => MoreToolTargets.Any(t => t.Target == SelectedNavItem);
+
     private void RefreshNavLabels()
     {
+        OnPropertyChanged(nameof(MoreToolPages));
         OnPropertyChanged(nameof(NavChat));
         OnPropertyChanged(nameof(NavModels));
         OnPropertyChanged(nameof(NavSettings));

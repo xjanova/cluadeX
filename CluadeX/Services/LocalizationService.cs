@@ -911,9 +911,10 @@ public class LocalizationService
         ["settings.card.moreTools"] = new() { ["en"] = "More tools", ["th"] = "เครื่องมือเพิ่มเติม" },
         ["settings.moreToolsDesc"] = new()
         {
-            ["en"] = "Pages that are not on the left bar — also on Ctrl+K and their Ctrl+number keys.",
-            ["th"] = "หน้าที่ไม่ได้อยู่บนแถบซ้าย — เปิดจาก Ctrl+K หรือปุ่มลัด Ctrl+ตัวเลขได้เหมือนเดิม",
+            ["en"] = "Pages that are not on the left bar — also under the bar's ⋯ button, Ctrl+K and their Ctrl+number keys.",
+            ["th"] = "หน้าที่ไม่ได้อยู่บนแถบซ้าย — เปิดจากปุ่ม ⋯ บนแถบซ้าย, Ctrl+K หรือปุ่มลัด Ctrl+ตัวเลขได้เหมือนเดิม",
         },
+        ["nav.moreToolsTip"] = new() { ["en"] = "More tools — Skills, Subagents, Plugins, Hooks…", ["th"] = "เครื่องมือเพิ่มเติม — Skill, Subagent, ปลั๊กอิน, ฮุก…" },
         ["nav.chatTip"] = new() { ["en"] = "Chat (Ctrl+1)", ["th"] = "แชท (Ctrl+1)" },
         ["nav.codeTip"] = new() { ["en"] = "Code Editor (Ctrl+5)", ["th"] = "อีดิเตอร์โค้ด (Ctrl+5)" },
         ["nav.subagentsTip"] = new() { ["en"] = "Subagents (Ctrl+6)", ["th"] = "Subagent (Ctrl+6)" },
@@ -1096,6 +1097,7 @@ public class LocalizationService
         ["chat.tool.failed"] = new() { ["en"] = "Failed", ["th"] = "ล้มเหลว" },
         ["chat.plan.working"] = new() { ["en"] = "Working on it ({0}/{1})", ["th"] = "กำลังดำเนินการ ({0}/{1})" },
         ["chat.plan.done"] = new() { ["en"] = "Done ({0}/{1})", ["th"] = "เสร็จแล้ว ({0}/{1})" },
+        ["chat.plan.ended"] = new() { ["en"] = "Run ended ({0}/{1} ticked)", ["th"] = "งานจบแล้ว (ติ๊กแผนไว้ {0}/{1})" },
         ["chat.diff.before"] = new() { ["en"] = "Before", ["th"] = "ก่อนแก้ไข" },
         ["chat.diff.after"] = new() { ["en"] = "After", ["th"] = "หลังแก้ไข" },
         ["chat.header.noProject"] = new() { ["en"] = "No project open", ["th"] = "ยังไม่ได้เปิดโปรเจกต์" },

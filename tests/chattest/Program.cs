@@ -309,6 +309,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=PC: just the plan card's clock and how it closes when the run ends.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PC")
+        {
+            await TestPlanCardClock();
+            Log($"\n## Result (CHATTEST_ONLY=PC): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=COP: just a CLI agent opening a folder for the task (asked once, then it carries on there).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "COP")
         {
@@ -428,6 +437,7 @@ internal static partial class Program
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
+        await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
         await TestSwitchRace();               // SW: a chat still loading never lands over New Chat / delete; pipe and agent chats don't cancel a pick
