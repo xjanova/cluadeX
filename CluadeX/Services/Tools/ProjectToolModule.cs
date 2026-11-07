@@ -470,7 +470,7 @@ public sealed class ProjectToolModule : IAgentToolModule
         if (!hasProject) return registry?.PromptList();
         var recent = registry?.Recent(10) ?? Array.Empty<ProjectRegistryService.Entry>();
         string? current = AgentRunScope.Current?.WorkingDirectory;
-        var others = recent.Where(e => current == null || !IsSameOrInside(current, e.Path)).ToList();
+        var others = ProjectRegistryService.ByName(recent.Where(e => current == null || !IsSameOrInside(current, e.Path)));
         string list = others.Count == 0 ? "" : "\nOther projects on this machine:\n" + string.Join("\n", others.Select(e => $"- {e.Name} — {e.Path}"));
         return "# Related projects\n"
             + "When the task needs code that lives in ANOTHER project (a shared library, the server an app calls, the tool "

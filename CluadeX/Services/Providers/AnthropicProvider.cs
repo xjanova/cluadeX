@@ -51,13 +51,14 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
 
     /// <summary>The wire messages: effort-only system messages kept where the model takes them, dropped elsewhere.</summary>
     private static List<Dictionary<string, object>> WireMessages(List<NativeMessage> messages, string model, AppSettings settings,
-        Func<NativeMessage, object> content, out bool usedPerMessageEffort)
+        Func<NativeMessage, object> content, out bool usedPerMessageEffort, List<int>? cacheMarks = null)
     {
         bool ok = PerMessageEffortOk(model, settings);
         usedPerMessageEffort = false;
         var list = new List<Dictionary<string, object>>();
         foreach (var m in messages)
         {
+            if (m.CacheMark && m.Role != "system") cacheMarks?.Add(list.Count);   // its index on the wire
             if (m.Role == "system")
             {
                 if (!ok || EffortFor(Traits(model), m.Effort) is not { } eff) continue;
@@ -517,16 +518,28 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
     /// previous request wrote, read back). With only the system prompt marked, every agent step re-sent the whole
     /// conversation as uncached input. With the system breakpoint that is 3 of the API's 4. Thinking blocks never take
     /// cache_control; the nearest other block before them does. Public for the contract harness.
+    /// <para><paramref name="marks"/>: wire indices the agent loop marked (<see cref="NativeMessage.CacheMark"/>) — the
+    /// last message before microcompact's cut, which stays byte-identical from step to step. When the cut moves, the
+    /// conversation after the old cut is rewritten; before 2026-11-07 the cache then held only system + tools (the
+    /// earlier breakpoints all sat in the part that had just been shortened), so 105–167k tokens were written again
+    /// (23 times in 19 days of logs, ≈ $17.65 on Opus 5.5). A mark there keeps the shortened prefix readable. Up to
+    /// three conversation breakpoints in all (the system prompt takes the fourth): the last message, the marks, then the
+    /// previous user turn while a slot is left.</para>
     /// </summary>
-    public static void MarkConversationCache(List<Dictionary<string, object>> messages)
+    public static void MarkConversationCache(List<Dictionary<string, object>> messages, IReadOnlyList<int>? marks = null)
     {
         if (messages.Count == 0) return;
         var ephemeral = new Dictionary<string, string> { ["type"] = "ephemeral" };
         int marked = 0;
-        // The last message, then the user message before the last assistant one.
+        // The last message, the loop's marks, then the user message before the last assistant one.
         var targets = new List<int> { messages.Count - 1 };
-        for (int i = messages.Count - 2; i >= 0; i--)
-            if (Equals(messages[i]["role"], "user") && i < messages.Count - 1) { targets.Add(i); break; }
+        if (marks != null)
+            foreach (int i in marks.Where(i => i >= 0 && i < messages.Count - 1).Distinct().OrderBy(i => i).Take(2))
+                targets.Add(i);
+        if (targets.Count < 3)
+            for (int i = messages.Count - 2; i >= 0; i--)
+                if (Equals(messages[i]["role"], "user") && i < messages.Count - 1) { targets.Add(i); break; }
+        int limit = targets.Count;
         foreach (int idx in targets.Distinct())
         {
             if (messages[idx]["content"] is not List<object> blocks) continue;
@@ -540,7 +553,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                 marked++;
                 break;
             }
-            if (marked >= 2) break;
+            if (marked >= Math.Min(3, limit)) break;
         }
     }
 
@@ -859,10 +872,11 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
             : systemPrompt;
 
         // Build request
+        var cacheMarks = new List<int>();
         var requestObj = new Dictionary<string, object>
         {
             ["model"] = model,
-            ["messages"] = WireMessages(messages, model, settings, m => WireContent(m, search), out bool perMessageEffort),
+            ["messages"] = WireMessages(messages, model, settings, m => WireContent(m, search), out bool perMessageEffort, cacheMarks),
             ["max_tokens"] = settings.MaxTokens,
             ["tools"] = toolDefs,
             ["stream"] = true,
@@ -875,7 +889,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
             requestObj["system"] = BuildSystem(requestSystem, settings, hour: true);
 
         if (settings.PromptCachingEnabled)
-            MarkConversationCache((List<Dictionary<string, object>>)requestObj["messages"]);
+            MarkConversationCache((List<Dictionary<string, object>>)requestObj["messages"], cacheMarks);
 
         // Forced tool choice (planner / forced recovery). Forcing is a 400 while the model thinks and on
         // models that dropped it — there the loop's own instruction steers instead, under "auto".

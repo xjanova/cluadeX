@@ -511,7 +511,7 @@ public partial class CodeAgentService
     /// </summary>
     public async Task<string> GetSystemPromptAsync()
     {
-        string? brainNow = _brainSync?.LiveStatusLine;
+        string? brainNow = _brainSync?.PromptStatusLine;   // what the prompt says, not the tool count that moves under it
         bool nativeNow = ActiveProviderHasNativeTools();
         // The vision line is a fact about the active model AND loop: switching to a blind one inside the 30 s window
         // must not leave a prompt that says "you can see images".
@@ -1508,7 +1508,7 @@ public partial class CodeAgentService
             // it skipped the call and asserted the opposite of the truth. State that
             // it is not allowed to overrule this, because a fact it can contradict is
             // no better than no fact.
-            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
+            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.PromptStatusLine}");
             sb.AppendLine("  That line is ground truth. NEVER claim you cannot reach the brain while it");
             sb.AppendLine("  says CONNECTED — if asked about the connection, quote it and stop.");
             sb.AppendLine("- The brain is where you LOOK THINGS UP first — where a project lives, how something was");
@@ -1544,7 +1544,7 @@ public partial class CodeAgentService
             // act on, and it costs three lines.
             sb.AppendLine();
             sb.AppendLine("# BrainX — not available this turn");
-            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
+            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.PromptStatusLine}");
             sb.AppendLine("  You have NO brain tools right now. Do not claim to have searched the brain, and");
             sb.AppendLine("  do not promise to. If asked about the connection, quote the line above verbatim");
             sb.AppendLine("  and tell the user to click the 🧠 chip in the status bar, or open MCP Servers (Ctrl+K → MCP Servers).");
@@ -1620,37 +1620,22 @@ public partial class CodeAgentService
             sb.AppendLine($"- Working Directory: {_fileSystemService.WorkingDirectory}");
 
             // ═══════════════════════════════════════════
-            // Dynamic Section: Git Status (injected at session start)
+            // Git: the branch only. The status (which files changed) changes with every edit, so it rides on each
+            // turn's message (GitStatusTurnNote) — here, 13.8k characters into the prompt, it rewrote everything after
+            // it on the next turn: ≤ 52 system-prompt rewrites, ≤ $23 in 19 days of logs (docs/token-audit-2026-11-07.md).
             // ═══════════════════════════════════════════
-            if (_settingsService.Settings.Features.GitIntegration
-                && _activationService.IsFeatureUnlocked("feature.git"))
+            if (GitPromptOn())
             {
                 try
                 {
-                    // Run both git commands in parallel (saves ~1-3s).
-                    // Hard timeout (6s) so we never stall system-prompt construction on a hung git.
                     var branchTask = Task.Run(GetGitBranchSync);
-                    var statusTask = Task.Run(GetGitStatusSync);
-                    Task.WaitAll(new[] { branchTask, statusTask }, 6000);
-
+                    // Hard timeout so we never stall system-prompt construction on a hung git.
+                    branchTask.Wait(6000);
                     string gitBranch = branchTask.IsCompletedSuccessfully ? branchTask.Result : "";
                     if (!string.IsNullOrEmpty(gitBranch))
                     {
                         sb.AppendLine($"- Git Branch: {gitBranch.Trim()}");
-                        string gitStatus = statusTask.IsCompletedSuccessfully ? statusTask.Result : "";
-                        if (!string.IsNullOrWhiteSpace(gitStatus))
-                        {
-                            sb.AppendLine("- Git Status:");
-                            var lines = gitStatus.Split('\n');
-                            foreach (var line in lines.Take(20))
-                                sb.AppendLine($"  {line}");
-                            if (lines.Length > 20)
-                                sb.AppendLine($"  ... ({lines.Length - 20} more files)");
-                        }
-                        else
-                        {
-                            sb.AppendLine("- Git Status: clean (no changes)");
-                        }
+                        sb.AppendLine("- Git Status: the changed files come with each of the owner's messages ([git status] at its end).");
                     }
                 }
                 catch { /* not a git repo or git not available */ }
@@ -1948,6 +1933,45 @@ public partial class CodeAgentService
         return sb.ToString();
     }
 
+    private bool GitPromptOn() => _fileSystemService.HasWorkingDirectory
+        && _settingsService.Settings.Features.GitIntegration
+        && _activationService.IsFeatureUnlocked("feature.git");
+
+    /// <summary>The working tree's state when this turn starts, for the end of the turn's message (null = no project, git
+    /// off, not a repository). It used to sit in the system prompt, where any edit changed it and the prompt cache
+    /// wrote the whole prompt again on the next turn; on the message it costs only its own few lines.</summary>
+    internal string? GitStatusTurnNote()
+    {
+        if (!GitPromptOn()) return null;
+        try
+        {
+            var branchTask = Task.Run(GetGitBranchSync);
+            var statusTask = Task.Run(GetGitStatusSync);
+            Task.WaitAll(new Task[] { branchTask, statusTask }, 6000);
+            string branch = branchTask.IsCompletedSuccessfully ? branchTask.Result.Trim() : "";
+            if (branch.Length == 0) return null;   // not a repository (or a detached/hung git): say nothing
+            string status = statusTask.IsCompletedSuccessfully ? statusTask.Result : "";
+            return FormatGitStatusNote(branch, status);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The turn's message with the [git status] block at its end (unchanged when there is none).</summary>
+    public static string WithGitStatus(string? message, string? note) =>
+        string.IsNullOrEmpty(note) ? message ?? "" : $"{message}\n\n{note}";
+
+    /// <summary>The [git status] block of <see cref="GitStatusTurnNote"/>: ≤ 20 file lines. Public for the harness.</summary>
+    public static string FormatGitStatusNote(string branch, string? status)
+    {
+        var sb = new StringBuilder();
+        sb.Append("[git status — branch ").Append(branch).Append(", when this message was sent]");
+        var lines = (status ?? "").Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length == 0) { sb.Append("\nclean (no changes)"); return sb.ToString(); }
+        foreach (var line in lines.Take(20)) sb.Append('\n').Append(line);
+        if (lines.Length > 20) sb.Append($"\n... ({lines.Length - 20} more files)");
+        return sb.ToString();
+    }
+
     /// <summary>Get current git branch synchronously (for prompt injection). Safe process pattern.</summary>
     private string GetGitBranchSync() => RunGitSync("branch --show-current");
 
@@ -2058,6 +2082,7 @@ public partial class CodeAgentService
     {
         // Build system prompt on background thread (avoids blocking UI with git/file I/O)
         string systemPrompt = await GetSystemPromptAsync();
+        userMessage = WithGitStatus(userMessage, await Task.Run(GitStatusTurnNote, ct));
 
         await foreach (var token in _providerManager.ActiveProvider.ChatAsync(history, userMessage, systemPrompt, ct))
         {
@@ -3055,7 +3080,9 @@ public partial class CodeAgentService
             })
             .ToList();
 
-        string currentMessage = enrichedMessage;
+        // The working tree's state rides on the turn, not in the system prompt (GitStatusTurnNote) — after the mentioned-file
+        // scan above, which would otherwise load every file a status line names.
+        string currentMessage = WithGitStatus(enrichedMessage, await Task.Run(GitStatusTurnNote, ct));
         int maxTokenRecoveryCount = 0;
         bool hasAttemptedReactiveCompact = false;
         const int MaxOutputTokenRecoveries = 3;
@@ -3766,6 +3793,9 @@ public partial class CodeAgentService
             currentUserBlock.Text += "\n\n" + EmptyProjectNote(_fileSystemService.WorkingDirectory);
             _debugLog?.Info("Agent", "project folder is empty — told the model to create files with write_file");
         }
+        // The working tree's state rides on the turn, not in the system prompt (GitStatusTurnNote). Added to the block
+        // only — userMessage is still read for mentioned files and task size above and below, and a status line names files.
+        currentUserBlock.Text = WithGitStatus(currentUserBlock.Text, await Task.Run(GitStatusTurnNote, ct));
         nativeMessages.Add(new Services.Providers.NativeMessage
         {
             Role = "user",
@@ -3862,9 +3892,16 @@ public partial class CodeAgentService
             // In batches, like microcompact: replacing an old screenshot rewrites an earlier turn, which restarts the
             // prompt cache and (on models that bind thinking to the history) drops every later thinking block. So the
             // older ones are let pile up to keepImages + ImagePruneSlack (a setting) and then cut back to keepImages in one go.
-            int imagesDropped = PruneToolImagesBatched(nativeMessages, keepImages, _settingsService.Settings.ImagePruneSlack);
-            if (imagesDropped > 0)
-                _debugLog?.Info("Agent", $"step {iteration + 1}: {imagesDropped} older tool image(s) replaced by their file path (keep {keepImages})");
+            // API models: only when microcompact moves its cut this step (one rewrite instead of two), or past a hard cap,
+            // and never before the previous cut — that shortened prefix is what the prompt cache reads back (see
+            // StepImagePrune). Decided below, once the cut is known.
+            int prevCompactBoundary = CompactBoundaryOf(nativeMessages, compactMark);
+            if (loopIsLocal)
+            {
+                int localDropped = PruneToolImagesBatched(nativeMessages, keepImages, _settingsService.Settings.ImagePruneSlack);
+                if (localDropped > 0)
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: {localDropped} older tool image(s) replaced by their file path (keep {keepImages})");
+            }
 
             // Microcompact — shrink old tool results (keep recent turns verbatim).
             // Local models: from the 7th message on, their window is small. API models: only under real
@@ -3882,6 +3919,15 @@ public partial class CodeAgentService
                 _settingsService.Settings.MicrocompactKeepRecentTurns,
                 _settingsService.Settings.MicrocompactMaxOldResultChars, out bool willCompact);
             compactMark = compactBoundary > 0 && compactBoundary < nativeMessages.Count ? nativeMessages[compactBoundary] : null;
+
+            if (!loopIsLocal)
+            {
+                int apiDropped = StepImagePrune(nativeMessages, keepImages, _settingsService.Settings.ImagePruneSlack,
+                    willCompact, prevCompactBoundary);
+                if (apiDropped > 0)
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: {apiDropped} older tool image(s) replaced by their file path "
+                        + $"(keep {keepImages}; {(willCompact ? "with the compaction" : "hard cap")})");
+            }
 
             // PreCompact hook fires once per loop iteration where compaction would run,
             // BEFORE the trimming so a snapshot hook can capture the full history.
@@ -3904,6 +3950,9 @@ public partial class CodeAgentService
             var outboundMessages = compactBoundary > 0
                 ? MicrocompactUpTo(nativeMessages, compactBoundary, _settingsService.Settings.MicrocompactMaxOldResultChars)
                 : nativeMessages;
+            // Cache breakpoints on the shortened prefix (Anthropic): the copies before the cut are this step's own.
+            if (!loopIsLocal && _settingsService.Settings.PromptCachingEnabled)
+                SetCompactCacheMarks(outboundMessages, compactBoundary, willCompact ? prevCompactBoundary : 0);
 
             // Call API with native tools. Two fixes for the "feels frozen / no response" problems live here:
             //   1. onTextDelta streams the model's reply to the UI live (agentic mode used to stay silent
@@ -5401,6 +5450,48 @@ public partial class CodeAgentService
             ? Vision.ToolImageWire.KeepNewestImages(messages, keep)
             : 0;
 
+    /// <summary>Older images an API model's conversation may carry past keep before they are cut back without a
+    /// compaction. Each image is ~1.6k tokens read back at a tenth of the input price, while cutting one rewrites the
+    /// whole conversation after it: in 19 days of logs the batched cut (slack 3) did that 17 times, ≈ $11.49 on Opus 5.5.</summary>
+    public const int ApiImageHardSlack = 12;
+
+    /// <summary>The image cut of an API model's step (Anthropic caches the prompt prefix): with the compaction when
+    /// microcompact moves its cut this step (<paramref name="compacting"/> — the conversation is rewritten from the old
+    /// cut on anyway), otherwise only once more than keep + max(slack, <see cref="ApiImageHardSlack"/>) pile up (slack 0 =
+    /// every step, as the setting says). Either way
+    /// messages before <paramref name="stableFrom"/> (the previous cut) are not touched: that shortened prefix is the part
+    /// the cache reads back. Images are counted from there on too: those before it were cut back at that compaction.
+    /// Returns how many images were replaced. Public for the contract harness.</summary>
+    public static int StepImagePrune(List<Services.Providers.NativeMessage> messages, int keep, int slack, bool compacting, int stableFrom)
+    {
+        stableFrom = Math.Clamp(stableFrom, 0, messages.Count);
+        int count = Vision.ToolImageWire.CountImages(messages.Skip(stableFrom));
+        if (count <= keep) return 0;
+        // Slack 0 is the owner's own "cut every step" (Settings): honoured as it is. Any other slack is at least the hard one.
+        int allowed = slack <= 0 ? 0 : Math.Max(Math.Min(slack, 20), ApiImageHardSlack);
+        bool overCap = count > keep + allowed;
+        if (!compacting && !overCap) return 0;
+        return Vision.ToolImageWire.KeepNewestImages(messages, keep, stableFrom);
+    }
+
+    /// <summary>Cache marks on the outbound copy (Anthropic, <see cref="Services.Providers.NativeMessage.CacheMark"/>): on
+    /// the last message before the cut (<paramref name="boundary"/>), whose prefix stays byte-identical until the cut moves,
+    /// and — on the step the cut moves — also on the last message before the old cut (<paramref name="previousBoundary"/>),
+    /// so the part shortened at the previous compaction is read back instead of written again. Only messages before
+    /// <paramref name="boundary"/> are marked: those are this step's own copies (MicrocompactUpTo), never the loop's
+    /// conversation. Public for the contract harness.</summary>
+    public static void SetCompactCacheMarks(List<Services.Providers.NativeMessage> outbound, int boundary, int previousBoundary)
+    {
+        if (boundary <= 0 || boundary > outbound.Count) return;
+        void MarkBefore(int cut)
+        {
+            for (int i = Math.Min(cut, boundary) - 1; i >= 0; i--)
+                if (outbound[i].Role != "system") { outbound[i].CacheMark = true; return; }
+        }
+        MarkBefore(boundary);
+        if (previousBoundary > 0 && previousBoundary < boundary) MarkBefore(previousBoundary);
+    }
+
 
     /// <summary>Rough token count of a native conversation: characters / 4 over every block's text payload, plus
     /// ceil(w×h/750) per tool image — never its base64 length (a 1568-px screenshot is ~1,600 tokens, not the
@@ -5579,7 +5670,9 @@ public partial class CodeAgentService
                 continue;
             }
 
-            var compacted = new Services.Providers.NativeMessage { Role = msg.Role };
+            // Effort too: a per-message effort change (role "system", no content) that lost it was dropped from the wire,
+            // so the turns after it fell back to the request's top-level effort once the cut passed it.
+            var compacted = new Services.Providers.NativeMessage { Role = msg.Role, Effort = msg.Effort };
             foreach (var block in msg.Content)
             {
                 compacted.Content.Add(CompactBlock(block, maxOldResultChars));

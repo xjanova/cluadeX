@@ -109,6 +109,10 @@ public class NativeMessage
     /// <summary>Role "system" with no content: changes effort from the next user turn on (Anthropic per-message effort,
     /// beta mid-conversation-output-config-2026-07-01) without the cache reset a top-level change causes.</summary>
     public string? Effort { get; set; }
+    /// <summary>A prompt-cache breakpoint goes on this message (Anthropic): the agent loop sets it on the last message
+    /// before microcompact's cut, the part of the conversation that stays byte-identical from step to step. Set on the
+    /// outbound copy only; providers without prompt caching ignore it.</summary>
+    public bool CacheMark { get; set; }
 }
 
 /// <summary>A content block in a native API message.</summary>

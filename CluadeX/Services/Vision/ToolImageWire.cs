@@ -185,15 +185,18 @@ public static class ToolImageWire
     ///   the context window" (never seen), older ones as <see cref="OmittedOld"/>.</item>
     /// </list>
     /// </summary>
-    public static int KeepNewestImages(List<NativeMessage> messages, int keep)
+    /// <param name="from">Messages before this index are left exactly as they are (not counted, not changed): an agent
+    /// loop's prompt-cache prefix lives there, and rewriting one old block re-sends the whole conversation uncached.</param>
+    public static int KeepNewestImages(List<NativeMessage> messages, int keep, int from = 0)
     {
+        from = Math.Max(0, from);
         int newest = -1;
-        for (int mi = messages.Count - 1; mi >= 0 && newest < 0; mi--)
+        for (int mi = messages.Count - 1; mi >= from && newest < 0; mi--)
             if (messages[mi].Content.Any(b => b.Images is { Count: > 0 })) newest = mi;
         if (newest < 0) return 0;
 
         int seen = 0, dropped = 0;
-        for (int mi = newest; mi >= 0; mi--)
+        for (int mi = newest; mi >= from; mi--)
         {
             bool isNewest = mi == newest;
             // The newest step's images are counted in the order the tools returned them (first ones first);
