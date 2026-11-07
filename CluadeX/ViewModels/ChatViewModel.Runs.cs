@@ -528,6 +528,7 @@ public partial class ChatViewModel
         RaiseRunStateChanged();
         if (run != null && ReferenceEquals(run.Session, CurrentSession)) RefreshStickyPlan();   // its rows stop moving too
         if (run != null) TellParentSplitFinished(run.Session, run.Messages);
+        if (run != null && leftover is { Count: > 0 }) HandOnUntakenWatchNotes(run, leftover);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
     }
@@ -668,8 +669,10 @@ public partial class ChatViewModel
             try { if (run.Cts is { } cts) { cts.Cancel(); n++; } }
             catch (ObjectDisposedException) { }
         }
-        if (n > 0) StatusText = Loc("desktop.hotkeyStopped");
-        _debugLog?.Info("Chat", $"Ctrl+Alt+End stopped {n} run(s)");
+        // …and every watch: nothing starts a new turn behind the owner's back after they pulled the brake.
+        int watches = _watch?.CancelAll(Loc("watch.cancelledByHotkey")) ?? 0;
+        if (n > 0 || watches > 0) StatusText = Loc("desktop.hotkeyStopped");
+        _debugLog?.Info("Chat", $"Ctrl+Alt+End stopped {n} run(s) and {watches} watch(es)");
         return n;
     }
 

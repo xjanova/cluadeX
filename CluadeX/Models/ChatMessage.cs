@@ -342,12 +342,14 @@ public class ChatMessage : INotifyPropertyChanged
     //     columns every row already has, so a reloaded chat draws them again with no schema change. The view each one
     //     shows is built on first use by the chat page (it holds the services), from the row's own data. ───
 
-    public const string WorkflowTag = "cx:workflow", SplitsTag = "cx:splits", NextStepTag = "cx:nextstep", NoticeTag = "cx:notice";
+    public const string WorkflowTag = "cx:workflow", SplitsTag = "cx:splits", NextStepTag = "cx:nextstep", NoticeTag = "cx:notice",
+        WatchTag = "cx:watch";
 
     /// <summary>Builds a row's view (set by the chat page). Null result = the row shows its text.</summary>
     public static Func<ChatMessage, ViewModels.WorkflowCard?>? WorkflowCardFor;
     public static Func<ChatMessage, System.Collections.ObjectModel.ObservableCollection<ChatSession>?>? SplitChipsFor;
     public static Func<ChatMessage, ViewModels.NextStepView?>? NextStepFor;
+    public static Func<ChatMessage, ViewModels.WatchCardView?>? WatchCardFor;
 
     private ViewModels.WorkflowCard? _workflow;
     /// <summary>A workflow card (ToolOutput = the workflow's id).</summary>
@@ -366,6 +368,12 @@ public class ChatMessage : INotifyPropertyChanged
     public ViewModels.NextStepView? NextStep => _nextStep ??= ToolName == NextStepTag ? NextStepFor?.Invoke(this) : null;
     public bool IsNextStep => ToolName == NextStepTag;
 
+    private ViewModels.WatchCardView? _watchCard;
+    /// <summary>A watch's card (ToolOutput = the watch's id) — watch_ci / watch_process.</summary>
+    public ViewModels.WatchCardView? WatchCard => _watchCard ??= ToolName == WatchTag ? WatchCardFor?.Invoke(this) : null;
+    public bool IsWatch => ToolName == WatchTag;
+    public bool ShowsWatchCard => IsWatch && WatchCard != null;
+
     /// <summary>A notice the model also sees on its next turn (a background command or a split chat finished).</summary>
     public bool IsNotice => ToolName == NoticeTag;
 
@@ -374,7 +382,7 @@ public class ChatMessage : INotifyPropertyChanged
     public bool ShowsNextStep => IsNextStep && NextStep != null;
 
     /// <summary>A row with its own card instead of the chat bubble.</summary>
-    public bool IsOrchestrationCard => ShowsWorkflowCard || IsSplitChips || ShowsNextStep;
+    public bool IsOrchestrationCard => ShowsWorkflowCard || IsSplitChips || ShowsNextStep || ShowsWatchCard;
     /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:
     /// a reloaded group shows its merged output instead).</summary>
     public System.Collections.ObjectModel.ObservableCollection<ToolStepView> GroupSteps { get; } = new();

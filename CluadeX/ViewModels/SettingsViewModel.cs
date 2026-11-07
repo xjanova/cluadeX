@@ -49,6 +49,7 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(InteractiveRequestTimeoutSeconds)] = (vm, s) => s.InteractiveRequestTimeoutSeconds = Math.Clamp(vm.InteractiveRequestTimeoutSeconds, 0, 3600),
         [nameof(EnforceReadBeforeEdit)] = (vm, s) => s.EnforceReadBeforeEdit = vm.EnforceReadBeforeEdit,
         [nameof(AutoVerifyAfterEditEnabled)] = (vm, s) => s.AutoVerifyAfterEditEnabled = vm.AutoVerifyAfterEditEnabled,
+        [nameof(WatchAutoContinue)] = (vm, s) => s.WatchAutoContinue = vm.WatchAutoContinue,
         [nameof(AutoVerifyCommand)] = (vm, s) => s.AutoVerifyCommand = vm.AutoVerifyCommand?.Trim() ?? "",
         [nameof(MaxAutoFixAttempts)] = (vm, s) => s.MaxAutoFixAttempts = Math.Clamp(vm.MaxAutoFixAttempts, 0, 20),
         [nameof(EscalationEnabled)] = (vm, s) =>
@@ -156,6 +157,8 @@ public partial class SettingsViewModel : ViewModelBase
     public int InteractiveRequestTimeoutSeconds { get => _interactiveTimeoutSeconds; set => SetProperty(ref _interactiveTimeoutSeconds, value); }
     public bool EnforceReadBeforeEdit { get => _enforceReadBeforeEdit; set => SetProperty(ref _enforceReadBeforeEdit, value); }
     public bool AutoVerifyAfterEditEnabled { get => _autoVerifyAfterEdit; set => SetProperty(ref _autoVerifyAfterEdit, value); }
+    private bool _watchAutoContinue = true;
+    public bool WatchAutoContinue { get => _watchAutoContinue; set => SetProperty(ref _watchAutoContinue, value); }
     public string AutoVerifyCommand { get => _autoVerifyCommand; set => SetProperty(ref _autoVerifyCommand, value); }
     public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
     public bool EscalationEnabled { get => _escalationEnabled; set => SetProperty(ref _escalationEnabled, value); }
@@ -694,6 +697,7 @@ public partial class SettingsViewModel : ViewModelBase
         InteractiveRequestTimeoutSeconds = src.InteractiveRequestTimeoutSeconds;
         EnforceReadBeforeEdit = src.EnforceReadBeforeEdit;
         AutoVerifyAfterEditEnabled = src.AutoVerifyAfterEditEnabled;
+        WatchAutoContinue = src.WatchAutoContinue;
         AutoVerifyCommand = src.AutoVerifyCommand ?? "";
         MaxAutoFixAttempts = src.MaxAutoFixAttempts;
         EscalationEnabled = src.EscalationEnabled;

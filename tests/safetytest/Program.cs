@@ -842,7 +842,9 @@ internal static class Program
                     Approve(54, new { questions = new object[] { new { question = "ข้อเดียว", options = new[] { new { label = "a", description = "" } } } } }),
                 });
                 string RS(int id) => rs.FirstOrDefault(r => r.Contains("\"id\":" + id + ",") || r.Contains("\"id\":" + id + "}")) ?? "";
-                var first = stepCards.FirstOrDefault();
+                // The calls are answered concurrently: find #51's card by its question, not by arrival order.
+                IReadOnlyList<CluadeX.Models.AskStep>? first;
+                lock (stepCards) first = stepCards.FirstOrDefault(s => s.Count > 0 && s[0].Question == "สีอะไรดีคะ?");
                 Check("steps: AskUserQuestion with two questions opens ONE card with two steps (labels, meanings, multi-select kept)",
                     first is { Count: 2 } && first[0].Question == "สีอะไรดีคะ?" && first[0].Options.SequenceEqual(new[] { "แดง", "ฟ้า" })
                     && first[0].Notes.Contains("แดง: สีเดิม") && !first[0].Multi && first[1].Multi && first[1].Options.SequenceEqual(new[] { "S", "L" }),

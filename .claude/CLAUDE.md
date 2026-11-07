@@ -362,6 +362,28 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   chat page + native loop). **Not yet with a live brain**: the card writing and ranking were only checked against the brain's
   answer shape, not run by the app against BrainX.
 
+## Watches: the AI waits for CI / a background process and is woken with the result (2026-11-07)
+- Tools `watch_ci` (pr / commit / branch / repo; none = the current branch's PR, else HEAD), `watch_process` (bg id),
+  `watch_list`, `watch_cancel` live in `EngineeringToolModule.Watch.cs`, so every CLI agent gets them over ChatToolBridge
+  too. Free (no card): they only read. The tool result tells the model to end its turn — no polling, no sleep.
+- `Services/Watch/RunWatchService.cs` (`RunWatchService.Current`, made with the tool modules in App.ConfigureServices):
+  CI looked at every 15→90 s through `GhCiProbe` (`gh pr checks --json`, plain listing on an old gh, `gh run list
+  --commit|--branch`; argv only, every value re-checked each look, nothing may start with '-'). **gh matches a commit by
+  its full hash only** — a short one is expanded with `git rev-parse` or refused. No checks within 5 min = ended;
+  5 failed looks in a row or a fatal answer (gh missing / signed out / no such PR) = error; deadline (CI ≤ 6 h, process
+  ≤ 12 h). ≤ 3 per chat, ≤ 12 in all, same target = the watch already there. `DataRoot\watch-jobs.json`: CI watches
+  are picked up again after a restart, process watches are closed (bg ids restart with the app).
+- `ViewModels/ChatViewModel.Watch.cs`: the card row (`ChatMessage.WatchTag`, `WatchCardView`, Cancel). On the end: a run
+  works in that chat → notice row + a note it reads at its next step (a note it never took is delivered again at
+  EndTurn); nobody works there → a turn starts in that chat (`ContinueChatForPipeAsync(..., fromWatch: true)`: not
+  marked FromPipe, off screen in its own list). Settings ▸ Agent ▸ `WatchAutoContinue` off, or more than `MaxWakes` (6)
+  such turns in 2 h (reset when the owner writes there) = a notice only. Ctrl+Alt+End and deleting the chat cancel watches.
+- Dry-run (`ProcessLaunchPolicy`, every host but CluadeX.exe) blocks gh here too (`GhCiProbe.GhBlocked`): the probe answers
+  a fatal `[dry-run]` and `watch_ci` skips `gh pr view` — a harness never polls GitHub unless it adds gh.exe to `Allowed`.
+- Proven by `tests/watchtest` (92 offline + 4 `--live` = real gh, read-only, on this repo's PR 91 and commit ddbd141) and
+  `tests/chattest` WJ0–WJ14 (`CHATTEST_ONLY=WJ`, the real chat page + native loop + real `cmd` background processes).
+  Not yet: a real CI watch woken in the running app, and a CLI agent (Claude Dev / Codex) calling watch_ci for real.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

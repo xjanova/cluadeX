@@ -309,6 +309,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=WJ: just watch_process — the card, the turn a finished watch starts, its limits (WatchJobTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "WJ")
+        {
+            await TestWatchJobs();
+            Log(Environment.NewLine + $"## Result (CHATTEST_ONLY=WJ): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=SP: just smart skill picking (a turn gets the skills that fit it; the composer's switch).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SP")
         {
@@ -447,6 +456,7 @@ internal static partial class Program
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
         await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card
+        await TestWatchJobs();                // WJ: watch_process — the card, the turn a finished watch starts, its limits
         await TestSkillPick();                // SP: each turn is given only the skills that fit it; the composer's switch
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)

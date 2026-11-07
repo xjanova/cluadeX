@@ -1179,10 +1179,14 @@ public partial class App : Application
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AttachmentToolModule(sp.GetService<SettingsService>()));
         // verify_change, find_references / rename_symbol / impact_of, checkpoint_*, gh_* / git_blame / git_show, debug.
         // AgentToolService is resolved at call time: it takes the modules, so it cannot be a constructor argument.
-        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.EngineeringToolModule(
+        // watch_ci / watch_process: the waits a chat hands off (Services/Watch). Made with the tools, so it exists — and picks
+        // up the CI watches the last app run left — before the first chat runs; RunWatchService.Current is how the tools reach it.
+        services.AddSingleton(sp => Services.Watch.RunWatchService.Current = new Services.Watch.RunWatchService(
+            sp.GetRequiredService<SettingsService>().DataRoot, sp.GetService<BackgroundProcessService>(), sp.GetService<DebugLogService>()));
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => { _ = sp.GetService<Services.Watch.RunWatchService>(); return new Services.Tools.EngineeringToolModule(
             () => sp.GetService<AgentToolService>(), sp.GetService<CodeIntelligenceService>(), sp.GetService<CheckpointService>(),
             sp.GetService<DebugAdapterService>(), sp.GetService<SettingsService>(), sp.GetService<ActivationService>(),
-            sp.GetService<RepoMapService>()));
+            sp.GetService<RepoMapService>()); });
         // add_code_comments: the open editor tabs are read at call time (the editor view model is built after the tools).
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.AutoComment.AutoCommentToolModule(
             sp.GetService<SettingsService>(), sp.GetService<AiProviderManager>(), sp.GetService<GitService>(),

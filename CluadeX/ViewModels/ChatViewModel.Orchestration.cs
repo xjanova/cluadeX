@@ -170,6 +170,8 @@ public partial class ChatViewModel
     {
         // An explicit stop (the agent's bg_stop, the owner's button, the app closing) is not news to whoever stopped it.
         if (owner == null || snap.Status == "stopped") return;
+        // A process a watch waits on: the watch says it (and may start a turn) — one message, not two.
+        if (Services.Watch.RunWatchService.Current?.WatchesProcess(snap.Id) == true) return;
         if (!_bgEnded.TryGetValue(owner, out var ended)) _bgEnded[owner] = ended = new();
         ended.Add(snap);
         if (_bgTimer == null)

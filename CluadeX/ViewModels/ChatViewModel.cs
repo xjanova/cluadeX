@@ -1284,6 +1284,8 @@ public partial class ChatViewModel : ViewModelBase
         // the next-step box (ChatViewModel.Orchestration.cs).
         InitOrchestration();
         InitDesign();
+        // watch_ci / watch_process: their cards, and the turn a finished watch starts (ChatViewModel.Watch.cs).
+        InitWatch();
         InitSkillPick();
 
         // Agent map: every sub-agent this command started, live, as one tree card per command.
@@ -2015,6 +2017,7 @@ public partial class ChatViewModel : ViewModelBase
         _persistenceService.DeleteSession(sessionId);
         await CleanUpSessionAsync(sessionId, deleteImages: false);   // DeleteSession already removed its screenshots
         Services.Agents.DesignGate.Forget(sessionId);
+        _watch?.CancelChat(sessionId, "the chat was deleted");
         Services.Skills.SkillPickGate.Forget(sessionId);
 
         if (_settingsService.Settings.PinnedChatIds.Contains(sessionId))
@@ -3543,6 +3546,8 @@ public partial class ChatViewModel : ViewModelBase
     {
         bool fromBox = pipe == null;
         void ClearBox() { if (fromBox) UserInput = string.Empty; }
+        // The owner wrote here: watches may start turns in this chat again (RunWatchService.MaxWakes).
+        if (fromBox && CurrentSession is { } spoke) _watch?.OwnerSpoke(spoke.Id);
         // Files dropped a moment ago may still be copying in (a big zip): the message waits for them rather than
         // going out without them. A second Send pressed meanwhile does nothing — the first one sends.
         if (fromBox && !IsGenerating && !_attachingFiles.IsCompleted)
@@ -3916,7 +3921,7 @@ public partial class ChatViewModel : ViewModelBase
         {
             // A message a pipe caller sent (cluadex.continue_chat): marked as such (the BrainX model never relays it
             // back into the room), with the caller's step limit; the caller reads its outcome from this run.
-            pipeRun.Scope.FromPipe = true;
+            pipeRun.Scope.FromPipe = !pipe.FromWatch;
             pipeRun.MaxSteps = pipe.MaxSteps;
             pipe.Run = pipeRun;
             pipe.UserMessage = userMsg;
