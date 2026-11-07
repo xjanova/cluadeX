@@ -167,6 +167,19 @@ public partial class MainWindow : Window
         catch { /* don't prevent closing */ }
     }
 
+    /// <summary>The rail's ⋯ button: its menu of the pages that are not on the rail opens beside it (a left click, not
+    /// only a right click). The click checked it for the moment; the menu's close puts it back to "is one of those
+    /// pages on screen".</summary>
+    private void MoreToolsButton_Click(object sender, RoutedEventArgs e)
+    {
+        MoreToolsMenu.PlacementTarget = MoreToolsButton;
+        MoreToolsMenu.IsOpen = true;
+    }
+
+    private void MoreToolsMenu_Closed(object sender, RoutedEventArgs e)
+        => System.Windows.Data.BindingOperations.GetBindingExpression(MoreToolsButton,
+            System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty)?.UpdateTarget();
+
     private void BtnMinimize_Click(object sender, RoutedEventArgs e)
         => WindowState = WindowState.Minimized;
 

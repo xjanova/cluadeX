@@ -1342,12 +1342,9 @@ public partial class ChatViewModel : ViewModelBase
                 if (_todoListMsg != null && Messages.Contains(_todoListMsg))
                     planItems = PlanItemView.Reconcile(_todoListMsg.PlanItems, planItems);
                 int planDone = planItems.Count(p => p.IsDone);
-                string planHeader = planDone == planItems.Count
-                    ? LocF("chat.plan.done", planDone, planItems.Count)
-                    : LocF("chat.plan.working", planDone, planItems.Count);
-                var planElapsedSpan = todoRun?.Stopwatch.Elapsed ?? TimeSpan.Zero;
-                string planElapsed = planElapsedSpan.TotalSeconds < 1 ? ""
-                    : planElapsedSpan.TotalMinutes >= 1 ? $"{(int)planElapsedSpan.TotalMinutes}m {planElapsedSpan.Seconds}s" : $"{planElapsedSpan.Seconds}s";
+                // A change queued just before the run ended lands after EndTurn: it must not bring "working" back.
+                string planHeader = PlanCardHeader(planDone, planItems.Count, running: todoRun == null || _runs.Contains(todoRun));
+                string planElapsed = PlanElapsedText(todoRun?.Stopwatch.Elapsed ?? TimeSpan.Zero);
                 if (_todoListMsg == null || !Messages.Contains(_todoListMsg))
                 {
                     _todoListMsg = new ChatMessage { Role = MessageRole.System, Content = sb.ToString().TrimEnd(),
@@ -5225,6 +5222,47 @@ public partial class ChatViewModel : ViewModelBase
         return verb;
     }
 
+    // ─── The plan card's header and clock ───
+
+    /// <summary>The plan card's header. Running: "กำลังดำเนินการ (2/6)". Ended with every item ticked: "เสร็จแล้ว (6/6)".
+    /// Ended with items left: "งานจบแล้ว (ติ๊กแผนไว้ 2/6)" — the run is over even though the agent never ticked the rest,
+    /// and the card must not keep saying it is working (owner 2026-11-07: a 70-minute run left "กำลังดำเนินการ (2/6)"
+    /// up long after it finished, and read as a hang).</summary>
+    public string PlanCardHeader(int done, int total, bool running)
+        => done == total && total > 0 ? LocF("chat.plan.done", done, total)
+            : running ? LocF("chat.plan.working", done, total)
+            : LocF("chat.plan.ended", done, total);
+
+    /// <summary>"42s" · "12m 26s" · "1h 10m" — how long the run has been going. Under a second: nothing.</summary>
+    public static string PlanElapsedText(TimeSpan t)
+        => t.TotalSeconds < 1 ? ""
+            : t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes}m"
+            : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds}s"
+            : $"{t.Seconds}s";
+
+    /// <summary>Every running chat's plan card shows the run's time now. The clock used to move only when the agent
+    /// changed its plan, so an agent that stopped ticking its plan froze the card's time and the card looked hung.
+    /// Only a changed text is written (one property change a second per card at most).</summary>
+    public void TickPlanClocks()
+    {
+        foreach (var run in _runs)
+        {
+            if (run.TodoMsg is not { IsPlan: true } card) continue;
+            string now = PlanElapsedText(run.Stopwatch.Elapsed);
+            if (now != card.PlanElapsed) card.PlanElapsed = now;
+        }
+    }
+
+    /// <summary>The run is over: its plan card says so (done, or ended with items left), its clock stops at the run's
+    /// whole time, and the step left "in progress" stops turning.</summary>
+    private void ClosePlanCard(ChatRun run)
+    {
+        if (run.TodoMsg?.PlanItems is not { Count: > 0 } items) return;
+        foreach (var item in items) item.IsLive = false;
+        run.TodoMsg.PlanHeader = PlanCardHeader(items.Count(p => p.IsDone), items.Count, running: false);
+        run.TodoMsg.PlanElapsed = PlanElapsedText(run.Stopwatch.Elapsed);
+    }
+
     // ─── Elapsed Time Timer ───
     private void StartElapsedTimer()
     {
@@ -5233,6 +5271,7 @@ public partial class ChatViewModel : ViewModelBase
         _elapsedTimer.Tick += (_, _) =>
         {
             if (_runs.Count == 0) { _elapsedTimer?.Stop(); _elapsedTimer = null; return; }
+            TickPlanClocks();   // every running chat's card, on screen or not
             // The status bar describes the chat on screen (its run, if it has one).
             if (!_generationStopwatch.IsRunning || !IsGenerating) return;
             double elapsed = _generationStopwatch.Elapsed.TotalSeconds;

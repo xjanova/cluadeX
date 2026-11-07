@@ -44,6 +44,7 @@ internal static partial class Program
     static string? LookAt;
     static bool LookRender;
     static bool WebOnly;
+    static bool ToolsOnly;
 
     [STAThread]
     static int Main(string[] args)
@@ -54,6 +55,8 @@ internal static partial class Program
         if (args.Length is 2 or 3 && args[0] == "--look") { LookAt = args[1]; LookRender = args.Length == 3 && args[2] == "--render"; }
         // pagestest --web: the web-site parts only (minutes, not the ~25 of the real Flutter renders).
         WebOnly = args.Contains("--web");
+        // pagestest --tools: the activity bar and the pages off it (the ⋯ menu, Settings ▸ More tools) only — seconds.
+        ToolsOnly = args.Contains("--tools");
         var app = new CluadeX.App();
         app.InitializeComponent();
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -248,6 +251,9 @@ internal static partial class Program
             Check("activity bar: …and Select on Chat goes back", MainVm.SelectedNavItem == "Chat", MainVm.SelectedNavItem);
         }
         else Check("activity bar: the Models and Chat buttons exist", false, string.Join(",", rail.Select(r => r.CommandParameter)));
+
+        await MoreToolsChecks(loc);
+        if (ToolsOnly) return Finish();
 
         Invoke(MainVm, "NavigateTo", "UiStudio");
         await Idle(300);

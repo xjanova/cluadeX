@@ -307,6 +307,37 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
 - Proven by `tests/chattest` AG1–AG16 (`CHATTEST_ONLY=AG`, renders with `CHATTEST_RENDERS`; AG12–AG16 run the real held
   loop with a scripted native provider through the real chat page); MO's clock counts follow.
 
+## A written file must parse before "done"; each model's tool track record (2026-11-07)
+- `Services/Agents/WrittenFileCheck.cs`: after a step that wrote files (native loop, gated by `AutoVerifyAfterEditEnabled`),
+  JSON / XML (DTD refused) are parsed in-process, `.js` goes through `node --check` (parse only; ESM re-checked as `.mjs`,
+  JSX / a broken package.json above it are not blamed — only `SyntaxError` counts), an HTML page's inline scripts are
+  checked at the page's own line and its local script / stylesheet / image refs must exist, `.py` through `ast.parse`.
+  No node / Python = skipped. Files > 2 MB skipped, ≤ 20 files, ≤ 10 issues, 10 s per tool, no shell (ArgumentList).
+  The model reads `[file-check] ✗ …` at once; the **broken-file guard** refuses a finish twice (like red-build), then the
+  answer ends with CluadeX's own ⚠️ line naming the file. This is what the build-based auto-verify missed for plain web pages.
+- `Services/Agents/ToolTrackRecord.cs` (`<data root>\tool-record.json`): every call of an offered tool, per model label
+  (`ModelLabelFor`), with a failure kind (`Classify`; the user's refusals are not counted). A tool with ≥ 3 fails in ≥ 5 calls
+  at ≥ 30 % gets one advice line in that model's next system prompt (native + [ACTION:] loops, ≤ 3 tools). Counts halve
+  at 200 calls; ≤ 60 models.
+- Already elsewhere, not redone here: `find_tools` for local models (`feat/local-tool-budget`, unmerged), context rescue +
+  honest overflow stop (`feat/local-model-health`, unmerged), escalation on a stuck local model (main, `EscalationEnabled`).
+- Proven by `tests/loopguardtest` W* (real node + real Python when installed) / T*, and `tests/chattest` DC1–DC10
+  (`CHATTEST_ONLY=DC`, the real agent loop + real write_file with a scripted native provider).
+
+## The plan card that looked hung; the pages off the rail (2026-11-07)
+- The chat's plan card (`ChatMessage.PlanHeader` / `PlanElapsed`) used to change only when the agent changed its plan:
+  a 70-minute Claude Dev run ticked its plan for 12 minutes, so the card stood at "12m 26s" and, after the run, still
+  said "กำลังดำเนินการ (2/6)". Now the run's 500 ms elapsed timer moves every running card's clock
+  (`ChatViewModel.TickPlanClocks`), and `EndTurn` → `ClosePlanCard` sets the header to done or "งานจบแล้ว (ติ๊กแผนไว้ 2/6)"
+  (`PlanCardHeader`, `chat.plan.ended`) with the run's whole time. A plan change queued before the end cannot bring
+  "working" back. Proven by `tests/chattest` PC0–PC3 (`CHATTEST_ONLY=PC`, the real chat page + native loop).
+- Skills, Subagents, Plugins, Hook Library, Instincts, Permissions, Features, Security Shield, Hex Editor and Debug Log are
+  not on the rail (owner 2026-10-11). Their only button, Settings ▸ More tools, was removed on 2026-10-16, which left
+  them on Ctrl+K / Ctrl+number only. Back as one list, `MainViewModel.MoreToolTargets` / `MoreToolPages`, shown twice:
+  the rail's ⋯ button (bottom, above Settings; its own radio group, lit while one of those pages is on screen; a left
+  click opens its menu) and the Settings ▸ General ▸ More tools card. Proven by `tests/pagestest` MT1–MT6
+  (`dotnet run -- --tools`, the shipping MainWindow).
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.
