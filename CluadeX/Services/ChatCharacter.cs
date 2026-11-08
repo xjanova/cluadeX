@@ -123,27 +123,27 @@ public sealed class ChatCharacter
 
     // Owner 2026-11-08: "อย่าลืมเพิ่มมาสคอนสาว น้อง Colibri … ไอค่อนไหนใช้โมเดลน้อง อะไรก็มีให้แสดงทุกที่ … เอไอมาสคอตสาวตัวไหนก็
     // ทำให้ครบ" — every provider has her own girl now, in the brand's colour. Her picture is Assets\Girls\Providers\<name>.png
-    // (drawn in ChatGPT from the main girls, each with her own face; face numbers measured on it). Until it is drawn,
-    // CluadeX's girl stands in under her name and colour (and the numbers stay 0.50, 0.115).
+    // (drawn in ChatGPT from the main girls, each with her own face; face numbers measured on it). All 19 are drawn (2026-11-08);
+    // a girl added later without a picture gets CluadeX's girl standing in under her name and colour.
     public static readonly ChatCharacter Colibri = new("colibri", "Colibri", Color.FromRgb(0x10, 0xB9, 0x81), 0.47, 0.110);   // emerald hummingbird
     public static readonly ChatCharacter OpenRouter = new("openrouter", "OpenRouter", Color.FromRgb(0x62, 0x65, 0xED), 0.52, 0.110);
     public static readonly ChatCharacter Groq = new("groq", "Groq", Color.FromRgb(0xF5, 0x50, 0x36), 0.545, 0.180);
     public static readonly ChatCharacter DeepSeek = new("deepseek", "DeepSeek", Color.FromRgb(0x4B, 0x68, 0xF6), 0.48, 0.120);
     public static readonly ChatCharacter Mistral = new("mistral", "Mistral", Color.FromRgb(0xFA, 0x52, 0x0F), 0.42, 0.100);
     public static readonly ChatCharacter Together = new("together", "Together", Color.FromRgb(0x0F, 0x6E, 0xFC), 0.44, 0.120);
-    public static readonly ChatCharacter Fireworks = new("fireworks", "Fireworks", Color.FromRgb(0x67, 0x20, 0xFF), 0.50, 0.115);
-    public static readonly ChatCharacter Cerebras = new("cerebras", "Cerebras", Color.FromRgb(0xF1, 0x5A, 0x29), 0.50, 0.115);
-    public static readonly ChatCharacter DeepInfra = new("deepinfra", "DeepInfra", Color.FromRgb(0x2E, 0x86, 0xDE), 0.50, 0.115);
-    public static readonly ChatCharacter HuggingFace = new("huggingface", "Hugging Face", Color.FromRgb(0xFF, 0xD2, 0x1E), 0.50, 0.115);
-    public static readonly ChatCharacter Novita = new("novita", "Novita", Color.FromRgb(0x22, 0xD3, 0xEE), 0.50, 0.115);
-    public static readonly ChatCharacter SambaNova = new("sambanova", "SambaNova", Color.FromRgb(0xEE, 0x76, 0x24), 0.50, 0.115);
-    public static readonly ChatCharacter Nebius = new("nebius", "Nebius", Color.FromRgb(0x5B, 0x5B, 0xD6), 0.50, 0.115);
-    public static readonly ChatCharacter Qwen = new("qwen", "Qwen", Color.FromRgb(0x61, 0x5C, 0xED), 0.50, 0.115);
-    public static readonly ChatCharacter Kimi = new("kimi", "Kimi", Color.FromRgb(0x25, 0x63, 0xEB), 0.50, 0.115);
-    public static readonly ChatCharacter Glm = new("glm", "GLM", Color.FromRgb(0x38, 0x59, 0xFF), 0.50, 0.115);
-    public static readonly ChatCharacter Azure = new("azure", "Azure", Color.FromRgb(0x00, 0x78, 0xD4), 0.50, 0.115);
-    public static readonly ChatCharacter LMStudio = new("lmstudio", "LM Studio", Color.FromRgb(0x4F, 0x46, 0xE5), 0.50, 0.115);
-    public static readonly ChatCharacter Vllm = new("vllm", "vLLM", Color.FromRgb(0xF7, 0xB5, 0x00), 0.50, 0.115);
+    public static readonly ChatCharacter Fireworks = new("fireworks", "Fireworks", Color.FromRgb(0x67, 0x20, 0xFF), 0.48, 0.100);
+    public static readonly ChatCharacter Cerebras = new("cerebras", "Cerebras", Color.FromRgb(0xF1, 0x5A, 0x29), 0.52, 0.090);
+    public static readonly ChatCharacter DeepInfra = new("deepinfra", "DeepInfra", Color.FromRgb(0x2E, 0x86, 0xDE), 0.5, 0.115);
+    public static readonly ChatCharacter HuggingFace = new("huggingface", "Hugging Face", Color.FromRgb(0xFF, 0xD2, 0x1E), 0.47, 0.115);
+    public static readonly ChatCharacter Novita = new("novita", "Novita", Color.FromRgb(0x22, 0xD3, 0xEE), 0.47, 0.115);
+    public static readonly ChatCharacter SambaNova = new("sambanova", "SambaNova", Color.FromRgb(0xEE, 0x76, 0x24), 0.5, 0.095);
+    public static readonly ChatCharacter Nebius = new("nebius", "Nebius", Color.FromRgb(0x5B, 0x5B, 0xD6), 0.49, 0.110);
+    public static readonly ChatCharacter Qwen = new("qwen", "Qwen", Color.FromRgb(0x61, 0x5C, 0xED), 0.53, 0.090);
+    public static readonly ChatCharacter Kimi = new("kimi", "Kimi", Color.FromRgb(0x25, 0x63, 0xEB), 0.47, 0.090);
+    public static readonly ChatCharacter Glm = new("glm", "GLM", Color.FromRgb(0x38, 0x59, 0xFF), 0.49, 0.120);
+    public static readonly ChatCharacter Azure = new("azure", "Azure", Color.FromRgb(0x00, 0x78, 0xD4), 0.48, 0.105);
+    public static readonly ChatCharacter LMStudio = new("lmstudio", "LM Studio", Color.FromRgb(0x4F, 0x46, 0xE5), 0.51, 0.110);
+    public static readonly ChatCharacter Vllm = new("vllm", "vLLM", Color.FromRgb(0xF7, 0xB5, 0x00), 0.61, 0.150);
 
     /// <summary>The girls with a picture of their own — what a "pick a girl" list shows (stand-ins would repeat CluadeX's).</summary>
     public static IReadOnlyList<ChatCharacter> All => _all ??= Everyone.Where(c => c.HasOwnArt).ToList();

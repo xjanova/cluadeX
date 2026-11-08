@@ -194,9 +194,10 @@ internal static class ColibriWire
 
         // the girls drawn in ChatGPT (Assets\Girls\Providers) are their own, framed on their own faces, and never join the
         // backdrop / splash pick of the main eight
-        var drawn = new[] { "colibri", "openrouter", "groq", "deepseek", "mistral", "together" };
+        var drawn = new[] { "colibri", "openrouter", "groq", "deepseek", "mistral", "together", "fireworks", "cerebras", "deepinfra",
+            "huggingface", "novita", "sambanova", "nebius", "qwen", "kimi", "glm", "azure", "lmstudio", "vllm" };
         var notOwn = drawn.Where(n => !ChatCharacter.ForGirl(n).HasOwnArt || !GirlArt.Has(n)).ToList();
-        check("mascot", "the drawn provider girls show their own picture", notOwn.Count == 0, string.Join(",", notOwn));
+        check("mascot", "all 19 provider girls show their own picture (none is a stand-in now)", notOwn.Count == 0, string.Join(",", notOwn));
         var badFace = drawn.Select(ChatCharacter.ForGirl)
             .Where(c => c.FaceBrush is not { } f || f.Viewbox.Left < 0 || f.Viewbox.Top < 0 || f.Viewbox.Right > 1 || f.Viewbox.Bottom > 0.25)
             .Select(c => c.Own).ToList();
