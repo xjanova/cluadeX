@@ -112,6 +112,7 @@ internal static partial class Program
                 case "--bubbles": BubblesOnly = true; break;
                 case "--badges": BadgesOnly = true; break;   // the sidebar run badges and the buddy alone
                 case "--hero": HeroOnly = true; break;       // น้อง CluadeX in the corner + text size and font (HeroRenders.cs)
+                case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
             }
         }
@@ -629,7 +630,8 @@ internal static partial class Program
         if (GoldenMode) return await CaptureGolden();
         if (BubblesOnly) { await BubbleRenders(); await LinkRenders(); return Finish(); }
         if (BadgesOnly) { await RunBadgeShots(); return Finish(); }
-        if (HeroOnly) { await HeroShots(); return Finish(); }   // the chat's speech bubbles alone, for a quick look
+        if (HeroOnly) { await HeroShots(); return Finish(); }
+        if (BuddyClipsOnly) { CluadeX.Views.CluadexBuddy.ClipsAllowed = false; await ClipChecks(); await BubbleChecks(); return Finish(); }   // the chat's speech bubbles alone, for a quick look
 
         // 1. Midnight at startup vs the golden.
         string startTheme = themes == null ? "midnight" : ((string)Prop(themes, "CurrentThemeId")).ToLowerInvariant();

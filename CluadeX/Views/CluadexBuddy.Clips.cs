@@ -76,6 +76,9 @@ public partial class CluadexBuddy
     public static readonly string WakeClip = "wake";
     public static readonly string[] SuggestClips = { "suggest", "suggest-wink", "suggest-point", "suggest-whisper" };
 
+    /// <summary>Clicked, now and then she jumps (owner 2026-11-08: "คลิ๊กที่เธอมีการตกใจได้ในบางครั้ง"); MainWindow rolls the dice.</summary>
+    public static readonly string[] StartleClips = { "surprised" };
+
     // ---- Her spoken lines (owner 2026-11-08: "งานเสร็จแล้วก็เรียก เสร็จแล้วค่ะ ทำหลายๆ แบบ", "ต้องตัดสินใจ อะไรก็มี",
     // "เราไม่อยู่นานๆ ก็ เรียกได้ฮัลโหล มีใครอยู่มั้ย"). Short English lines, said in her own voice in the clip (Digen
     // Real Motion 3.5 with audio). She says one at most every SpeechGap, and never with sound off.
@@ -148,7 +151,7 @@ public partial class CluadexBuddy
     public static IEnumerable<string> AllClipNames =>
         Scenes.Values.SelectMany(s => s.Intro.Concat(s.Loop).Concat(s.Extras))
             .Concat(new[] { TimeSpan.FromHours(8), TimeSpan.FromHours(14), TimeSpan.FromHours(19), TimeSpan.FromHours(23) }.SelectMany(GreetingsAt))
-            .Append(WakeClip).Concat(SuggestClips).Concat(Spoken).Concat(BackClips).Concat(SulkClips).Concat(LunchExtras).Concat(NightExtras)
+            .Append(WakeClip).Concat(SuggestClips).Concat(StartleClips).Concat(Spoken).Concat(BackClips).Concat(SulkClips).Concat(LunchExtras).Concat(NightExtras)
             .Distinct();
 
     /// <summary>Her sound on or off (AppSettings.BuddySounds, Settings › General › Appearance; MainWindow keeps it in step).
@@ -356,6 +359,24 @@ public partial class CluadexBuddy
         if (!IsLoaded || !ClipsOn || _forcePlay || Shown != BuddyMood.Idle || SuggestClips.Contains(ClipShown)) return false;
         string? clip = Pick(SuggestClips, null);
         return clip != null && PlayClip(clip, loop: false, () => { if (!ContinueScene()) HideClips(); });
+    }
+
+    /// <summary>The owner clicked her and she jumps: a startle clip, then back to what she was doing (asleep she dozes off
+    /// again). It cuts into an away call or a sulk: the owner who clicked is here. False when it cannot play: on the
+    /// stills, already startled, no clip.</summary>
+    public bool Startle()
+    {
+        if (!IsLoaded || !ClipsOn || ClipShown == "" || StartleClips.Contains(ClipShown)) return false;
+        string? clip = Pick(StartleClips, null);
+        if (clip == null) return false;
+        if (_forcePlay) { _forcePlay = false; SyncPause(); }
+        // a click during a greeting or a line: the scene that chain was leading to (it set SceneShown) follows instead
+        string back = SceneShown == "" ? BuddyMood.Idle : SceneShown;
+        bool inScene = _scene != null;
+        return PlayClip(clip, loop: false, () =>
+        {
+            if (!(inScene && ContinueScene()) && !StartScene(back, skipIntro: true)) HideClips();
+        });
     }
 
     private bool PlayClip(string name, bool loop, Action? then = null)

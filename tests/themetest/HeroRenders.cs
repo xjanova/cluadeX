@@ -13,7 +13,7 @@ namespace ThemeTest;
 
 internal static partial class Program
 {
-    static bool HeroOnly;
+    static bool HeroOnly, BuddyClipsOnly;
 
     /// <summary>
     /// น้อง CluadeX big in the top-left corner (owner 2026-11-08: her sketch — a square under the title bar over the rail and
@@ -295,6 +295,36 @@ internal static partial class Program
         prop.SetValue(svm, true);
         Check("setting: sound on reaches her", CluadexBuddy.SoundsOn);
         prop.SetValue(svm, was);
+
+        // ---- the speaker in her corner: off and on, the same saved setting, shown while she is muted
+        var heroBtn = (Button)MainWin.FindName("BuddyHero");
+        var toggle = heroBtn.Template.FindName("BuddySoundToggle", heroBtn) as Button;
+        Check("sound button: in her plate's corner", toggle != null);
+        if (toggle != null)
+        {
+            string glyph() => FindAll<TextBlock>(toggle).FirstOrDefault()?.Text ?? "";
+            toggle.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, toggle));
+            await Idle(60);
+            bool saved = Sp.GetRequiredService<SettingsService>().Settings.BuddySounds;
+            Check("sound button: a click mutes her and saves it", !CluadexBuddy.SoundsOn && !saved && glyph() == "", $"{CluadexBuddy.SoundsOn} {saved} {(int)glyph().FirstOrDefault():X}");
+            Check("sound button: shown while she is muted", toggle.Opacity > 0.5, $"{toggle.Opacity}");
+            // her corner, muted, for the eye
+            var root = (UIElement)RootVisual(MainWin);
+            var full = Snapshot(root, (int)MainWin.ActualWidth, (int)MainWin.ActualHeight);
+            SavePng(new TransformedBitmap(new CroppedBitmap(full, new Int32Rect(0, 0, 440, 420)), new ScaleTransform(2, 2)),
+                    Path.Combine(OutRoot, "renders", "hero", "corner-muted-2x.png"));
+            toggle.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, toggle));
+            await Idle(60);
+            Check("sound button: a second click brings her sound back", CluadexBuddy.SoundsOn && (bool)prop.GetValue(svm)! && glyph() == "");
+            prop.SetValue(svm, was);
+        }
+
+        // ---- a click on her: now and then she jumps, then goes back to what she was doing
+        await Mood(BuddyMood.Idle);
+        await Idle(150);
+        Check("startle: she jumps", buddy.Startle() && CluadexBuddy.StartleClips.Contains(buddy.ClipShown), buddy.ClipShown);
+        Check("startle: not twice on top of each other", !buddy.Startle());
+        Check("startle: her scene stays idle", buddy.SceneShown == BuddyMood.Idle, buddy.SceneShown);
         CluadexBuddy.SoundsOn = soundsWere;
 
         // a clip that cannot play leaves her on the stills

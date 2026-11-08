@@ -67,6 +67,30 @@ public partial class MainWindow
 
     private void SyncBuddySounds() => CluadexBuddy.SoundsOn = _viewModel.Settings.Settings.BuddySounds;
 
+    /// <summary>The speaker in her plate's corner: her sound off or on, saved (the Settings page's box follows).</summary>
+    private void BuddySoundToggle_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;   // not a click on her: no Home, no startle
+        _viewModel.SettingsVM.BuddySounds = !_viewModel.SettingsVM.BuddySounds;
+    }
+
+    /// <summary>How often a click on her makes her jump (owner 2026-11-08: "คลิ๊กที่เธอมีการตกใจได้ในบางครั้ง" — sometimes,
+    /// not every time), and the least time between two.</summary>
+    public const double StartleChance = 0.3;
+    public static readonly TimeSpan StartleGap = TimeSpan.FromSeconds(10);
+    private static readonly Random StartleDice = new();
+    private DateTime _lastStartleAt = DateTime.MinValue;
+
+    /// <summary>A click on her (it also goes Home, BuddyHero's command): now and then she jumps.</summary>
+    private void BuddyHero_Click(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource != BuddyHero) return;
+        if (DateTime.UtcNow - _lastStartleAt < StartleGap || StartleDice.NextDouble() >= StartleChance) return;
+        _lastStartleAt = DateTime.UtcNow;
+        // after Home has run (it may change her mood, which would replace the startle at once)
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () => HeroBuddy()?.Startle());
+    }
+
     private void OnBuddyMoodChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ViewModels.ChatViewModel.UserInput))

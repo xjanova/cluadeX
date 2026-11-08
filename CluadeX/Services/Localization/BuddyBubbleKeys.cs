@@ -13,6 +13,8 @@ internal static class BuddyBubbleKeys
     internal static readonly Dictionary<string, Dictionary<string, string>> Keys = new()
     {
         ["buddy.bubble.closeTip"] = new() { ["en"] = "Click to close", ["th"] = "คลิกเพื่อปิด" },
+        ["buddy.sound.muteTip"] = new() { ["en"] = "Mute CluadeX", ["th"] = "ปิดเสียงน้อง CluadeX" },
+        ["buddy.sound.unmuteTip"] = new() { ["en"] = "Unmute CluadeX", ["th"] = "เปิดเสียงน้อง CluadeX" },
 
         ["buddy.tip.palette"] = new()
         {
