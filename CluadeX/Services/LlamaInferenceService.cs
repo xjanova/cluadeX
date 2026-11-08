@@ -51,7 +51,9 @@ public class LlamaInferenceService : IDisposable
     }
 
     // ─── Native backend selection (CUDA) ───────────────────────────────────────────────────────
-    // CRITICAL local-mode fix. The project references BOTH LLamaSharp.Backend.Cpu AND .Cuda12. Without an
+    // Since 2026-11-08 the project references only LLamaSharp.Backend.Cpu (the CUDA one was 424 MB and needed the CUDA
+    // Toolkit; the GPU path is llama-server, LocalGgufProvider). WithCuda stays: a CUDA backend dropped next to the app
+    // by hand is still used, and without one LLamaSharp falls back to the CPU build. History: it referenced BOTH. Without an
     // explicit NativeLibraryConfig, LLamaSharp's auto-probe can pick the CPU backend even on a CUDA box —
     // so the model runs entirely on CPU (GPU sits idle) and a 7B prefill takes tens of seconds to minutes.
     // That is the real "local chat hangs / 75s and no answer" report. We force CUDA (with CPU auto-fallback)
