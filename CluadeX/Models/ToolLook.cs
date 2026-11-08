@@ -142,7 +142,7 @@ public sealed class PlanItemView : System.ComponentModel.INotifyPropertyChanged
             // Only a change someone is watching pops: a row drawn already done (a chat opened later) just sits there.
             if (IsDone && !wasDone && PropertyChanged != null) _doneAt = DateTime.UtcNow;
             Raise(nameof(State)); Raise(nameof(IsDone)); Raise(nameof(IsActive)); Raise(nameof(IsPending)); Raise(nameof(IsQueued));
-            Raise(nameof(JustDone)); Raise(nameof(IsWorking));
+            Raise(nameof(JustDone)); Raise(nameof(IsWorking)); Raise(nameof(IsStopped));
         }
     }
     public bool IsDone => _state == "done";
@@ -158,11 +158,14 @@ public sealed class PlanItemView : System.ComponentModel.INotifyPropertyChanged
     public bool IsLive
     {
         get => _isLive;
-        set { if (_isLive == value) return; _isLive = value; Raise(nameof(IsLive)); Raise(nameof(IsWorking)); }
+        set { if (_isLive == value) return; _isLive = value; Raise(nameof(IsLive)); Raise(nameof(IsWorking)); Raise(nameof(IsStopped)); }
     }
     /// <summary>The step is being worked on right now — the only state whose row animates without end (the ring turns,
     /// the light sweeps), and only while that row is on screen.</summary>
     public bool IsWorking => IsActive && _isLive;
+    /// <summary>The step was in progress when its run ended (stopped, or the chat was read back later): the row says
+    /// "stopped" so it does not read as still running.</summary>
+    public bool IsStopped => IsActive && !_isLive;
 
     /// <summary>The rows already drawn, brought to <paramref name="fresh"/>: a row with the same words at the same place
     /// is kept and its state set in place; anything else is the fresh row. Returns <paramref name="current"/> itself when

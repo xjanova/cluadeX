@@ -59,7 +59,12 @@ public partial class ChatViewModel
             ? new NextStepView(step, m.ToolSummary, (_, label) => OnNextStepPicked(m, label))
             : null;
 
-        OrchestrationToolModule.NextStepRequested += (chat, step) => { if (chat != null) _pendingNextStep[chat] = step; };
+        OrchestrationToolModule.NextStepRequested += (chat, step) =>
+        {
+            if (chat != null) _pendingNextStep[chat] = step;
+            // In the tool's own flow (the run's scope): wrap_up checks off the plan this run worked on.
+            _agentToolService.FinishPlanAtWrapUp();
+        };
 
         if (_cleanup?.Background is { } bg)
             bg.Ended += (snap, owner) => App.Current?.Dispatcher.BeginInvoke(() => OnBackgroundEnded(snap, owner));
@@ -228,6 +233,23 @@ public partial class ChatViewModel
         if (last == null) return "";
         string text = string.Join(" ", last.Content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         return text.Length > 240 ? text[..240] + "…" : text;
+    }
+
+    // ─── the plan a turn carries on from ───
+
+    /// <summary>A new run in a chat whose last plan card still has work left: that plan comes over into the run (each
+    /// step keeps its status), so the model can advance it, and its first message says so (CodeAgentService.WithCarriedPlan).
+    /// A plan that was finished, or a chat with none, starts empty.</summary>
+    private static void CarryPlanOver(ChatRun run)
+    {
+        var card = run.Messages.LastOrDefault(m => m.IsPlan);
+        if (card?.PlanItems is not { Count: > 0 } rows) return;
+        var rec = PlanRecord.FromCard(rows, card.PlanScope, card.PlanStopped);
+        if (!rec.HasWorkLeft) return;
+        run.Scope.Todos.AddRange(rec.Items);
+        // Not the old scope tag: what this request is to the chat is the model's to say again (the card keeps its own).
+        run.Scope.PlanCarried = true;
+        run.CarriedPlanMsg = card;
     }
 
     // ─── the next-step box ───

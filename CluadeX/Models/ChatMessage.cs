@@ -309,6 +309,12 @@ public class ChatMessage : INotifyPropertyChanged
     public string PlanHeader { get => _planHeader; set { _planHeader = value; OnPropertyChanged(); OnPropertyChanged(nameof(PlanProgress)); } }
     private string _planElapsed = "";
     public string PlanElapsed { get => _planElapsed; set { _planElapsed = value; OnPropertyChanged(); } }
+    private string? _planScope;
+    /// <summary>What the request was to the chat when the plan was written: first_task, continuation or new_task
+    /// (PlanOps.Scope) — the card's chip. Null = the model did not say.</summary>
+    public string? PlanScope { get => _planScope; set { _planScope = value; OnPropertyChanged(); } }
+    /// <summary>Its run was stopped with a step in progress (saved with the card: a reloaded one still says "หยุดไว้").</summary>
+    public bool PlanStopped { get; set; }
 
     // ─── Tool Call Grouping ───
     /// <summary>Whether this ToolAction is collapsed into a group summary.</summary>
