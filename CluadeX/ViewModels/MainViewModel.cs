@@ -615,7 +615,7 @@ public class MainViewModel : ViewModelBase
             try { item.Run(); } catch (Exception ex) { CommandErrorSink.Report("CommandPalette", ex); }
         });
         PetBuddyCommand = new RelayCommand(() => _pet.Pat());
-        InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
+        InstallUpdateCommand = new AsyncRelayCommand(InstallFromBannerAsync);
         UpdateNowCommand = new AsyncRelayCommand(UpdateNowAsync);
         DismissUpdateCommand = new RelayCommand(() =>
         {
@@ -1334,6 +1334,27 @@ public class MainViewModel : ViewModelBase
             return;
         }
         if (ShowUpdateNow) ShowLinkHint = !AutoUpdateEntitlement.Allowed(_activation, _settingsService.Settings);
+    }
+
+    /// <summary>The banner's Install &amp; Restart: a staged Velopack update first shows "A new version is ready" (what is
+    /// new, the auto-update switch); only "Update and restart" goes on to <see cref="InstallUpdate"/>. "อัปเดตเลย" and an
+    /// update staged after it skip the dialog — the person already said yes.</summary>
+    private async Task InstallFromBannerAsync()
+    {
+        if (IsUpdating) return;
+        if (_autoUpdate.HasStagedUpdate)
+        {
+            var choice = App.ShowUpdateReady(AutoUpdateService.CurrentVersion, _autoUpdate.StagedVersion ?? "", _autoUpdate.StagedNotes,
+                _autoUpdate.StagedSize, AutoUpdateEntitlement.Allowed(_activation, _settingsService.Settings), _settingsService);
+            if (choice == Views.Setup.UpdateReadyChoice.LinkAccount)
+            {
+                App.ShowSetupWizard(ViewModels.Setup.WizardMode.LinkAccount);
+                RenderUpdateEntitlement();
+                return;
+            }
+            if (choice != Views.Setup.UpdateReadyChoice.Now) return;
+        }
+        await InstallUpdate();
     }
 
     private async Task InstallUpdate()

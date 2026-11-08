@@ -80,7 +80,29 @@ internal static partial class Program
             }, finished: true), vm => Check($"wizard[{lang}]: a failed step keeps the page with the doctor and the report", vm.InstallNeedsAttention));
             await Shot(dir, "13-doctor", vm => { vm.PreviewPage(WizardPage.License, offline); vm.PreviewDoctor(FakeReport(loc)); });
             await Shot(dir, "14-done", vm => vm.PreviewPage(WizardPage.Done));
+
+            // the update screens (design board UpdateSplash)
+            const string notes = "## What's new\n- **Setup wizard** on the first run: sign in, pick the parts, watch them install (#2701)\n"
+                + "- Sign in with your Xman Studio account — a linked account updates by itself\n"
+                + "- Connection doctor: tells you *why* the server cannot be reached a1b2c3d\n  - nested detail line\n"
+                + "- The license button sits right after the CluadeX name\n- A fifth line that does not fit\n";
+            await UpdateReadyShot(dir, "15-update-ready", notes, allowed: true, lang);
+            await UpdateReadyShot(dir, "16-update-ready-link", null, allowed: false, lang);
+            await SplashShot(dir, "17-update-splash-40", new UpdateProgressInfo(UpdatePhase.Downloading, "3.0.280", 40, 2_642_411, 6_606_029, 1_153_434, false, null)
+                { Seq = 5, Delta = true, DeltaCount = 2 });
+            await SplashShot(dir, "18-update-splash-stalled", new UpdateProgressInfo(UpdatePhase.Downloading, "3.0.280", 62, 4_095_738, 6_606_029, 0, false, null)
+                { Seq = 6, StalledSeconds = 14 });
+            await SplashShot(dir, "19-update-splash-preparing", new UpdateProgressInfo(UpdatePhase.Preparing, "3.0.280", 100, 6_606_029, 6_606_029, 0, false, null)
+                { Seq = 7, PhaseSeconds = 3 });
         }
+        var bullets = AutoUpdateService.ReleaseNotesBullets("## Head\n- **One** (#12)\n- [Two](https://x) a1b2c3d\n  - nested\n- `Three`\n- Four\n- Five", 4);
+        Check("update notes: list items cleaned, nested skipped, at most four", string.Join("|", bullets) == "One|Two|Three|Four", string.Join("|", bullets));
+        Check("update notes: plain text when there is no list", AutoUpdateService.ReleaseNotesBullets("Bug fixes.\n\nFaster start.").Count == 2);
+        Check("update notes: nothing readable → empty", AutoUpdateService.ReleaseNotesBullets("## v3.0.280\n---").Count == 0 && AutoUpdateService.ReleaseNotesBullets(null).Count == 0);
+        Check("update notes: *emphasis* and _emphasis_ lose their marks, snake_case keeps its",
+            AutoUpdateService.ReleaseNotesBullets("- tells you *why* and _how_ in my_file_name").Single() == "tells you why and how in my_file_name",
+            AutoUpdateService.ReleaseNotesBullets("- tells you *why* and _how_ in my_file_name").Single());
+        Check("update notes: a word made of hex letters is not a commit hash", AutoUpdateService.ReleaseNotesBullets("- Fixed the defaced").Single() == "Fixed the defaced");
         loc.SetLanguage("en");
         return Finish();
     }
@@ -123,6 +145,58 @@ internal static partial class Program
             CheckWizardLayout(win, name);
         }
         finally { win.Close(); await Idle(); }
+    }
+
+    /// <summary>"A new version is ready" → PNG, plus the layout checks and the switch's rule.</summary>
+    static async Task UpdateReadyShot(string dir, string name, string notes, bool allowed, string lang)
+    {
+        var win = new UpdateReadyWindow("3.0.271", "3.0.280", notes, 6_606_029, allowed, null)
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -20000, Top = -20000, ShowActivated = false, ShowInTaskbar = false,
+        };
+        try
+        {
+            win.Show();
+            await Idle(300);
+            var bmp = await Stable(() => (RootVisual(win), 960, 600), "update/" + name);
+            string path = Path.Combine(dir, name + ".png");
+            SavePng(bmp, path);
+            Log($"  {name}: {path}");
+            var sw = (System.Windows.Controls.Primitives.ToggleButton)win.FindName("AutoSwitch");
+            var link = (FrameworkElement)win.FindName("LinkRow");
+            var list = (ItemsControl)win.FindName("Notes");
+            Check($"update[{lang}] {name}: the switch follows the entitlement", sw.IsEnabled == allowed && (sw.IsChecked == true) == allowed && link.IsVisible == !allowed);
+            Check($"update[{lang}] {name}: what's new shows {(notes == null ? "the generic line" : "four lines")}", list.Items.Count == (notes == null ? 1 : 4), $"{list.Items.Count}");
+            CheckWizardLayout(win, name);
+        }
+        finally { win.Close(); await Idle(); }
+    }
+
+    /// <summary>The splash in update mode at one progress snapshot → PNG, plus the layout checks.</summary>
+    static async Task SplashShot(string dir, string name, UpdateProgressInfo p)
+    {
+        CluadeX.Views.SplashWindow.PreviewOnly = true;
+        var win = new CluadeX.Views.SplashWindow(Sp)
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -20000, Top = -20000, ShowActivated = false, ShowInTaskbar = false,
+        };
+        try
+        {
+            win.Show();
+            await Idle(200);
+            win.PreviewUpdate(p);
+            await Idle(300);
+            var bmp = await Stable(() => (RootVisual(win), (int)win.Width, (int)win.Height), "splash/" + name);
+            string path = Path.Combine(dir, name + ".png");
+            SavePng(bmp, path);
+            Log($"  {name}: {path}");
+            var mode = (FrameworkElement)win.FindName("UpdateMode");
+            Check($"splash {name}: the update view shows", mode?.IsVisible == true);
+            CheckWizardLayout(win, name);
+        }
+        finally { win.Close(); CluadeX.Views.SplashWindow.PreviewOnly = false; await Idle(); }
     }
 
     /// <summary>Every visible TextBlock fits its own box (no cut-off Thai), and nothing shown leaves the window.</summary>

@@ -560,6 +560,55 @@ public class AutoUpdateService : IAppShutdownHook
     /// <summary>Version of the staged update, or null.</summary>
     public string? StagedVersion => _vpkPending?.TargetFullRelease?.Version?.ToString();
 
+    /// <summary>The staged release's notes (markdown, as packed with vpk --releaseNotes), or null.</summary>
+    public string? StagedNotes
+    {
+        get { try { return _vpkPending?.TargetFullRelease?.NotesMarkdown; } catch { return null; } }
+    }
+
+    /// <summary>The staged package's size in bytes (0 when unknown).</summary>
+    public long StagedSize
+    {
+        get { try { return _vpkPending?.TargetFullRelease?.Size ?? 0; } catch { return 0; } }
+    }
+
+    /// <summary>
+    /// Up to <paramref name="max"/> short lines for "what's new" out of release-notes markdown: list items first
+    /// (headings, links, emphasis, code ticks and trailing commit hashes stripped); plain lines when there is no list.
+    /// Empty when there is nothing readable. Pure, for the test harness.
+    /// </summary>
+    public static IReadOnlyList<string> ReleaseNotesBullets(string? markdown, int max = 4)
+    {
+        var items = new List<string>();
+        var plain = new List<string>();
+        if (string.IsNullOrWhiteSpace(markdown) || max <= 0) return items;
+        foreach (string raw in markdown.Replace("\r", "").Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#') || line.StartsWith("---") || line.StartsWith("```") || line.StartsWith('>')) continue;
+            var m = System.Text.RegularExpressions.Regex.Match(line, @"^(?:[-*+]|\d+[.)])\s+(.*)$");
+            string text = CleanNote(m.Success ? m.Groups[1].Value : line);
+            if (text.Length < 3) continue;
+            if (m.Success) { if (!raw.StartsWith("  ") && !raw.StartsWith('\t')) items.Add(text); }   // nested items are detail
+            else plain.Add(text);
+        }
+        var pick = items.Count > 0 ? items : plain;
+        return pick.Distinct(StringComparer.OrdinalIgnoreCase).Take(max).ToList();
+    }
+
+    private static string CleanNote(string s)
+    {
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"!\[[^\]]*\]\([^)]*\)", "");                 // images
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\[([^\]]+)\]\([^)]*\)", "$1");              // [text](url)
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*\(?\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b\)?\s*$", "");      // trailing commit hash
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*\(#\d+\)\s*$", "");                       // trailing (#123)
+        s = s.Replace("**", "").Replace("__", "").Replace("`", "");
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"(?<![\w*])[*_](\S(?:[^*_]*\S)?)[*_](?![\w*])", "$1");   // *one* _one_
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"^\[[ xX]\]\s*", "");                         // task-list box
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
+        return s.Length > 120 ? s[..117].TrimEnd() + "…" : s;
+    }
+
     /// <summary>Why automatic updating is paused (or what the last attempt did), in the UI's language; null when there
     /// is nothing to say.</summary>
     public string? PausedReason => _attempts.Describe(thai: IsThai);

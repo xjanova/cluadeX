@@ -170,9 +170,9 @@ internal static class SetupWizardKeys
         ["wiz.comp.bx.title"] = new() { ["en"] = "BrainX — the AI's lasting memory", ["th"] = "BrainX ความจำถาวรของ AI" },
         ["wiz.comp.bx.sub"] = new() { ["en"] = "Installs as its own program, with the same Xman Studio account", ["th"] = "ติดตั้งเป็นอีกโปรแกรม ใช้บัญชี Xman Studio เดียวกัน" },
         ["wiz.comp.bx.found"] = new() { ["en"] = "BrainX is already on this PC — it will be connected to CluadeX", ["th"] = "พบ BrainX ในเครื่องนี้ จะเชื่อมกับ CluadeX ให้" },
-        ["wiz.comp.bx.b1"] = new() { ["en"] = "The AI remembers projects, lessons from bugs and unfinished work across every chat", ["th"] = "AI จำโปรเจกต์ บทเรียนจากบั๊ก และงานค้างได้ข้ามทุกแชต" },
+        ["wiz.comp.bx.b1"] = new() { ["en"] = "The AI remembers projects, lessons from bugs and unfinished work across every chat", ["th"] = "AI จำโปรเจกต์ บทเรียนจากบั๊ก และงานค้างได้ข้ามทุกแชท" },
         ["wiz.comp.bx.b2"] = new() { ["en"] = "One brain for CluadeX, Claude Code and Claude Desktop", ["th"] = "ใช้สมองเดียวกันได้ทั้ง CluadeX, Claude Code และ Claude Desktop" },
-        ["wiz.comp.bx.why"] = new() { ["en"] = "Why: no retelling the same story in every new chat — the longer you use it, the better the AI knows your work.", ["th"] = "ทำไมต้องมี: ไม่ต้องเล่าเรื่องเดิมซ้ำทุกครั้งที่เปิดแชตใหม่ ยิ่งใช้นาน AI ยิ่งรู้จักงานของคุณ" },
+        ["wiz.comp.bx.why"] = new() { ["en"] = "Why: no retelling the same story in every new chat — the longer you use it, the better the AI knows your work.", ["th"] = "ทำไมต้องมี: ไม่ต้องเล่าเรื่องเดิมซ้ำทุกครั้งที่เปิดแชทใหม่ ยิ่งใช้นาน AI ยิ่งรู้จักงานของคุณ" },
         ["wiz.comp.install"] = new() { ["en"] = "Install CluadeX", ["th"] = "ติดตั้ง CluadeX" },
 
         // ── Progress ──
@@ -217,7 +217,7 @@ internal static class SetupWizardKeys
         ["wiz.tip.1"] = new() { ["en"] = "Right-click a girl in the app to mute her, or switch to stills and a slideshow.", ["th"] = "คลิกขวาที่สาวๆ ในแอป เพื่อปิดเสียง หรือสลับเป็นภาพนิ่งและสไลด์โชว์ได้" },
         ["wiz.tip.2"] = new() { ["en"] = "Ctrl+K opens the command palette — jump to any page or file.", ["th"] = "กด Ctrl+K เพื่อเปิดแถบคำสั่ง ไปหน้าไหนหรือเปิดไฟล์ไหนก็ได้" },
         ["wiz.tip.3"] = new() { ["en"] = "Tell the AI in Thai what you want — it plans, writes and runs the code for the whole project.", ["th"] = "บอก AI เป็นภาษาไทยว่าอยากได้อะไร มันวางแผน เขียน และรันโค้ดทั้งโปรเจกต์ให้" },
-        ["wiz.tip.4"] = new() { ["en"] = "Your chats, projects and settings stay put through every update.", ["th"] = "แชต โปรเจกต์ และการตั้งค่าของคุณอยู่ครบทุกครั้งที่อัปเดต" },
+        ["wiz.tip.4"] = new() { ["en"] = "Your chats, projects and settings stay put through every update.", ["th"] = "แชท โปรเจกต์ และการตั้งค่าของคุณอยู่ครบทุกครั้งที่อัปเดต" },
 
         // ── Done ──
         ["wiz.done.title"] = new() { ["en"] = "All set", ["th"] = "ติดตั้งเสร็จแล้ว" },
@@ -226,7 +226,7 @@ internal static class SetupWizardKeys
         ["wiz.done.next"] = new() { ["en"] = "On first start the girls walk you through 3 things", ["th"] = "เปิดครั้งแรก สาวๆ จะพาทำ 3 อย่าง" },
         ["wiz.done.n1"] = new() { ["en"] = "Pick the AI provider you use", ["th"] = "เลือกผู้ให้บริการ AI ที่ใช้อยู่" },
         ["wiz.done.n2"] = new() { ["en"] = "Download a model to run on this PC", ["th"] = "ดาวน์โหลดโมเดลไว้รันบนเครื่อง" },
-        ["wiz.done.n3"] = new() { ["en"] = "Start the first chat with your project", ["th"] = "เริ่มแชตแรกกับโปรเจกต์ของคุณ" },
+        ["wiz.done.n3"] = new() { ["en"] = "Start the first chat with your project", ["th"] = "เริ่มแชทแรกกับโปรเจกต์ของคุณ" },
         ["wiz.done.skippable"] = new() { ["en"] = "optional", ["th"] = "ข้ามได้" },
         ["wiz.done.open"] = new() { ["en"] = "Open CluadeX", ["th"] = "เปิด CluadeX" },
         ["wiz.done.close"] = new() { ["en"] = "Close", ["th"] = "ปิด" },
@@ -243,6 +243,28 @@ internal static class SetupWizardKeys
         ["update.linkHint"] = new() { ["en"] = "Link your Xman Studio account to update automatically", ["th"] = "เชื่อมบัญชี Xman Studio เพื่อให้อัปเดตเองอัตโนมัติ" },
         ["update.linkAccount"] = new() { ["en"] = "Link account", ["th"] = "เชื่อมบัญชี" },
         ["update.autoOff"] = new() { ["en"] = "Automatic updates are switched off — updates wait for you.", ["th"] = "ปิดอัปเดตอัตโนมัติไว้ รุ่นใหม่จะรอให้กดเอง" },
+        // ── the splash's update view (design board UpdateSplash) ──
+        ["splash.up.head"] = new() { ["en"] = "Updating CluadeX", ["th"] = "กำลังอัปเดต CluadeX" },
+        ["splash.up.s1"] = new() { ["en"] = "Download the new version", ["th"] = "ดาวน์โหลดรุ่นใหม่" },
+        ["splash.up.s1delta"] = new() { ["en"] = "Download what changed", ["th"] = "ดาวน์โหลดส่วนที่เปลี่ยน" },
+        ["splash.up.s2"] = new() { ["en"] = "Check the files", ["th"] = "ตรวจความถูกต้องของไฟล์" },
+        ["splash.up.s3"] = new() { ["en"] = "Install the new version", ["th"] = "ติดตั้งรุ่นใหม่" },
+        ["splash.up.s4"] = new() { ["en"] = "Open the app again by itself", ["th"] = "เปิดแอปใหม่อัตโนมัติ" },
+        ["splash.up.safe"] = new() { ["en"] = "Your chats, projects and settings stay exactly as they are.", ["th"] = "แชท โปรเจกต์ และการตั้งค่าของคุณอยู่ครบ ไม่หายไปไหน" },
+        ["splash.up.slow"] = new() { ["en"] = "Slow network? Go in now — the new version installs when you close the app.", ["th"] = "เน็ตช้า? เข้าใช้งานไปก่อนได้ รุ่นใหม่จะติดตั้งตอนปิดโปรแกรม" },
+        ["splash.up.enter"] = new() { ["en"] = "Go in now", ["th"] = "เข้าใช้งานก่อน" },
+        ["splash.up.stalled"] = new() { ["en"] = "stalled {0} s — retrying", ["th"] = "สัญญาณค้าง {0} วินาที กำลังลองใหม่" },
+        ["splash.up.resuming"] = new() { ["en"] = "resuming", ["th"] = "กำลังต่อจากเดิม" },
+        // ── the update-ready dialog (design board UpdateReady) ──
+        ["upd.title"] = new() { ["en"] = "A new version of CluadeX", ["th"] = "มีเวอร์ชันใหม่ของ CluadeX" },
+        ["upd.sub"] = new() { ["en"] = "Already downloaded — updating takes a few seconds.", ["th"] = "โหลดไว้ให้แล้ว อัปเดตใช้เวลาไม่กี่วินาที" },
+        ["upd.whatsNew"] = new() { ["en"] = "What's new", ["th"] = "มีอะไรใหม่" },
+        ["upd.noNotes"] = new() { ["en"] = "Fixes and improvements — the full list is in the release notes.", ["th"] = "แก้ไขและปรับปรุงหลายจุด ดูรายการทั้งหมดได้ในรายละเอียด" },
+        ["upd.auto"] = new() { ["en"] = "Update by itself every time the app opens — chats and settings stay.", ["th"] = "อัปเดตให้เองทุกครั้งที่เปิดแอป แชทและการตั้งค่าอยู่ครบ" },
+        ["upd.now"] = new() { ["en"] = "Update and restart", ["th"] = "อัปเดตและเริ่มใหม่" },
+        ["upd.later"] = new() { ["en"] = "Later", ["th"] = "ไว้ทีหลัง" },
+        ["upd.details"] = new() { ["en"] = "See all the details", ["th"] = "ดูรายละเอียดทั้งหมด" },
+        ["upd.close"] = new() { ["en"] = "Close", ["th"] = "ปิด" },
         ["update.nowDownloading"] = new() { ["en"] = "Downloading v{0} — it installs and restarts when done.", ["th"] = "กำลังดาวน์โหลด v{0} เสร็จแล้วจะติดตั้งและเปิดใหม่ให้" },
     };
 }

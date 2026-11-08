@@ -393,6 +393,20 @@ public partial class App : Application
         catch (Exception ex) { WriteCrashLog("setup-wizard", ex); }
     }
 
+    /// <summary>"A new version is ready" over the main window; Later when it cannot be shown.</summary>
+    public static Views.Setup.UpdateReadyChoice ShowUpdateReady(string from, string to, string? notes, long size, bool allowed, SettingsService settings)
+    {
+        try
+        {
+            var w = new Views.Setup.UpdateReadyWindow(from, to, notes, size, allowed, settings);
+            if (Current?.MainWindow is { IsVisible: true } owner) w.Owner = owner;
+            else w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            w.ShowDialog();
+            return w.Choice;
+        }
+        catch (Exception ex) { WriteCrashLog("update-ready", ex); return Views.Setup.UpdateReadyChoice.Later; }
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  MCP tool dispatcher
     //  ────────────────────
