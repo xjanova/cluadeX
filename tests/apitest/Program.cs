@@ -573,6 +573,7 @@ internal static class Program
         await VibeWire.Run(Check, Section);
         await PlanWire.Run(Check, Section);
         await ColibriWire.Run(Check, Section);
+        await NodeGraphBgWire.Run(Check, Section);
     }
 
     /// <summary>MD5 of a SQLite file after releasing pooled connections (they keep it open).</summary>
