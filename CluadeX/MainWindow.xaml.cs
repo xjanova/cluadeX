@@ -25,6 +25,7 @@ public partial class MainWindow : Window
         // picker and the buddy also live below (the composer, the sidebar); the caption buttons have their own column.
         SizeChanged += (_, _) => ApplyTitleBarRoom();
         Loaded += (_, _) => ApplyTitleBarRoom();
+        InitBuddyHero();   // น้อง CluadeX's size, what moves out of her way, and the text size zoom (MainWindow.Buddy.cs)
         _viewModel = viewModel;
         DataContext = viewModel;
         // The chat opened a project: the UI Studio builds its page (hidden) and starts showing it, so it is ready the

@@ -8,9 +8,9 @@ using CluadeX.Services;
 namespace CluadeX.Views;
 
 /// <summary>
-/// น้อง CluadeX's face in the activity bar, moving with what CluadeX does (<see cref="BuddyMood"/>):
-/// idle — breathes and blinks now and then; working — a neon arc runs round her while she bobs and sways;
-/// waiting — head cocked, an amber rim pulsing and a "?" bouncing; happy — a hop and a sparkle, once;
+/// น้อง CluadeX's face in the top-left corner (any size: she is drawn in a Viewbox), moving with what CluadeX does (<see cref="BuddyMood"/>):
+/// idle — breathes and blinks now and then; working — a small spinner at her shoulder while she bobs and sways;
+/// waiting — head cocked, an amber glow pulsing and a "?" bouncing; happy — a hop and a sparkle, once;
 /// sad — a shake and a red "!"; asleep — eyes closed, head down, slow breaths and z's floating up.
 /// <para>Each mood is one storyboard begun on this control at 10–24 fps. It is paused while the window is minimised or
 /// the control hidden, and — when she is idle or asleep — while another app has the focus, so an idle CluadeX asks for
@@ -85,55 +85,59 @@ public partial class CluadexBuddy : UserControl
         Reset();
         Shown = mood;
         var sb = new Storyboard();
+        // Distances are in her 120-unit canvas (the Viewbox scales them with her).
         switch (mood)
         {
             case BuddyMood.Working:
-                WorkArc.Visibility = Visibility.Visible;
-                Rim.Opacity = 0.35;
-                Forever(sb, ArcSpin, RotateTransform.AngleProperty, 0, 360, 1.2, reverse: false);
-                Forever(sb, Bob, TranslateTransform.YProperty, 0, -1.4, 0.45);
-                Forever(sb, Tilt, RotateTransform.AngleProperty, -4, 4, 1.7);
+                WorkChip.Visibility = Visibility.Visible;
+                Glow.SetResourceReference(Shape.FillProperty, "Accent.1");
+                Forever(sb, Glow, OpacityProperty, 0.22, 0.48, 0.9);
+                Forever(sb, ArcSpin, RotateTransform.AngleProperty, 0, 360, 1.1, reverse: false);
+                Forever(sb, Bob, TranslateTransform.YProperty, 0, -2.5, 0.45);
+                Forever(sb, Tilt, RotateTransform.AngleProperty, -2.5, 2.5, 1.7);
                 Blink(sb, 3.2);
                 Timeline.SetDesiredFrameRate(sb, 24);
                 break;
             case BuddyMood.Waiting:
-                Rim.SetResourceReference(Shape.StrokeProperty, "Status.Warning");
+                Glow.SetResourceReference(Shape.FillProperty, "Status.Warning");
                 AskChip.Visibility = Visibility.Visible;
-                Tilt.Angle = 7;   // head cocked: "yes?"
-                Forever(sb, Rim, OpacityProperty, 0.35, 1, 0.8);
-                Forever(sb, AskHop, TranslateTransform.YProperty, 0, -2.5, 0.4);
+                Tilt.Angle = 5;   // head cocked: "yes?"
+                Forever(sb, Glow, OpacityProperty, 0.2, 0.55, 0.8);
+                Forever(sb, AskHop, TranslateTransform.YProperty, 0, -6, 0.4);
                 Blink(sb, 3.6);
                 Timeline.SetDesiredFrameRate(sb, 20);
                 break;
             case BuddyMood.Happy:
-                Rim.SetResourceReference(Shape.StrokeProperty, "Status.Success");
-                Rim.Opacity = 0.9;
-                Once(sb, Bob, TranslateTransform.YProperty, (0, 0), (0.15, -4), (0.3, 0), (0.45, -2.5), (0.6, 0));
+                Glow.SetResourceReference(Shape.FillProperty, "Status.Success");
+                Glow.Opacity = 0.5;
+                Once(sb, Bob, TranslateTransform.YProperty, (0, 0), (0.15, -9), (0.3, 0), (0.45, -5), (0.6, 0));
                 Once(sb, Sparkle, OpacityProperty, (0, 0), (0.2, 1), (0.9, 1), (1.3, 0));
                 Once(sb, SparkleScale, ScaleTransform.ScaleXProperty, (0, 0.3), (0.25, 1.2), (0.5, 0.9));
                 Once(sb, SparkleScale, ScaleTransform.ScaleYProperty, (0, 0.3), (0.25, 1.2), (0.5, 0.9));
                 Timeline.SetDesiredFrameRate(sb, 30);
                 break;
             case BuddyMood.Sad:
-                Rim.SetResourceReference(Shape.StrokeProperty, "Status.Danger");
-                Rim.Opacity = 0.9;
+                Glow.SetResourceReference(Shape.FillProperty, "Status.Danger");
+                Glow.Opacity = 0.45;
                 SadChip.Visibility = Visibility.Visible;
-                Once(sb, Tilt, RotateTransform.AngleProperty, (0, 0), (0.08, -7), (0.18, 7), (0.28, -5), (0.38, 4), (0.5, 0));
+                Once(sb, Tilt, RotateTransform.AngleProperty, (0, 0), (0.08, -5), (0.18, 5), (0.28, -3.5), (0.38, 3), (0.5, 0));
                 Timeline.SetDesiredFrameRate(sb, 30);
                 break;
             case BuddyMood.Sleep:
                 FaceAsleep.Opacity = 1;
-                Tilt.Angle = 9;   // nodding off
-                Rim.Opacity = 0.3;
-                Forever(sb, Breathe, ScaleTransform.ScaleXProperty, 1, 1.035, 1.9);
-                Forever(sb, Breathe, ScaleTransform.ScaleYProperty, 1, 1.035, 1.9);
+                Tilt.Angle = 6;   // nodding off
+                Glow.Opacity = 0.16;
+                Forever(sb, Breathe, ScaleTransform.ScaleXProperty, 1, 1.02, 1.9);
+                Forever(sb, Breathe, ScaleTransform.ScaleYProperty, 1, 1.02, 1.9);
                 FloatZ(sb, Z1, Z1Rise, 0);
                 FloatZ(sb, Z2, Z2Rise, 1.4);
                 Timeline.SetDesiredFrameRate(sb, 10);
                 break;
             default:   // idle
-                Forever(sb, Breathe, ScaleTransform.ScaleXProperty, 1, 1.025, 1.6);
-                Forever(sb, Breathe, ScaleTransform.ScaleYProperty, 1, 1.025, 1.6);
+                Forever(sb, Breathe, ScaleTransform.ScaleXProperty, 1, 1.015, 1.6);
+                Forever(sb, Breathe, ScaleTransform.ScaleYProperty, 1, 1.015, 1.6);
+                Forever(sb, GlowScale, ScaleTransform.ScaleXProperty, 0.96, 1.04, 2.4);
+                Forever(sb, GlowScale, ScaleTransform.ScaleYProperty, 0.96, 1.04, 2.4);
                 Blink(sb, 4.2);
                 Timeline.SetDesiredFrameRate(sb, 12);
                 break;
@@ -144,12 +148,13 @@ public partial class CluadexBuddy : UserControl
         SyncPause();
     }
 
-    /// <summary>Back to the plain face: nothing turned, nothing shown, the accent rim.</summary>
+    /// <summary>Back to the plain face: nothing turned, nothing shown, the accent glow.</summary>
     private void Reset()
     {
-        WorkArc.Visibility = AskChip.Visibility = SadChip.Visibility = Visibility.Collapsed;
-        Rim.SetResourceReference(Shape.StrokeProperty, "Accent.2");
-        Rim.Opacity = 0.55;
+        WorkChip.Visibility = AskChip.Visibility = SadChip.Visibility = Visibility.Collapsed;
+        Glow.SetResourceReference(Shape.FillProperty, "Accent.2");
+        Glow.Opacity = 0.32;
+        GlowScale.ScaleX = GlowScale.ScaleY = 1;
         FaceAsleep.Opacity = Sparkle.Opacity = Z1.Opacity = Z2.Opacity = 0;
         Tilt.Angle = 0;
         Bob.Y = 0;
@@ -194,7 +199,7 @@ public partial class CluadexBuddy : UserControl
         fade.KeyFrames.Add(new LinearDoubleKeyFrame(0.9, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(0.7))));
         fade.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.4))));
         Add(sb, fade, z, OpacityProperty);
-        var up = new DoubleAnimation(2, -7, TimeSpan.FromSeconds(2.8)) { RepeatBehavior = RepeatBehavior.Forever, BeginTime = TimeSpan.FromSeconds(delay) };
+        var up = new DoubleAnimation(4, -16, TimeSpan.FromSeconds(2.8)) { RepeatBehavior = RepeatBehavior.Forever, BeginTime = TimeSpan.FromSeconds(delay) };
         Add(sb, up, rise, TranslateTransform.YProperty);
     }
 

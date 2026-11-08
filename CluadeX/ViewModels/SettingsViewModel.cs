@@ -577,7 +577,9 @@ public partial class SettingsViewModel : ViewModelBase
             MarkCurrentTheme();
             _themes.ThemeChanged += _ => MarkCurrentTheme();
             _localizationService.LanguageChanged += RefreshThemeTexts;
+            _themes.ThemeChanged += _ => OnTypographyChanged();   // "the theme's font" changes with the theme
         }
+        InitTypography();   // Text size and font (SettingsViewModel.Typography.cs)
 
         LoadPageValues(_settingsService.Settings);
         _uiLanguage = _settingsService.Settings.Language == "th" ? "ไทย" : "English";
