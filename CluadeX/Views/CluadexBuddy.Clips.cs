@@ -189,7 +189,7 @@ public partial class CluadexBuddy
         }
     }
 
-    private static bool ClipsOn => ClipsAllowed && SystemParameters.ClientAreaAnimation;
+    private static bool ClipsOn => ClipsAllowed && Display == DisplayClips && SystemParameters.ClientAreaAnimation;
 
     private MediaElement? _front, _pending;
     private bool _clipLoop, _greeted, _clipsHooked, _listening;
@@ -362,11 +362,13 @@ public partial class CluadexBuddy
     }
 
     /// <summary>The owner clicked her and she jumps: a startle clip, then back to what she was doing (asleep she dozes off
-    /// again). It cuts into an away call or a sulk: the owner who clicked is here. False when it cannot play: on the
-    /// stills, already startled, no clip.</summary>
+    /// again). It cuts into an away call or a sulk: the owner who clicked is here. With no clip (her stills or the
+    /// slideshow) she hops instead. False when she cannot now: already startled, not on screen.</summary>
     public bool Startle()
     {
-        if (!IsLoaded || !ClipsOn || ClipShown == "" || StartleClips.Contains(ClipShown)) return false;
+        if (!IsLoaded) return false;
+        if (!ClipsOn || ClipShown == "") return Hop();
+        if (StartleClips.Contains(ClipShown)) return false;
         string? clip = Pick(StartleClips, null);
         if (clip == null) return false;
         if (_forcePlay) { _forcePlay = false; SyncPause(); }
@@ -377,6 +379,24 @@ public partial class CluadexBuddy
         {
             if (!(inScene && ContinueScene()) && !StartScene(back, skipIntro: true)) HideClips();
         });
+    }
+
+    private DateTime _hopUntil = DateTime.MinValue;
+
+    /// <summary>A startled hop with a little shake (no clip): false while one is still going, or with Windows' animations off.</summary>
+    private bool Hop()
+    {
+        if (!SystemParameters.ClientAreaAnimation || DateTime.UtcNow < _hopUntil) return false;
+        _hopUntil = DateTime.UtcNow + TimeSpan.FromMilliseconds(600);
+        var up = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(560) };
+        foreach (var (t, y) in new[] { (0.0, 0.0), (0.09, -16.0), (0.24, 0.0), (0.36, -6.0), (0.5, 0.0) })
+            up.KeyFrames.Add(new EasingDoubleKeyFrame(y, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(t)), new QuadraticEase()));
+        var shake = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(560) };
+        foreach (var (t, x) in new[] { (0.0, 0.0), (0.06, -3.0), (0.12, 3.0), (0.18, -2.0), (0.24, 0.0) })
+            shake.KeyFrames.Add(new LinearDoubleKeyFrame(x, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(t))));
+        Jump.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, up);
+        Jump.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, shake);
+        return true;
     }
 
     private bool PlayClip(string name, bool loop, Action? then = null)

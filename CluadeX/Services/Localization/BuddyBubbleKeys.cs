@@ -15,6 +15,10 @@ internal static class BuddyBubbleKeys
         ["buddy.bubble.closeTip"] = new() { ["en"] = "Click to close", ["th"] = "คลิกเพื่อปิด" },
         ["buddy.sound.muteTip"] = new() { ["en"] = "Mute CluadeX", ["th"] = "ปิดเสียงน้อง CluadeX" },
         ["buddy.sound.unmuteTip"] = new() { ["en"] = "Unmute CluadeX", ["th"] = "เปิดเสียงน้อง CluadeX" },
+        ["buddy.menu.sound"] = new() { ["en"] = "Her sound", ["th"] = "เสียงของน้อง" },
+        ["buddy.menu.clips"] = new() { ["en"] = "Moving clips (normal)", ["th"] = "คลิปเคลื่อนไหว (ปกติ)" },
+        ["buddy.menu.stills"] = new() { ["en"] = "Still picture only", ["th"] = "ภาพนิ่งอย่างเดียว" },
+        ["buddy.menu.slides"] = new() { ["en"] = "Slideshow of the girls (waist up)", ["th"] = "สไลด์สาวๆ ทีละคน (ครึ่งตัว)" },
 
         ["buddy.tip.palette"] = new()
         {

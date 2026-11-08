@@ -325,6 +325,46 @@ internal static partial class Program
         Check("startle: she jumps", buddy.Startle() && CluadexBuddy.StartleClips.Contains(buddy.ClipShown), buddy.ClipShown);
         Check("startle: not twice on top of each other", !buddy.Startle());
         Check("startle: her scene stays idle", buddy.SceneShown == BuddyMood.Idle, buddy.SceneShown);
+
+        // ---- her right-click menu: sound, and clips / stills / the girls' slideshow — each saved
+        var menu = heroBtn.ContextMenu;
+        var items = menu?.Items.OfType<MenuItem>().ToList() ?? new();
+        Check("menu: right-click has her sound and three ways to show", items.Count == 4, $"{items.Count}");
+        void Choose(string mode) => items.First(i => (i.Tag as string) == mode).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        var cfg = Sp.GetRequiredService<SettingsService>().Settings;
+        var stills = (FrameworkElement)buddy.FindName("Stills");
+        if (items.Count == 4)
+        {
+            Choose(CluadexBuddy.DisplayStills);
+            await Idle(200);
+            Check("stills: saved, no clip, her still picture", cfg.BuddyDisplay == "stills" && buddy.ClipShown == "" && stills.IsVisible,
+                  $"{cfg.BuddyDisplay} '{buddy.ClipShown}' {stills.IsVisible}");
+            Check("stills: a click makes her hop", buddy.Startle());
+            Choose(CluadexBuddy.DisplaySlides);
+            await Idle(800);
+            Check("slides: saved, a girl waist up instead of her", cfg.BuddyDisplay == "slides" && buddy.SlideShown != "" && !stills.IsVisible,
+                  $"{cfg.BuddyDisplay} '{buddy.SlideShown}'");
+            string first = buddy.SlideShown;
+            buddy.NextSlide();
+            await Idle(800);
+            Check("slides: then another girl", buddy.SlideShown != "" && buddy.SlideShown != first, $"{first} → {buddy.SlideShown}");
+            var cut = CluadexBuddy.WaistUp(CluadeX.Services.GirlArt.Names[0], 1);
+            Check("slides: the picture is her frame's shape (1:2), head to waist (the top 40 % of the cut-out)",
+                  cut != null && Math.Abs(cut.PixelHeight - 2.0 * cut.PixelWidth) <= 2 && Math.Abs(cut.PixelHeight - 760 * CluadexBuddy.WaistAt) <= 2,
+                  cut == null ? "null" : $"{cut.PixelWidth}×{cut.PixelHeight}");
+            {
+                var root = (UIElement)RootVisual(MainWin);
+                var full = Snapshot(root, (int)MainWin.ActualWidth, (int)MainWin.ActualHeight);
+                SavePng(new TransformedBitmap(new CroppedBitmap(full, new Int32Rect(0, 0, 440, 420)), new ScaleTransform(2, 2)),
+                        Path.Combine(OutRoot, "renders", "hero", "corner-slides-2x.png"));
+            }
+            Check("slides: a click makes her hop", buddy.Startle());
+            Choose(CluadexBuddy.DisplayClips);
+            await Idle(200);
+            Check("clips again: saved, her clip plays, the slideshow is gone",
+                  cfg.BuddyDisplay == "clips" && buddy.ClipShown != "" && buddy.SlideShown == "" && stills.IsVisible,
+                  $"{cfg.BuddyDisplay} '{buddy.ClipShown}' '{buddy.SlideShown}'");
+        }
         CluadexBuddy.SoundsOn = soundsWere;
 
         // a clip that cannot play leaves her on the stills

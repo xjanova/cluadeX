@@ -32,6 +32,8 @@
                         <ScaleTransform x:Name="Breathe"/>
                         <RotateTransform x:Name="Tilt"/>
                         <TranslateTransform x:Name="Bob"/>
+                        <!-- a startled hop when clicked and there is no clip to play (CluadexBuddy.Clips.cs Startle) -->
+                        <TranslateTransform x:Name="Jump"/>
                     </TransformGroup>
                 </Grid.RenderTransform>
                 <Grid.Effect>
@@ -43,6 +45,19 @@
                     <!-- eyes closed: a blink now and then, and asleep -->
                     <Image x:Name="FaceAsleep" Source="/CluadeX;component/Assets/Buddy/cluadex-hero-sleep.png" Stretch="Uniform"
                            RenderOptions.BitmapScalingMode="HighQuality" Opacity="0"/>
+                </Grid>
+                <!-- the slideshow (her right-click menu): the girls waist up, one after another, the next fading in over the
+                     last; their cut waist fades out at the bottom (CluadexBuddy.Slides.cs) -->
+                <Grid x:Name="Slides" Visibility="Collapsed" IsHitTestVisible="False">
+                    <Grid.OpacityMask>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#FF000000" Offset="0"/>
+                            <GradientStop Color="#FF000000" Offset="0.8"/>
+                            <GradientStop Color="#00000000" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Grid.OpacityMask>
+                    <Image x:Name="SlideA" Stretch="Uniform" VerticalAlignment="Top" RenderOptions.BitmapScalingMode="HighQuality" Opacity="0"/>
+                    <Image x:Name="SlideB" Stretch="Uniform" VerticalAlignment="Top" RenderOptions.BitmapScalingMode="HighQuality" Opacity="0"/>
                 </Grid>
                 <!-- her clips (Assets/Buddy/Clips, filmed on green and keyed here): two players so the next clip fades in over
                      the one that is showing. When a clip shows, the stills fade out (CluadexBuddy.Clips.cs). -->

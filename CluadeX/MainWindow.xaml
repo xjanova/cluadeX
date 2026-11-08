@@ -1577,6 +1577,18 @@
                                 Command="{Binding ChatVM.GoHomeCommand}" ToolTip="{Binding ChatVM.BuddyTip}"
                                 AutomationProperties.Name="{services:Loc buddy.goHomeName}"
                                 AutomationProperties.HelpText="{Binding ChatVM.BuddyMoodTip}">
+                            <!-- right-click (owner 2026-11-08: "ใช้การคลิ๊กขวา ปิดเปิดเสียง หรือ สั่งให้เป็นภาพนิ่งอย่างเดียว หรือให้สไลด์
+                                 บรรดา สาวๆ"): her sound, and how she shows — clips, stills, or the girls one after another
+                                 waist up. All kept in the settings (MainWindow.BuddyBubble.cs, Views/CluadexBuddy.Slides.cs). -->
+                            <Button.ContextMenu>
+                                <ContextMenu Opened="BuddyMenu_Opened">
+                                    <MenuItem x:Name="BuddyMenuSound" Header="{services:Loc buddy.menu.sound}" Click="BuddyMenuSound_Click"/>
+                                    <Separator/>
+                                    <MenuItem x:Name="BuddyMenuClips" Header="{services:Loc buddy.menu.clips}" Tag="clips" Click="BuddyMenuDisplay_Click"/>
+                                    <MenuItem x:Name="BuddyMenuStills" Header="{services:Loc buddy.menu.stills}" Tag="stills" Click="BuddyMenuDisplay_Click"/>
+                                    <MenuItem x:Name="BuddyMenuSlides" Header="{services:Loc buddy.menu.slides}" Tag="slides" Click="BuddyMenuDisplay_Click"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
                             <!-- keyboard focus only (not after a mouse click): a soft ring round her square -->
                             <Button.FocusVisualStyle>
                                 <Style>

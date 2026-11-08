@@ -42,8 +42,8 @@ public partial class CluadexBuddy : UserControl
     {
         InitializeComponent();
         SetBinding(MoodProperty, new System.Windows.Data.Binding("BuddyMoodState") { FallbackValue = BuddyMood.Idle });
-        Loaded += (_, _) => { HookWindow(); Apply(); StartAway(); };
-        Unloaded += (_, _) => { StopAway(); Stop(); HideClips(); };
+        Loaded += (_, _) => { HookWindow(); HookDisplay(); Apply(); StartAway(); };
+        Unloaded += (_, _) => { StopAway(); UnhookDisplay(); Stop(); HideClips(); };
         IsVisibleChanged += (_, _) => SyncPause();
     }
 
