@@ -123,6 +123,11 @@ public class AppSettings
     /// Claude login) and a handoff brief instead of stopping on a billing error.</summary>
     public bool AutoFailoverOnQuota { get; set; } = true;
 
+    /// <summary>Where a run goes when its provider runs out (Services/Agents/ProviderFailover.cs): provider names, best
+    /// first ("OpenAI", "ClaudeDev", …); "-Name" leaves one out. Empty = automatic: the other cloud APIs set up, then the
+    /// CLI logins, then a model on this PC. Only providers that are set up (a key, a login, a running server) are used.</summary>
+    public List<string> FailoverOrder { get; set; } = new();
+
     // ─── Dispatch policy (Services/Agents/DispatchPolicy.cs) ───
     /// <summary>Effort decides when the agent fans out: low none, medium read-only sub-agents on the cheapest model,
     /// high workers in git worktrees with a reviewer, xhigh/max also speculative fixes. Off = sub-agents as before.</summary>

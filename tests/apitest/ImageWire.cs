@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -1185,6 +1185,12 @@ internal static class ImageWire
                 && legacyBody.Contains("\"stream\":true") && legacyBody.Contains("You cannot see images") && !legacyBody.Contains("You can see images"),
                 $"sees={providers.ActiveProvider.SupportsToolResultImages("")} native={providers.ActiveProvider.SupportsNativeToolUse} final={Trunc(legacy.FinalResponse, 40)}");
             s.LocalNativeToolUseEnabled = true;
+            fs.WorkingDirectory = "";
+
+            // ── Switching provider mid-run: out of credit → the same turn carries on elsewhere; a switch by hand (FailoverWire) ──
+            fs.WorkingDirectory = project;
+            await FailoverWire.Loop(Check, providers, settings, agent, anth, ollama, project,
+                (h, msg) => { agent.InvalidateSystemPromptCache(); return Turn(h, msg); }, executed);
             fs.WorkingDirectory = "";
 
             // ── Deleting the chat deletes its screenshots — only the store's own files, only that chat ──

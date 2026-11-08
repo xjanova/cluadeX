@@ -386,6 +386,30 @@ public partial class ChatViewModel
                 }
             }
             var carryOn = carryOnNow && !pipeRun ? onScreen : null;
+            // ─── The run takes the new model where it stands (owner 2026-11-08: "เปลี่ยนโมเดลเจ้าใหม่กลางงาน … ให้มันสมูธ") ───
+            // A native agent loop changes provider/model between two steps: only the reply in flight is stopped (its
+            // tool calls never ran), the conversation is translated for the new model and the same step is asked again —
+            // nothing done so far is lost or redone. A CLI model picked this way takes the turn over with a brief of
+            // every step. Runs that cannot (a CLI turn, the text loop) stop and carry on as before.
+            if (carryOn != null && Services.Agents.ProviderSwitchBoard.CanHotSwap(carryOn.Scope))
+            {
+                string liveKey = c.Provider.ToString();
+                _settingsService.UpdateSettings(s =>
+                {
+                    if (!s.ProviderConfigs.TryGetValue(liveKey, out var cfg)) s.ProviderConfigs[liveKey] = cfg = new ProviderConfig();
+                    cfg.SelectedModel = c.Model;
+                    cfg.UseCustomModel = false;
+                });
+                if (otherProvider) await _providerManager.SwitchProviderAsync(c.Provider);
+                if (Services.Agents.ProviderSwitchBoard.Request(carryOn.Scope, new Services.Agents.ProviderSwitchBoard.PendingSwitch(c.Provider, c.Model, "owner")))
+                {
+                    StatusText = LocF("chat.model.switchedLive", c.Model);
+                    return;
+                }
+                // the run ended in the meantime: nothing to carry over, the pick simply holds from the next turn
+                StatusText = LocF("chat.model.switched", c.Model);
+                return;
+            }
             if (carryOn != null)
             {
                 StatusText = LocF("chat.model.stopping", c.Model);
