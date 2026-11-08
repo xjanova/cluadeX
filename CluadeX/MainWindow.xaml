@@ -1573,10 +1573,22 @@
                          A click (or Tab to her + Enter/Space) goes Home: the Chat page, an empty chat, no folder open; running
                          chats carry on in the background. ░░░ -->
                     <Canvas Grid.Column="0" Panel.ZIndex="20" HorizontalAlignment="Left" VerticalAlignment="Top" Width="0" Height="0">
-                        <Button x:Name="BuddyHero" Width="120" Height="240" Cursor="Hand"
+                        <Button x:Name="BuddyHero" Width="120" Height="240" Cursor="Hand" Click="BuddyHero_Click"
                                 Command="{Binding ChatVM.GoHomeCommand}" ToolTip="{Binding ChatVM.BuddyTip}"
                                 AutomationProperties.Name="{services:Loc buddy.goHomeName}"
                                 AutomationProperties.HelpText="{Binding ChatVM.BuddyMoodTip}">
+                            <!-- right-click (owner 2026-11-08: "ใช้การคลิ๊กขวา ปิดเปิดเสียง หรือ สั่งให้เป็นภาพนิ่งอย่างเดียว หรือให้สไลด์
+                                 บรรดา สาวๆ"): her sound, and how she shows — clips, stills, or the girls one after another
+                                 waist up. All kept in the settings (MainWindow.BuddyBubble.cs, Views/CluadexBuddy.Slides.cs). -->
+                            <Button.ContextMenu>
+                                <ContextMenu Opened="BuddyMenu_Opened">
+                                    <MenuItem x:Name="BuddyMenuSound" Header="{services:Loc buddy.menu.sound}" Click="BuddyMenuSound_Click"/>
+                                    <Separator/>
+                                    <MenuItem x:Name="BuddyMenuClips" Header="{services:Loc buddy.menu.clips}" Tag="clips" Click="BuddyMenuDisplay_Click"/>
+                                    <MenuItem x:Name="BuddyMenuStills" Header="{services:Loc buddy.menu.stills}" Tag="stills" Click="BuddyMenuDisplay_Click"/>
+                                    <MenuItem x:Name="BuddyMenuSlides" Header="{services:Loc buddy.menu.slides}" Tag="slides" Click="BuddyMenuDisplay_Click"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
                             <!-- keyboard focus only (not after a mouse click): a soft ring round her square -->
                             <Button.FocusVisualStyle>
                                 <Style>
@@ -1621,10 +1633,47 @@
                                             </Border>
                                         </Border>
                                         <views:CluadexBuddy x:Name="Buddy" DataContext="{Binding ChatVM}" Margin="4,3,2,3"/>
+                                        <!-- her sound on/off (owner 2026-11-08: "ทำให้ปิดเปิดเสียง อวาต้า เธอได้"): a small speaker in
+                                             her plate's corner, shown while the pointer is on her or while she is muted; the
+                                             same setting as Settings › General › Appearance (AppSettings.BuddySounds, kept) -->
+                                        <Button x:Name="BuddySoundToggle" Click="BuddySoundToggle_Click" Opacity="0"
+                                                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,7,8"
+                                                Width="24" Height="24" Cursor="Hand"
+                                                ToolTip="{services:Loc buddy.sound.muteTip}"
+                                                AutomationProperties.Name="{services:Loc buddy.sound.muteTip}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="chip" CornerRadius="12" BorderThickness="1"
+                                                            Background="{DynamicResource Popup.Background}" BorderBrush="{DynamicResource Popup.Border}">
+                                                        <TextBlock x:Name="icon" Text="&#xE767;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource Text.Secondary}"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding SettingsVM.BuddySounds}" Value="False">
+                                                            <Setter TargetName="icon" Property="Text" Value="&#xE74F;"/>
+                                                        </DataTrigger>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="icon" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                            <Setter TargetName="chip" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
                                     </Grid>
                                     <ControlTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding SettingsVM.BuddySounds}" Value="False">
+                                            <Setter TargetName="BuddySoundToggle" Property="Opacity" Value="0.85"/>
+                                            <Setter TargetName="BuddySoundToggle" Property="ToolTip" Value="{services:Loc buddy.sound.unmuteTip}"/>
+                                            <Setter TargetName="BuddySoundToggle" Property="AutomationProperties.Name" Value="{services:Loc buddy.sound.unmuteTip}"/>
+                                        </DataTrigger>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="Buddy" Property="Margin" Value="3,2,1,2"/>
+                                            <Setter TargetName="BuddySoundToggle" Property="Opacity" Value="1"/>
+                                        </Trigger>
+                                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                            <Setter TargetName="BuddySoundToggle" Property="Opacity" Value="1"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>

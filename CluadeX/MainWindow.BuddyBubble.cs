@@ -50,7 +50,7 @@ public partial class MainWindow
         _viewModel.ChatVM.PropertyChanged += OnBuddyMoodChanged;
         Deactivated += (_, _) => HideBuddyBubble();
         // her sound follows the setting, live (CluadexBuddy.SoundsOn)
-        CluadexBuddy.SoundsOn = _viewModel.Settings.Settings.BuddySounds;
+        SyncBuddySounds();
         _viewModel.Settings.SettingsChanged += SyncBuddySounds;
         // she listens while the owner types (her "listening" clips), and goes back to idle 4 s after the last key
         _typingTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
@@ -65,7 +65,63 @@ public partial class MainWindow
         };
     }
 
-    private void SyncBuddySounds() => CluadexBuddy.SoundsOn = _viewModel.Settings.Settings.BuddySounds;
+    /// <summary>Her sound and how she shows (clips, stills, slides) follow the settings, live.</summary>
+    private void SyncBuddySounds()
+    {
+        CluadexBuddy.SoundsOn = _viewModel.Settings.Settings.BuddySounds;
+        CluadexBuddy.Display = _viewModel.Settings.Settings.BuddyDisplay;
+    }
+
+    /// <summary>Her right-click menu: sound, and clips / stills / the girls' slideshow. The ticks show what is on now.</summary>
+    private void BuddyMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        BuddyMenuSound.IsChecked = _viewModel.SettingsVM.BuddySounds;
+        BuddyMenuClips.IsChecked = CluadexBuddy.Display == CluadexBuddy.DisplayClips;
+        BuddyMenuStills.IsChecked = CluadexBuddy.Display == CluadexBuddy.DisplayStills;
+        BuddyMenuSlides.IsChecked = CluadexBuddy.Display == CluadexBuddy.DisplaySlides;
+    }
+
+    private void BuddyMenuSound_Click(object sender, RoutedEventArgs e) =>
+        _viewModel.SettingsVM.BuddySounds = !_viewModel.SettingsVM.BuddySounds;
+
+    private void BuddyMenuDisplay_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string mode }) return;
+        SetBuddyDisplay(mode);
+    }
+
+    /// <summary>Clips, stills or slides: saved (kept after a restart) and passed to her at once.</summary>
+    internal void SetBuddyDisplay(string mode)
+    {
+        if (_viewModel.Settings.Settings.BuddyDisplay != mode)
+            try { _viewModel.Settings.UpdateSettings(s => s.BuddyDisplay = mode); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Buddy] display: {ex.Message}"); }
+        CluadexBuddy.Display = mode;
+    }
+
+    /// <summary>The speaker in her plate's corner: her sound off or on, saved (the Settings page's box follows).</summary>
+    private void BuddySoundToggle_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;   // not a click on her: no Home, no startle
+        _viewModel.SettingsVM.BuddySounds = !_viewModel.SettingsVM.BuddySounds;
+    }
+
+    /// <summary>How often a click on her makes her jump (owner 2026-11-08: "คลิ๊กที่เธอมีการตกใจได้ในบางครั้ง" — sometimes,
+    /// not every time), and the least time between two.</summary>
+    public const double StartleChance = 0.3;
+    public static readonly TimeSpan StartleGap = TimeSpan.FromSeconds(10);
+    private static readonly Random StartleDice = new();
+    private DateTime _lastStartleAt = DateTime.MinValue;
+
+    /// <summary>A click on her (it also goes Home, BuddyHero's command): now and then she jumps.</summary>
+    private void BuddyHero_Click(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource != BuddyHero) return;
+        if (DateTime.UtcNow - _lastStartleAt < StartleGap || StartleDice.NextDouble() >= StartleChance) return;
+        _lastStartleAt = DateTime.UtcNow;
+        // after Home has run (it may change her mood, which would replace the startle at once)
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () => HeroBuddy()?.Startle());
+    }
 
     private void OnBuddyMoodChanged(object? sender, PropertyChangedEventArgs e)
     {

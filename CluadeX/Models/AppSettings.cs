@@ -461,6 +461,10 @@ public class AppSettings
     /// "Hello? Is anyone there?"). Views/CluadexBuddy.Clips.cs; Settings › General › Appearance.</summary>
     public bool BuddySounds { get; set; } = true;
 
+    /// <summary>How น้อง CluadeX shows (her right-click menu, owner 2026-11-08): "clips" (her video clips, the default),
+    /// "stills" (her still pictures only, no clips) or "slides" (the girls one after another, waist up). Views/CluadexBuddy.Slides.cs.</summary>
+    public string BuddyDisplay { get; set; } = "clips";
+
     public bool StreamOutput { get; set; } = true;
 
     // Language / Localization
