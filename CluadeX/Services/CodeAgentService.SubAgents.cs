@@ -405,7 +405,7 @@ public partial class CodeAgentService
                     OnAgentStatus?.Invoke($"{label}: {doing}");
                     RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step, CostUsd = Cost(), CallId = c.tc.Id });
                     var r = await _agentToolService.ExecuteToolAsync(call, ct);
-                    string text = r.Success ? (r.Output ?? "") : $"Error: {r.Error ?? r.Output}";
+                    string text = r.Success ? (r.Output ?? "") : $"Error: {AgentToolService.ModelText(r)}";
                     RaiseSubAgent(ev with { Phase = "result", Detail = "", Steps = step, CostUsd = Cost(), CallId = c.tc.Id,
                         Result = ResultForMap(text), Ok = r.Success });
                     if (text.Length > SubAgentMaxResultChars)
