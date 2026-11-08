@@ -49,7 +49,7 @@ internal static partial class Program
 {
     const int W = 1440, H = 900;
     static string OutRoot = @"D:\Temp\cluadex-bld\themes";
-    const string FixtureRoot = @"D:\Temp\cluadex-bld\themes";
+    static string FixtureRoot = @"D:\Temp\cluadex-bld\themes";   // --titlebar moves it under --out
     static int Tolerance = 8;
     static double MaxChangedPct = 0.1;
     static bool GoldenMode, Force;
@@ -113,6 +113,7 @@ internal static partial class Program
                 case "--badges": BadgesOnly = true; break;   // the sidebar run badges and the buddy alone
                 case "--hero": HeroOnly = true; break;       // น้อง CluadeX in the corner + text size and font (HeroRenders.cs)
                 case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
+                case "--titlebar": TitleBarOnly = true; break;   // the main title bar in every theme and width (TitleBarRenders.cs)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
             }
         }
@@ -554,6 +555,12 @@ internal static partial class Program
         if (!portable) return 2;
         Directory.CreateDirectory(Settings.DataRoot);
 
+        if (TitleBarOnly)
+        {
+            if (OutRoot.StartsWith("E:", StringComparison.OrdinalIgnoreCase)) { Log("FATAL --titlebar needs --out on D: (E: is the USB disk)"); return 2; }
+            FixtureRoot = Path.Combine(OutRoot, "_fixture");
+        }
+
         // The debug log writes to ~/.cluadex/logs from its constructor (one line, as in every harness) — from
         // here on it writes into the fixture area: a FIXED path, because the Debug Log page shows it and its golden
         // must not depend on where this harness was built.
@@ -631,6 +638,7 @@ internal static partial class Program
         if (BubblesOnly) { await BubbleRenders(); await LinkRenders(); return Finish(); }
         if (BadgesOnly) { await RunBadgeShots(); return Finish(); }
         if (HeroOnly) { await HeroShots(); return Finish(); }
+        if (TitleBarOnly) { if (themes != null) await TitleBarShots(themes); else Log("FATAL no ThemeService"); return Finish(); }
         if (BuddyClipsOnly) { CluadeX.Views.CluadexBuddy.ClipsAllowed = false; await ClipChecks(); await BubbleChecks(); return Finish(); }   // the chat's speech bubbles alone, for a quick look
 
         // 1. Midnight at startup vs the golden.
