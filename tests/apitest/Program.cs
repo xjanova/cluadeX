@@ -568,6 +568,7 @@ internal static class Program
         await SettingsSalvageWire.Run(Check, Section);
         await GitMultiRepoWire.Run(Check, Section);
         await AggregatorWire.Run(Check, Section);
+        await VibeWire.Run(Check, Section);
     }
 
     /// <summary>MD5 of a SQLite file after releasing pooled connections (they keep it open).</summary>

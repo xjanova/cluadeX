@@ -1490,6 +1490,7 @@ public partial class ChatViewModel : ViewModelBase
         _memoryTimer.Start();
         InitControls(activation);
         InitSidePanel();
+        InitVibe();
         InitCharacter();
         InitStarters();
         HookPendingImages();
@@ -4958,6 +4959,7 @@ public partial class ChatViewModel : ViewModelBase
             // A screenshot (or any image a tool returned) shows on its own row as a thumbnail — by its saved file
             // path only; the image bytes never reach the chat or codex.db. Such a row is never merged into a group.
             string? thumbnail = ToolThumbnailPath(toolResult);
+            NoteTurnChange(run, toolResult, runFolder ?? windowFolder, thumbnail);
 
             // ─── Tool call grouping: collapse consecutive same-category calls ───
             string category = GetToolCategory(toolResult.ToolName);

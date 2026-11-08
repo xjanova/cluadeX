@@ -44,6 +44,8 @@ public partial class ChatViewModel
         public ChatMessage? AgentMapMsg;
         /// <summary>This command's split-chat chips (made with its first new_chat).</summary>
         public ChatMessage? SplitsMsg;
+        /// <summary>The files this turn wrote and its pictures: the change card at its end (ChatViewModel.Vibe).</summary>
+        public readonly Services.Agents.TurnChanges Changes = new();
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
@@ -487,6 +489,7 @@ public partial class ChatViewModel
         run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;
         foreach (var extra in session.ExtraFolders.ToList())
             if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);
+        run.Changes.SeedBefore(NewestPicture(messages));
         _runs.Add(run);
         AgentRunScope.Enter(run.Scope);
         // The app-wide key too (code that runs outside the scope — a UI-thread callback — keys by the latest chat).
@@ -504,6 +507,7 @@ public partial class ChatViewModel
             Services.Agents.RunActivity.ClearRun(run.Session.Id);
             PostRunCostSummary(run);
             RememberRunStats(run);
+            AddTurnChangesCard(run);
             AddNextStepBox(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
