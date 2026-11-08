@@ -136,6 +136,7 @@ public static class ThemeTokens
         "Badge.Background", "Badge.Border",
         "CodeBlock.Background", "CodeBlock.Border",
         "Editor.Background", "Editor.Foreground", "Editor.LineNumber", "Editor.Caret", "Editor.Selection",
+        "Terminal.Background", "Terminal.Foreground", "Terminal.Prompt", "Terminal.Input", "Terminal.Accent",
         "Editor.Gutter", "Editor.Minimap.Background", "Editor.Minimap.Bar", "Editor.Minimap.Comment",
         "Editor.Minimap.Viewport", "Editor.Minimap.ViewportBorder", "Editor.Minimap.Hover", "Editor.Minimap.Caret",
         "Editor.Minimap.Change", "Editor.Breakpoint", "Editor.Breakpoint.Halo", "Editor.ExecutionLine",

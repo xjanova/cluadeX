@@ -154,9 +154,14 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             {
                 AppendTerminal($"— PowerShell · {_workspace.WorkingDirectory} —");
                 _terminal.Start(_workspace.WorkingDirectory);
+                OnPropertyChanged(nameof(IsTerminalRunning));
             }
         }
     }
+
+    /// <summary>The shell is alive (the header's green light). Raised on start, stop, a command that restarts it, and
+    /// exit — the exit comes from a pool thread, which WPF marshals for a plain property.</summary>
+    public bool IsTerminalRunning => _terminal.IsRunning;
 
     /// <summary>The whole terminal transcript, read once when the view binds. Never raised: new output reaches the
     /// view as <see cref="TerminalTextAppended"/> chunks instead of a fresh 200 K string 20 times a second.</summary>
@@ -183,6 +188,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         if (!_terminal.IsRunning) return;
         _terminal.Interrupt();
         AppendTerminal(T("ide.termStopped"));
+        OnPropertyChanged(nameof(IsTerminalRunning));
     });
     private ICommand? _interruptTerminalCommand;
 
@@ -190,10 +196,11 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     {
         string cmd = TerminalInput?.Trim() ?? "";
         if (cmd.Length == 0) return;
-        AppendTerminal($"> {cmd}");
+        AppendTerminal($"PS> {cmd}");
         NoteTerminalCommand(cmd);
         _terminal.Send(cmd);
         TerminalInput = "";
+        OnPropertyChanged(nameof(IsTerminalRunning));   // Send restarts a shell that had exited
     }
 
     private const int TerminalMaxChars = 200_000;
@@ -324,7 +331,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         HookGitPanel();
 
         _terminal.OutputReceived += AppendTerminal;
-        _terminal.Exited += () => AppendTerminal(T("ide.termExited"));
+        _terminal.Exited += () => { AppendTerminal(T("ide.termExited")); OnPropertyChanged(nameof(IsTerminalRunning)); };
     }
 
     // ═══════════════ Lifetime ═══════════════

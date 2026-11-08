@@ -1711,6 +1711,38 @@ internal static partial class Program
             return Task.CompletedTask;
         });
 
+        // owner 2026-11-08: "มันใช้ได้จริงไหม" — the real EmbeddedTerminal class, not a stand-in: start it in a folder,
+        // type commands, read what comes back (folder, Thai text, state kept between commands, stop → fresh shell).
+        await Case("T2", async () =>
+        {
+            string dir = Dir("term-live");
+            var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using var term = new CluadeX.Services.EmbeddedTerminal();
+            term.OutputReceived += l => lines.Enqueue(l);
+            async Task<bool> WaitFor(string needle)
+            {
+                for (int i = 0; i < 150; i++) { if (lines.Any(l => l.Contains(needle))) return true; await Task.Delay(100); }
+                return false;
+            }
+            term.Start(dir);
+            term.Send("(Get-Location).ProviderPath");
+            bool inFolder = await WaitFor(dir);
+            term.Send("$x = 41 + 1; Write-Output \"answer=$x\"");
+            term.Send("Write-Output \"kept=$x\"");
+            bool kept = await WaitFor("answer=42") && await WaitFor("kept=42");
+            term.Send("Write-Output 'สวัสดี-ไทย'");
+            bool thai = await WaitFor("สวัสดี-ไทย");
+            Check("T2", "the terminal runs typed commands in the project folder and keeps variables between them",
+                term.IsRunning && inFolder && kept, string.Join(" ⏎ ", lines));
+            Check("T2b", "Thai text typed into the terminal comes back as Thai", thai, string.Join(" ⏎ ", lines));
+
+            term.Send("$x = 'before-stop'");
+            term.Interrupt();
+            term.Send("Write-Output \"after=[$x]\"");
+            Check("T2c", "stop gives a fresh shell that still answers (old variables gone)",
+                term.IsRunning && await WaitFor("after=[]"), string.Join(" ⏎ ", lines));
+        });
+
         // ═══════════════════════ security scan ═══════════════════════
         Console.WriteLine("\n── security shield ──");
         var log = new DebugLogService();
