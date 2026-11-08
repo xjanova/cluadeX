@@ -49,6 +49,8 @@
     <Resource Include="Assets\Girls\Pose2\*.png" />
     <Resource Include="Assets\Icons\*.png" />
     <Resource Include="Assets\Wizard\*" />
+    <!-- the activity bar's face of CluadeX: awake and eyes closed (blink, sleep) -->
+    <Resource Include="Assets\Buddy\*.png" />
     <!-- Provider logos for the Billing page (sources and licences: Assets\Logos\ATTRIBUTION.md) -->
     <Resource Include="Assets\Logos\*.png" />
   </ItemGroup>

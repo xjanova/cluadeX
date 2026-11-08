@@ -63,6 +63,8 @@ public partial class ChatViewModel
         /// <summary>Send now on a run that cannot stop one reply (a CLI agent, the [ACTION:] loop): it was stopped, and
         /// what was typed goes out as the next turn instead of back into the box.</summary>
         public bool SendNotesAfterStop;
+        /// <summary>Rows its chat had when the turn began: how it ended is read from the rows after it.</summary>
+        public int FirstRow;
 
         /// <summary>Who started the turn, for a supervisor: "pipe" (a program over the pipe), "split_parent" (new_chat from
         /// another chat's agent) or "user". The pipe flag is read live: it is set right after the run begins.</summary>
@@ -202,7 +204,8 @@ public partial class ChatViewModel
             run.Session.RunStatus = waiting ? "waiting" : "working";
             run.Session.RunStep = waiting ? Loc("chat.runs.waitingForYou") : (run.ActiveStatus?.Content ?? "").TrimStart('⏵', ' ');
         }
-        if (CurrentSession is { RunStatus: "done" } open) open.RunStatus = "";
+        if (CurrentSession is { } open) open.RunStatus = RunBadge.OnOpen(open.RunStatus);
+        RefreshBuddy();
     }
 
     // ─── open folders (the project + related ones) ───
@@ -479,7 +482,8 @@ public partial class ChatViewModel
     /// screen or not), working in <paramref name="folder"/>. Enters the run's scope for the calling flow.</summary>
     private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
     {
-        var run = new ChatRun { Session = session, Messages = messages };
+        var run = new ChatRun { Session = session, Messages = messages, FirstRow = messages.Count };
+        NoteRunBegan(session);
         if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
@@ -525,8 +529,11 @@ public partial class ChatViewModel
             _runs.Remove(run);
             DropDraft(run);
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
-            // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it.
-            run.Session.RunStatus = ReferenceEquals(run.Session, CurrentSession) ? "" : "done";
+            // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it. An error or a stop says
+            // so (red) until the next turn begins, on screen or not.
+            var (stopped, failed) = RunBadge.Outcome(run.Messages, run.FirstRow, run.Stopped);
+            run.Session.RunStatus = RunBadge.AtEnd(stopped, failed, ReferenceEquals(run.Session, CurrentSession));
+            NoteRunEnded(run.Session, run.Session.RunStatus);
             run.Session.RunStep = "";
             // Its chat is not on screen: the live list is that chat now — store it.
             if (!ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
