@@ -24,14 +24,29 @@ public static class GirlArt
     private static readonly Dictionary<string, ImageSource> Cache = new(StringComparer.OrdinalIgnoreCase);
 
     private const string Folder = "assets/girls/";
+    /// <summary>The providers' own girls (Groq, DeepSeek, Colibri … — owner 2026-11-08, drawn in ChatGPT from the girls above):
+    /// one picture each (only their faces and portraits show; the backdrop and the splash stay the main eight).</summary>
+    private const string ProviderFolder = "assets/girls/providers/";
+    private static List<string>? _providerNames;
 
     /// <summary>How many poses each girl has: pose 1 (her main picture) and pose 2.</summary>
     public const int PoseCount = 2;
 
     /// <summary>Resource names of the girls ("cluadex", "claude", …), read once from the assembly's .g.resources.</summary>
-    public static IReadOnlyList<string> Names => _names ??= ReadNames();
+    public static IReadOnlyList<string> Names => _names ??= ReadNames(Folder);
 
-    private static List<string> ReadNames()
+    /// <summary>The providers' girls under Assets\Girls\Providers ("groq", "colibri", …): pictures for their ChatCharacter,
+    /// never picked for the backdrop or the splash.</summary>
+    public static IReadOnlyList<string> ProviderNames => _providerNames ??= ReadNames(ProviderFolder);
+
+    /// <summary>The build has a picture for this girl (a main girl or a provider's).</summary>
+    public static bool Has(string? name) => !string.IsNullOrEmpty(name)
+        && (Names.Contains(name, StringComparer.OrdinalIgnoreCase) || ProviderNames.Contains(name, StringComparer.OrdinalIgnoreCase));
+
+    private static bool IsProviderGirl(string name) => !Names.Contains(name, StringComparer.OrdinalIgnoreCase)
+        && ProviderNames.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+    private static List<string> ReadNames(string folder)
     {
         var names = new List<string>();
         try
@@ -41,9 +56,9 @@ public static class GirlArt
             if (stream == null) return names;
             using var reader = new ResourceReader(stream);
             foreach (DictionaryEntry e in reader)
-                if (e.Key is string key && key.StartsWith(Folder, StringComparison.OrdinalIgnoreCase)
+                if (e.Key is string key && key.StartsWith(folder, StringComparison.OrdinalIgnoreCase)
                     && key.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
-                    && key.IndexOf('/', Folder.Length) < 0)   // Pose2/… is a pose, not another girl
+                    && key.IndexOf('/', folder.Length) < 0)   // Pose2/… is a pose, Providers/… a provider's girl
                     names.Add(Path.GetFileNameWithoutExtension(key));
         }
         catch { /* no girls: callers hide the picture */ }
@@ -69,7 +84,9 @@ public static class GirlArt
     }
 
     /// <summary>The pack URI of a girl's picture in a pose (1 = her main picture, 2 = Pose2\).</summary>
-    public static Uri UriOf(string name, int pose = 1) => new(pose == 2
+    public static Uri UriOf(string name, int pose = 1) => IsProviderGirl(name)
+        ? new($"pack://application:,,,/CluadeX;component/Assets/Girls/Providers/{name}.png", UriKind.Absolute)
+        : new(pose == 2
         ? $"pack://application:,,,/CluadeX;component/Assets/Girls/Pose2/{name}.png"
         : $"pack://application:,,,/CluadeX;component/Assets/Girls/{name}.png", UriKind.Absolute);
 

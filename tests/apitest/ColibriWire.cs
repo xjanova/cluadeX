@@ -191,5 +191,18 @@ internal static class ColibriWire
         check("mascot", "a picker of girls lists only drawn ones; ForGirl finds a stand-in by her own name",
             ChatCharacter.All.All(c => c.HasOwnArt) && ChatCharacter.ForGirl("groq").Own == "groq"
             && ChatCharacter.ForGirl("cluadex") == ChatCharacter.CluadeX && ChatCharacter.ForGirl("nobody") == ChatCharacter.CluadeX, "");
+
+        // the girls drawn in ChatGPT (Assets\Girls\Providers) are their own, framed on their own faces, and never join the
+        // backdrop / splash pick of the main eight
+        var drawn = new[] { "colibri", "openrouter", "groq", "deepseek", "mistral", "together" };
+        var notOwn = drawn.Where(n => !ChatCharacter.ForGirl(n).HasOwnArt || !GirlArt.Has(n)).ToList();
+        check("mascot", "the drawn provider girls show their own picture", notOwn.Count == 0, string.Join(",", notOwn));
+        var badFace = drawn.Select(ChatCharacter.ForGirl)
+            .Where(c => c.FaceBrush is not { } f || f.Viewbox.Left < 0 || f.Viewbox.Top < 0 || f.Viewbox.Right > 1 || f.Viewbox.Bottom > 0.25)
+            .Select(c => c.Own).ToList();
+        check("mascot", "each drawn provider girl's face square sits inside her picture", badFace.Count == 0, string.Join(",", badFace));
+        check("mascot", "the backdrop / splash still pick from the main eight only",
+            GirlArt.Names.Count == 8 && !GirlArt.Names.Intersect(drawn, StringComparer.OrdinalIgnoreCase).Any(),
+            string.Join(",", GirlArt.Names));
     }
 }

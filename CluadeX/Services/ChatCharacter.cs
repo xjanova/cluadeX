@@ -75,7 +75,7 @@ public sealed class ChatCharacter
         Own = girl;
         // A girl whose picture is not in the build yet (owner 2026-11-08: "เอไอมาสคอตสาวตัวไหนก็ทำให้ครบ" — the art comes
         // when the image quota does): CluadeX's girl stands in, framed on HER face, in this girl's own colour and name.
-        bool has = GirlArt.Names.Contains(girl, StringComparer.OrdinalIgnoreCase);
+        bool has = GirlArt.Has(girl);
         Girl = has ? girl : StandIn;
         Name = name;
         Accent = accent;
@@ -122,14 +122,15 @@ public sealed class ChatCharacter
     private const double StandInFaceX = 0.50, StandInFaceY = 0.115;
 
     // Owner 2026-11-08: "อย่าลืมเพิ่มมาสคอนสาว น้อง Colibri … ไอค่อนไหนใช้โมเดลน้อง อะไรก็มีให้แสดงทุกที่ … เอไอมาสคอตสาวตัวไหนก็
-    // ทำให้ครบ" — every provider has her own girl now, in the brand's colour. Until her picture is drawn (Assets\Girls\<name>.png;
-    // the face numbers then need measuring on it), CluadeX's girl stands in under her name and colour.
-    public static readonly ChatCharacter Colibri = new("colibri", "Colibri", Color.FromRgb(0x10, 0xB9, 0x81), 0.50, 0.115);   // emerald hummingbird
-    public static readonly ChatCharacter OpenRouter = new("openrouter", "OpenRouter", Color.FromRgb(0x64, 0x67, 0xF2), 0.50, 0.115);
-    public static readonly ChatCharacter Groq = new("groq", "Groq", Color.FromRgb(0xF5, 0x50, 0x36), 0.50, 0.115);
-    public static readonly ChatCharacter DeepSeek = new("deepseek", "DeepSeek", Color.FromRgb(0x4D, 0x6B, 0xFE), 0.50, 0.115);
-    public static readonly ChatCharacter Mistral = new("mistral", "Mistral", Color.FromRgb(0xFA, 0x52, 0x0F), 0.50, 0.115);
-    public static readonly ChatCharacter Together = new("together", "Together", Color.FromRgb(0x0F, 0x6F, 0xFF), 0.50, 0.115);
+    // ทำให้ครบ" — every provider has her own girl now, in the brand's colour. Her picture is Assets\Girls\Providers\<name>.png
+    // (drawn in ChatGPT from the main girls, each with her own face; face numbers measured on it). Until it is drawn,
+    // CluadeX's girl stands in under her name and colour (and the numbers stay 0.50, 0.115).
+    public static readonly ChatCharacter Colibri = new("colibri", "Colibri", Color.FromRgb(0x10, 0xB9, 0x81), 0.47, 0.110);   // emerald hummingbird
+    public static readonly ChatCharacter OpenRouter = new("openrouter", "OpenRouter", Color.FromRgb(0x62, 0x65, 0xED), 0.52, 0.110);
+    public static readonly ChatCharacter Groq = new("groq", "Groq", Color.FromRgb(0xF5, 0x50, 0x36), 0.545, 0.180);
+    public static readonly ChatCharacter DeepSeek = new("deepseek", "DeepSeek", Color.FromRgb(0x4B, 0x68, 0xF6), 0.48, 0.120);
+    public static readonly ChatCharacter Mistral = new("mistral", "Mistral", Color.FromRgb(0xFA, 0x52, 0x0F), 0.42, 0.100);
+    public static readonly ChatCharacter Together = new("together", "Together", Color.FromRgb(0x0F, 0x6E, 0xFC), 0.44, 0.120);
     public static readonly ChatCharacter Fireworks = new("fireworks", "Fireworks", Color.FromRgb(0x67, 0x20, 0xFF), 0.50, 0.115);
     public static readonly ChatCharacter Cerebras = new("cerebras", "Cerebras", Color.FromRgb(0xF1, 0x5A, 0x29), 0.50, 0.115);
     public static readonly ChatCharacter DeepInfra = new("deepinfra", "DeepInfra", Color.FromRgb(0x2E, 0x86, 0xDE), 0.50, 0.115);
@@ -145,7 +146,8 @@ public sealed class ChatCharacter
     public static readonly ChatCharacter Vllm = new("vllm", "vLLM", Color.FromRgb(0xF7, 0xB5, 0x00), 0.50, 0.115);
 
     /// <summary>The girls with a picture of their own — what a "pick a girl" list shows (stand-ins would repeat CluadeX's).</summary>
-    public static IReadOnlyList<ChatCharacter> All { get; } = [Claude, Codex, Gemini, Grok, Mind, BrainX, CluadeX, Antigravity];
+    public static IReadOnlyList<ChatCharacter> All => _all ??= Everyone.Where(c => c.HasOwnArt).ToList();
+    private static List<ChatCharacter>? _all;
 
     /// <summary>Every provider's girl, stand-ins included (for a picture-sheet of who is drawn and who still waits).</summary>
     public static IReadOnlyList<ChatCharacter> Everyone { get; } = [Claude, Codex, Gemini, Grok, Mind, BrainX, CluadeX, Antigravity,
