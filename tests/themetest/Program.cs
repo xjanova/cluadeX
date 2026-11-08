@@ -112,7 +112,8 @@ internal static partial class Program
                 case "--bubbles": BubblesOnly = true; break;
                 case "--badges": BadgesOnly = true; break;   // the sidebar run badges and the buddy alone
                 case "--hero": HeroOnly = true; break;       // น้อง CluadeX in the corner + text size and font (HeroRenders.cs)
-                case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
+                case "--buddy-clips": BuddyClipsOnly = true; break;
+                case "--setup-wizard": SetupWizardOnly = true; break;   // the first-run setup wizard, every page and state (SetupWizardRenders.cs)   // her clips, voice, startle, sound button and bubble only (no renders)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
             }
         }
@@ -553,6 +554,14 @@ internal static partial class Program
         Check("setup: portable data root (never the user's ~/.cluadex)", portable, Settings.DataRoot);
         if (!portable) return 2;
         Directory.CreateDirectory(Settings.DataRoot);
+
+        // The setup wizard needs none of the fixture project, the debug-log redirect or the theme pages, all of
+        // which live on E: — branch before any of them. Its renders go to --out (never the E: default).
+        if (SetupWizardOnly)
+        {
+            if (OutRoot.StartsWith("E:", StringComparison.OrdinalIgnoreCase)) { Log("FATAL --setup-wizard needs --out on D: (E: is the USB disk)"); return 2; }
+            return await SetupWizardShots();
+        }
 
         // The debug log writes to ~/.cluadex/logs from its constructor (one line, as in every harness) — from
         // here on it writes into the fixture area: a FIXED path, because the Debug Log page shows it and its golden

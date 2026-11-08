@@ -393,6 +393,10 @@ public class MainViewModel : ViewModelBase
     public ICommand InstallUpdateCommand { get; }
     public ICommand DismissUpdateCommand { get; }
     public ICommand CheckUpdateCommand { get; }
+    /// <summary>Settings › "เปิดตัวช่วยติดตั้งอีกครั้ง".</summary>
+    public ICommand OpenSetupWizardCommand { get; }
+    /// <summary>The update banner's "เชื่อมบัญชี": the wizard's sign-in only.</summary>
+    public ICommand LinkAccountCommand { get; }
     public ICommand OpenLicenseCommand { get; }
     public ICommand OpenDgxSparkCommand { get; }
     /// <summary>The status-bar brain chip: the MCP page while a configured brain is up or coming up (Ready, Starting,
@@ -609,6 +613,8 @@ public class MainViewModel : ViewModelBase
             _dismissedUpdateKey = _pendingUpdate != null && !_autoUpdate.CanSelfUpdate ? "offer:" + _pendingUpdate.NewVersion : UpdateKey(_autoUpdate.Progress);
         });
         CheckUpdateCommand = new AsyncRelayCommand(() => CheckForUpdate(manual: true));
+        OpenSetupWizardCommand = new RelayCommand(() => App.ShowSetupWizard(ViewModels.Setup.WizardMode.Reopen));
+        LinkAccountCommand = new RelayCommand(() => App.ShowSetupWizard(ViewModels.Setup.WizardMode.LinkAccount));
         OpenLicenseCommand = new RelayCommand(() => OpenLicense(null));
         OpenDgxSparkCommand = new RelayCommand(OpenDgxSpark);
         OpenBrainCommand = new RelayCommand(() =>

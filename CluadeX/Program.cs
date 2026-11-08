@@ -15,6 +15,10 @@ namespace CluadeX;
 /// </summary>
 public static class Program
 {
+    /// <summary>Velopack reported this launch as the first one after a fresh install (its OnFirstRun hook) —
+    /// one of the two signals that show the setup wizard (the other: no settings file before this launch).</summary>
+    public static bool VelopackFirstRun { get; private set; }
+
     [STAThread]
     public static void Main(string[] args)
     {
@@ -72,6 +76,7 @@ public static class Program
             Velopack.VelopackApp.Build()
                 .SetAutoApplyOnStartup(false)
                 .OnBeforeUninstallFastCallback(_ => Services.Chrome.ChromeBridgeInstall.Unregister())
+                .OnFirstRun(_ => VelopackFirstRun = true)
                 .Run();
         }
         catch (Exception ex) { Debug.WriteLine($"Velopack init: {ex.Message}"); }

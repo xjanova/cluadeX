@@ -1560,7 +1560,16 @@
                                         </StackPanel>
                                     </Button>
                                 </Grid>
-                                <Grid Style="{StaticResource Row}" Margin="0">
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{services:Loc settings.setupWizard.title}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.setupWizard.desc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Style="{StaticResource SecondaryButton}" Margin="16,0,0,0" VerticalAlignment="Center"
+                                            Content="{services:Loc settings.setupWizard.open}"
+                                            Command="{Binding DataContext.OpenSetupWizardCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                                </Grid>                                <Grid Style="{StaticResource Row}" Margin="0">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
                                         <TextBlock Text="{services:Loc settings.resetDefaults}" Style="{StaticResource SettingLabel}"/>
