@@ -28,5 +28,6 @@ Rendered from SVG at 256×256 with a transparent background; the app shows them 
 | kimi.png | Moonshot (Kimi) | @lobehub/icons-static-svg 1.102.0 (MIT), `kimi-color` |
 | zai.png | Z.ai (GLM) | @lobehub/icons-static-svg 1.102.0 (MIT), `zai`, #000000 |
 | azure.png | Azure OpenAI | @lobehub/icons-static-svg 1.102.0 (MIT), `azure-color` |
+| colibri.png | Colibri (local) | drawn for CluadeX (a hummingbird on an emerald tile), not colibri's own mark |
 
 OpenAI and a custom endpoint have no bundled mark; the picker shows a text badge for them.

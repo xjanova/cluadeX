@@ -194,6 +194,11 @@
                                     </Style>
                                 </Ellipse.Style>
                             </Ellipse>
+                            <!-- who it runs on: that provider's girl, a small face on the top-left corner -->
+                            <Ellipse Width="14" Height="14" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-4,-4,0,0"
+                                     Fill="{Binding Mascot.FaceBrush}" Stroke="{Binding Mascot.AccentBrush}" StrokeThickness="1.2"
+                                     ToolTip="{Binding Mascot.Name}" IsHitTestVisible="True"
+                                     Visibility="{Binding Mascot, Converter={StaticResource NullToCollapsed}}"/>
                             <!-- done: a green check badge that pops in when it finishes on screen -->
                             <Border Width="13" Height="13" CornerRadius="6.5" HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                     Margin="0,0,-3,-3" Background="{DynamicResource Status.Success}" BorderThickness="1.5"

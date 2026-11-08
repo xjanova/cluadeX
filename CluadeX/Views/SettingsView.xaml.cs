@@ -11,6 +11,19 @@ public partial class SettingsView : UserControl
         InitializeComponent();
     }
 
+    /// <summary>คลิกข้อความข้างช่องติ๊ก "น้อง CluadeX พูด" = คลิกช่องติ๊กเอง</summary>
+    private void BuddySoundsText_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        BuddySoundsBox.IsChecked = BuddySoundsBox.IsChecked != true;
+        e.Handled = true;
+    }
+
+    private void BuddyBubblesText_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        BuddyBubblesBox.IsChecked = BuddyBubblesBox.IsChecked != true;
+        e.Handled = true;
+    }
+
     private void Hyperlink_RequestNavigate(object sender, RequestNavigateEventArgs e)
     {
         try

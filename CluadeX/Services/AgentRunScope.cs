@@ -191,6 +191,11 @@ public sealed class AgentRunScope
     public decimal RoutingBaselineUsd { get { lock (_costLock) return _routingBaseline; } }
     public void AddRouting(decimal saved, decimal onRunModel) { lock (_costLock) { _routingSaved += saved; _routingBaseline += onRunModel; } }
 
+    private decimal _localSaved;
+    /// <summary>The part of <see cref="RoutingSavedUsd"/> a model on this PC earned (it answered instead of the API).</summary>
+    public decimal LocalSavedUsd { get { lock (_costLock) return _localSaved; } }
+    public void AddLocalSaving(decimal saved) { lock (_costLock) _localSaved += saved; }
+
     /// <summary>This turn's id and the agent loop's current step — what a restore point is named by.</summary>
     public string TurnId { get; } = DateTime.UtcNow.ToString("yyyyMMddHHmmss") + "-" + Guid.NewGuid().ToString("N")[..6];
     public int Step { get; set; }

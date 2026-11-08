@@ -205,7 +205,7 @@
                 </Ellipse>
             </Grid>
 
-            <Grid Panel.ZIndex="1">
+            <Grid x:Name="ShellGrid" Panel.ZIndex="1">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="42"/>
                     <RowDefinition Height="*"/>
@@ -591,7 +591,7 @@
                 <!-- ════════════════════════════════════════════════════════ -->
                 <!--                       MAIN CONTENT                       -->
                 <!-- ════════════════════════════════════════════════════════ -->
-                <Grid Grid.Row="1">
+                <Grid x:Name="MainContentGrid" Grid.Row="1">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="60"/>      <!-- Activity bar -->
                         <ColumnDefinition Width="Auto"/>    <!-- Contextual panel (240 when shown) -->
@@ -608,58 +608,11 @@
                                 <RowDefinition Height="Auto"/>  <!-- Bottom: settings -->
                             </Grid.RowDefinitions>
 
-                            <!-- Logo -->
-                            <StackPanel Grid.Row="0" Margin="0,12,0,8" HorizontalAlignment="Center">
-                                <Grid Width="36" Height="36">
-                                    <!-- Halo with conic-gradient feel via radial -->
-                                    <Ellipse views:AmbientAnimation.WhileActive="True" Width="48" Height="48" Margin="-6" Opacity="0.55"
-                                             Fill="{DynamicResource ActivityBar.Logo.Halo}">
-                                        <Ellipse.Effect><BlurEffect Radius="8"/></Ellipse.Effect>
-                                        <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
-                                        <Ellipse.RenderTransform><RotateTransform x:Name="LogoHalo"/></Ellipse.RenderTransform>
-                                        <Ellipse.Triggers>
-                                            <EventTrigger RoutedEvent="Ellipse.Loaded">
-                                                <BeginStoryboard x:Name="AmbientLogoHalo">
-                                                    <!-- 15 fps: a blurred ellipse redrawn at 60 fps kept the render thread
-                                                         at ~30% of a core with the app idle (2026-10-14). -->
-                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="15">
-                                                        <DoubleAnimation Storyboard.TargetName="LogoHalo"
-                                                                         Storyboard.TargetProperty="Angle"
-                                                                         From="0" To="360" Duration="0:0:8"/>
-                                                    </Storyboard>
-                                                </BeginStoryboard>
-                                            </EventTrigger>
-                                        </Ellipse.Triggers>
-                                    </Ellipse>
-                                    <!-- น้อง CluadeX, moving with the work: busy, waiting for you, pleased, asleep when idle.
-                                         A click (or Tab to her + Enter/Space) goes Home: the Chat page, an empty chat, no
-                                         folder open; running chats carry on in the background. -->
-                                    <Button Width="36" Height="36" Cursor="Hand"
-                                            Command="{Binding ChatVM.GoHomeCommand}" ToolTip="{Binding ChatVM.BuddyTip}"
-                                            AutomationProperties.Name="{services:Loc buddy.goHomeName}"
-                                            AutomationProperties.HelpText="{Binding ChatVM.BuddyMoodTip}">
-                                        <!-- keyboard focus only (not after a mouse click): a ring just outside her rim -->
-                                        <Button.FocusVisualStyle>
-                                            <Style>
-                                                <Setter Property="Control.Template">
-                                                    <Setter.Value>
-                                                        <ControlTemplate>
-                                                            <Ellipse Margin="-3" StrokeThickness="1.5" Stroke="{DynamicResource Accent.1}"/>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </Button.FocusVisualStyle>
-                                        <Button.Template>
-                                            <ControlTemplate TargetType="Button">
-                                                <Grid Background="Transparent">
-                                                    <views:CluadexBuddy DataContext="{Binding ChatVM}"/>
-                                                </Grid>
-                                            </ControlTemplate>
-                                        </Button.Template>
-                                    </Button>
-                                </Grid>
-                                <Border Width="28" Height="1" Margin="0,10,0,0" Background="{DynamicResource ActivityBar.Logo.Divider}"/>
+                            <!-- น้อง CluadeX floats over the top of the rail (BuddyHero below, MainWindow.Buddy.cs); this keeps her square
+                                 free — its height follows her size. -->
+                            <StackPanel Grid.Row="0" HorizontalAlignment="Center">
+                                <Border x:Name="BuddyRailSpacer" Height="66"/>
+                                <Border Width="28" Height="1" Background="{DynamicResource ActivityBar.Logo.Divider}"/>
                             </StackPanel>
 
                             <!-- Activity icons -->
@@ -794,56 +747,117 @@
                         </Border.Style>
                         <Grid>
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>  <!-- Header -->
-                                <RowDefinition Height="Auto"/>  <!-- Search box -->
+                                <RowDefinition Height="Auto"/>  <!-- Beside her: title, buttons, search box -->
+                                <RowDefinition Height="Auto"/>  <!-- Projects -->
                                 <RowDefinition Height="*" MinHeight="80"/>     <!-- Sessions list -->
                                 <RowDefinition Height="Auto"/>  <!-- Drag line between the chats and the files -->
                                 <RowDefinition Height="*" MinHeight="60"/>     <!-- The project's files -->
                             </Grid.RowDefinitions>
 
-                            <!-- Panel header: EXPLORER-style strip -->
-                            <Border Grid.Row="0" Padding="14,12,14,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{services:Loc sidebar.conversations}" FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                    <Button Width="24" Height="24" Margin="0,0,2,0" Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                            Command="{Binding ChatVM.NewChatAndShowCommand}" ToolTip="{services:Loc nav.newChatTip}">
-                                        <Button.Template>
-                                            <ControlTemplate TargetType="Button">
-                                                <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                                                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                               HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Button.Template>
-                                    </Button>
-                                    <!-- Off when no project is open: every chat already shows, so a live button would answer nothing -->
-                                    <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE1A6;"
-                                                  IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
-                                                  IsEnabled="{Binding ChatVM.HasProject}"
-                                                  ToolTipService.ShowOnDisabled="True"
-                                                  ToolTip="{Binding ChatVM.AllProjectsTip}"/>
-                                    <!-- Split chats that were put away: show them (dimmed, with "bring back") -->
-                                    <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE7B8;"
-                                                  IsChecked="{Binding ChatVM.ShowArchivedSplits}"
-                                                  ToolTip="{services:Loc chat.split.showAwayTip}"/>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
+                            <!-- The top of the list sits beside น้อง CluadeX: the title, its buttons, the search box and the projects move
+                                 right of her (1 wide, 2 tall), so nothing is ever under her; the chats start below her feet
+                                 (MainWindow.Buddy.cs sets the margins and the height from her size). -->
+                            <Grid x:Name="SidebarTopZone" Grid.Row="0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <!-- Panel header: EXPLORER-style strip -->
+                                <!-- The title on its own line and the three buttons under it: beside น้อง CluadeX the strip is
+                                     narrow but tall, so the title is never cut ("Conversatio…") and the buttons keep their size. -->
+                                <Border Grid.Row="0" Padding="14,12,14,8">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="{services:Loc sidebar.conversations}" FontSize="13" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="-6,6,0,0">
+                                        <Button Width="24" Height="24" Margin="0,0,2,0" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                Command="{Binding ChatVM.NewChatAndShowCommand}" ToolTip="{services:Loc nav.newChatTip}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="bg" Background="Transparent" CornerRadius="4">
+                                                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                        <!-- Off when no project is open: every chat already shows, so a live button would answer nothing -->
+                                        <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE1A6;"
+                                                      IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
+                                                      IsEnabled="{Binding ChatVM.HasProject}"
+                                                      ToolTipService.ShowOnDisabled="True"
+                                                      ToolTip="{Binding ChatVM.AllProjectsTip}"/>
+                                        <!-- Split chats that were put away: show them (dimmed, with "bring back") -->
+                                        <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE7B8;"
+                                                      IsChecked="{Binding ChatVM.ShowArchivedSplits}"
+                                                      ToolTip="{services:Loc chat.split.showAwayTip}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                                <StackPanel Grid.Row="2">
+                                    <Border Margin="14,2,14,6" Padding="8,0"
+                                            Background="{DynamicResource Surface.Input}"
+                                            BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                            CornerRadius="6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBox Grid.Column="1"
+                                                     Text="{Binding ChatVM.HistorySearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                                                     Background="Transparent" BorderThickness="0"
+                                                     Foreground="{DynamicResource Text.Primary}"
+                                                     CaretBrush="{DynamicResource Accent.1}"
+                                                     FontSize="11" Padding="0,7" VerticalContentAlignment="Center"/>
+                                            <Button Grid.Column="2" Width="20" Height="20"
+                                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                    Command="{Binding ChatVM.ClearSearchCommand}"
+                                                    Visibility="{Binding ChatVM.IsSearchingHistory, Converter={StaticResource BoolVis}}"
+                                                    ToolTip="{services:Loc sidebar.clearSearch}">
+                                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
+                                                           Foreground="{DynamicResource Text.Faint}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                    <TextBlock Text="{Binding ChatVM.SidebarFilterText}" FontSize="10.5" Margin="16,0,14,6"
+                                               Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ChatVM.SidebarFilterText}" Value="">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Grid>
 
-                            <!-- Search box, then what the list holds: the top rows often stay the same when the filter changes,
-                                 so the count is what shows the button did something -->
-                            <StackPanel Grid.Row="1">
+                            <!-- The projects, beside her too when she is tall (MainWindow.Buddy.cs gives them the zone's left margin and
+                                 the height still needed to reach her feet); the search box and the line saying what the list holds are in
+                                 the zone above: the top rows often stay the same when the filter changes, so the count is what shows a
+                                 button did something -->
+                            <StackPanel x:Name="SidebarProjects" Grid.Row="1">
                             <!-- Projects: named groups of chats (owner 2026-11-01). A row shows only its chats (again = all); a chat
                                  dropped on it moves in; right-click for a new chat in it, rename, its folder, delete. -->
                             <StackPanel Margin="10,0,10,6">
@@ -974,50 +988,6 @@
                                     </Button>
                                 </StackPanel>
                             </StackPanel>
-                            <Border Margin="14,2,14,6" Padding="8,0"
-                                    Background="{DynamicResource Surface.Input}"
-                                    BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
-                                    CornerRadius="6">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                               Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBox Grid.Column="1"
-                                             Text="{Binding ChatVM.HistorySearchQuery, UpdateSourceTrigger=PropertyChanged}"
-                                             Background="Transparent" BorderThickness="0"
-                                             Foreground="{DynamicResource Text.Primary}"
-                                             CaretBrush="{DynamicResource Accent.1}"
-                                             FontSize="11" Padding="0,7" VerticalContentAlignment="Center"/>
-                                    <Button Grid.Column="2" Width="20" Height="20"
-                                            Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                            Command="{Binding ChatVM.ClearSearchCommand}"
-                                            Visibility="{Binding ChatVM.IsSearchingHistory, Converter={StaticResource BoolVis}}"
-                                            ToolTip="{services:Loc sidebar.clearSearch}">
-                                        <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                   Foreground="{DynamicResource Text.Faint}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Button>
-                                </Grid>
-                            </Border>
-                            <TextBlock Text="{Binding ChatVM.SidebarFilterText}" FontSize="10.5" Margin="16,0,14,6"
-                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.SidebarFilterText}" Value="">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
                             </StackPanel>
 
                             <!-- Sessions list / search results -->
@@ -1595,6 +1565,89 @@
                              kept (switching between them used to rebuild both); see Views/PageHost. -->
                         <views:PageHost x:Name="PageArea" Grid.Row="1" Page="{Binding CurrentView}"/>
                     </Grid>
+
+                    <!-- ░░░ น้อง CluadeX (owner 2026-11-08: "ใหญ่ ๆ ลอยมุมซ้ายบน"): a square under the title bar over the rail and
+                         the chat list beside it. In a Canvas so her size never widens a column; on top of both. MainWindow.Buddy.cs
+                         sizes her (big beside the chat list, rail-sized on the other pages, smaller in a short window) and moves
+                         what would sit under her: the rail's first icon and the list's title, buttons and search box.
+                         A click (or Tab to her + Enter/Space) goes Home: the Chat page, an empty chat, no folder open; running
+                         chats carry on in the background. ░░░ -->
+                    <Canvas Grid.Column="0" Panel.ZIndex="20" HorizontalAlignment="Left" VerticalAlignment="Top" Width="0" Height="0">
+                        <Button x:Name="BuddyHero" Width="120" Height="240" Cursor="Hand"
+                                Command="{Binding ChatVM.GoHomeCommand}" ToolTip="{Binding ChatVM.BuddyTip}"
+                                AutomationProperties.Name="{services:Loc buddy.goHomeName}"
+                                AutomationProperties.HelpText="{Binding ChatVM.BuddyMoodTip}">
+                            <!-- keyboard focus only (not after a mouse click): a soft ring round her square -->
+                            <Button.FocusVisualStyle>
+                                <Style>
+                                    <Setter Property="Control.Template">
+                                        <Setter.Value>
+                                            <ControlTemplate>
+                                                <Rectangle Margin="2" RadiusX="14" RadiusY="14" StrokeThickness="1.5" Stroke="{DynamicResource Accent.1}"/>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </Button.FocusVisualStyle>
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Grid Background="Transparent">
+                                        <!-- her plate (owner 2026-11-08: "ไม่ควรเห็นเส้นด้านหลังเธอ … ทำพื้นที่กรอบนูนก็ได้"): a raised
+                                             card in the theme's opaque raised colour (the list's own colour is see-through),
+                                             so the rail's edge and the two panels' colours never show through her faded
+                                             edges; light along the top, a soft shadow under it -->
+                                        <Border x:Name="BuddyPlate" Margin="3,2,1,2" CornerRadius="14" BorderThickness="1"
+                                                Background="{DynamicResource Bg.Elevated}" IsHitTestVisible="False">
+                                            <Border.BorderBrush>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="0.6,1">
+                                                    <GradientStop Color="#55FFFFFF" Offset="0"/>
+                                                    <GradientStop Color="#14FFFFFF" Offset="0.45"/>
+                                                    <GradientStop Color="#33000000" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.BorderBrush>
+                                            <Border.Effect>
+                                                <DropShadowEffect BlurRadius="14" ShadowDepth="3" Direction="270" Opacity="0.30"
+                                                                  RenderingBias="Performance"/>
+                                            </Border.Effect>
+                                            <Border CornerRadius="13" IsHitTestVisible="False">
+                                                <Border.Background>
+                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                        <GradientStop Color="#16FFFFFF" Offset="0"/>
+                                                        <GradientStop Color="#00FFFFFF" Offset="0.35"/>
+                                                        <GradientStop Color="#00000000" Offset="0.7"/>
+                                                        <GradientStop Color="#14000000" Offset="1"/>
+                                                    </LinearGradientBrush>
+                                                </Border.Background>
+                                            </Border>
+                                        </Border>
+                                        <views:CluadexBuddy x:Name="Buddy" DataContext="{Binding ChatVM}" Margin="4,3,2,3"/>
+                                    </Grid>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Buddy" Property="Margin" Value="3,2,1,2"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <!-- Her speech bubble (owner 2026-11-08: "บางทีก็มีบับเบิ้ล แนะนำลอยออกมา"): a tip now and then, or a word when a
+                             turn ends or waits for you. It floats out from her cheek over the list for a few seconds; a click
+                             closes it. Placed, timed and filled by MainWindow.Buddy.cs; off with Settings › General ›
+                             Appearance. -->
+                        <Border x:Name="BuddyBubble" Visibility="Collapsed" MaxWidth="230" Padding="12,8,10,9" CornerRadius="14,14,14,4"
+                                Background="{DynamicResource Popup.Background}" BorderBrush="{DynamicResource Popup.Border}" BorderThickness="1"
+                                Effect="{DynamicResource Shadow.Popup}" Cursor="Hand" RenderTransformOrigin="0,1"
+                                AutomationProperties.LiveSetting="Polite" ToolTip="{services:Loc buddy.bubble.closeTip}">
+                            <Border.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform x:Name="BuddyBubbleScale" ScaleX="1" ScaleY="1"/>
+                                    <TranslateTransform x:Name="BuddyBubbleRise"/>
+                                </TransformGroup>
+                            </Border.RenderTransform>
+                            <TextBlock x:Name="BuddyBubbleText" TextWrapping="Wrap" FontSize="12.5" LineHeight="18"
+                                       Foreground="{DynamicResource Text.Primary}"/>
+                        </Border>
+                    </Canvas>
                 </Grid>
 
                 <!-- ════════════════════════════════════════════════════════ -->

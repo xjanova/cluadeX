@@ -1268,7 +1268,8 @@ public partial class CodeAgentService
     }
 
     private static bool IsLocalProvider(Services.Providers.IAiProvider? p)
-        => p?.ProviderId is "Local" or "Ollama" or "LlamaServer";
+        => p?.ProviderId is "Local" or "Ollama" or "LlamaServer"
+           || (Enum.TryParse<AiProviderType>(p?.ProviderId, out var t) && IsLocalType(t));
 
     /// <summary>The name of the model a local provider runs — its configured id, else the loaded GGUF — so its size can
     /// be read from it ("llama3.2:3b", "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"). "" when nothing names it.</summary>

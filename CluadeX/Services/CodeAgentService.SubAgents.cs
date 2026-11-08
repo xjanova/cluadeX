@@ -92,7 +92,7 @@ public partial class CodeAgentService
     /// "deep" when auto model chose it. <paramref name="Color"/>: a specialist's accent (its file's color).</summary>
     public sealed record SubAgentEvent(int Id, string Label, string Kind, string Task, string Phase, string Detail, int Steps,
         string? Model = null, decimal CostUsd = 0, string? WorkflowId = null, string? CallId = null, string? Result = null, bool Ok = true,
-        Agents.SubAgentControl? Control = null, string? Tool = null, string? Tier = null, string? Color = null);
+        Agents.SubAgentControl? Control = null, string? Tool = null, string? Tier = null, string? Color = null, string? Provider = null);
 
     /// <summary>A tool result as the agent window shows it: at most this many characters.</summary>
     internal const int SubAgentEventResultChars = 2000;
@@ -171,24 +171,73 @@ public partial class CodeAgentService
         _ => thai ? "เต็มกำลัง" : "deep",
     };
 
-    /// <summary>The local model a cheap read-only sub-agent may run on (Settings ▸ auto model ▸ local), already loaded and
-    /// able to run a tool loop; null = none (it goes to the API's cheap model).</summary>
-    private Providers.IAiProvider? LocalCheapProvider(SubAgentTier tier, bool canEdit)
+    /// <summary>The local model a read-only sub-agent may run on (Settings ▸ auto model ▸ local, or the Colibri card's
+    /// switch): one already up that can run a tool loop — llama-server, Ollama, the built-in engine, or a server on this PC
+    /// behind a compatible preset (Colibri, LM Studio, vLLM). Cheap tier on a 7B+ model, mid tier on a 30B+ one
+    /// (<see cref="Agents.DispatchPolicy.UseLocalFor"/>). <paramref name="tried"/> holds the local providers this
+    /// sub-agent already ran on: a weak report climbs AWAY from them, never back. Null = none (it goes to the API).</summary>
+    private async Task<Providers.IAiProvider?> LocalSubAgentProviderAsync(SubAgentTier tier, bool canEdit, IReadOnlySet<string> tried, CancellationToken ct)
     {
         var s = _settingsService.Settings;
-        if (!s.SubAgentLocalCheap || tier != SubAgentTier.Cheap || canEdit) return null;
-        bool runIsLocal = _providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
-        foreach (var t in new[] { AiProviderType.LlamaServer, AiProviderType.Ollama, AiProviderType.Local })
+        if (!s.SubAgentLocalCheap || tier == SubAgentTier.Deep || canEdit) return null;
+        bool runIsLocal = IsLocalType(_providerManager.ActiveProviderType);
+        foreach (var t in LocalSubAgentTypes)
         {
             var p = _providerManager.GetProvider(t);
-            if (p == null || ReferenceEquals(p, _providerManager.ActiveProvider) || p.ProviderId != t.ToString()) continue;
+            if (p == null || ReferenceEquals(p, _providerManager.ActiveProvider) || p.ProviderId != t.ToString() || tried.Contains(LocalKeyOf(p))) continue;
             bool ready, tools;
-            try { ready = p.IsReady; tools = p.SupportsNativeToolUse; } catch { continue; }
-            var size = Agents.ModelCapability.ForLocal(LocalModelNameFor(p)).Tier;
-            if (Agents.DispatchPolicy.UseLocalForCheap(true, tier, canEdit, runIsLocal, ready, tools, size)) return p;
+            try
+            {
+                ready = p.IsReady;
+                // A server on this PC behind a compatible preset is "ready" only once something initialised it: ask it
+                // (its /models, a local call) — at most once a minute after it said no, so a server that is off costs nothing.
+                if (!ready && Providers.CompatiblePresets.For(t) is { Local: true } && ProbeDue(t))
+                {
+                    using var probe = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    probe.CancelAfter(TimeSpan.FromSeconds(3));
+                    try { await p.InitializeAsync(probe.Token); }
+                    catch (Exception) when (!ct.IsCancellationRequested) { }
+                    ready = p.IsReady;
+                    if (!ready) _localProbeFailed[t] = DateTime.UtcNow;
+                }
+                tools = p.SupportsNativeToolUse;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { continue; }
+            string name = LocalModelNameFor(p);
+            if (t == AiProviderType.Colibri && Agents.ModelCapability.ParseBillions(name) == null)
+                name = Colibri.ColibriService.CatalogModelId(_settingsService.DataRoot) ?? name;   // the server's id may not carry the size
+            var size = Agents.ModelCapability.ForLocal(name).Tier;
+            if (Agents.DispatchPolicy.UseLocalFor(true, tier, canEdit, runIsLocal, ready, tools, size, Agents.ModelCapability.ParseBillions(name)))
+                return p;
         }
         return null;
     }
+
+    /// <summary>Where a sub-agent looks for a local model, in order: the ones CluadeX loads itself, then servers on this PC
+    /// — Colibri first among those (it is installed for exactly this).</summary>
+    private static readonly AiProviderType[] LocalSubAgentTypes =
+    {
+        AiProviderType.LlamaServer, AiProviderType.Ollama, AiProviderType.Local,
+        AiProviderType.Colibri, AiProviderType.LMStudio, AiProviderType.Vllm,
+    };
+
+    /// <summary>Which local model a sub-agent ran on, for "never back to it": a server behind a compatible preset is its
+    /// address (vLLM and colibri both default to port 8000 — two presets, one server), anything else its provider id.</summary>
+    private string LocalKeyOf(Providers.IAiProvider p)
+    {
+        if (Enum.TryParse<AiProviderType>(p.ProviderId, out var t) && Providers.CompatiblePresets.For(t) is { Local: true } preset)
+        {
+            string url = _settingsService.Settings.ProviderConfigs.TryGetValue(p.ProviderId, out var cfg) && !string.IsNullOrWhiteSpace(cfg.BaseUrl)
+                ? cfg.BaseUrl : preset.BaseUrl;
+            if (Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u))
+                return (u.IsLoopback ? "loopback" : u.Host.ToLowerInvariant()) + ":" + u.Port;
+        }
+        return p.ProviderId;
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<AiProviderType, DateTime> _localProbeFailed = new();
+    private bool ProbeDue(AiProviderType t) => !_localProbeFailed.TryGetValue(t, out var at) || DateTime.UtcNow - at > TimeSpan.FromMinutes(1);
 
     /// <summary>A run's sub-agent conversations: they end with the run.</summary>
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<AgentRunScope, System.Collections.Concurrent.ConcurrentDictionary<int, SubAgentThread>> _subAgentThreads = new();
@@ -278,6 +327,7 @@ public partial class CodeAgentService
             bool specialist = !string.IsNullOrWhiteSpace(request.Persona);
             string? runModel = RunModel() is { Length: > 0 } rm ? rm : null;
 
+            var triedLocal = new HashSet<string>(StringComparer.Ordinal);
             for (int climbs = 0; ; climbs++)
             {
                 // ─── this attempt: its model, provider, effort ceiling, step budget ───
@@ -286,7 +336,7 @@ public partial class CodeAgentService
                 if (earlier?.Provider is { } kept) { onProvider = kept; model = earlier.Model; }
                 else if (dispatch.Legacy) model = null;
                 else if (!auto) model = Agents.DispatchPolicy.ManualModelFor(kind, runModel, s.SubAgentModelOverrides);
-                else if (LocalCheapProvider(tier, canEdit) is { } local)
+                else if (await LocalSubAgentProviderAsync(tier, canEdit, triedLocal, ct) is { } local)
                 {
                     onProvider = local;
                     model = LocalModelNameFor(local) is { Length: > 0 } ln ? System.IO.Path.GetFileName(ln) : null;
@@ -332,6 +382,8 @@ public partial class CodeAgentService
                         control.StopRequested, now.BudgetCapped || !now.SubAgents, earlier != null))
                 {
                     _costTrackingService?.RecordTierClimb(thread.Tier.ToString().ToLowerInvariant(), child);
+                    // The local model gave the weak report: the next try is on the API, never on it again.
+                    if (thread.Provider is { } ranOn) triedLocal.Add(LocalKeyOf(ranOn));
                     tier = Agents.DispatchPolicy.NextTier(thread.Tier);
                     OnAgentStatus?.Invoke(thai ? $"{label}: รายงานยังไม่พอ — ให้โมเดล{TierWord(tier, thai)}ลองต่อ"
                                                : $"{label}: the report fell short — trying again on the {TierWord(tier, thai)} tier");
@@ -472,7 +524,7 @@ public partial class CodeAgentService
 
         OnAgentStatus?.Invoke($"{label}: {(thai ? "เริ่มงาน" : "starting")} · {Shorten(task, 60)}");
         var ev = new SubAgentEvent(n, label, opts?.Kind ?? type, Shorten(task, 160), "start", "", 0, opts?.Model, WorkflowId: opts?.WorkflowId,
-            Control: opts?.Control, Tier: opts?.Tier?.ToString().ToLowerInvariant(), Color: opts?.Color);
+            Control: opts?.Control, Tier: opts?.Tier?.ToString().ToLowerInvariant(), Color: opts?.Color, Provider: provider.ProviderId);
         if (opts?.Control != null) opts.Control.StartEvent = ev with { Control = null };
         decimal Cost() => opts?.Scope?.CostUsd ?? 0;
         _subAgentLast.Value = ev;

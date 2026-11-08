@@ -276,6 +276,9 @@ public sealed class AgentNode : System.ComponentModel.INotifyPropertyChanged
         "red" => "red",
         _ => "magenta",
     };
+    private Services.ChatCharacter? _mascot;
+    /// <summary>The girl of the provider it runs on (น้อง Colibri when it runs on this PC): her face on the avatar's corner.</summary>
+    public Services.ChatCharacter? Mascot { get => _mascot; set { _mascot = value; Raise(nameof(Mascot)); } }
     /// <summary>The Upgrade button shows: it runs, can be steered and is not already on the deep tier.</summary>
     public bool CanUpgrade => IsRunning && _control?.CanUpgrade == true && _tier is "cheap" or "mid";
     /// <summary>What it is doing now ("อ่าน main.ts"), or how it ended.</summary>

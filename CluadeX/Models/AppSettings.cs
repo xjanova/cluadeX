@@ -444,6 +444,23 @@ public class AppSettings
 
     // UI settings
     public double FontSize { get; set; } = 14;
+
+    /// <summary>Zoom of the whole main window, 0.8–1.6 (Settings › General › Text size and font; 1 = 100 %).
+    /// See Services/TypographyService.</summary>
+    public double UiScale { get; set; } = 1.0;
+
+    /// <summary>The UI font: "" = the theme's own, "bundled" = Noto Sans shipped with CluadeX (Thai from Leelawadee UI), otherwise the name of
+    /// an installed font (anything else is ignored at startup).</summary>
+    public string UiFont { get; set; } = "";
+
+    /// <summary>น้อง CluadeX may speak up in a bubble: a tip now and then, a word when a chat finishes or waits
+    /// (MainWindow.Buddy.cs; Settings › General › Appearance).</summary>
+    public bool BuddyBubbles { get; set; } = true;
+
+    /// <summary>น้อง CluadeX's sound: the small sounds in her clips and the short lines she says ("All done!", "Your call!",
+    /// "Hello? Is anyone there?"). Views/CluadexBuddy.Clips.cs; Settings › General › Appearance.</summary>
+    public bool BuddySounds { get; set; } = true;
+
     public bool StreamOutput { get; set; } = true;
 
     // Language / Localization

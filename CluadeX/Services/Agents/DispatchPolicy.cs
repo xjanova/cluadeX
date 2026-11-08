@@ -425,8 +425,27 @@ public static class DispatchPolicy
     /// </summary>
     public static bool UseLocalForCheap(bool settingOn, SubAgentTier tier, bool canEdit, bool runIsLocal,
         bool localReady, bool localToolUse, ModelCapability.Tier localSize)
-        => settingOn && tier == SubAgentTier.Cheap && !canEdit && !runIsLocal && localReady && localToolUse
-           && localSize == ModelCapability.Tier.Capable;
+        => tier == SubAgentTier.Cheap && UseLocalFor(settingOn, tier, canEdit, runIsLocal, localReady, localToolUse, localSize, null);
+
+    /// <summary>The smallest model (billions of parameters; a MoE counts its whole size) that takes the MID tier's
+    /// read-only work too: a 30B+ model on this PC (colibri runs a 35B MoE on an 8 GB card) reads and explores about as
+    /// well as the API's mid model.</summary>
+    public const double MidLocalMinBillions = 30;
+
+    /// <summary>
+    /// A read-only sub-agent goes to the model on this machine instead of the API (owner 2026-11-08: "งานไหนใช้การ์ดจอ local
+    /// ได้ ยิ่งดีเลย … โมเดลใหญ่ แต่ใช้การ์ดจอเล็ก ประหยัดโทเค็น"): the cheap tier on any capable (7B+) local model, the mid
+    /// tier too on a 30B+ one, the deep tier never. Otherwise as before: the owner turned it on, the run is on an API
+    /// model, the local model is up and can run a tool loop, and the sub-agent does not edit.
+    /// </summary>
+    public static bool UseLocalFor(bool settingOn, SubAgentTier tier, bool canEdit, bool runIsLocal,
+        bool localReady, bool localToolUse, ModelCapability.Tier localSize, double? localBillions)
+        => settingOn && !canEdit && !runIsLocal && localReady && localToolUse && tier switch
+        {
+            SubAgentTier.Cheap => localSize == ModelCapability.Tier.Capable,
+            SubAgentTier.Mid => localBillions >= MidLocalMinBillions,
+            _ => false,
+        };
 
     /// <summary>The kind an agent_spawn / subagent_invoke request is.</summary>
     public static SubAgentKind KindOf(bool canEdit) => canEdit ? SubAgentKind.Code : SubAgentKind.Explore;

@@ -524,6 +524,8 @@ public sealed class BillingViewModel : ViewModelBase
         public bool HasLogo => Logo != null;
         public bool IsAll => Key == ProviderBrand.AllKey;
         public bool IsBadge => !IsAll && Logo == null;
+        /// <summary>The provider's girl (its face on the logo's corner); null for "All" and "Other".</summary>
+        public ChatCharacter? Mascot { get; }
         public string MonthText { get => _monthText; private set => SetProperty(ref _monthText, value); }
         public bool IsSelected { get => _selected; set => SetProperty(ref _selected, value); }
 
@@ -534,6 +536,7 @@ public sealed class BillingViewModel : ViewModelBase
             Name = key == ProviderBrand.AllKey ? L("billing.tab.all") : brand.Key == key ? brand.Name : key;
             Badge = brand.Badge;
             Logo = key == ProviderBrand.AllKey ? null : LoadLogo(brand.LogoUri);
+            Mascot = Enum.TryParse<Models.AiProviderType>(key, out var t) ? ChatCharacter.ForProvider(t) : null;
         }
 
         public void Update(ProviderReport r)

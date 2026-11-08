@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.259</Version>
+    <Version>3.0.263</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -47,10 +47,20 @@
     <Resource Include="Assets\Girls\*.png" />
     <!-- each girl's second pose (GirlArt.PoseImage); a subfolder PNG is never a girl of its own -->
     <Resource Include="Assets\Girls\Pose2\*.png" />
+    <!-- the providers' own girls (one picture each), never in the backdrop / splash pick -->
+    <Resource Include="Assets\Girls\Providers\*.png" />
     <Resource Include="Assets\Icons\*.png" />
     <Resource Include="Assets\Wizard\*" />
-    <!-- the activity bar's face of CluadeX: awake and eyes closed (blink, sleep) -->
+    <!-- น้อง CluadeX's face in the corner: awake and eyes closed (blink, sleep) — the stills under her clips -->
     <Resource Include="Assets\Buddy\*.png" />
+    <!-- her mood clips, filmed on green (Assets\Buddy\Clips\README.md); files next to the app because MediaElement cannot
+         play from a pack URI. ChromaKey.ps keys them (Effects\ChromaKey.fx, rebuilt by hand with fxc). -->
+    <Content Include="Assets\Buddy\Clips\*.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="Effects\ChromaKey.ps" />
+    <None Remove="Effects\ChromaKey.fx" />
+    <!-- The bundled UI font (Noto Sans CX + Noto Sans, SIL OFL 1.1 — Assets\Fonts\OFL.txt and README.md; Thai is drawn by Windows' Leelawadee UI) -->
+    <Resource Include="Assets\Fonts\*.ttf" />
+    <None Include="Assets\Fonts\OFL.txt" CopyToOutputDirectory="PreserveNewest" Link="Licenses\NotoSans-OFL.txt" />
     <!-- Provider logos for the Billing page (sources and licences: Assets\Logos\ATTRIBUTION.md) -->
     <Resource Include="Assets\Logos\*.png" />
   </ItemGroup>

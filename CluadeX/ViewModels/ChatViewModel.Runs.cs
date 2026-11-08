@@ -594,6 +594,7 @@ public partial class ChatViewModel
         if (e.CostUsd > node.CostUsd) node.CostUsd = e.CostUsd;
         if (!string.IsNullOrEmpty(e.Tier)) node.Tier = e.Tier;     // its routing tier (deep once the owner upgraded it)
         if (!string.IsNullOrEmpty(e.Color)) node.Color = e.Color;
+        if (Enum.TryParse<AiProviderType>(e.Provider, out var runsOn)) node.Mascot = ChatCharacter.ForProvider(runsOn);
         node.RefreshUpgrade();
         switch (e.Phase)
         {
