@@ -235,5 +235,14 @@ internal static class SetupWizardKeys
         ["settings.setupWizard.title"] = new() { ["en"] = "Setup wizard", ["th"] = "ตัวช่วยติดตั้ง" },
         ["settings.setupWizard.desc"] = new() { ["en"] = "Sign in to Xman Studio, register the license, add the NVIDIA accelerator or BrainX — the first-run steps again.", ["th"] = "เข้าสู่ระบบ Xman Studio ลงทะเบียนไลเซ่น เพิ่มตัวเร่งการ์ดจอหรือ BrainX ขั้นตอนเดียวกับตอนติดตั้งครั้งแรก" },
         ["settings.setupWizard.open"] = new() { ["en"] = "Open the setup wizard again", ["th"] = "เปิดตัวช่วยติดตั้งอีกครั้ง" },
+
+        // ── auto-update entitlement (installer contract 2.1) ──
+        ["update.available"] = new() { ["en"] = "Version {0} is out — press Update now to install it.", ["th"] = "มีรุ่นใหม่ v{0} กด อัปเดตเลย เพื่อติดตั้ง" },
+        ["update.available.splash"] = new() { ["en"] = "v{0} is out — update it from inside the app", ["th"] = "มีรุ่นใหม่ v{0} อัปเดตได้จากในแอป" },
+        ["update.updateNow"] = new() { ["en"] = "Update now", ["th"] = "อัปเดตเลย" },
+        ["update.linkHint"] = new() { ["en"] = "Link your Xman Studio account to update automatically", ["th"] = "เชื่อมบัญชี Xman Studio เพื่อให้อัปเดตเองอัตโนมัติ" },
+        ["update.linkAccount"] = new() { ["en"] = "Link account", ["th"] = "เชื่อมบัญชี" },
+        ["update.autoOff"] = new() { ["en"] = "Automatic updates are switched off — updates wait for you.", ["th"] = "ปิดอัปเดตอัตโนมัติไว้ รุ่นใหม่จะรอให้กดเอง" },
+        ["update.nowDownloading"] = new() { ["en"] = "Downloading v{0} — it installs and restarts when done.", ["th"] = "กำลังดาวน์โหลด v{0} เสร็จแล้วจะติดตั้งและเปิดใหม่ให้" },
     };
 }

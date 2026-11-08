@@ -1532,8 +1532,20 @@
                                 <TextBlock Text="&#xE777;" FontFamily="Segoe MDL2 Assets" FontSize="16"
                                            Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding UpdateMessage}" FontSize="12"
+                                    <TextBlock Text="{Binding UpdateMessage}" FontSize="12" TextWrapping="Wrap"
                                                Foreground="{DynamicResource Text.Primary}"/>
+                                    <!-- no paid/trial license and no linked account: it does not update by itself (installer contract 2.1) -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0"
+                                                Visibility="{Binding ShowLinkHint, Converter={StaticResource BoolVis}}">
+                                        <TextBlock Text="{Binding LinkHintText}" FontSize="11.5" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                        <Button Command="{Binding LinkAccountCommand}" Margin="10,0,0,0" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="0">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate>
+                                            </Button.Template>
+                                            <TextBlock Text="{services:Loc update.linkAccount}" FontSize="11.5" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Accent.1}" TextDecorations="Underline"/>
+                                        </Button>
+                                    </StackPanel>
                                     <ProgressBar Value="{Binding UpdateProgress}" Maximum="100" Height="4" Margin="0,4,0,0"
                                                  Foreground="{DynamicResource Accent.1}"
                                                  Visibility="{Binding IsUpdating, Converter={StaticResource BoolVis}}"/>
@@ -1552,6 +1564,21 @@
                                         </ControlTemplate>
                                     </Button.Template>
                                     <TextBlock Text="{services:Loc nav.installRestart}"/>
+                                </Button>
+                                <Button Grid.Column="2" Command="{Binding UpdateNowCommand}"
+                                        Visibility="{Binding ShowUpdateNow, Converter={StaticResource BoolVis}}"
+                                        Padding="14,6" Margin="8,0" FontSize="11" Cursor="Hand"
+                                        Background="{DynamicResource Banner.Button.Background}" BorderThickness="0"
+                                        Foreground="{DynamicResource Text.OnAccent}">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="6"
+                                                    Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                    <TextBlock Text="{services:Loc update.updateNow}"/>
                                 </Button>
                                 <Button Grid.Column="3" Command="{Binding DismissUpdateCommand}" Width="28" Height="28"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand"

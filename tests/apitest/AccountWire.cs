@@ -214,6 +214,76 @@ internal static class AccountWire
             && rep.Cause == loc.T("acct.doc.tcp.fail", 1), Steps() + " · " + rep.Cause);
         Environment.SetEnvironmentVariable("CLUADEX_LICENSE_API", null);
         listener.Stop();
+
+        Entitlement(check, section);
+        Girls(check, section);
+    }
+
+    /// <summary>Installer contract 2.1: who gets updates by themselves, and what an install that does not gets.</summary>
+    static void Entitlement(Action<string, string, bool, string> check, Action<string> section)
+    {
+        section("offline · auto-update entitlement (contract 2.1)");
+        check("entitlement", "the rule: (paid or trial license) OR linked account",
+            AutoUpdateEntitlement.Allowed(true, false) && AutoUpdateEntitlement.Allowed(false, true) && AutoUpdateEntitlement.Allowed(true, true)
+            && !AutoUpdateEntitlement.Allowed(false, false), "");
+        var settings = new CluadeX.Models.AppSettings { AccountLinked = true, AutoUpdateEnabled = false };
+        check("entitlement", "the user's switch turns automatic off even when allowed",
+            AutoUpdateEntitlement.Allowed(null, settings) && !AutoUpdateEntitlement.Automatic(null, settings), "");
+        settings.AutoUpdateEnabled = true;
+        check("entitlement", "a linked account with no license is allowed (the free tier links to update)", AutoUpdateEntitlement.Automatic(null, settings), "");
+        settings.AccountLinked = false;
+        check("entitlement", "no license and no account: not allowed", !AutoUpdateEntitlement.Automatic(null, settings), "");
+
+        var svc = new AutoUpdateService(new SettingsService());
+        check("entitlement", "no rule set (older callers, harnesses): automatic as before", svc.Automatic && svc.MayAutoInstall("9.9.9"), "");
+        bool allowed = false;
+        svc.AutomaticAllowed = () => allowed;
+        check("entitlement", "not entitled: nothing installs at startup or on exit", !svc.Automatic && !svc.MayAutoInstall("9.9.9"), "");
+        allowed = true;
+        check("entitlement", "entitled again: the same version may install", svc.Automatic && svc.MayAutoInstall("9.9.9"), "");
+        svc.AutomaticAllowed = () => throw new InvalidOperationException("boom");
+        check("entitlement", "a rule that throws never blocks updates", svc.Automatic, "");
+        check("entitlement", "the splash waits for a job that ends at Available (found, not downloaded)",
+            StartupUpdatePolicy.Decide(false, UpdatePhase.Available, TimeSpan.FromMinutes(5), false) == StartupUpdatePolicy.Next.Wait
+            && StartupUpdatePolicy.Decide(true, UpdatePhase.Available, TimeSpan.FromMinutes(5), false) == StartupUpdatePolicy.Next.Finished, "");
+        check("entitlement", "Available is appended last (the phase order is part of the wire)", (int)UpdatePhase.Available == 6, ((int)UpdatePhase.Available).ToString());
+    }
+
+    /// <summary>Installer contract 2.6: the girls of one wizard run.</summary>
+    static void Girls(Action<string, string, bool, string> check, Action<string> section)
+    {
+        section("offline · setup wizard girls (contract 2.6)");
+        string[] names = { "cluadex", "claude", "gemini", "grok", "mai", "brainx", "antigravity", "deepseek" };
+        var rng = new Random(7);
+        bool allDistinct = true, posesOk = true, neverRepeatsFirst = true;
+        string last = null;
+        for (int run = 0; run < 200; run++)
+        {
+            var plan = CluadeX.Services.Setup.SetupGirls.Plan(names, last, rng);
+            allDistinct &= plan.Select(p => p.Name).Distinct().Count() == names.Length;
+            posesOk &= plan.All(p => p.Pose is 1 or 2);
+            neverRepeatsFirst &= last == null || plan[0].Name != last;
+            last = plan[0].Name;
+        }
+        check("girls", "each run shows all eight once, in a shuffled order", allDistinct, "");
+        check("girls", "every page gets pose 1 or 2", posesOk, "");
+        check("girls", "a run never opens on the girl the last run opened on (200 runs)", neverRepeatsFirst, "");
+        var one = CluadeX.Services.Setup.SetupGirls.Plan(new[] { "solo" }, "solo", rng);
+        check("girls", "one girl only: she is shown (no endless reshuffle)", one.Count == 1 && one[0].Name == "solo", "");
+        check("girls", "no girls: an empty plan, no crash", CluadeX.Services.Setup.SetupGirls.Plan(Array.Empty<string>(), null, rng).Count == 0, "");
+        string dir = Path.Combine(Path.GetTempPath(), "cx-girls-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            Directory.CreateDirectory(dir);
+            string file = Path.Combine(dir, CluadeX.Services.Setup.SetupGirls.FileName);
+            var plan = CluadeX.Services.Setup.SetupGirls.Plan(names, null, rng);
+            File.WriteAllText(file, CluadeX.Services.Setup.SetupGirls.Format(plan));
+            check("girls", "the remembered run reads back its first girl", CluadeX.Services.Setup.SetupGirls.ReadFirst(file) == plan[0].Name, File.ReadAllText(file));
+            File.WriteAllText(file, "garbage without colons");
+            check("girls", "a damaged file still reads (no crash)", CluadeX.Services.Setup.SetupGirls.ReadFirst(file) != null, "");
+            check("girls", "a missing file reads as none", CluadeX.Services.Setup.SetupGirls.ReadFirst(Path.Combine(dir, "nope.txt")) == null, "");
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
     // ─── the mock ───────────────────────────────────────────────────────────────────────

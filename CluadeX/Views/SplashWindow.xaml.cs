@@ -266,11 +266,15 @@ public partial class SplashWindow : Window
                 {
                     StartupUpdateHandled = true;   // the background probe retries; the main window does not start a second check
                     EndUpdateRow();
-                    if (end.Phase == UpdatePhase.Failed)
+                    // Found but not downloaded: this install does not update by itself (installer contract 2.1).
+                    if (end.Phase == UpdatePhase.Available && up.AvailableVersion is { } avail)
+                        update.Warn(string.Format(LocalizedResources.Instance["update.available.splash"], avail));
+                    else if (end.Phase == UpdatePhase.Failed)
                         update.Bad(T($"อัปเดตไม่สำเร็จ: {end.Error} — จะลองใหม่เองเบื้องหลัง", $"update failed: {end.Error} — it retries in the background"));
                     // A downloaded version the circuit breaker holds is waiting — not "up to date".
                     else if (up.StagedVersion is { } held && !up.MayAutoInstall(held))
-                        update.Warn(up.PausedReason ?? T($"v{held} รอติดตั้งเอง", $"v{held} waits for a manual install"));
+                        update.Warn(!up.Automatic ? string.Format(LocalizedResources.Instance["update.available.splash"], held)
+                            : up.PausedReason ?? T($"v{held} รอติดตั้งเอง", $"v{held} waits for a manual install"));
                     else update.Ok(T("เป็นเวอร์ชันล่าสุดแล้ว", "up to date"));
                     return false;
                 }
