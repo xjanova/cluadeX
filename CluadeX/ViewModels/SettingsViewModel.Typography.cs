@@ -46,6 +46,32 @@ public partial class SettingsViewModel
 {
     private TypographyService? Typography => TypographyService.Current;
 
+    /// <summary>น้อง CluadeX's speech bubble on or off (Appearance card); saved at once, read live by MainWindow.BuddyBubble.cs.</summary>
+    public bool BuddyBubbles
+    {
+        get => _settingsService.Settings.BuddyBubbles;
+        set
+        {
+            if (_settingsService.Settings.BuddyBubbles == value) return;
+            try { _settingsService.UpdateSettings(s => s.BuddyBubbles = value); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Settings] buddy bubbles: {ex.Message}"); }
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>น้อง CluadeX's sound on or off (Appearance card); saved at once, MainWindow passes it to her (CluadexBuddy.SoundsOn).</summary>
+    public bool BuddySounds
+    {
+        get => _settingsService.Settings.BuddySounds;
+        set
+        {
+            if (_settingsService.Settings.BuddySounds == value) return;
+            try { _settingsService.UpdateSettings(s => s.BuddySounds = value); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Settings] buddy sounds: {ex.Message}"); }
+            OnPropertyChanged();
+        }
+    }
+
     private readonly ObservableCollection<FontChoice> _fontChoices = new();
     private bool _fontsBuilt;
 

@@ -754,9 +754,9 @@
                                 <RowDefinition Height="*" MinHeight="60"/>     <!-- The project's files -->
                             </Grid.RowDefinitions>
 
-                            <!-- The top of the list sits beside น้อง CluadeX: the title, its buttons and the search box move right of
-                                 her square and the zone is at least as tall as she is, so nothing is ever under her (MainWindow.Buddy.cs
-                                 sets its left margin and MinHeight from her size). The projects and the chats start below her. -->
+                            <!-- The top of the list sits beside น้อง CluadeX: the title, its buttons, the search box and the projects move
+                                 right of her (1 wide, 2 tall), so nothing is ever under her; the chats start below her feet
+                                 (MainWindow.Buddy.cs sets the margins and the height from her size). -->
                             <Grid x:Name="SidebarTopZone" Grid.Row="0">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
@@ -853,9 +853,11 @@
                                 </StackPanel>
                             </Grid>
 
-                            <!-- The projects, below her (the search box and the line saying what the list holds are in the zone above:
-                                 the top rows often stay the same when the filter changes, so the count is what shows a button did something) -->
-                            <StackPanel Grid.Row="1">
+                            <!-- The projects, beside her too when she is tall (MainWindow.Buddy.cs gives them the zone's left margin and
+                                 the height still needed to reach her feet); the search box and the line saying what the list holds are in
+                                 the zone above: the top rows often stay the same when the filter changes, so the count is what shows a
+                                 button did something -->
+                            <StackPanel x:Name="SidebarProjects" Grid.Row="1">
                             <!-- Projects: named groups of chats (owner 2026-11-01). A row shows only its chats (again = all); a chat
                                  dropped on it moves in; right-click for a new chat in it, rename, its folder, delete. -->
                             <StackPanel Margin="10,0,10,6">
@@ -1571,7 +1573,7 @@
                          A click (or Tab to her + Enter/Space) goes Home: the Chat page, an empty chat, no folder open; running
                          chats carry on in the background. ░░░ -->
                     <Canvas Grid.Column="0" Panel.ZIndex="20" HorizontalAlignment="Left" VerticalAlignment="Top" Width="0" Height="0">
-                        <Button x:Name="BuddyHero" Width="124" Height="124" Cursor="Hand"
+                        <Button x:Name="BuddyHero" Width="120" Height="240" Cursor="Hand"
                                 Command="{Binding ChatVM.GoHomeCommand}" ToolTip="{Binding ChatVM.BuddyTip}"
                                 AutomationProperties.Name="{services:Loc buddy.goHomeName}"
                                 AutomationProperties.HelpText="{Binding ChatVM.BuddyMoodTip}">
@@ -1590,16 +1592,61 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Grid Background="Transparent">
-                                        <views:CluadexBuddy x:Name="Buddy" DataContext="{Binding ChatVM}" Margin="2"/>
+                                        <!-- her plate (owner 2026-11-08: "ไม่ควรเห็นเส้นด้านหลังเธอ … ทำพื้นที่กรอบนูนก็ได้"): a raised
+                                             card in the theme's opaque raised colour (the list's own colour is see-through),
+                                             so the rail's edge and the two panels' colours never show through her faded
+                                             edges; light along the top, a soft shadow under it -->
+                                        <Border x:Name="BuddyPlate" Margin="3,2,1,2" CornerRadius="14" BorderThickness="1"
+                                                Background="{DynamicResource Bg.Elevated}" IsHitTestVisible="False">
+                                            <Border.BorderBrush>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="0.6,1">
+                                                    <GradientStop Color="#55FFFFFF" Offset="0"/>
+                                                    <GradientStop Color="#14FFFFFF" Offset="0.45"/>
+                                                    <GradientStop Color="#33000000" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.BorderBrush>
+                                            <Border.Effect>
+                                                <DropShadowEffect BlurRadius="14" ShadowDepth="3" Direction="270" Opacity="0.30"
+                                                                  RenderingBias="Performance"/>
+                                            </Border.Effect>
+                                            <Border CornerRadius="13" IsHitTestVisible="False">
+                                                <Border.Background>
+                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                        <GradientStop Color="#16FFFFFF" Offset="0"/>
+                                                        <GradientStop Color="#00FFFFFF" Offset="0.35"/>
+                                                        <GradientStop Color="#00000000" Offset="0.7"/>
+                                                        <GradientStop Color="#14000000" Offset="1"/>
+                                                    </LinearGradientBrush>
+                                                </Border.Background>
+                                            </Border>
+                                        </Border>
+                                        <views:CluadexBuddy x:Name="Buddy" DataContext="{Binding ChatVM}" Margin="4,3,2,3"/>
                                     </Grid>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="Buddy" Property="Margin" Value="0"/>
+                                            <Setter TargetName="Buddy" Property="Margin" Value="3,2,1,2"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Button.Template>
                         </Button>
+                        <!-- Her speech bubble (owner 2026-11-08: "บางทีก็มีบับเบิ้ล แนะนำลอยออกมา"): a tip now and then, or a word when a
+                             turn ends or waits for you. It floats out from her cheek over the list for a few seconds; a click
+                             closes it. Placed, timed and filled by MainWindow.Buddy.cs; off with Settings › General ›
+                             Appearance. -->
+                        <Border x:Name="BuddyBubble" Visibility="Collapsed" MaxWidth="230" Padding="12,8,10,9" CornerRadius="14,14,14,4"
+                                Background="{DynamicResource Popup.Background}" BorderBrush="{DynamicResource Popup.Border}" BorderThickness="1"
+                                Effect="{DynamicResource Shadow.Popup}" Cursor="Hand" RenderTransformOrigin="0,1"
+                                AutomationProperties.LiveSetting="Polite" ToolTip="{services:Loc buddy.bubble.closeTip}">
+                            <Border.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform x:Name="BuddyBubbleScale" ScaleX="1" ScaleY="1"/>
+                                    <TranslateTransform x:Name="BuddyBubbleRise"/>
+                                </TransformGroup>
+                            </Border.RenderTransform>
+                            <TextBlock x:Name="BuddyBubbleText" TextWrapping="Wrap" FontSize="12.5" LineHeight="18"
+                                       Foreground="{DynamicResource Text.Primary}"/>
+                        </Border>
                     </Canvas>
                 </Grid>
 

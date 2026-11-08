@@ -1387,7 +1387,7 @@ public partial class App : Application
         catch { /* logging must never crash crash handling */ }
     }
 
-    private static void WriteCrashLog(string source, Exception ex)
+    internal static void WriteCrashLog(string source, Exception ex)
     {
         try
         {

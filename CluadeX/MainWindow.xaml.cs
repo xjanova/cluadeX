@@ -28,6 +28,7 @@ public partial class MainWindow : Window
         InitBuddyHero();   // น้อง CluadeX's size, what moves out of her way, and the text size zoom (MainWindow.Buddy.cs)
         _viewModel = viewModel;
         DataContext = viewModel;
+        InitBuddyBubble(); // her speech bubble: tips now and then, a word when a turn ends or waits (MainWindow.BuddyBubble.cs)
         // The chat opened a project: the UI Studio builds its page (hidden) and starts showing it, so it is ready the
         // moment it is opened — no Open / Start to press first.
         if (viewModel.UiStudioVM is { } studio)

@@ -1,6 +1,6 @@
 namespace CluadeX.Services.Localization;
 
-/// <summary>Localized strings for Settings › General › Text size and font (Views/Settings/TypographyPicker.xaml,
+/// <summary>Localized strings for Settings › General › Text size and font (Views/SettingsView.xaml, TypographyCard;
 /// Services/TypographyService). Every key needs both "en" and "th".</summary>
 internal static class TypographyKeys
 {

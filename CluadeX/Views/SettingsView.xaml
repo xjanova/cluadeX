@@ -1293,6 +1293,23 @@
                             <StackPanel>
                                 <TextBlock Text="{services:Loc settings.card.appearance}" Style="{StaticResource CardTitle}"/>
                                 <settingsviews:ThemePicker/>
+                                <!-- The text sits beside the box, not in it: a CheckBox's content gets endless width and never wraps. -->
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <CheckBox x:Name="BuddyBubblesBox" IsChecked="{Binding BuddyBubbles}" VerticalAlignment="Top"
+                                              AutomationProperties.Name="{services:Loc buddy.bubbles}"/>
+                                    <TextBlock Grid.Column="1" Text="{services:Loc buddy.bubbles}" TextWrapping="Wrap" Margin="6,1,0,0"
+                                               Foreground="{DynamicResource Text.Primary}" Cursor="Hand"
+                                               MouseLeftButtonUp="BuddyBubblesText_Click"/>
+                                </Grid>
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <CheckBox x:Name="BuddySoundsBox" IsChecked="{Binding BuddySounds}" VerticalAlignment="Top"
+                                              AutomationProperties.Name="{services:Loc buddy.sounds}"/>
+                                    <TextBlock Grid.Column="1" Text="{services:Loc buddy.sounds}" TextWrapping="Wrap" Margin="6,1,0,0"
+                                               Foreground="{DynamicResource Text.Primary}" Cursor="Hand"
+                                               MouseLeftButtonUp="BuddySoundsText_Click"/>
+                                </Grid>
                             </StackPanel>
                         </Border>
 

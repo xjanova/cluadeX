@@ -9,6 +9,9 @@ namespace CluadeX.ViewModels;
 public class MainViewModel : ViewModelBase
 {
     private readonly SettingsService _settingsService;
+
+    /// <summary>For the window's own bits that read a setting live (น้อง CluadeX's bubble: MainWindow.Buddy.cs).</summary>
+    internal SettingsService Settings => _settingsService;
     private readonly AgentToolService _agentToolService;
     private readonly GpuDetectionService _gpuDetectionService;
     private readonly AiProviderManager _providerManager;

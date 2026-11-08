@@ -1,4 +1,5 @@
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -25,6 +26,8 @@ internal static partial class Program
     static async Task HeroShots()
     {
         Log("\n## น้อง CluadeX in the corner, text size and font (rendered for the eye)");
+        // her clips would make every render different: the stills until ClipChecks
+        CluadexBuddy.ClipsAllowed = false;
         string dir = Path.Combine(OutRoot, "renders", "hero");
         var themes = ThemeServiceOrNull();
         var typo = Sp.GetRequiredService<TypographyService>();
@@ -57,9 +60,10 @@ internal static partial class Program
                 bool chat = page == "Chat";
                 double expected = CluadeX.MainWindow.HeroSizeFor(chat ? ((FrameworkElement)MainWin.FindName("ChatSidebar")).ActualWidth : 0,
                                                          ((FrameworkElement)MainWin.FindName("MainContentGrid")).ActualHeight) * scale;
-                Check($"hero [{tag}]: her size is {(chat ? "big beside the list" : "the rail's")}",
-                      Math.Abs(her.Width - expected) < 1.5 && (chat ? her.Width >= 84 * scale - 1 : Math.Abs(her.Width - 60 * scale) < 1.5),
-                      $"{her.Width:0.#} px, expected {expected:0.#}");
+                Check($"hero [{tag}]: her size is {(chat ? "big beside the list" : "the rail's")}, twice as tall as wide",
+                      Math.Abs(her.Width - expected) < 1.5 && Math.Abs(her.Height - 2 * her.Width) < 1.5
+                      && (chat ? her.Width >= 80 * scale - 1 : Math.Abs(her.Width - 60 * scale) < 1.5),
+                      $"{her.Width:0.#}×{her.Height:0.#} px, expected {expected:0.#} wide");
                 Check($"hero [{tag}]: she sits right under the title bar at the left edge",
                       Math.Abs(her.X) < 1.5 && Math.Abs(her.Y - 42 * scale) < 2.5, $"{her.X:0.#},{her.Y:0.#}");
                 var under = Under(hero, her, root);
@@ -70,7 +74,7 @@ internal static partial class Program
                     var full = Snapshot(root, w, h);
                     SavePng(full, Path.Combine(dir, $"{label}-{w}x{h}-{z * 100:0}-{page.ToLowerInvariant()}.png"));
                     if (chat && z == 1.0 && w == 1600)
-                        SavePng(new TransformedBitmap(new CroppedBitmap(full, new Int32Rect(0, 0, 420, 300)), new ScaleTransform(2, 2)),
+                        SavePng(new TransformedBitmap(new CroppedBitmap(full, new Int32Rect(0, 0, 440, 420)), new ScaleTransform(2, 2)),
                                 Path.Combine(dir, $"{label}-corner-2x.png"));
                 }
             }
@@ -88,12 +92,15 @@ internal static partial class Program
         {
             var root = (UIElement)RootVisual(MainWin);
             Rect her = Bounds(hero, root);
-            Check("hero [narrow list]: she shrinks with a 180 px list", her.Width < 124 && her.Width >= 60, $"{her.Width:0.#}");
+            Check("hero [narrow list]: she shrinks with a 180 px list", her.Width < CluadeX.MainWindow.HeroBig && her.Width >= 60, $"{her.Width:0.#}");
             var under = Under(hero, her, root);
             Check("hero [narrow list]: nothing under her", under.Count == 0, string.Join("; ", under.Take(6)));
         }
         side.Width = oldW;
         await Idle(150);
+
+        await ClipChecks();
+        await BubbleChecks();
 
         // ── the bundled font ──
         typo.SetFont(TypographyService.BundledFont, persist: false);
@@ -154,6 +161,177 @@ internal static partial class Program
         Check("font: back to the theme's own takes the override out", !ReferenceEquals(Application.Current.Resources["Font.Ui"], TypographyService.BundledFamily)
               && ReferenceEquals(MainWin.TryFindResource("Font.Ui"), TypographyService.ThemeFamily()));
         Log($"  shots: {dir}");
+    }
+
+    /// <summary>Her clips (Assets/Buddy/Clips): every one the scenes name is shipped and small, and each mood picks a clip of
+    /// its own scene — a greeting first, a reaction then idle, typing turns idle into listening.</summary>
+    static async Task ClipChecks()
+    {
+        var names = CluadexBuddy.AllClipNames.ToList();
+        var missing = names.Where(n => !File.Exists(Path.Combine(CluadexBuddy.ClipDir, n + ".mp4"))).ToList();
+        Check($"clips: all {names.Count} clips the scenes name are shipped", missing.Count == 0, string.Join(", ", missing));
+        Check("clips: there are 130 or more", names.Count >= 130, $"{names.Count}");
+        var files = Directory.Exists(CluadexBuddy.ClipDir) ? new DirectoryInfo(CluadexBuddy.ClipDir).GetFiles("*.mp4") : Array.Empty<FileInfo>();
+        var big = files.Where(f => f.Length > 600_000).Select(f => $"{f.Name} {f.Length / 1024} KB").ToList();
+        Check("clips: none over 600 KB", big.Count == 0, string.Join(", ", big));
+        long total = files.Sum(f => f.Length);
+        Check("clips: all of them together under 30 MB", total < 30_000_000, $"{total / 1024} KB");
+        var extra = files.Select(f => Path.GetFileNameWithoutExtension(f.Name)).Except(names).ToList();
+        Check("clips: no clip on disk that no scene plays", extra.Count == 0, string.Join(", ", extra));
+
+        var buddy = FindAll<CluadexBuddy>(MainWin).FirstOrDefault();
+        if (buddy == null || !SystemParameters.ClientAreaAnimation)
+        {
+            Log("  (clip scenes skipped: " + (buddy == null ? "no buddy" : "Windows animations are off — she keeps the stills") + ")");
+            return;
+        }
+        CluadexBuddy.ClipsAllowed = true;
+        // sound off first: she never picks a spoken line, so every mood shows its own gesture
+        bool soundsWere = CluadexBuddy.SoundsOn;
+        CluadexBuddy.SoundsOn = false;
+        MainVm.NavigateToCommand.Execute("Chat");
+        async Task<string> Mood(string mood)
+        {
+            buddy.SetCurrentValue(CluadexBuddy.MoodProperty, mood);
+            await Idle(120);
+            return buddy.ClipShown;
+        }
+        await Mood(BuddyMood.Working);
+        Check("clips [working]: a working clip", CluadexBuddy.Scenes[BuddyMood.Working].Loop.Contains(buddy.ClipShown), buddy.ClipShown);
+        await Mood(BuddyMood.Happy);
+        Check("clips [happy]: one of her happy reactions", CluadexBuddy.Scenes[BuddyMood.Happy].Intro.Contains(buddy.ClipShown), buddy.ClipShown);
+        await Mood(BuddyMood.Sad);
+        Check("clips [sad]: one of her sorry reactions", CluadexBuddy.Scenes[BuddyMood.Sad].Intro.Contains(buddy.ClipShown), buddy.ClipShown);
+        await Mood(BuddyMood.Waiting);
+        Check("clips [waiting]: the waiting scene", buddy.SceneShown == BuddyMood.Waiting, buddy.SceneShown);
+        await Mood(BuddyMood.Sleep);
+        Check("clips [sleep]: she yawns first", CluadexBuddy.Scenes[BuddyMood.Sleep].Intro.Contains(buddy.ClipShown), buddy.ClipShown);
+        await Mood(BuddyMood.Idle);
+        Check("clips [awake]: she wakes up first", buddy.ClipShown == CluadexBuddy.WakeClip, buddy.ClipShown);
+        await Mood(BuddyMood.Working);
+        await Mood(BuddyMood.Idle);
+        Check("clips [idle]: the idle scene", buddy.SceneShown == BuddyMood.Idle, buddy.SceneShown);
+        buddy.SetListening(true);
+        await Idle(80);
+        Check("clips [typing]: she listens while the owner types", buddy.SceneShown == CluadexBuddy.ListeningScene, buddy.SceneShown);
+        buddy.SetListening(false);
+        await Idle(80);
+        Check("clips [stopped typing]: back to idle", buddy.SceneShown == BuddyMood.Idle, buddy.SceneShown);
+        Check("clips [suggest]: a tip gesture plays while she is idle", buddy.Suggest() && CluadexBuddy.SuggestClips.Contains(buddy.ClipShown), buddy.ClipShown);
+        var players = new[] { (System.Windows.Controls.MediaElement)buddy.FindName("ClipA"), (System.Windows.Controls.MediaElement)buddy.FindName("ClipB") };
+        Check("sound off: both players muted", players.All(p => p.IsMuted));
+
+        // ---- her voice: spoken lines, at most one every SpeechGap
+        CluadexBuddy.SoundsOn = true;
+        void Field(string name, object value) =>
+            typeof(CluadexBuddy).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(buddy, value);
+        void MayTalk() => Field("_lastSpokeAt", DateTime.MinValue);
+        MayTalk();
+        await Mood(BuddyMood.Working);
+        Field("_workingSince", DateTime.UtcNow - TimeSpan.FromSeconds(20));
+        await Mood(BuddyMood.Happy);
+        Check("voice [done]: a long turn ends with a \"done!\" line", CluadexBuddy.DoneLines.Contains(buddy.ClipShown), buddy.ClipShown);
+        Check("voice [done]: a spoken line can be heard", players.Any(p => p.Source != null && !p.IsMuted));
+        await Mood(BuddyMood.Waiting);
+        Check("voice [gap]: right after a line she only gestures", !CluadexBuddy.Spoken.Contains(buddy.ClipShown) && buddy.SceneShown == BuddyMood.Waiting, buddy.ClipShown);
+        await Mood(BuddyMood.Working);
+        await Mood(BuddyMood.Happy);
+        Check("voice [short turn]: a quick answer gets a smile, not a line", CluadexBuddy.Scenes[BuddyMood.Happy].Intro.Contains(buddy.ClipShown), buddy.ClipShown);
+        MayTalk();
+        await Mood(BuddyMood.Waiting);
+        Check("voice [decide]: waiting for the owner, she calls them", CluadexBuddy.DecideLines.Contains(buddy.ClipShown), buddy.ClipShown);
+        Field("_lastSadAt", DateTime.MinValue);
+        foreach (var (scene, n) in new[] { (BuddyMood.Sad, 1), (CluadexBuddy.AnnoyedScene, 2), (CluadexBuddy.AngryScene, 3) })
+        {
+            await Mood(BuddyMood.Idle);
+            MayTalk();
+            await Mood(BuddyMood.Sad);
+            Check($"voice [error {n}]: the {scene} scene and its line",
+                  buddy.SceneShown == scene && CluadexBuddy.ErrorLines[scene].Contains(buddy.ClipShown), $"{buddy.SceneShown} {buddy.ClipShown}");
+        }
+
+        // ---- the owner away: she calls out (waking up first when asleep), not again soon after, and the count starts over when they are back
+        await Mood(BuddyMood.Idle);
+        await Mood(BuddyMood.Sleep);
+        await Idle(150);
+        buddy.AwayTick(TimeSpan.FromSeconds(30));
+        buddy.AwayTick(TimeSpan.FromMinutes(5));
+        await Idle(120);
+        Check("away: asleep, she wakes up to call out", buddy.AwayCalls == 1 && buddy.ClipShown == CluadexBuddy.WakeClip, $"{buddy.AwayCalls} {buddy.ClipShown}");
+        buddy.AwayTick(TimeSpan.FromMinutes(6));
+        Check("away: not again a minute later", buddy.AwayCalls == 1, $"{buddy.AwayCalls}");
+        buddy.AwayTick(TimeSpan.FromSeconds(20));
+        Check("away: the owner is back, the count starts over", buddy.AwayCalls == 0, $"{buddy.AwayCalls}");
+        await Mood(BuddyMood.Idle);
+        await Idle(150);
+        CluadexBuddy.SoundsOn = false;
+        buddy.AwayTick(TimeSpan.FromMinutes(5));
+        Check("away: with sound off she stays quiet", buddy.AwayCalls == 0, $"{buddy.AwayCalls}");
+        CluadexBuddy.SoundsOn = true;
+        buddy.AwayTick(TimeSpan.FromSeconds(20));
+        buddy.AwayTick(TimeSpan.FromMinutes(5));
+        await Idle(120);
+        Check("away: idle, she calls out", buddy.AwayCalls == 1 && CluadexBuddy.AwayLines.Contains(buddy.ClipShown), $"{buddy.AwayCalls} {buddy.ClipShown}");
+        buddy.AwayTick(TimeSpan.FromSeconds(20));
+        await Idle(120);
+        Check("away: nobody answered, so she sulks when the owner is back",
+              CluadexBuddy.SulkLines.Concat(CluadexBuddy.SulkClips).Contains(buddy.ClipShown), buddy.ClipShown);
+
+        // ---- the time of day
+        Check("time: good morning at 8", CluadexBuddy.GreetingsAt(TimeSpan.FromHours(8)).Contains("hi-morning"));
+        Check("time: good evening at 19", CluadexBuddy.GreetingsAt(TimeSpan.FromHours(19)).Contains("hi-evening"));
+        Check("time: \"it's late\" at 23 and at 2", CluadexBuddy.GreetingsAt(TimeSpan.FromHours(23)).Contains("night-late")
+                                                   && CluadexBuddy.GreetingsAt(TimeSpan.FromHours(2)).Contains("night-late"));
+        Check("time: a snack at lunch, not at 3 pm", CluadexBuddy.ExtrasAt(BuddyMood.Idle, new TimeSpan(12, 15, 0)).Contains("snack")
+                                                    && !CluadexBuddy.ExtrasAt(BuddyMood.Idle, TimeSpan.FromHours(15)).Contains("snack"));
+        Check("time: sleepy late at night", CluadexBuddy.ExtrasAt(BuddyMood.Idle, TimeSpan.FromHours(23.5)).Contains("sleepy-blink"));
+
+        // ---- the setting turns her sound off and on, live
+        var svm = MainVm.SettingsVM;
+        var prop = svm.GetType().GetProperty("BuddySounds")!;
+        bool was = (bool)prop.GetValue(svm)!;
+        prop.SetValue(svm, false);
+        Check("setting: sound off reaches her", !CluadexBuddy.SoundsOn);
+        prop.SetValue(svm, true);
+        Check("setting: sound on reaches her", CluadexBuddy.SoundsOn);
+        prop.SetValue(svm, was);
+        CluadexBuddy.SoundsOn = soundsWere;
+
+        // a clip that cannot play leaves her on the stills
+        CluadexBuddy.ClipsAllowed = false;
+        await Mood(BuddyMood.Working);
+        Check("clips off: no clip, the stills", buddy.ClipShown == "", buddy.ClipShown);
+        await Mood(BuddyMood.Idle);
+    }
+
+    /// <summary>Her speech bubble: it says the text, sits right of her face inside the window, a click closes it, and the
+    /// setting turns it off.</summary>
+    static async Task BubbleChecks()
+    {
+        MainVm.NavigateToCommand.Execute("Chat");
+        await Idle(150);
+        Invoke(MainWin, "ShowBuddyBubble", "buddy.tip.palette");
+        await Idle(300);
+        string said = ((CluadeX.MainWindow)MainWin).BuddyBubbleSaying;
+        Check("bubble: she says the tip", said.Length > 0 && said == CluadeX.Services.LocalizedResources.Instance["buddy.tip.palette"], said);
+        var bubble = (FrameworkElement)MainWin.FindName("BuddyBubble");
+        var root = (UIElement)RootVisual(MainWin);
+        Rect b = Bounds(bubble, root), her = Bounds((FrameworkElement)MainWin.FindName("BuddyHero"), root);
+        Check("bubble: right of her, beside her face, inside the window",
+              b.Left >= her.Left + her.Width * 0.6 && b.Top >= 0 && b.Bottom <= her.Top + her.Height * 0.6 && b.Right <= ((FrameworkElement)root).ActualWidth,
+              $"bubble {b.X:0},{b.Y:0} {b.Width:0}×{b.Height:0}; her {her.X:0},{her.Y:0} {her.Width:0}×{her.Height:0}");
+        FreezeVolatile();
+        SavePng(Snapshot(root, (int)MainWin.Width, (int)MainWin.Height), Path.Combine(OutRoot, "renders", "hero", "bubble.png"));
+        Invoke(MainWin, "HideBuddyBubble");
+        await Idle(400);
+        Check("bubble: it goes away", ((CluadeX.MainWindow)MainWin).BuddyBubbleSaying == "");
+
+        var svm = MainVm.SettingsVM;
+        bool was = (bool)svm.GetType().GetProperty("BuddyBubbles")!.GetValue(svm)!;
+        svm.GetType().GetProperty("BuddyBubbles")!.SetValue(svm, false);
+        bool speaks = (bool)Invoke(MainWin, "CanSpeak", false);
+        Check("bubble: the setting off keeps her quiet", !speaks);
+        svm.GetType().GetProperty("BuddyBubbles")!.SetValue(svm, was);
     }
 
     static Rect Bounds(FrameworkElement e, UIElement root) =>
