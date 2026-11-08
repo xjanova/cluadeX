@@ -144,6 +144,13 @@ public sealed class AgentRunScope
     /// <summary>The run's plan checklist (todo_write).</summary>
     public List<TodoItem> Todos { get; } = new();
 
+    /// <summary>The plan's scope tag as the model last gave it (first_task / continuation / new_task), or null.</summary>
+    public string? PlanScope { get; set; }
+    /// <summary>The model wrote or moved the plan in this run (wrap_up checks off only a plan this run worked on).</summary>
+    public bool PlanTouched { get; set; }
+    /// <summary>The plan came over from the chat's last turn with work left (PlanRecord.CarryNote tells the model).</summary>
+    public bool PlanCarried { get; set; }
+
     private readonly object _costLock = new();
     private decimal _costUsd;
 
@@ -165,6 +172,24 @@ public sealed class AgentRunScope
     /// <summary>Effort "auto": the agent loop's pick for its next request (low / medium / high / xhigh), read by the
     /// providers through <see cref="Models.EffortLevels.Effective"/>. Null = none picked (the provider's default).</summary>
     public string? StepEffort { get; set; }
+
+    /// <summary>The most effort this flow's requests may go out with, whatever the setting or the loop's pick — a
+    /// sub-agent's tier ceiling (cheap → low, mid → medium; <see cref="Agents.DispatchPolicy.EffortCapFor"/>). Null = no
+    /// ceiling. Read through <see cref="Models.EffortLevels.Effective"/>; the sub-agent's own loop never resets it.</summary>
+    public string? EffortCap { get; set; }
+
+    /// <summary>A sub-agent's tier ("cheap" / "mid" / "deep"; null = not a tiered sub-agent) and the model the run itself is
+    /// on — the Billing page prices this flow's tokens on that model too, and shows the difference as the routing saving
+    /// (<see cref="CostTrackingService.RecordUsage"/>).</summary>
+    public string? SubAgentTier { get; set; }
+    public string? TierRunModel { get; set; }
+
+    private decimal _routingSaved, _routingBaseline;
+    /// <summary>Of this flow's requests: the routing saving booked so far, and what they would have cost on the run's
+    /// model — taken back when the attempt fell short and climbed (it saved nothing: it was paid for twice).</summary>
+    public decimal RoutingSavedUsd { get { lock (_costLock) return _routingSaved; } }
+    public decimal RoutingBaselineUsd { get { lock (_costLock) return _routingBaseline; } }
+    public void AddRouting(decimal saved, decimal onRunModel) { lock (_costLock) { _routingSaved += saved; _routingBaseline += onRunModel; } }
 
     /// <summary>This turn's id and the agent loop's current step — what a restore point is named by.</summary>
     public string TurnId { get; } = DateTime.UtcNow.ToString("yyyyMMddHHmmss") + "-" + Guid.NewGuid().ToString("N")[..6];
@@ -241,6 +266,9 @@ public sealed class AgentRunScope
             TaskRequest = TaskRequest,
             ActiveSkillAllowedTools = ActiveSkillAllowedTools,
             StepEffort = StepEffort,
+            EffortCap = EffortCap,
+            SubAgentTier = SubAgentTier,
+            TierRunModel = TierRunModel,
             EffortWhy = EffortWhy,
         };
         foreach (var f in ExtraFolders) child.AddExtraFolder(f);

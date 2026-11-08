@@ -87,10 +87,12 @@ public partial class CodeAgentService
     /// <summary>What a sub-agent is doing, for the agent map: Phase "start" | "tool" | "result" | "done" | "failed" |
     /// "stopped". A "tool" with a <paramref name="CallId"/> is answered by a "result" with the same id, its
     /// <paramref name="Result"/> (trimmed) and <paramref name="Ok"/> — the agent's floating window lists both.
-    /// Raised in the run's own flow (AgentRunScope.Current is the run that spawned it).</summary>
+    /// Raised in the run's own flow (AgentRunScope.Current is the run that spawned it).
+    /// <paramref name="Tool"/>: the tool a "tool" phase runs (its avatar shows it). <paramref name="Tier"/>: "cheap" / "mid" /
+    /// "deep" when auto model chose it. <paramref name="Color"/>: a specialist's accent (its file's color).</summary>
     public sealed record SubAgentEvent(int Id, string Label, string Kind, string Task, string Phase, string Detail, int Steps,
         string? Model = null, decimal CostUsd = 0, string? WorkflowId = null, string? CallId = null, string? Result = null, bool Ok = true,
-        Agents.SubAgentControl? Control = null);
+        Agents.SubAgentControl? Control = null, string? Tool = null, string? Tier = null, string? Color = null);
 
     /// <summary>A tool result as the agent window shows it: at most this many characters.</summary>
     internal const int SubAgentEventResultChars = 2000;
@@ -102,10 +104,14 @@ public partial class CodeAgentService
     }
 
     /// <summary>How one sub-agent runs when the dispatcher starts it: its map id and label, kind, routed model, own scope
-    /// (its cost), its warm-start context; ReportOnDone = false for a fixer, whose "done" comes after the re-run.</summary>
+    /// (its cost), its warm-start context; ReportOnDone = false for a fixer, whose "done" comes after the re-run.
+    /// Tier: its tier when auto model chose one (shown on its node). Provider: another provider than the run's (a local
+    /// model for a cheap one). MaxSteps: its step budget (0 = <see cref="SubAgentMaxSteps"/>). Upgrade: the model and
+    /// provider its window's Upgrade moves it to.</summary>
     private sealed record SubAgentRunOptions(int Id, string Label, string Kind, string? Model, AgentRunScope? Scope,
         string? Warm = null, bool ReportOnDone = true, SubAgentThread? Thread = null, string? WorkflowId = null,
-        Agents.SubAgentControl? Control = null);
+        Agents.SubAgentControl? Control = null, SubAgentTier? Tier = null, string? Color = null,
+        Providers.IAiProvider? Provider = null, int MaxSteps = 0, Func<(string? Model, Providers.IAiProvider Provider)>? Upgrade = null);
 
     /// <summary>A sub-agent's conversation, so agent_spawn's continue_agent carries on with it. Finished: it ended with a
     /// report, so the conversation can take another message; one that failed mid-tool cannot.</summary>
@@ -116,6 +122,72 @@ public partial class CodeAgentService
         public List<NativeMessage> Messages { get; } = new();
         public bool Finished;
         public int Busy;
+        /// <summary>What it ran on last — a carried-on conversation stays there (its history belongs to that model).</summary>
+        public SubAgentTier Tier = SubAgentTier.Deep;
+        public string? Model;
+        public Providers.IAiProvider? Provider;
+    }
+
+    private Agents.TierHistory? _tierHistory;
+    /// <summary>How often each kind climbed from each tier (subagent-tiers.json in the data folder).</summary>
+    private Agents.TierHistory TierStats => LazyInitializer.EnsureInitialized(ref _tierHistory,
+        () => new Agents.TierHistory(SafeDataPath("subagent-tiers.json")));
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _tierBumps = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>A kind started one tier up because of its history is tried at its own tier every this many runs.</summary>
+    private const int ReprobeEvery = 5;
+
+    private string? SafeDataPath(string file)
+    {
+        try { return string.IsNullOrWhiteSpace(_settingsService.DataRoot) ? null : System.IO.Path.Combine(_settingsService.DataRoot, file); }
+        catch { return null; }
+    }
+
+    /// <summary>The tool calls an attempt made, as "read_file(src/A.cs)" — what the next tier gets told it already ran.</summary>
+    private static List<string> ToolCallsOf(IEnumerable<NativeMessage> messages)
+    {
+        var list = new List<string>();
+        foreach (var m in messages)
+            if (m.Role == "assistant")
+                foreach (var b in m.Content)
+                    if (b.Type == "tool_use" && !string.IsNullOrEmpty(b.Name))
+                        list.Add(b.Name + "(" + Shorten(FirstStringArg(b.Input), 100) + ")");
+        return list;
+    }
+
+    private static string FirstStringArg(System.Text.Json.JsonElement? input)
+    {
+        if (input is not { ValueKind: System.Text.Json.JsonValueKind.Object } o) return "";
+        foreach (var key in new[] { "path", "file_path", "pattern", "query", "command", "url" })
+            if (o.TryGetProperty(key, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String) return v.GetString() ?? "";
+        foreach (var p in o.EnumerateObject())
+            if (p.Value.ValueKind == System.Text.Json.JsonValueKind.String) return p.Value.GetString() ?? "";
+        return "";
+    }
+
+    private static string TierWord(SubAgentTier t, bool thai) => t switch
+    {
+        SubAgentTier.Cheap => thai ? "ประหยัด" : "cheap",
+        SubAgentTier.Mid => thai ? "กลาง" : "mid",
+        _ => thai ? "เต็มกำลัง" : "deep",
+    };
+
+    /// <summary>The local model a cheap read-only sub-agent may run on (Settings ▸ auto model ▸ local), already loaded and
+    /// able to run a tool loop; null = none (it goes to the API's cheap model).</summary>
+    private Providers.IAiProvider? LocalCheapProvider(SubAgentTier tier, bool canEdit)
+    {
+        var s = _settingsService.Settings;
+        if (!s.SubAgentLocalCheap || tier != SubAgentTier.Cheap || canEdit) return null;
+        bool runIsLocal = _providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        foreach (var t in new[] { AiProviderType.LlamaServer, AiProviderType.Ollama, AiProviderType.Local })
+        {
+            var p = _providerManager.GetProvider(t);
+            if (p == null || ReferenceEquals(p, _providerManager.ActiveProvider) || p.ProviderId != t.ToString()) continue;
+            bool ready, tools;
+            try { ready = p.IsReady; tools = p.SupportsNativeToolUse; } catch { continue; }
+            var size = Agents.ModelCapability.ForLocal(LocalModelNameFor(p)).Tier;
+            if (Agents.DispatchPolicy.UseLocalForCheap(true, tier, canEdit, runIsLocal, ready, tools, size)) return p;
+        }
+        return null;
     }
 
     /// <summary>A run's sub-agent conversations: they end with the run.</summary>
@@ -173,27 +245,106 @@ public partial class CodeAgentService
         await gate.WaitAsync(ct);
         try
         {
+            var s = _settingsService.Settings;
             var kind = Agents.DispatchPolicy.KindOf(canEdit);
-            string? model = dispatch.Legacy ? null : RoutedModel(kind);
-            var child = parent?.CreateChild();
-            if (child != null && !dispatch.Legacy && kind == Agents.SubAgentKind.Explore) child.StepEffort = "low";
-            AgentRunScope.Enter(child ?? parent);
-            Agents.SubAgentModel.Use(model);
+            // Tier routing (Settings ▸ Agent ▸ auto model): the model and effort the work needs. A carried-on conversation
+            // keeps the tier it ended on — its history belongs to that model.
+            bool auto = !dispatch.Legacy && s.SubAgentAutoModel;
+            var tier = earlier?.Tier ?? (auto
+                ? Agents.DispatchPolicy.TierFor(kind, Agents.DispatchPolicy.ParseTier(request.Tier), dispatch.BudgetCapped)
+                : SubAgentTier.Deep);
+            // A kind that kept climbing from this tier starts one up (doing it twice costs more than once on the stronger
+            // model); now and then it is tried at its own tier again, so a better cheap model can win the kind back.
+            var proposedTier = tier;
+            if (auto && earlier == null)
+            {
+                var (runs, climbed) = TierStats.Of(request.Type, tier);
+                var start = Agents.DispatchPolicy.StartTier(tier, runs, climbed, dispatch.BudgetCapped);
+                if (start != tier && _tierBumps.AddOrUpdate(Agents.TierHistory.KeyOf(request.Type, tier), 1, (_, v) => v + 1) % ReprobeEvery != 0)
+                {
+                    _debugLog?.Info("Dispatch", $"{request.Type}: climbed {climbed} of the last {runs} times from {tier} — starting at {start}");
+                    tier = start;
+                }
+            }
+            var startTier = tier;
             if (!dispatch.Legacy) parent?.MarkStrategy((int)Agents.DispatchStrategy.FanOut);
             string warm = dispatch.Legacy || earlier != null ? "" : WarmContext();
-            if (!dispatch.Legacy && !canEdit && QuotaRecentlyExhausted && _settingsService.Settings.AutoFailoverOnQuota)
+            if (!dispatch.Legacy && !canEdit && QuotaRecentlyExhausted && s.AutoFailoverOnQuota)
+            {
+                AgentRunScope.Enter(parent?.CreateChild() ?? parent);
                 return await RunSubAgentOnClaudeDevAsync(BriefOf(request, warm), false, ct);
-            int n = earlier?.Id ?? Interlocked.Increment(ref _subAgentCounter);
+            }
             bool thai = _localizationService.CurrentLanguage == "th";
             bool specialist = !string.IsNullOrWhiteSpace(request.Persona);
-            string label = (thai ? $"เอเจนต์ย่อย #{n}" : $"Sub-agent #{n}") + (specialist ? $" ({request.Type})" : "");
-            var thread = earlier ?? new SubAgentThread { Request = request, Id = n };
-            if (parent != null) _subAgentThreads.GetOrCreateValue(parent)[n] = thread;
-            // Its own stop (the owner's, from its window) and message queue: linked to the run's token, never the reverse.
-            using var control = new Agents.SubAgentControl(ct, canEdit);
-            string? report = await RunSubAgentCoreAsync(request, control.Token,
-                new SubAgentRunOptions(n, label, request.Type, model, child, warm, Thread: thread, Control: control));
-            return report == null || parent == null || !thread.Finished ? report : $"{report}\n\n(Sub-agent {n}: agent_spawn with continue_agent {n} carries on with it.)";
+            string? runModel = RunModel() is { Length: > 0 } rm ? rm : null;
+
+            for (int climbs = 0; ; climbs++)
+            {
+                // ─── this attempt: its model, provider, effort ceiling, step budget ───
+                string? model;
+                Providers.IAiProvider? onProvider = null;
+                if (earlier?.Provider is { } kept) { onProvider = kept; model = earlier.Model; }
+                else if (dispatch.Legacy) model = null;
+                else if (!auto) model = Agents.DispatchPolicy.ManualModelFor(kind, runModel, s.SubAgentModelOverrides);
+                else if (LocalCheapProvider(tier, canEdit) is { } local)
+                {
+                    onProvider = local;
+                    model = LocalModelNameFor(local) is { Length: > 0 } ln ? System.IO.Path.GetFileName(ln) : null;
+                }
+                else model = Agents.DispatchPolicy.ModelForTier(tier, kind, _providerManager.ActiveProviderType, runModel,
+                    request.Model, s.SubAgentModelOverrides, dispatch.BudgetCapped);
+
+                var child = parent?.CreateChild();
+                if (child != null && auto)
+                {
+                    child.EffortCap = Agents.DispatchPolicy.EffortCapFor(tier);
+                    child.SubAgentTier = tier.ToString().ToLowerInvariant();
+                    child.TierRunModel = runModel;
+                }
+                AgentRunScope.Enter(child ?? parent);
+                // A local model reads its own configuration: no API model override goes with it.
+                Agents.SubAgentModel.Use(onProvider != null ? null : model);
+
+                int n = climbs == 0 && earlier != null ? earlier.Id : Interlocked.Increment(ref _subAgentCounter);
+                string label = (thai ? $"เอเจนต์ย่อย #{n}" : $"Sub-agent #{n}") + (specialist ? $" ({request.Type})" : "")
+                               + (climbs > 0 ? $" ↑{TierWord(tier, thai)}" : "");
+                var thread = climbs == 0 && earlier != null ? earlier : new SubAgentThread { Request = request, Id = n };
+                thread.Tier = tier; thread.Model = model; thread.Provider = onProvider;
+                if (parent != null) _subAgentThreads.GetOrCreateValue(parent)[n] = thread;
+                if (climbs > 0) _debugLog?.Info("Dispatch", $"sub-agent climbs to {tier} ({model ?? "run model"}) after a weak report");
+                _debugLog?.Info("Dispatch", $"sub-agent #{n} · {(auto ? "tier " + tier : "auto model off")} · {model ?? "run model"}"
+                    + (onProvider != null ? " (local)" : "") + $" · effort cap {child?.EffortCap ?? "none"}");
+
+                // Its own stop (the owner's, from its window) and message queue: linked to the run's token, never the reverse.
+                using var control = new Agents.SubAgentControl(ct, canEdit) { CanUpgrade = auto && tier != SubAgentTier.Deep };
+                int maxSteps = auto ? Agents.DispatchPolicy.MaxStepsFor(tier, SubAgentMaxSteps) : SubAgentMaxSteps;
+                Func<(string? Model, Providers.IAiProvider Provider)>? upgrade = auto
+                    ? () => (Agents.DispatchPolicy.ModelForTier(SubAgentTier.Deep, kind, _providerManager.ActiveProviderType, runModel,
+                                 request.Model, s.SubAgentModelOverrides), _providerManager.ActiveProvider)
+                    : null;
+                string? report = await RunSubAgentCoreAsync(request, control.Token,
+                    new SubAgentRunOptions(n, label, request.Type, model, child, warm, Thread: thread, Control: control,
+                        Tier: auto ? tier : null, Color: request.Color, Provider: onProvider, MaxSteps: maxSteps, Upgrade: upgrade));
+
+                // ─── a weak report climbs one tier (cheap → mid → deep), in a fresh conversation ───
+                var now = CurrentDispatch();
+                if (report != null && Agents.DispatchPolicy.ShouldEscalate(thread.Tier, report, climbs, auto && s.SubAgentEscalate,
+                        control.StopRequested, now.BudgetCapped || !now.SubAgents, earlier != null))
+                {
+                    _costTrackingService?.RecordTierClimb(thread.Tier.ToString().ToLowerInvariant(), child);
+                    tier = Agents.DispatchPolicy.NextTier(thread.Tier);
+                    OnAgentStatus?.Invoke(thai ? $"{label}: รายงานยังไม่พอ — ให้โมเดล{TierWord(tier, thai)}ลองต่อ"
+                                               : $"{label}: the report fell short — trying again on the {TierWord(tier, thai)} tier");
+                    // What the weak attempt already did goes along, so the stronger one does not read it all again.
+                    string carry = Agents.DispatchPolicy.CarryOver(report, ToolCallsOf(thread.Messages));
+                    if (carry.Length > 0)
+                        request = request with { Context = string.IsNullOrWhiteSpace(request.Context) ? carry : request.Context.TrimEnd() + "\n\n" + carry };
+                    continue;
+                }
+                if (auto && earlier == null && proposedTier != SubAgentTier.Deep)
+                    TierStats.Record(request.Type, startTier, climbs > 0);
+                return report == null || parent == null || !thread.Finished ? report : $"{report}\n\n(Sub-agent {n}: agent_spawn with continue_agent {n} carries on with it.)";
+            }
         }
         catch (OperationCanceledException)
         {
@@ -226,9 +377,15 @@ public partial class CodeAgentService
 
     private async Task<string?> RunSubAgentCoreAsync(SubAgentRequest request, CancellationToken ct, SubAgentRunOptions? opts)
     {
-        var provider = _providerManager.ActiveProvider;
+        // A cheap one may run on the local model already loaded (SubAgentRunOptions.Provider); otherwise the run's.
+        var provider = opts?.Provider ?? _providerManager.ActiveProvider;
         if (provider == null || !provider.SupportsNativeToolUse || !provider.IsReady)
-            return null;
+        {
+            if (opts?.Provider == null) return null;
+            provider = _providerManager.ActiveProvider;   // the local one went away since it was picked: the run's model
+            if (provider == null || !provider.SupportsNativeToolUse || !provider.IsReady) return null;
+            opts = opts! with { Provider = null };
+        }
 
         // A slot on this machine, across every chat. Only sub-agents queue here: the main loops keep moving.
         await Agents.AgentLoad.EnterAsync(ct);
@@ -315,7 +472,7 @@ public partial class CodeAgentService
 
         OnAgentStatus?.Invoke($"{label}: {(thai ? "เริ่มงาน" : "starting")} · {Shorten(task, 60)}");
         var ev = new SubAgentEvent(n, label, opts?.Kind ?? type, Shorten(task, 160), "start", "", 0, opts?.Model, WorkflowId: opts?.WorkflowId,
-            Control: opts?.Control);
+            Control: opts?.Control, Tier: opts?.Tier?.ToString().ToLowerInvariant(), Color: opts?.Color);
         if (opts?.Control != null) opts.Control.StartEvent = ev with { Control = null };
         decimal Cost() => opts?.Scope?.CostUsd ?? 0;
         _subAgentLast.Value = ev;
@@ -323,9 +480,32 @@ public partial class CodeAgentService
         _debugLog?.Info("SubAgent", $"{label} ({type}) start: {Shorten(task, 120)} · {tools.Count} tools");
 
         int timeoutSec = _settingsService.Settings.InteractiveRequestTimeoutSeconds;
-        for (int step = 1; step <= SubAgentMaxSteps; step++)
+        int maxSteps = opts?.MaxSteps is > 0 and var ms ? ms : SubAgentMaxSteps;
+        for (int step = 1; step <= maxSteps; step++)
         {
             ct.ThrowIfCancellationRequested();
+            // The owner pressed Upgrade in its window: from this step on, the run's own model, effort and step budget.
+            // Its conversation carries over (this one agent's small cache is written once on the new model).
+            if (opts?.Control?.TakeUpgrade() == true && opts.Upgrade != null)
+            {
+                var (upModel, upProvider) = opts.Upgrade();
+                if (upProvider is { SupportsNativeToolUse: true, IsReady: true })
+                {
+                    provider = upProvider;
+                    Agents.SubAgentModel.Use(upModel);
+                    if (opts.Scope != null) { opts.Scope.EffortCap = null; opts.Scope.SubAgentTier = "deep"; }
+                    if (opts.Thread != null) { opts.Thread.Tier = SubAgentTier.Deep; opts.Thread.Model = upModel; opts.Thread.Provider = null; }
+                    // thinking blocks are signed by the model that wrote them: another model refuses them
+                    foreach (var m in messages) m.Content.RemoveAll(b => b.Type is "thinking" or "redacted_thinking");
+                    maxSteps = Math.Max(maxSteps, SubAgentMaxSteps);
+                    ev = ev with { Model = upModel, Tier = "deep" };
+                    if (opts.Control != null) opts.Control.StartEvent = ev with { Control = null };
+                    _subAgentLast.Value = ev;
+                    _debugLog?.Info("SubAgent", $"{label}: upgraded by the owner → {upModel ?? "run model"}");
+                    RaiseSubAgent(ev with { Phase = "tool", Detail = thai ? $"↑ อัปเกรดเป็น {upModel ?? "โมเดลหลัก"}" : $"↑ upgraded to {upModel ?? "the run's model"}",
+                        Steps = step, CostUsd = Cost() });
+                }
+            }
             // What the owner typed into its window since the last step: read now, and its row says so.
             if (opts?.Control is { PendingNotes: > 0 } ctl)
             {
@@ -337,7 +517,7 @@ public partial class CodeAgentService
             }
             // The run's spend guard holds for its sub-agents too: past the budget, report now instead of spending on.
             bool overBudget = step > 1 && opts != null && RunBudgetSpent();
-            bool lastStep = step == SubAgentMaxSteps || overBudget;
+            bool lastStep = step == maxSteps || overBudget;
             if (lastStep)
                 messages[^1].Content.Add(new ContentBlock { Type = "text", Text = overBudget
                     ? "[The run's spend budget is used: no more tools. Write your report now with what you have.]"
@@ -403,9 +583,9 @@ public partial class CodeAgentService
                     var call = new ToolCall { ToolName = runName, Type = c.type.Value, Arguments = ParseJsonInputToArgs(c.tc.Input) };
                     string doing = GetToolStatusMessage(c.tc.Name, call.Arguments);
                     OnAgentStatus?.Invoke($"{label}: {doing}");
-                    RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step, CostUsd = Cost(), CallId = c.tc.Id });
+                    RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step, CostUsd = Cost(), CallId = c.tc.Id, Tool = runName });
                     var r = await _agentToolService.ExecuteToolAsync(call, ct);
-                    string text = r.Success ? (r.Output ?? "") : $"Error: {r.Error ?? r.Output}";
+                    string text = r.Success ? (r.Output ?? "") : $"Error: {AgentToolService.ModelText(r)}";
                     RaiseSubAgent(ev with { Phase = "result", Detail = "", Steps = step, CostUsd = Cost(), CallId = c.tc.Id,
                         Result = ResultForMap(text), Ok = r.Success });
                     if (text.Length > SubAgentMaxResultChars)
@@ -433,7 +613,7 @@ public partial class CodeAgentService
         }
         if (opts?.Control != null) ReportUnreadNotes(opts.Control, thai);
         RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done",
-            Detail = thai ? "ใช้ขั้นครบโดยไม่ได้สรุป" : "step budget used, no report", Steps = SubAgentMaxSteps, CostUsd = Cost() });
+            Detail = thai ? "ใช้ขั้นครบโดยไม่ได้สรุป" : "step budget used, no report", Steps = maxSteps, CostUsd = Cost() });
         return thai ? "(เอเจนต์ย่อยใช้ขั้นตอนครบโดยไม่ได้สรุป)" : "(the sub-agent used its step budget without a report)";
     }
 

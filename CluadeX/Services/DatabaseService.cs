@@ -296,13 +296,19 @@ public sealed class DatabaseService : IDisposable
             bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0 && !userFiles;
             // …and an agent map card its nodes, the same way, so a reopened chat shows the card again.
             bool agentMap = msg.AgentNodes != null;
-            object toolName = userFiles ? AttachmentsTag : userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value;
-            object toolSummary = agentMap ? (object?)msg.AgentMapHeader ?? DBNull.Value : (object?)msg.ToolSummary ?? DBNull.Value;
+            // …and the plan card its steps, scope and stop (Agents.PlanRecord); its text stays for older builds.
+            bool plan = !agentMap && msg.PlanItems is { Count: > 0 };
+            object toolName = userFiles ? AttachmentsTag : userImages ? AttachedImagesTag : agentMap ? AgentMapTag
+                : plan ? PlanTag : (object?)msg.ToolName ?? DBNull.Value;
+            object toolSummary = agentMap ? (object?)msg.AgentMapHeader ?? DBNull.Value
+                : plan ? msg.PlanElapsed ?? ""
+                : (object?)msg.ToolSummary ?? DBNull.Value;
             object toolOutput = userFiles
                 ? System.Text.Json.JsonSerializer.Serialize(new AttachmentsRow { Images = msg.AttachedImages, Files = msg.AttachedFiles })
                 : userImages
                 ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
                 : agentMap ? System.Text.Json.JsonSerializer.Serialize(msg.AgentNodes!.Select(AgentNodeRow.From).ToList())
+                : plan ? Agents.PlanRecord.FromCard(msg.PlanItems!, msg.PlanScope, msg.PlanStopped).ToJson()
                 : (object?)msg.ToolOutput ?? DBNull.Value;
             rows.Add(new MessageRow(msg.Id, (int)msg.Role, msg.Content ?? "", msg.Timestamp.ToString("o"),
                 toolName, toolSummary, toolOutput, msg.ToolSuccess ? 1 : 0, msg.HasError ? 1 : 0, i));
@@ -528,6 +534,22 @@ public sealed class DatabaseService : IDisposable
                     loaded.ToolSummary = null;
                     loaded.ToolOutput = null;
                 }
+                if (loaded.ToolName == PlanTag)
+                {
+                    // A card read back never runs: its step in progress shows as stopped.
+                    if (Agents.PlanRecord.FromJson(loaded.ToolOutput) is { } plan)
+                    {
+                        var rows = plan.ToRows(live: false);
+                        loaded.PlanScope = plan.Scope;
+                        loaded.PlanStopped = plan.Stopped;
+                        loaded.PlanElapsed = loaded.ToolSummary ?? "";
+                        loaded.PlanHeader = Agents.PlanRecord.EndedHeader(rows, plan.Stopped, k => LocalizedResources.Instance[k]);
+                        loaded.PlanItems = rows;
+                    }
+                    loaded.ToolName = null;
+                    loaded.ToolSummary = null;
+                    loaded.ToolOutput = null;
+                }
                 session.Messages.Add(loaded);
             }
         }
@@ -549,20 +571,24 @@ public sealed class DatabaseService : IDisposable
 
     /// <summary>tool_name of an agent map card whose tool_output holds its nodes (JSON) and tool_summary its header.</summary>
     private const string AgentMapTag = "@agentmap";
+    private const string PlanTag = "@plan";
 
     /// <summary>An agent map node as saved. A node saved while it was still running (the app closed mid-run) comes
-    /// back as stopped — nothing is running it any more.</summary>
+    /// back as stopped — nothing is running it any more. Color, Tier and Model came later (2026-11-08): a row saved
+    /// before them reads back empty, as it showed then.</summary>
     private sealed record AgentNodeRow(int Id, string Label, string Kind, string Task, string State, string Action,
-        int Steps, int ToolCalls, string Elapsed)
+        int Steps, int ToolCalls, string Elapsed, string? Color = null, string? Tier = null, string? Model = null)
     {
         public static AgentNodeRow From(AgentNode n) =>
-            new(n.Id, n.Label, n.Kind, n.Task, n.State, n.Action, n.Steps, n.ToolCalls, n.Elapsed);
+            new(n.Id, n.Label, n.Kind, n.Task, n.State, n.Action, n.Steps, n.ToolCalls, n.Elapsed,
+                n.Color.Length > 0 ? n.Color : null, n.Tier.Length > 0 ? n.Tier : null, n.Model.Length > 0 ? n.Model : null);
 
         public AgentNode ToNode() => new()
         {
             Id = Id, Label = Label ?? "", Kind = Kind ?? "", Task = Task ?? "",
             State = State == "running" ? "stopped" : State ?? "done",
             Action = Action ?? "", Steps = Steps, ToolCalls = ToolCalls, Elapsed = Elapsed ?? "",
+            Color = Color ?? "", Tier = Tier ?? "", Model = Model ?? "",
         };
     }
 

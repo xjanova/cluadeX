@@ -95,7 +95,7 @@ public class ChatMessage : INotifyPropertyChanged
     public bool IsStreaming
     {
         get => _isStreaming;
-        set { if (_isStreaming != value) { _isStreaming = value; OnPropertyChanged(); } }
+        set { if (_isStreaming != value) { _isStreaming = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanExplainSimply)); } }
     }
 
     public List<CodeBlock> CodeBlocks { get; set; } = new();
@@ -309,6 +309,12 @@ public class ChatMessage : INotifyPropertyChanged
     public string PlanHeader { get => _planHeader; set { _planHeader = value; OnPropertyChanged(); OnPropertyChanged(nameof(PlanProgress)); } }
     private string _planElapsed = "";
     public string PlanElapsed { get => _planElapsed; set { _planElapsed = value; OnPropertyChanged(); } }
+    private string? _planScope;
+    /// <summary>What the request was to the chat when the plan was written: first_task, continuation or new_task
+    /// (PlanOps.Scope) — the card's chip. Null = the model did not say.</summary>
+    public string? PlanScope { get => _planScope; set { _planScope = value; OnPropertyChanged(); } }
+    /// <summary>Its run was stopped with a step in progress (saved with the card: a reloaded one still says "หยุดไว้").</summary>
+    public bool PlanStopped { get; set; }
 
     // ─── Tool Call Grouping ───
     /// <summary>Whether this ToolAction is collapsed into a group summary.</summary>
@@ -343,13 +349,14 @@ public class ChatMessage : INotifyPropertyChanged
     //     shows is built on first use by the chat page (it holds the services), from the row's own data. ───
 
     public const string WorkflowTag = "cx:workflow", SplitsTag = "cx:splits", NextStepTag = "cx:nextstep", NoticeTag = "cx:notice",
-        WatchTag = "cx:watch";
+        WatchTag = "cx:watch", TurnChangesTag = "cx:changes";
 
     /// <summary>Builds a row's view (set by the chat page). Null result = the row shows its text.</summary>
     public static Func<ChatMessage, ViewModels.WorkflowCard?>? WorkflowCardFor;
     public static Func<ChatMessage, System.Collections.ObjectModel.ObservableCollection<ChatSession>?>? SplitChipsFor;
     public static Func<ChatMessage, ViewModels.NextStepView?>? NextStepFor;
     public static Func<ChatMessage, ViewModels.WatchCardView?>? WatchCardFor;
+    public static Func<ChatMessage, ViewModels.TurnChangesView?>? TurnChangesFor;
 
     private ViewModels.WorkflowCard? _workflow;
     /// <summary>A workflow card (ToolOutput = the workflow's id).</summary>
@@ -374,6 +381,16 @@ public class ChatMessage : INotifyPropertyChanged
     public bool IsWatch => ToolName == WatchTag;
     public bool ShowsWatchCard => IsWatch && WatchCard != null;
 
+    private ViewModels.TurnChangesView? _turnChanges;
+    /// <summary>What a turn changed (ToolOutput = the files as JSON, TurnChanges.ToJson): built on first use, so a row
+    /// that is not one costs nothing; the card is a ContentControl that only draws when this is not null.</summary>
+    public ViewModels.TurnChangesView? TurnChanges => _turnChanges ??= ToolName == TurnChangesTag ? TurnChangesFor?.Invoke(this) : null;
+    public bool IsTurnChanges => ToolName == TurnChangesTag;
+    public bool ShowsTurnChanges => IsTurnChanges && TurnChanges != null;
+
+    /// <summary>"Explain simply" on the hover strip: a finished reply with words in it.</summary>
+    public bool CanExplainSimply => Role == MessageRole.Assistant && !IsStreaming && !string.IsNullOrWhiteSpace(Content);
+
     /// <summary>A notice the model also sees on its next turn (a background command or a split chat finished).</summary>
     public bool IsNotice => ToolName == NoticeTag;
 
@@ -382,7 +399,7 @@ public class ChatMessage : INotifyPropertyChanged
     public bool ShowsNextStep => IsNextStep && NextStep != null;
 
     /// <summary>A row with its own card instead of the chat bubble.</summary>
-    public bool IsOrchestrationCard => ShowsWorkflowCard || IsSplitChips || ShowsNextStep || ShowsWatchCard;
+    public bool IsOrchestrationCard => ShowsWorkflowCard || IsSplitChips || ShowsNextStep || ShowsWatchCard || ShowsTurnChanges;
     /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:
     /// a reloaded group shows its merged output instead).</summary>
     public System.Collections.ObjectModel.ObservableCollection<ToolStepView> GroupSteps { get; } = new();

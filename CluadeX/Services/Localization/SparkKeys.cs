@@ -12,12 +12,58 @@ internal static class SparkKeys
             ["th"] = "รันโมเดลเขียนโค้ดระดับ 120B บนโต๊ะของคุณเอง — หน่วยความจำ 128 GB โค้ดไม่ออกนอกบริษัท ไม่มีค่า API รายเดือน",
         },
         ["spark.chip"] = new() { ["en"] = "DGX Spark", ["th"] = "DGX Spark" },
-        ["spark.chipTip"] = new()
+        // ── Link status of the remembered Spark (title-bar chip, its tooltip, the window's header) ──
+        ["spark.link.chip"] = new() { ["en"] = "DGX Spark · {0}", ["th"] = "DGX Spark · {0}" },
+        ["spark.link.checking"] = new() { ["en"] = "connecting…", ["th"] = "กำลังเชื่อมต่อ…" },
+        ["spark.link.online"] = new() { ["en"] = "online", ["th"] = "ออนไลน์" },
+        ["spark.link.offline"] = new() { ["en"] = "not reachable", ["th"] = "ติดต่อไม่ได้" },
+        ["spark.link.tip.notConfigured"] = new()
         {
-            ["en"] = "Use an NVIDIA DGX Spark on your network as CluadeX's model",
-            ["th"] = "ใช้ NVIDIA DGX Spark ในเครือข่ายของคุณเป็นโมเดลของ CluadeX",
+            ["en"] = "No DGX Spark set up yet — click to type its name or IP address and connect.",
+            ["th"] = "ยังไม่ได้ตั้งค่า DGX Spark — คลิกเพื่อพิมพ์ชื่อเครื่องหรือ IP แล้วกดเชื่อมต่อ",
         },
-        ["spark.paletteSubtitle"] = new() { ["en"] = "Connect an NVIDIA DGX Spark", ["th"] = "เชื่อมต่อ NVIDIA DGX Spark" },
+        ["spark.link.tip.checking"] = new()
+        {
+            ["en"] = "Connecting to the DGX Spark at {0}…",
+            ["th"] = "กำลังเชื่อมต่อ DGX Spark ที่ {0}…",
+        },
+        ["spark.link.tip.online"] = new()
+        {
+            ["en"] = "The DGX Spark at {0} is online (Ollama {1}), but CluadeX is using another model — click to pick one on the Spark.",
+            ["th"] = "DGX Spark ที่ {0} ออนไลน์อยู่ (Ollama {1}) แต่ CluadeX ยังใช้โมเดลอื่น — คลิกเพื่อเลือกโมเดลบน Spark",
+        },
+        ["spark.link.tip.inUse"] = new()
+        {
+            ["en"] = "Connected: CluadeX is using {0} on the DGX Spark at {1} (Ollama {2}).",
+            ["th"] = "เชื่อมต่อแล้ว: CluadeX กำลังใช้ {0} บน DGX Spark ที่ {1} (Ollama {2})",
+        },
+        ["spark.link.tip.unreachable"] = new()
+        {
+            ["en"] = "{0} Click to connect again.",
+            ["th"] = "{0} — คลิกเพื่อเชื่อมต่ออีกครั้ง",
+        },
+        // ── Why the Spark didn't answer (from the socket error; the exception itself goes to the Debug Log) ──
+        ["spark.reason.hostNotFound"] = new()
+        {
+            ["en"] = "This PC can't find a machine named {0} on the network — type the Spark's IP address instead (on the Spark: hostname -I).",
+            ["th"] = "พีซีเครื่องนี้หาเครื่องชื่อ {0} ในเครือข่ายไม่เจอ — ลองพิมพ์ IP ของ Spark แทน (ดูได้บน Spark ด้วยคำสั่ง hostname -I)",
+        },
+        ["spark.reason.refused"] = new()
+        {
+            ["en"] = "{0} is on the network, but nothing answers on Ollama's port 11434. On the Spark, start Ollama and let it listen on the network (OLLAMA_HOST=0.0.0.0).",
+            ["th"] = "เจอเครื่อง {0} ในเครือข่ายแล้ว แต่ไม่มี Ollama ตอบที่พอร์ต 11434 — บน Spark ให้เปิด Ollama และตั้งให้รับจากเครือข่าย (OLLAMA_HOST=0.0.0.0)",
+        },
+        ["spark.reason.timeout"] = new()
+        {
+            ["en"] = "{0} didn't answer in time — the Spark may be off or asleep, on another network, or a firewall blocks port 11434.",
+            ["th"] = "{0} ไม่ตอบกลับภายในเวลาที่กำหนด — Spark อาจปิดหรือพักเครื่องอยู่ อยู่คนละเครือข่าย หรือไฟร์วอลล์บล็อกพอร์ต 11434",
+        },
+        ["spark.reason.notOllama"] = new()
+        {
+            ["en"] = "Something answered on port 11434 at {0}, but not the way Ollama does — check that it is Ollama running there.",
+            ["th"] = "มีบางอย่างตอบกลับที่พอร์ต 11434 ของ {0} แต่ไม่ใช่แบบที่ Ollama ตอบ — ตรวจว่าที่นั่นเป็น Ollama จริง",
+        },
+        ["spark.paletteSubtitle"] =new() { ["en"] = "Connect an NVIDIA DGX Spark", ["th"] = "เชื่อมต่อ NVIDIA DGX Spark" },
         ["spark.how"] = new()
         {
             ["en"] = "The Spark serves the model with Ollama; CluadeX on this PC drives it over your local network. Models download onto the Spark — nothing large comes to this PC.",

@@ -60,6 +60,12 @@ public sealed class BillingSavingsViewModel : ViewModelBase
     /// <summary>One dispatch strategy over the selected dates (CostTrackingService.StrategyBreakdown): runs, success share,
     /// cost per run, time per run — the numbers DispatchPolicy's thresholds are tuned from.</summary>
     public sealed record StrategyRow(string Name, string Runs, string Success, string CostPerRun, string TimePerRun, string Total, double Fraction);
+    /// <summary>One sub-agent tier over the selected dates (CostTrackingService.TierBreakdown): what it cost, what the same
+    /// work would have cost on the run's own model, and the difference.</summary>
+    public sealed record TierLine(string Name, string Requests, string Paid, string OnRunModel, string Saved, double Fraction, string Climbs = "0")
+    {
+        public bool HasClimbs => Climbs != "0";
+    }
     public sealed record LinePoint(double X, double Y, string Tip, Brush? Color = null);
     public sealed record ProviderLine(string Label, Brush Color, PointCollection Points, IReadOnlyList<LinePoint> Dots);
     public sealed record RangeChoice(string Key, string Label, int? Days)
@@ -110,6 +116,8 @@ public sealed class BillingSavingsViewModel : ViewModelBase
     public ObservableCollection<SavingRow> Savings { get; } = new();
     public ObservableCollection<StrategyRow> Strategies { get; } = new();
     public bool HasStrategies => Strategies.Count > 0;
+    public ObservableCollection<TierLine> Tiers { get; } = new();
+    public bool HasTiers => Tiers.Count > 0;
     public ObservableCollection<ProviderChoice> Providers { get; } = new();
     public ObservableCollection<ProviderLine> ProviderLines { get; } = new();
     public ObservableCollection<MonthlyTotal> MonthlyTotals { get; } = new();
@@ -328,7 +336,7 @@ public sealed class BillingSavingsViewModel : ViewModelBase
         var a = values.ToList();
         return new(day, a.Sum(d => d.Usd), a.Sum(d => d.BaselineUsd), a.Sum(d => d.Requests), a.Sum(d => d.SavedCacheUsd),
             a.Sum(d => d.SavedToolSearchUsd), a.Sum(d => d.SavedCompactionUsd), a.Sum(d => d.SavedBatchUsd),
-            a.Sum(d => d.InputTokens), a.Sum(d => d.CacheReadTokens), a.Sum(d => d.OutputTokens));
+            a.Sum(d => d.InputTokens), a.Sum(d => d.CacheReadTokens), a.Sum(d => d.OutputTokens), a.Sum(d => d.SavedRoutingUsd));
     }
 
     private Models.ProviderSpendSettings? Billing(string key) => _settings.Settings.ProviderSpending?.GetValueOrDefault(key);
@@ -373,7 +381,8 @@ public sealed class BillingSavingsViewModel : ViewModelBase
         BuildCharts();
 
         var parts = new[] { ("usage.byCache", _chartDays.Sum(d => d.SavedCacheUsd)), ("usage.byToolSearch", _chartDays.Sum(d => d.SavedToolSearchUsd)),
-            ("usage.byCompaction", _chartDays.Sum(d => d.SavedCompactionUsd)), ("usage.byBatch", _chartDays.Sum(d => d.SavedBatchUsd)) };
+            ("usage.byCompaction", _chartDays.Sum(d => d.SavedCompactionUsd)), ("usage.byBatch", _chartDays.Sum(d => d.SavedBatchUsd)),
+            ("usage.byRouting", _chartDays.Sum(d => d.SavedRoutingUsd)) };
         decimal top = parts.Max(p => Math.Max(0, p.Item2));
         Savings.Clear();
         foreach (var (key, usd) in parts) Savings.Add(new SavingRow(L(key), Usd(usd), top > 0 ? (double)(Math.Max(0, usd) / top) : 0));
@@ -390,6 +399,15 @@ public sealed class BillingSavingsViewModel : ViewModelBase
                 topPerRun > 0 ? (double)(r.UsdPerRun / topPerRun) : 0));
         }
         OnPropertyChanged(nameof(HasStrategies));
+
+        Tiers.Clear();
+        var tiers = _cost.TierBreakdown(_from, _to);
+        decimal topTier = tiers.Count == 0 ? 0 : tiers.Max(r => r.RunModelUsd);
+        foreach (var r in tiers)
+            Tiers.Add(new TierLine(L("usage.tier." + r.Tier), r.Requests.ToString("N0", CultureInfo.InvariantCulture),
+                Usd(r.Usd), Usd(r.RunModelUsd), Usd(r.SavedUsd), topTier > 0 ? (double)(r.Usd / topTier) : 0,
+                r.Climbs.ToString("N0", CultureInfo.InvariantCulture)));
+        OnPropertyChanged(nameof(HasTiers));
         BuildMonthlyTotals(selected.Select(p => p.Provider).ToList());
     }
 

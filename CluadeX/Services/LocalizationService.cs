@@ -25,6 +25,7 @@ public class LocalizationService
                                       Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys,
                                       Localization.StarterKeys.Keys,
                                       Localization.AutoCommentKeys.Keys,
+                                      Localization.RunBadgeKeys.Keys,
                                       Localization.GitPanelKeys.Keys,
                                       Localization.OrchestrationKeys.Keys,
                                       Localization.DesignKeys.Keys, Localization.SkillPickKeys.Keys,
@@ -34,7 +35,7 @@ public class LocalizationService
                                       Localization.LspKeys.Keys,
                                       Localization.PopOutKeys.Keys,
                                       Localization.ModelPickerKeys.Keys,
-                                      Localization.MediaKeys.Keys })
+                                      Localization.MediaKeys.Keys, Localization.VibeKeys.Keys, Localization.PlanKeys.Keys, Localization.TierKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

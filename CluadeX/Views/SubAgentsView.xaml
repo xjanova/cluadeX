@@ -288,6 +288,23 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- Tier: which model class it runs on under auto model (empty = its file's tier) -->
+                            <Border Padding="12" CornerRadius="6"
+                                    Background="{DynamicResource State.Fill.Faint}"
+                                    BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
+                                    Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="{services:Loc subag.tierTitle}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                               FontSize="9" FontWeight="Bold"
+                                               Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,6"/>
+                                    <ComboBox ItemsSource="{Binding TierChoices}" DisplayMemberPath="Label" SelectedValuePath="Key"
+                                              SelectedValue="{Binding SelectedTierOverride}" Style="{StaticResource ModernComboBox}"
+                                              HorizontalAlignment="Left" MinWidth="220"/>
+                                    <TextBlock Text="{services:Loc subag.tierDesc}" FontSize="11" Margin="0,6,0,0"
+                                               Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
+
                             <!-- Allowed tools -->
                             <Border Padding="12" CornerRadius="6"
                                     Background="{DynamicResource State.Fill.Faint}"

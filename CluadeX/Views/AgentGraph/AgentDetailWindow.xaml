@@ -52,15 +52,14 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Grid Width="34" Height="34" Margin="0,0,10,0" VerticalAlignment="Center">
-                    <Ellipse Fill="{DynamicResource Accent.1.Tint}"/>
-                    <TextBlock Text="{Binding Node.KindGlyph}" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="{DynamicResource Accent.1}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Grid Width="34" Height="34" Margin="0,0,10,0" VerticalAlignment="Center" DataContext="{Binding Node}">
+                    <Ellipse Style="{StaticResource AgentAvatar.Disc}"/>
+                    <TextBlock Text="{Binding AvatarGlyph, NotifyOnTargetUpdated=True}" FontSize="15" Style="{StaticResource AgentAvatar.Glyph}"/>
                     <!-- a ring turns round it while it works -->
                     <Ellipse Margin="-3" StrokeThickness="2" StrokeDashArray="9 100" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5"
-                             Stroke="{DynamicResource Accent.1}" IsHitTestVisible="False">
+                             IsHitTestVisible="False">
                         <Ellipse.Style>
-                            <Style TargetType="Ellipse">
+                            <Style TargetType="Ellipse" BasedOn="{StaticResource AgentAvatar.Ring}">
                                 <Setter Property="views:Motion.Loop">
                                     <Setter.Value>
                                         <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
@@ -70,7 +69,7 @@
                                 </Setter>
                                 <Setter Property="Visibility" Value="Collapsed"/>
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Node.IsRunning}" Value="True">
+                                    <DataTrigger Binding="{Binding IsRunning}" Value="True">
                                         <Setter Property="Visibility" Value="Visible"/>
                                         <Setter Property="views:Motion.LoopOn" Value="True"/>
                                     </DataTrigger>
@@ -85,6 +84,10 @@
                                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                         <Border CornerRadius="6" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center" Background="{DynamicResource Surface.Raised}">
                             <TextBlock Text="{Binding Node.Kind}" FontSize="10" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"/>
+                        </Border>
+                        <Border CornerRadius="6" Padding="6,1" Margin="6,0,0,0" VerticalAlignment="Center" Background="{DynamicResource Accent.2.Tint}"
+                                DataContext="{Binding Node}" Visibility="{Binding HasTier, Converter={StaticResource Vis}}">
+                            <TextBlock Style="{StaticResource AgentTier.Text}"/>
                         </Border>
                     </StackPanel>
                     <Border x:Name="StatePill" HorizontalAlignment="Left" CornerRadius="8" Padding="8,1" Margin="0,4,0,0">
@@ -189,6 +192,7 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBox x:Name="DraftBox" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" Padding="8,6" FontSize="12.5"
                                      VerticalContentAlignment="Center" IsEnabled="{Binding CanSend}" ToolTip="{services:Loc agentdetail.send.tip}"
@@ -214,7 +218,16 @@
                             </TextBlock>
                             <Button x:Name="SendButton" Grid.Column="1" Command="{Binding SendCommand}" Style="{StaticResource PrimaryButton}"
                                     Margin="6,0,0,0" Padding="12,5" Content="{services:Loc agentdetail.send}"/>
-                            <Button x:Name="StopButton" Grid.Column="2" Command="{Binding StopCommand}" Style="{StaticResource DangerButton}"
+                            <!-- a cheap/mid agent can be moved up to the run's own model from its next step -->
+                            <Button x:Name="UpgradeButton" Grid.Column="2" Command="{Binding UpgradeCommand}" Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0" Padding="10,5" ToolTip="{services:Loc agentdetail.upgrade.tip}"
+                                    Visibility="{Binding CanUpgrade, Converter={StaticResource Vis}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBlock Text="{services:Loc agentdetail.upgrade}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="StopButton" Grid.Column="3" Command="{Binding StopCommand}" Style="{StaticResource DangerButton}"
                                     Margin="6,0,0,0" Padding="10,5" ToolTip="{services:Loc agentdetail.stop.tip}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>

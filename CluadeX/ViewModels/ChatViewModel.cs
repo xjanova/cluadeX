@@ -97,6 +97,7 @@ public partial class ChatViewModel : ViewModelBase
             if (!SetProperty(ref _userInput, value)) return;
             if (string.IsNullOrEmpty(value)) OnInputCleared();
             else NoteUserActivity();   // typing: the screen is in use (ScreenGuard)
+            if (_buddyMood == Services.BuddyMood.Sleep) NudgeBuddy();   // she wakes when the owner types
         }
     }
 
@@ -615,7 +616,7 @@ public partial class ChatViewModel : ViewModelBase
     public int VisibleSessionsCount => VisibleSessions.Count;
 
     /// <summary>A chat with a run going, waiting for the owner, or finished while the owner looked elsewhere.</summary>
-    private bool IsActiveChat(ChatSession s) => RunOf(s) != null || s.RunStatus is "working" or "waiting" or "done";
+    private bool IsActiveChat(ChatSession s) => RunOf(s) != null || s.RunStatus is "working" or "waiting" or "done" or "failed";
 
     /// <summary>The active chats the sidebar was last built with: rebuilt only when that set changes.</summary>
     private string _activeChatsShown = "";
@@ -1155,6 +1156,8 @@ public partial class ChatViewModel : ViewModelBase
         };
         // Which chat split off which, and which finished split chats were put away (chat-links.json beside codex.db).
         ChatLinkStore.Current ??= new ChatLinkStore(settingsService.DataRoot);
+        // Chats with a run going (live-runs.json beside codex.db): one CluadeX never saw end shows as stopped after a restart.
+        InitLiveRuns(settingsService.DataRoot);
         ChatLinkStore.Current.Changed += id => App.Current?.Dispatcher.BeginInvoke(() => OnSplitLinkChanged(id));
         _providerManager = providerManager;
         _agentService = agentService;
@@ -1303,6 +1306,7 @@ public partial class ChatViewModel : ViewModelBase
             // The run's own plan, read in its flow (each run has one) before hopping to the UI thread.
             var todoRun = Cur;
             var items = _agentToolService.TodoItems.ToList();
+            string? planScope = todoRun?.Scope.PlanScope;
             App.Current?.Dispatcher.BeginInvoke(() =>
             {
                 RememberPlan(todoRun, items);   // the plan window (and a finished run's plan) read it from here
@@ -1335,6 +1339,18 @@ public partial class ChatViewModel : ViewModelBase
                 // The same plan with a step further: its rows change state in place, so the card plays the change.
                 if (_todoListMsg != null && Messages.Contains(_todoListMsg))
                     planItems = PlanItemView.Reconcile(_todoListMsg.PlanItems, planItems);
+                // A plan carried over from the last turn goes on in its own card when this list continues it (the same
+                // steps, or the same with steps added after them). A different list is a new plan: it gets a new card and
+                // the old one stays in the chat as it was.
+                if (_todoListMsg == null && todoRun?.CarriedPlanMsg is { PlanItems: { } carriedRows } carried && Messages.Contains(carried)
+                    && planScope != Services.Agents.PlanOps.NewTask
+                    && !IsNewPlan(carriedRows.Select(r => r.Text).ToList(), planItems.Select(p => p.Text).ToList()))
+                {
+                    _todoListMsg = carried;
+                    todoRun.TodoMsg = carried;
+                    carried.PlanStopped = false;
+                    planItems = PlanItemView.Reconcile(carried.PlanItems, planItems);
+                }
                 int planDone = planItems.Count(p => p.IsDone);
                 // A change queued just before the run ended lands after EndTurn: it must not bring "working" back.
                 string planHeader = PlanCardHeader(planDone, planItems.Count, running: todoRun == null || _runs.Contains(todoRun));
@@ -1342,7 +1358,8 @@ public partial class ChatViewModel : ViewModelBase
                 if (_todoListMsg == null || !Messages.Contains(_todoListMsg))
                 {
                     _todoListMsg = new ChatMessage { Role = MessageRole.System, Content = sb.ToString().TrimEnd(),
-                                                     PlanItems = planItems, PlanHeader = planHeader, PlanElapsed = planElapsed };
+                                                     PlanItems = planItems, PlanHeader = planHeader, PlanElapsed = planElapsed,
+                                                     PlanScope = planScope };
                     if (todoRun != null) todoRun.TodoMsg = _todoListMsg;
                     Messages.Add(_todoListMsg);
                 }
@@ -1352,6 +1369,7 @@ public partial class ChatViewModel : ViewModelBase
                     _todoListMsg.PlanItems = planItems;
                     _todoListMsg.PlanHeader = planHeader;
                     _todoListMsg.PlanElapsed = planElapsed;
+                    _todoListMsg.PlanScope = planScope ?? _todoListMsg.PlanScope;
                     // Keep the plan near the action: if newer messages buried it, move it to the bottom.
                     if (Messages.IndexOf(_todoListMsg) < Messages.Count - 3)
                     {
@@ -1486,10 +1504,12 @@ public partial class ChatViewModel : ViewModelBase
             RefreshUsageStrip();
             ProbeOllamaForChatBox();   // throttled to 30 s: lists Ollama's models in the model box while it answers
             CheckSidebarDay();
+            RefreshBuddy();   // pleased → idle → asleep as time passes
         };
         _memoryTimer.Start();
         InitControls(activation);
         InitSidePanel();
+        InitVibe();
         InitCharacter();
         InitStarters();
         HookPendingImages();
@@ -1574,6 +1594,7 @@ public partial class ChatViewModel : ViewModelBase
                 }
                 finally { _bulkSessions = false; }
                 RebuildVisibleSessions();
+                MarkOrphanRuns();
                 // Split links of chats that are gone (deleted, or dropped above as empty) are forgotten.
                 ChatLinkStore.Current?.Prune(savedSessions.Select(s => s.Id));
                 // Projects the saved chats worked in join the project list (the agent opens them by name).
@@ -4958,6 +4979,7 @@ public partial class ChatViewModel : ViewModelBase
             // A screenshot (or any image a tool returned) shows on its own row as a thumbnail — by its saved file
             // path only; the image bytes never reach the chat or codex.db. Such a row is never merged into a group.
             string? thumbnail = ToolThumbnailPath(toolResult);
+            NoteTurnChange(run, toolResult, runFolder ?? windowFolder, thumbnail);
 
             // ─── Tool call grouping: collapse consecutive same-category calls ───
             string category = GetToolCategory(toolResult.ToolName);
@@ -5275,7 +5297,11 @@ public partial class ChatViewModel : ViewModelBase
     {
         if (run.TodoMsg?.PlanItems is not { Count: > 0 } items) return;
         foreach (var item in items) item.IsLive = false;
-        run.TodoMsg.PlanHeader = PlanCardHeader(items.Count(p => p.IsDone), items.Count, running: false);
+        // Stopped by the owner with a step in progress: "หยุดไว้ (2/6)", and the card is saved as stopped.
+        run.TodoMsg.PlanStopped = run.Stopped && items.Any(p => p.IsActive);
+        run.TodoMsg.PlanHeader = run.TodoMsg.PlanStopped
+            ? Services.Agents.PlanRecord.EndedHeader(items, stopped: true, Loc)
+            : PlanCardHeader(items.Count(p => p.IsDone), items.Count, running: false);
         run.TodoMsg.PlanElapsed = PlanElapsedText(run.Stopwatch.Elapsed);
     }
 

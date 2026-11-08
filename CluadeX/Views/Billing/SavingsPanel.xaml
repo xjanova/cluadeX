@@ -299,6 +299,37 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <!-- Sub-agent tiers: paid, what the run's own model would have charged, the difference -->
+                    <StackPanel Margin="0,14,0,0" Visibility="{Binding HasTiers, Converter={StaticResource BoolVis}}">
+                        <TextBlock Text="{services:Loc usage.tierTitle}" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                        <TextBlock Text="{services:Loc usage.tierDesc}" Style="{StaticResource Note}" Margin="0,2,0,0"/>
+                        <ItemsControl ItemsSource="{Binding Tiers}" Margin="0,4,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,6,0,2">
+                                        <DockPanel>
+                                            <TextBlock Text="{Binding Saved}" FontSize="12.5" FontWeight="SemiBold" DockPanel.Dock="Right" Foreground="{DynamicResource Status.Success}"/>
+                                            <TextBlock Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                                        </DockPanel>
+                                        <Border Height="4" CornerRadius="2" Margin="0,5,0,4" Background="{DynamicResource State.Fill.Faint}">
+                                            <Border CornerRadius="2" Background="{DynamicResource Accent.2}" RenderTransformOrigin="0,0.5">
+                                                <Border.RenderTransform>
+                                                    <ScaleTransform ScaleX="{Binding Fraction}"/>
+                                                </Border.RenderTransform>
+                                            </Border>
+                                        </Border>
+                                        <TextBlock Style="{StaticResource Note}">
+                                            <Run Text="{services:Loc usage.tierRequests}"/><Run Text=" "/><Run Text="{Binding Requests, Mode=OneWay}"/><Run Text=" · "/><Run Text="{services:Loc usage.tierPaid}"/><Run Text=" "/><Run Text="{Binding Paid, Mode=OneWay}"/><Run Text=" · "/><Run Text="{services:Loc usage.tierOnRunModel}"/><Run Text=" "/><Run Text="{Binding OnRunModel, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Style="{StaticResource Note}" Foreground="{DynamicResource Status.Warning}"
+                                                   Visibility="{Binding HasClimbs, Converter={StaticResource BoolVis}}">
+                                            <Run Text="{services:Loc usage.tierClimbs}"/><Run Text=" "/><Run Text="{Binding Climbs, Mode=OneWay}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </Grid>

@@ -1011,7 +1011,8 @@ public static class ChatToolBridge
         name = PlanToolName,
         description = "Your plan, shown to the user as a live checklist pinned under the latest message in CluadeX. Send the WHOLE "
             + "list once with todos; then step along with advance=true (finish the current item, start the next) or done + start "
-            + "(1-based step numbers). One item in_progress at a time.",
+            + "(1-based step numbers). One item in_progress at a time. Give scope (first_task / continuation / new_task) with each "
+            + "new whole list.",
         inputSchema = (object)new
         {
             type = "object",
@@ -1030,6 +1031,7 @@ public static class ChatToolBridge
                 advance = new { type = "boolean", description = "Finish the item in progress and start the next pending one" },
                 done = new { type = "array", items = new { type = "integer" }, description = "Step numbers to mark finished" },
                 start = new { type = "integer", description = "Step number to start" },
+                scope = new { type = "string", @enum = new[] { "first_task", "continuation", "new_task" }, description = "With a new whole list: what this request is to the chat" },
             },
         },
     }).Concat(OrchestrationToolModule.Schemas().Select(s => (object)new

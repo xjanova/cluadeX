@@ -26,6 +26,7 @@ internal static class DispatchWire
         section("offline · dispatch policy (effort → fan-out, workers, speculative fix)");
         Policy(check);
         Routing(check);
+        Tiers(check);
         Helpers(check);
         Ledger(check);
 
@@ -162,6 +163,178 @@ internal static class DispatchWire
         SubAgent().GetAwaiter().GetResult();
         check("routing", "the sub-agent's model override holds in its own flow and is gone for the caller",
             inside == "claude-haiku-5-5" && SubAgentModel.Override == null && SubAgentModel.Pick("claude-opus-5-5") == "claude-opus-5-5", inside ?? "");
+    }
+
+    // Sub-agent tiers (owner 2026-11-08: "ทำทั้ง 6 ข้อ" · "ระวังเรื่องเลือก โมเดลผิด แต่แรกแทนที่จะประหยัดกลับต้องทำงานสองรอบ").
+    static void Tiers(Action<string, string, bool, string> check)
+    {
+        const AiProviderType A = AiProviderType.Anthropic;
+        check("tier", "kind decides when nothing is asked: read-only cheap, editing deep; an ask wins; near the budget all cheap",
+            DispatchPolicy.TierFor(SubAgentKind.Explore, null, false) == SubAgentTier.Cheap
+            && DispatchPolicy.TierFor(SubAgentKind.Code, null, false) == SubAgentTier.Deep
+            && DispatchPolicy.TierFor(SubAgentKind.Code, SubAgentTier.Mid, false) == SubAgentTier.Mid
+            && DispatchPolicy.TierFor(SubAgentKind.Code, SubAgentTier.Deep, true) == SubAgentTier.Cheap, "");
+        check("tier", "tier text parses (cheap/mid/deep, low/medium/high); unknown = none",
+            DispatchPolicy.ParseTier(" MID ") == SubAgentTier.Mid && DispatchPolicy.ParseTier("high") == SubAgentTier.Deep
+            && DispatchPolicy.ParseTier("low") == SubAgentTier.Cheap && DispatchPolicy.ParseTier("turbo") == null && DispatchPolicy.ParseTier(null) == null, "");
+        check("tier", "cheap → Haiku, mid → Sonnet, deep → the run's model (Opus run)",
+            DispatchPolicy.ModelForTier(SubAgentTier.Cheap, SubAgentKind.Explore, A, "claude-opus-5-5") == "claude-haiku-5-5"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Mid, SubAgentKind.Code, A, "claude-opus-5-5") == "claude-sonnet-5-5"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Deep, SubAgentKind.Code, A, "claude-opus-5-5") == "claude-opus-5-5"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Deep, SubAgentKind.Explore, A, "claude-opus-5-5") == "claude-opus-5-5", "");
+        check("tier", "cheap/mid never go above the run's model (a Haiku run keeps mid on Haiku)",
+            DispatchPolicy.ModelForTier(SubAgentTier.Mid, SubAgentKind.Code, A, "claude-haiku-5-5") == "claude-haiku-5-5"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Mid, SubAgentKind.Code, AiProviderType.OpenAI, "gpt-6-luna") == "gpt-6-luna"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Mid, SubAgentKind.Code, AiProviderType.OpenAI, "gpt-6-astra") == "gpt-6.1-sol", "");
+        check("tier", "the agent file's model wins (alias or the provider's own id); another provider's id is ignored",
+            DispatchPolicy.ModelForTier(SubAgentTier.Cheap, SubAgentKind.Explore, A, "claude-opus-5-5", "sonnet") == "claude-sonnet-5-5"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Mid, SubAgentKind.Code, A, "claude-opus-5-5", "claude-fable-5-1") == "claude-fable-5-1"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Cheap, SubAgentKind.Explore, A, "claude-opus-5-5", "gpt-6-sol") == "claude-haiku-5-5", "");
+        check("tier", "near the budget the file's model is not used (it stays cheap)",
+            DispatchPolicy.ModelForTier(SubAgentTier.Cheap, SubAgentKind.Explore, A, "claude-opus-5-5", "opus", null, budgetCapped: true) == "claude-haiku-5-5", "");
+        var ov = new Dictionary<string, string> { ["cheap"] = "claude-sonnet-5-5", ["mid"] = " " };
+        check("tier", "Settings' tier override stands as written; a blank one is ignored; explore's override applies to cheap read-only",
+            DispatchPolicy.ModelForTier(SubAgentTier.Cheap, SubAgentKind.Explore, A, "claude-opus-5-5", null, ov) == "claude-sonnet-5-5"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Mid, SubAgentKind.Code, A, "claude-opus-5-5", null, ov) == "claude-sonnet-5-5"
+            && DispatchPolicy.ModelForTier(SubAgentTier.Cheap, SubAgentKind.Explore, A, "claude-opus-5-5", null,
+                new Dictionary<string, string> { ["explore"] = "claude-sonnet-5-5" }) == "claude-sonnet-5-5", "");
+        check("tier", "auto model off: the per-kind override, else the run's model (no routing down)",
+            DispatchPolicy.ManualModelFor(SubAgentKind.Explore, "claude-opus-5-5") == "claude-opus-5-5"
+            && DispatchPolicy.ManualModelFor(SubAgentKind.Explore, "claude-opus-5-5", new Dictionary<string, string> { ["explore"] = "claude-haiku-5-5" }) == "claude-haiku-5-5"
+            && DispatchPolicy.ManualModelFor(SubAgentKind.Code, "") == null, "");
+        check("tier", "local models / CLIs are not routed (null = the loaded / logged-in model)",
+            DispatchPolicy.ModelForTier(SubAgentTier.Cheap, SubAgentKind.Explore, AiProviderType.LlamaServer, "") == null, "");
+
+        check("tier-effort", "cheap caps effort at low, mid at medium, deep none; the cap never raises; auto under a cap = the cap",
+            DispatchPolicy.EffortCapFor(SubAgentTier.Cheap) == "low" && DispatchPolicy.EffortCapFor(SubAgentTier.Mid) == "medium"
+            && DispatchPolicy.EffortCapFor(SubAgentTier.Deep) == null
+            && EffortLevels.Capped("max", "low") == "low" && EffortLevels.Capped("low", "medium") == "low"
+            && EffortLevels.Capped("auto", "medium") == "medium" && EffortLevels.Capped("high", null) == "high", "");
+        var capScope = new AgentRunScope("t", null) { EffortCap = "low" };
+        AgentRunScope.Enter(capScope);
+        string? capped;
+        try { capped = EffortLevels.CappedHere("xhigh"); }
+        finally { AgentRunScope.Enter(null); }
+        check("tier-effort", "a per-message effort is held under the flow's cap (and untouched outside it)",
+            capped == "low" && EffortLevels.CappedHere("xhigh") == "xhigh" && EffortLevels.CappedHere(null) == null, capped ?? "null");
+        check("tier-steps", "steps per tier: cheap 16, mid 24, deep the whole budget (never above it, never 0)",
+            DispatchPolicy.MaxStepsFor(SubAgentTier.Cheap, 30) == 16 && DispatchPolicy.MaxStepsFor(SubAgentTier.Mid, 30) == 24
+            && DispatchPolicy.MaxStepsFor(SubAgentTier.Deep, 30) == 30 && DispatchPolicy.MaxStepsFor(SubAgentTier.Cheap, 10) == 10
+            && DispatchPolicy.MaxStepsFor(SubAgentTier.Deep, 0) == 1, "");
+
+        check("tier-climb", "weak: empty, an engine placeholder, very short, short + 'could not find' (en/th)",
+            DispatchPolicy.ReportLooksWeak("") && DispatchPolicy.ReportLooksWeak("(the sub-agent wrote no report)")
+            && DispatchPolicy.ReportLooksWeak("done") && DispatchPolicy.ReportLooksWeak("I could not find where the cache is configured in this project, sorry.")
+            && DispatchPolicy.ReportLooksWeak("ค้นหาทั่วโปรเจกต์แล้วแต่หาไม่เจอว่าตั้งค่าแคชไว้ตรงไหน ลองค้นหลายคำแล้ว"), "");
+        string longReport = string.Concat(Enumerable.Repeat("The cache is set in src/Cache.cs line 40, read by the loader. ", 12)) + "Old key was not found.";
+        check("tier-climb", "not weak: short but concrete (a path / file:line / code), long, or a stop marker '[…]'",
+            !DispatchPolicy.ReportLooksWeak("Found at src/Bar.cs:42") && !DispatchPolicy.ReportLooksWeak("`Foo()` in Bar.cs")
+            && !DispatchPolicy.ReportLooksWeak(longReport) && !DispatchPolicy.ReportLooksWeak("[stopped by the owner]"), "");
+        check("tier-climb", "climbs only below deep, under 2 climbs, with escalation on, not stopped, not near the budget, not a continuation",
+            DispatchPolicy.ShouldEscalate(SubAgentTier.Cheap, "", 0, true, false, false, false)
+            && !DispatchPolicy.ShouldEscalate(SubAgentTier.Deep, "", 0, true, false, false, false)
+            && !DispatchPolicy.ShouldEscalate(SubAgentTier.Mid, "", DispatchPolicy.MaxEscalations, true, false, false, false)
+            && !DispatchPolicy.ShouldEscalate(SubAgentTier.Cheap, "", 0, false, false, false, false)
+            && !DispatchPolicy.ShouldEscalate(SubAgentTier.Cheap, "", 0, true, true, false, false)
+            && !DispatchPolicy.ShouldEscalate(SubAgentTier.Cheap, "", 0, true, false, true, false)
+            && !DispatchPolicy.ShouldEscalate(SubAgentTier.Cheap, "", 0, true, false, false, true)
+            && !DispatchPolicy.ShouldEscalate(SubAgentTier.Cheap, "Found at src/Bar.cs:42", 0, true, false, false, false), "");
+        check("tier-climb", "next tier: cheap → mid → deep → deep",
+            DispatchPolicy.NextTier(SubAgentTier.Cheap) == SubAgentTier.Mid && DispatchPolicy.NextTier(SubAgentTier.Mid) == SubAgentTier.Deep
+            && DispatchPolicy.NextTier(SubAgentTier.Deep) == SubAgentTier.Deep, "");
+        var calls = Enumerable.Range(1, 30).Select(i => $"grep q{i}").ToList();
+        string carry = DispatchPolicy.CarryOver("it said little", calls);
+        check("tier-climb", "the next tier gets the weak attempt's calls (newest 25) and its report; nothing → empty",
+            carry.Contains("grep q30") && carry.Contains("grep q6\n") && !carry.Contains("grep q5\n") && carry.Contains("it said little")
+            && DispatchPolicy.CarryOver("", Array.Empty<string>()) == "", carry.Length.ToString());
+
+        check("tier-learn", "a kind that climbed in ≥40% of ≥4 runs starts one tier up; fewer runs, deep, or the budget guard: unchanged",
+            DispatchPolicy.StartTier(SubAgentTier.Cheap, 5, 2, false) == SubAgentTier.Mid
+            && DispatchPolicy.StartTier(SubAgentTier.Cheap, 5, 1, false) == SubAgentTier.Cheap
+            && DispatchPolicy.StartTier(SubAgentTier.Cheap, 3, 3, false) == SubAgentTier.Cheap
+            && DispatchPolicy.StartTier(SubAgentTier.Mid, 4, 4, false) == SubAgentTier.Deep
+            && DispatchPolicy.StartTier(SubAgentTier.Cheap, 10, 10, true) == SubAgentTier.Cheap, "");
+        string histPath = Path.Combine(Path.GetTempPath(), "cx-tiers-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            var hist = new TierHistory(histPath);
+            for (int i = 0; i < 25; i++) hist.Record("Explore", SubAgentTier.Cheap, i % 2 == 0);
+            hist.Record("explore", SubAgentTier.Deep, true);
+            var reread = new TierHistory(histPath).Of("EXPLORE", SubAgentTier.Cheap);
+            check("tier-learn", "history keeps the last 20 per kind+tier, case-insensitive, survives a restart; deep is not recorded",
+                reread.Runs == TierHistory.Window && reread.Climbs == 10 && new TierHistory(histPath).Of("explore", SubAgentTier.Deep).Runs == 0,
+                $"{reread.Runs}/{reread.Climbs}");
+            File.WriteAllText(histPath, "{ not json");
+            check("tier-learn", "a broken history file reads as empty (no crash)", new TierHistory(histPath).Of("explore", SubAgentTier.Cheap).Runs == 0, "");
+        }
+        finally { try { File.Delete(histPath); } catch { } }
+
+        check("tier-local", "a loaded local model takes cheap read-only work only: on, cheap, no edits, run on an API, ready, tools, 7B+",
+            DispatchPolicy.UseLocalForCheap(true, SubAgentTier.Cheap, false, false, true, true, ModelCapability.Tier.Capable)
+            && !DispatchPolicy.UseLocalForCheap(false, SubAgentTier.Cheap, false, false, true, true, ModelCapability.Tier.Capable)
+            && !DispatchPolicy.UseLocalForCheap(true, SubAgentTier.Mid, false, false, true, true, ModelCapability.Tier.Capable)
+            && !DispatchPolicy.UseLocalForCheap(true, SubAgentTier.Cheap, true, false, true, true, ModelCapability.Tier.Capable)
+            && !DispatchPolicy.UseLocalForCheap(true, SubAgentTier.Cheap, false, true, true, true, ModelCapability.Tier.Capable)
+            && !DispatchPolicy.UseLocalForCheap(true, SubAgentTier.Cheap, false, false, false, true, ModelCapability.Tier.Capable)
+            && !DispatchPolicy.UseLocalForCheap(true, SubAgentTier.Cheap, false, false, true, false, ModelCapability.Tier.Capable)
+            && !DispatchPolicy.UseLocalForCheap(true, SubAgentTier.Cheap, false, false, true, true, ModelCapability.Tier.Small), "");
+
+        // the Upgrade button: once, only while it can climb
+        using (var ctl = new SubAgentControl(CancellationToken.None) { CanUpgrade = true })
+        {
+            bool first = ctl.RequestUpgrade(), second = ctl.RequestUpgrade(), pending = ctl.UpgradeRequested;
+            bool took = ctl.TakeUpgrade(), tookAgain = ctl.TakeUpgrade();
+            check("tier-upgrade", "Upgrade: the first press asks, a second does nothing; the engine takes it once and it cannot climb again",
+                first && !second && pending && took && !tookAgain && !ctl.CanUpgrade && !ctl.RequestUpgrade(), "");
+        }
+        using (var deepCtl = new SubAgentControl(CancellationToken.None))
+            check("tier-upgrade", "an agent already on deep cannot be upgraded", !deepCtl.RequestUpgrade(), "");
+        var node = new AgentNode { Id = 1, Kind = "explore", State = "running" };
+        node.Control = new SubAgentControl(CancellationToken.None) { CanUpgrade = true };
+        node.Tier = "cheap";
+        node.CurrentTool = "grep";
+        bool upShown = node.CanUpgrade, glyphTool = node.AvatarGlyph == ToolLook.Of("grep").Glyph;
+        node.State = "done";
+        check("tier-upgrade", "the node: Upgrade shows while a cheap agent runs; the avatar is its tool's glyph, its kind's once it ended",
+            upShown && glyphTool && !node.CanUpgrade && node.AvatarGlyph == node.KindGlyph && node.CurrentTool == "", node.AvatarGlyph);
+        check("avatar", "colour by kind: explore blue, general cyan, worker mint, fixer amber, reviewer violet; a specialist's own colour",
+            new AgentNode { Kind = "explore" }.ColorKey == "blue" && new AgentNode { Kind = "" }.ColorKey == "cyan"
+            && new AgentNode { Kind = "worker" }.ColorKey == "mint" && new AgentNode { Kind = "fixer" }.ColorKey == "amber"
+            && new AgentNode { Kind = "reviewer" }.ColorKey == "violet" && new AgentNode { Kind = "security-auditor", Color = "red" }.ColorKey == "red"
+            && new AgentNode { Kind = "security-auditor" }.ColorKey == "magenta", "");
+
+        // the savings ledger: by tier, and a climbed attempt counts as a loss (net savings)
+        var cost = new CostTrackingService();
+        var runScope = new AgentRunScope("t", null);
+        var cheap = runScope.CreateChild();
+        cheap.SubAgentTier = "cheap"; cheap.TierRunModel = "claude-opus-5-5";
+        AgentRunScope.Enter(cheap);
+        try { cost.RecordUsage("claude-haiku-5-5", 20_000, 2_000); }
+        finally { AgentRunScope.Enter(null); }
+        var t1 = cost.TierBreakdown(DateTime.Today, DateTime.Today).FirstOrDefault(r => r.Tier == "cheap");
+        decimal savedDay = cost.Between(DateTime.Today, DateTime.Today).Sum(d => d.SavedRoutingUsd);
+        check("tier-cost", "a cheap request books what the run's model would have cost; the saving is the difference",
+            t1 is { Requests: 1 } && t1.RunModelUsd > t1.Usd && t1.SavedUsd > 0 && cheap.RoutingSavedUsd == t1.SavedUsd && savedDay == t1.SavedUsd,
+            t1 == null ? "none" : $"paid {t1.Usd} on-run {t1.RunModelUsd} saved {t1.SavedUsd} day {savedDay}");
+        cost.RecordTierClimb("cheap", cheap);
+        var t2 = cost.TierBreakdown(DateTime.Today, DateTime.Today).First(r => r.Tier == "cheap");
+        decimal savedAfter = cost.Between(DateTime.Today, DateTime.Today).Sum(d => d.SavedRoutingUsd);
+        check("tier-cost", "it fell short and climbed: its saving is taken back and its cost is a loss (net negative), one climb counted",
+            t2.Climbs == 1 && t2.SavedUsd == -cheap.CostUsd && savedAfter == -cheap.CostUsd, $"row {t2.SavedUsd} day {savedAfter} cost {cheap.CostUsd}");
+        var deepScope = runScope.CreateChild();
+        deepScope.SubAgentTier = "deep"; deepScope.TierRunModel = "claude-opus-5-5";
+        AgentRunScope.Enter(deepScope);
+        try { cost.RecordUsage("claude-opus-5-5", 1_000, 100); }
+        finally { AgentRunScope.Enter(null); }
+        var t3 = cost.TierBreakdown(DateTime.Today, DateTime.Today).FirstOrDefault(r => r.Tier == "deep");
+        check("tier-cost", "deep on the run's own model saves nothing (and rows come cheap → deep)",
+            t3 is { Requests: 1, SavedUsd: 0 } && cost.TierBreakdown(DateTime.Today, DateTime.Today).Select(r => r.Tier).SequenceEqual(new[] { "cheap", "deep" }), "");
+        var dayRow = new DailyUsage { SavedRoutingUsd = 0.25m, ByTier = new() { ["mid"] = new TierUsage { Requests = 2, Usd = 0.1m, RunModelUsd = 0.4m, Climbs = 1 } } };
+        var dayBack = JsonSerializer.Deserialize<DailyUsage>(JsonSerializer.Serialize(dayRow));
+        check("tier-cost", "the tier split survives the ledger's JSON", dayBack is { SavedRoutingUsd: 0.25m } && dayBack.ByTier?["mid"] is { Requests: 2, Climbs: 1, RunModelUsd: 0.4m }, "");
+        check("tier-budget", "near the budget the decision says so (sub-agents then run cheap)",
+            DispatchPolicy.Decide(Base("medium") with { RunSpentUsd = 1.95m }).BudgetCapped
+            && !DispatchPolicy.Decide(Base("medium")).BudgetCapped, "");
     }
 
     static void Helpers(Action<string, string, bool, string> check)

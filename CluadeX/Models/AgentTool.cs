@@ -352,6 +352,10 @@ public class TodoItem
 }
 
 /// <summary>One sub-agent to run: agent_spawn (Type explore | general) or subagent_invoke (Type = the specialist's
-/// name, with its Persona and AllowedTools). <paramref name="ContinueId"/>: a sub-agent of this run to carry on with.</summary>
+/// name, with its Persona and AllowedTools). <paramref name="ContinueId"/>: a sub-agent of this run to carry on with.
+/// <paramref name="Tier"/>: cheap / mid / deep — what model and effort it runs on (agent_spawn's tier, a specialist's
+/// file; null = by its kind). <paramref name="Model"/>: a specialist file's own model. <paramref name="Color"/>: its
+/// accent on the agent map.</summary>
 public sealed record SubAgentRequest(string Task, string Context, string Type, string? Persona = null,
-    IReadOnlyCollection<string>? AllowedTools = null, string? Pieces = null, int? ContinueId = null);
+    IReadOnlyCollection<string>? AllowedTools = null, string? Pieces = null, int? ContinueId = null,
+    string? Tier = null, string? Model = null, string? Color = null);

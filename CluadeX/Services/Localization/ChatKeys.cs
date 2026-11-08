@@ -314,6 +314,7 @@ internal static class ChatKeys
         ["chat.fork.failed"] = new() { ["en"] = "Could not read this chat back to fork it", ["th"] = "อ่านแชทนี้เพื่อแยกไม่สำเร็จ" },
         ["chat.tools.editGroupVerb"] = new() { ["en"] = "Edited {0} files", ["th"] = "แก้ไข {0} ไฟล์" },
         ["chat.model.stopping"] = new() { ["en"] = "Stopping this step to switch to {0}…", ["th"] = "กำลังหยุดขั้นนี้เพื่อเปลี่ยนเป็น {0}…" },
+        ["chat.model.switchedLive"] = new() { ["en"] = "Switching to {0} — the task carries on from this step, nothing is redone", ["th"] = "กำลังสลับเป็น {0} — งานทำต่อจากขั้นนี้ ไม่เริ่มใหม่" },
         ["chat.model.carryOn"] = new() { ["en"] = "Switched to {0} mid-way: carrying on from where it stopped", ["th"] = "เปลี่ยนเป็น {0} กลางทาง ทำต่อจากจุดที่หยุด" },
         ["chat.plan.branchParent"] = new() { ["en"] = "⤴ Branched from", ["th"] = "⤴ แยกมาจาก" },
         ["chat.plan.branchChild"] = new() { ["en"] = "⑂ Branch at step {0}", ["th"] = "⑂ แยกที่ขั้น {0}" },

@@ -40,10 +40,15 @@ public partial class ChatViewModel
         /// <summary>"⏵ writing file x — 3,200 chars…" while the model still streams a long tool input.</summary>
         public ChatMessage? DraftRow;
         public ChatMessage? TodoMsg;
+        /// <summary>The chat's last plan card with work left when this run began: its plan came over into the run
+        /// (PlanRecord.CarryNote), and the card carries on in place unless the model starts a new task.</summary>
+        public ChatMessage? CarriedPlanMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
         /// <summary>This command's split-chat chips (made with its first new_chat).</summary>
         public ChatMessage? SplitsMsg;
+        /// <summary>The files this turn wrote and its pictures: the change card at its end (ChatViewModel.Vibe).</summary>
+        public readonly Services.Agents.TurnChanges Changes = new();
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
@@ -58,6 +63,8 @@ public partial class ChatViewModel
         /// <summary>Send now on a run that cannot stop one reply (a CLI agent, the [ACTION:] loop): it was stopped, and
         /// what was typed goes out as the next turn instead of back into the box.</summary>
         public bool SendNotesAfterStop;
+        /// <summary>Rows its chat had when the turn began: how it ended is read from the rows after it.</summary>
+        public int FirstRow;
 
         /// <summary>Who started the turn, for a supervisor: "pipe" (a program over the pipe), "split_parent" (new_chat from
         /// another chat's agent) or "user". The pipe flag is read live: it is set right after the run begins.</summary>
@@ -197,7 +204,8 @@ public partial class ChatViewModel
             run.Session.RunStatus = waiting ? "waiting" : "working";
             run.Session.RunStep = waiting ? Loc("chat.runs.waitingForYou") : (run.ActiveStatus?.Content ?? "").TrimStart('⏵', ' ');
         }
-        if (CurrentSession is { RunStatus: "done" } open) open.RunStatus = "";
+        if (CurrentSession is { } open) open.RunStatus = RunBadge.OnOpen(open.RunStatus);
+        RefreshBuddy();
     }
 
     // ─── open folders (the project + related ones) ───
@@ -474,7 +482,8 @@ public partial class ChatViewModel
     /// screen or not), working in <paramref name="folder"/>. Enters the run's scope for the calling flow.</summary>
     private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
     {
-        var run = new ChatRun { Session = session, Messages = messages };
+        var run = new ChatRun { Session = session, Messages = messages, FirstRow = messages.Count };
+        NoteRunBegan(session);
         if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
@@ -487,6 +496,8 @@ public partial class ChatViewModel
         run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;
         foreach (var extra in session.ExtraFolders.ToList())
             if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);
+        run.Changes.SeedBefore(NewestPicture(messages));
+        CarryPlanOver(run);
         _runs.Add(run);
         AgentRunScope.Enter(run.Scope);
         // The app-wide key too (code that runs outside the scope — a UI-thread callback — keys by the latest chat).
@@ -504,6 +515,7 @@ public partial class ChatViewModel
             Services.Agents.RunActivity.ClearRun(run.Session.Id);
             PostRunCostSummary(run);
             RememberRunStats(run);
+            AddTurnChangesCard(run);
             AddNextStepBox(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
@@ -517,8 +529,11 @@ public partial class ChatViewModel
             _runs.Remove(run);
             DropDraft(run);
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
-            // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it.
-            run.Session.RunStatus = ReferenceEquals(run.Session, CurrentSession) ? "" : "done";
+            // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it. An error or a stop says
+            // so (red) until the next turn begins, on screen or not.
+            var (stopped, failed) = RunBadge.Outcome(run.Messages, run.FirstRow, run.Stopped);
+            run.Session.RunStatus = RunBadge.AtEnd(stopped, failed, ReferenceEquals(run.Session, CurrentSession));
+            NoteRunEnded(run.Session, run.Session.RunStatus);
             run.Session.RunStep = "";
             // Its chat is not on screen: the live list is that chat now — store it.
             if (!ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
@@ -577,10 +592,17 @@ public partial class ChatViewModel
         if (e.Steps > 0) node.Steps = e.Steps;
         if (!string.IsNullOrEmpty(e.Model)) node.Model = e.Model;
         if (e.CostUsd > node.CostUsd) node.CostUsd = e.CostUsd;
+        if (!string.IsNullOrEmpty(e.Tier)) node.Tier = e.Tier;     // its routing tier (deep once the owner upgraded it)
+        if (!string.IsNullOrEmpty(e.Color)) node.Color = e.Color;
+        node.RefreshUpgrade();
         switch (e.Phase)
         {
             case "start": node.Action = Loc("agentmap.starting"); break;
-            case "tool": node.ToolCalls++; node.Action = e.Detail; node.BeginStep(e.CallId, e.Detail); break;
+            case "tool":
+                // a tool call: the avatar shows that tool; a note from the loop itself (the upgrade) is a step, not a call
+                if (!string.IsNullOrEmpty(e.Tool)) { node.ToolCalls++; node.CurrentTool = e.Tool; }
+                node.Action = e.Detail; node.BeginStep(e.CallId, e.Detail);
+                break;
             // A tool came back: its row in the agent's window gets the result; the card's line keeps what runs now.
             case "result": node.EndStep(e.CallId, e.Ok, e.Result); break;
             case "done": node.State = "done"; node.Action = e.Detail; node.CloseSteps(); break;

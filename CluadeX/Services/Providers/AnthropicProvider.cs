@@ -61,7 +61,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
             if (m.CacheMark && m.Role != "system") cacheMarks?.Add(list.Count);   // its index on the wire
             if (m.Role == "system")
             {
-                if (!ok || EffortFor(Traits(model), m.Effort) is not { } eff) continue;
+                if (!ok || EffortFor(Traits(model), EffortLevels.CappedHere(m.Effort)) is not { } eff) continue;
                 list.Add(new Dictionary<string, object>
                 {
                     ["role"] = "system",

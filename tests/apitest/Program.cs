@@ -548,7 +548,9 @@ internal static class Program
         await PromptCacheReuse.Run(Check, Section);
         await BatchWire.Run(Check, Section);
         await ToolSearchWire.Run(Check, Section);
+        SmallModelWire.Run(Check, Section);
         await PricingWire.Run(Check, Section);
+        await RunBadgeWire.Run(Check, Section);
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);
         await Gpt6Wire.Run(Check, Section);
@@ -560,6 +562,7 @@ internal static class Program
         await GrokDevWire.Run(Check, Section);
         await CliParityWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
+        await FailoverWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
         await UpdateDownloadWire.Run(Check, Section);
         await UpdateProgressWire.Run(Check, Section);
@@ -567,6 +570,8 @@ internal static class Program
         await SettingsSalvageWire.Run(Check, Section);
         await GitMultiRepoWire.Run(Check, Section);
         await AggregatorWire.Run(Check, Section);
+        await VibeWire.Run(Check, Section);
+        await PlanWire.Run(Check, Section);
     }
 
     /// <summary>MD5 of a SQLite file after releasing pooled connections (they keep it open).</summary>

@@ -1314,12 +1314,42 @@
                                         Visibility="{Binding IsPlan, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                     <StackPanel>
                                         <Grid>
-                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                             <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Status.Success}"
                                                        VerticalAlignment="Center" Margin="0,0,8,0"/>
                                             <TextBlock Grid.Column="1" Text="{Binding PlanHeader}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                            <TextBlock Grid.Column="2" Text="{Binding PlanElapsed}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
+                                            <!-- what the request is to the chat (todo_write scope): first task / continuation / new task -->
+                                            <Border Grid.Column="2" CornerRadius="9" Padding="7,1" Margin="10,0,0,0" VerticalAlignment="Center" BorderThickness="1"
+                                                    Background="{DynamicResource State.Fill.Faint}" BorderBrush="{DynamicResource Border.Subtle}"
+                                                    ToolTip="{services:Loc plan.scope.tip}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PlanScope}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock FontSize="10.5" Foreground="{DynamicResource Text.Muted}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="{services:Loc plan.scope.continuation}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding PlanScope}" Value="first_task">
+                                                                    <Setter Property="Text" Value="{services:Loc plan.scope.first_task}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding PlanScope}" Value="new_task">
+                                                                    <Setter Property="Text" Value="{services:Loc plan.scope.new_task}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
+                                            <TextBlock Grid.Column="3" Text="{Binding PlanElapsed}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
                                                        Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         </Grid>
                                         <!-- how far the plan is: the same gliding line as the floating card (Views/Motion.Fraction) -->
@@ -1357,6 +1387,10 @@
                                                             <TextBlock Text="{Binding Running}" Margin="27,1,0,1" FontSize="11"
                                                                        Foreground="{DynamicResource Accent.1}"
                                                                        Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
+                                                            <!-- the step its run was on when it ended (Stop, or a chat read back later) -->
+                                                            <TextBlock Text="{services:Loc plan.step.stopped}" Margin="27,1,0,1" FontSize="11"
+                                                                       Foreground="{DynamicResource Status.Warning}"
+                                                                       Visibility="{Binding IsStopped, Converter={StaticResource BoolVis}}"/>
                                                         </StackPanel>
                                                     </ContentControl>
                                                 </DataTemplate>
@@ -1421,6 +1455,14 @@
                                                         <DataTrigger Binding="{Binding RunStatus}" Value="done">
                                                             <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Success}"/>
                                                             <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.done}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="failed">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Danger}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.failed}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding RunStatus}" Value="stopped">
+                                                            <Setter TargetName="StateDot" Property="Fill" Value="{DynamicResource Status.Danger.Soft}"/>
+                                                            <Setter TargetName="StateText" Property="Text" Value="{services:Loc orch.splits.stopped}"/>
                                                         </DataTrigger>
                                                     </DataTemplate.Triggers>
                                                 </DataTemplate>
@@ -1500,6 +1542,118 @@
                                                    Visibility="{Binding IsAnswered, Converter={StaticResource BoolVis}}"/>
                                     </StackPanel>
                                 </Border>
+
+                                <!-- ═══ What changed this turn: files, +/−, one plain line; before/after pictures for a screen ═══ -->
+                                <!-- Collapsed unless the row is one, and its template only applies when it is: an ordinary row pays
+                                     nothing for it. No animation: it is a still record of the turn. -->
+                                <ContentControl Grid.Row="1" Margin="20,8,0,4" Focusable="False" Content="{Binding TurnChanges}"
+                                                Visibility="{Binding ShowsTurnChanges, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                AutomationProperties.AutomationId="CxChat.TurnChanges">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="14,10" CornerRadius="10" BorderThickness="1"
+                                                    Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}">
+                                                <StackPanel>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Accent.1}"
+                                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                            <TextBlock Text="{services:Loc changes.title}" FontSize="12.5" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="1" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"
+                                                                   ToolTip="{services:Loc changes.totalTip}">
+                                                            <Run Text="{Binding AddedText, Mode=OneWay}" Foreground="{DynamicResource Status.Success}"/>
+                                                            <Run Text=" "/><Run Text="{Binding RemovedText, Mode=OneWay}" Foreground="{DynamicResource Status.Danger}"/>
+                                                        </TextBlock>
+                                                    </Grid>
+                                                    <TextBlock Text="{Binding Line}" Margin="0,6,0,0" FontSize="12.5" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource Text.Secondary}"/>
+                                                    <ItemsControl ItemsSource="{Binding Files}" Margin="0,8,0,0" Focusable="False">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Button Command="{Binding OpenCommand}" Cursor="Hand" ToolTip="{services:Loc changes.openTip}"
+                                                                        HorizontalContentAlignment="Stretch" Margin="0,1">
+                                                                    <Button.Template>
+                                                                        <ControlTemplate TargetType="Button">
+                                                                            <Border x:Name="Bd" CornerRadius="6" Padding="6,3" Background="Transparent">
+                                                                                <ContentPresenter/>
+                                                                            </Border>
+                                                                            <ControlTemplate.Triggers>
+                                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                                                </Trigger>
+                                                                            </ControlTemplate.Triggers>
+                                                                        </ControlTemplate>
+                                                                    </Button.Template>
+                                                                    <Grid>
+                                                                        <Grid.ColumnDefinitions>
+                                                                            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                                                        </Grid.ColumnDefinitions>
+                                                                        <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                                                   Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                                        <TextBlock Grid.Column="1" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center">
+                                                                            <Run Text="{Binding Folder, Mode=OneWay}" Foreground="{DynamicResource Text.Faint}"/><Run
+                                                                                 Text="{Binding Name, Mode=OneWay}" Foreground="{DynamicResource Text.Primary}"/>
+                                                                        </TextBlock>
+                                                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                                                                            <Border CornerRadius="4" Padding="5,0" Margin="0,0,8,0" Background="{DynamicResource Accent.1.Tint}"
+                                                                                    Visibility="{Binding IsNew, Converter={StaticResource BoolVis}}">
+                                                                                <TextBlock Text="{services:Loc changes.new}" FontSize="10.5" Foreground="{DynamicResource Accent.1}"/>
+                                                                            </Border>
+                                                                            <TextBlock Text="{Binding AddedText}" FontFamily="{DynamicResource Font.Mono}" FontSize="11.5"
+                                                                                       Foreground="{DynamicResource Status.Success}" Margin="0,0,6,0"/>
+                                                                            <TextBlock Text="{Binding RemovedText}" FontFamily="{DynamicResource Font.Mono}" FontSize="11.5"
+                                                                                       Foreground="{DynamicResource Status.Danger}"/>
+                                                                        </StackPanel>
+                                                                    </Grid>
+                                                                </Button>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                    <TextBlock Text="{Binding MoreText}" Margin="6,2,0,0" FontSize="11.5" Foreground="{DynamicResource Text.Muted}"
+                                                               Visibility="{Binding HasMore, Converter={StaticResource BoolVis}}"/>
+                                                    <!-- Before / after: the last picture of the app before the first screen edit and after the last -->
+                                                    <Grid Margin="0,10,0,0" Visibility="{Binding HasPictures, Converter={StaticResource BoolVis}}"
+                                                          ToolTip="{services:Loc changes.picTip}">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" MaxWidth="260"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*" MaxWidth="260"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{services:Loc changes.before}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,4"/>
+                                                            <Button Padding="0" Cursor="Hand" Tag="{Binding BeforeImage}" Click="ToolThumbnail_Click">
+                                                                <Button.Template>
+                                                                    <ControlTemplate TargetType="Button">
+                                                                        <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                                                                                Background="{DynamicResource Bg.Window}" Padding="2"><ContentPresenter/></Border>
+                                                                    </ControlTemplate>
+                                                                </Button.Template>
+                                                                <Image Source="{Binding BeforePicture}" MaxHeight="140" Stretch="Uniform"
+                                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                            </Button>
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="1" Text="&#xE72A;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="10,18,10,0"
+                                                                   VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"/>
+                                                        <StackPanel Grid.Column="2">
+                                                            <TextBlock Text="{services:Loc changes.after}" FontSize="11" Foreground="{DynamicResource Accent.1}" Margin="0,0,0,4"/>
+                                                            <Button Padding="0" Cursor="Hand" Tag="{Binding AfterImage}" Click="ToolThumbnail_Click">
+                                                                <Button.Template>
+                                                                    <ControlTemplate TargetType="Button">
+                                                                        <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Accent.1.Border.Soft}"
+                                                                                Background="{DynamicResource Bg.Window}" Padding="2"><ContentPresenter/></Border>
+                                                                    </ControlTemplate>
+                                                                </Button.Template>
+                                                                <Image Source="{Binding AfterPicture}" MaxHeight="140" Stretch="Uniform"
+                                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                            </Button>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
 
                                 <!-- ═══ Agent map: the sub-agents this command started, as a live tree (open by default, folds) ═══ -->
                                 <!-- Alive only while a sub-agent works (owner 2026-11-03: "อยากให้ปรับปรุงการแจงเอเจนให้สวย มีอนิเมชั่นกว่านี้"):
@@ -1985,6 +2139,15 @@
                                                         ToolTip="{services:Loc chat.copyMessageTip}"
                                                         Click="CopyMessage_Click"
                                                         Tag="{Binding Content}"/>
+                                                <!-- Explain simply: the reply again in plain words (a finished reply only) -->
+                                                <Button Content="{services:Loc vibe.explain.button}"
+                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
+                                                        FontSize="11" Padding="6,2" Margin="2,0"
+                                                        ToolTip="{services:Loc vibe.explain.tip}"
+                                                        Click="ExplainMessage_Click"
+                                                        AutomationProperties.AutomationId="CxChat.ExplainSimply"
+                                                        Visibility="{Binding CanExplainSimply, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                                 <!-- Go back to this point of the chat, here or in a new chat. These two are words on an
                                                      IconButton: without their own font and size its icon font draws squares and its 36 px clips them. -->
                                                 <Button Content="{services:Loc chat.rewindHere}"
@@ -2525,6 +2688,10 @@
                                             <TextBlock Text="{Binding Running}" Margin="27,1,0,1" FontSize="11" TextTrimming="CharacterEllipsis"
                                                        Foreground="{Binding (views:Motion.Accent), RelativeSource={RelativeSource Self}}"
                                                        Visibility="{Binding HasRunning, Converter={StaticResource BoolVis}}"/>
+                                            <!-- the chat's run ended on this step (Stop, or it finished without ticking it) -->
+                                            <TextBlock Text="{services:Loc plan.step.stopped}" Margin="27,1,0,1" FontSize="11"
+                                                       Foreground="{DynamicResource Status.Warning}"
+                                                       Visibility="{Binding IsStopped, Converter={StaticResource BoolVis}}"/>
                                         </StackPanel>
                                     </ContentControl>
                                 </DataTemplate>
@@ -3087,7 +3254,49 @@
                                      SelectionBrush="{DynamicResource Accent.1}"
                                      FontFamily="{DynamicResource Font.Ui}" FontSize="14"
                                      MinHeight="44" MaxHeight="200"
-                                     VerticalScrollBarVisibility="Auto"/>
+                                     VerticalScrollBarVisibility="Auto"
+                                     PreviewKeyDown="InputBox_MentionKeys" TextChanged="InputBox_MentionChanged"
+                                     SelectionChanged="InputBox_MentionCaret"/>
+                            <!-- @-mentions: the project's files and names that match what follows the "@" (ChatView.Mentions.cs) -->
+                            <Popup x:Name="MentionPopup" PlacementTarget="{Binding ElementName=InputBox}" Placement="Top" StaysOpen="False"
+                                   AllowsTransparency="True" PopupAnimation="None" Focusable="False">
+                                <Border Width="420" MaxHeight="320" CornerRadius="10" BorderThickness="1" Padding="6" Margin="0,0,0,6"
+                                        Background="{DynamicResource Bg.Elevated}" BorderBrush="{DynamicResource Border.Default}">
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Top" Text="{services:Loc vibe.mention.title}" FontSize="11"
+                                                   FontWeight="SemiBold" Foreground="{DynamicResource Text.Muted}" Margin="6,2,6,4"/>
+                                        <TextBlock DockPanel.Dock="Bottom" Text="{services:Loc vibe.mention.hint}" FontSize="10.5"
+                                                   Foreground="{DynamicResource Text.Faint}" Margin="6,4,6,0"/>
+                                        <TextBlock DockPanel.Dock="Top" x:Name="MentionEmpty" FontSize="12" Foreground="{DynamicResource Text.Muted}"
+                                                   Margin="6,4" Visibility="Collapsed"/>
+                                        <ListBox x:Name="MentionList" BorderThickness="0" Background="Transparent" Focusable="False"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                                                 MouseLeftButtonUp="MentionList_Click"
+                                                 AutomationProperties.AutomationId="CxChat.MentionList">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="2,2">
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                        <TextBlock x:Name="Ic" Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,8,0"
+                                                                   VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"/>
+                                                        <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12.5" Foreground="{DynamicResource Text.Primary}"
+                                                                   VerticalAlignment="Center"/>
+                                                        <TextBlock Grid.Column="2" Text="{Binding Detail}" FontSize="11" Margin="10,0,0,0" TextTrimming="CharacterEllipsis"
+                                                                   Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSymbol}" Value="True">
+                                                            <Setter TargetName="Ic" Property="Text" Value="&#xE943;"/>
+                                                            <Setter TargetName="Ic" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                    </DockPanel>
+                                </Border>
+                            </Popup>
                             <!-- While a reply runs the box stays open: Enter sends to it (it reads it at its next step) -->
                             <TextBlock FontFamily="{DynamicResource Font.Ui}" FontSize="14"
                                        Foreground="{DynamicResource Text.Muted}"
@@ -3120,6 +3329,30 @@
 
                             <WrapPanel x:Name="ComposerOptions" Orientation="Horizontal" VerticalAlignment="Center" ItemHeight="34"
                                        TextElement.FontSize="12" TextElement.FontFamily="{DynamicResource Font.Ui}">
+                                <!-- The project's errors from the last build / test / check: one click hands them to the AI -->
+                                <Button x:Name="ErrorChip" Command="{Binding FixErrorsCommand}" Cursor="Hand" Margin="0,2,8,2" VerticalAlignment="Center"
+                                        ToolTip="{Binding ErrorChipTip}" AutomationProperties.AutomationId="CxChat.ErrorChip"
+                                        Visibility="{Binding HasErrorChip, Converter={StaticResource BoolVis}}">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="Bd" CornerRadius="13" Padding="10,4" BorderThickness="1"
+                                                    Background="{DynamicResource Status.Danger.Tint}" BorderBrush="{DynamicResource Status.Danger.Border}">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Status.Danger.Soft}"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xEA39;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource Status.Danger}"
+                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBlock Text="{Binding ErrorChipText}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Status.Danger}"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
                                 <!-- "+": the switches and actions that don't need a pill of their own -->
                                 <Button x:Name="MoreButton" Style="{StaticResource IconButton}" Width="30" Height="30" Margin="0,2,8,2"
                                         Click="MoreButton_Click" ToolTip="{services:Loc chat.more.tip}">
@@ -3381,6 +3614,23 @@
                                     <TextBlock x:Name="EstimateLabel" Text="{Binding EstimateShortText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12"/>
                                 </Border>
 
+                                <!-- How full the AI's memory is, and when a compaction comes (tooltip) — beside the cost -->
+                                <Border x:Name="ContextGauge" CornerRadius="6" Padding="8,4" Margin="0,2,8,2" VerticalAlignment="Center"
+                                        Background="{DynamicResource State.Fill.Faint}" ToolTip="{Binding ContextGaugeTip}"
+                                        AutomationProperties.AutomationId="CxChat.ContextGauge"
+                                        Visibility="{Binding ContextGaugeText, Converter={StaticResource BoolVis}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Grid Width="34" Height="5" VerticalAlignment="Center" Margin="0,0,7,0">
+                                            <Border Background="{DynamicResource Led.Off}" CornerRadius="3"/>
+                                            <Border CornerRadius="3" HorizontalAlignment="Left" RenderTransformOrigin="0,0.5" Width="34"
+                                                    Background="{Binding ContextUsagePercent, Converter={StaticResource CtxBrush}}">
+                                                <Border.RenderTransform><ScaleTransform ScaleX="{Binding ContextFraction}"/></Border.RenderTransform>
+                                            </Border>
+                                        </Grid>
+                                        <TextBlock Text="{Binding ContextGaugeText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12"/>
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- Follow edits: this chat's edits open in the editor while it is on screen (per chat) -->
                                 <CheckBox x:Name="FollowEditsBox" IsChecked="{Binding FollowEditsHere}" VerticalAlignment="Center" Margin="0,2,10,2"
                                           ToolTip="{services:Loc chat.follow.tip}">
@@ -3498,19 +3748,23 @@
                 <Border Grid.Row="1" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="14,8,14,10"
                         Visibility="{Binding LatestImagePath, Converter={StaticResource BoolVis}}">
                     <StackPanel>
-                        <TextBlock Text="{services:Loc chat.side.image}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,6"/>
-                        <Button Padding="0" Cursor="Hand" Background="Transparent" BorderThickness="0" Tag="{Binding LatestImagePath}" Click="ToolThumbnail_Click"
-                                ToolTip="{services:Loc chat.thumbnail.tip}">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Bg.Window}" Padding="2">
-                                        <ContentPresenter/>
-                                    </Border>
-                                </ControlTemplate>
-                            </Button.Template>
-                            <Image Source="{Binding LatestImagePath, Converter={StaticResource ThumbSource}}" MaxHeight="160" Stretch="Uniform"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
-                        </Button>
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="{services:Loc chat.side.image}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                       VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" Content="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="11" Padding="4,2"
+                                    Style="{StaticResource IconButton}" Width="Auto" Height="Auto"
+                                    Tag="{Binding LatestImagePath}" Click="ToolThumbnail_Click" ToolTip="{services:Loc chat.thumbnail.tip}"/>
+                        </Grid>
+                        <!-- A click on the picture circles that spot, attaches it and starts the question in the box -->
+                        <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Bg.Window}"
+                                Padding="2" Cursor="Cross" ToolTip="{services:Loc vibe.ask.hint}">
+                            <Image x:Name="SidePicture" Source="{Binding LatestImagePath, Converter={StaticResource ThumbSource}}" MaxHeight="160" Stretch="Uniform"
+                                   RenderOptions.BitmapScalingMode="HighQuality" Tag="{Binding LatestImagePath}"
+                                   MouseLeftButtonUp="SidePicture_Click" AutomationProperties.AutomationId="CxChat.SidePicture"/>
+                        </Border>
+                        <TextBlock Text="{services:Loc vibe.ask.hint}" FontSize="10.5" Foreground="{DynamicResource Text.Faint}" Margin="0,4,0,0"
+                                   TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
 

@@ -358,19 +358,28 @@
                                 </Grid>
                             </StackPanel>
                         </Button>
-                        <!-- DGX Spark chip — opens the Spark window; solid green while CluadeX runs on a Spark -->
+                        <!-- DGX Spark chip — opens the Spark window. NVIDIA's own logo on white (never under its 15 px digital minimum),
+                             then the live status of the remembered Spark: grey = not set up, amber = connecting, green = online,
+                             glowing green = in use (with the model), red = not reachable (the tooltip says why and what to do). -->
                         <Button Height="26" Margin="4,0,2,0" Cursor="Hand"
                                 Command="{Binding OpenDgxSparkCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
-                                ToolTip="{services:Loc spark.chipTip}">
+                                AutomationProperties.Name="{Binding SparkChipText}"
+                                ToolTip="{Binding SparkChipTip}">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
-                                    <Border x:Name="bd" CornerRadius="13" Padding="10,0" BorderThickness="1"
+                                    <Border x:Name="bd" CornerRadius="13" BorderThickness="1"
                                             Background="{DynamicResource Spark.Chip.Background}" BorderBrush="{DynamicResource Spark.Chip.Border}">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="0,0,6,0" Fill="{DynamicResource Spark.Chip.Dot}"
+                                            <Border CornerRadius="12,0,0,12" Background="White" Padding="10,4,10,4" VerticalAlignment="Stretch">
+                                                <Image Source="/CluadeX;component/Assets/Logos/nvidia.png" Height="15" Stretch="Uniform"
+                                                       VerticalAlignment="Center"
+                                                       RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True"/>
+                                            </Border>
+                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="9,0,6,0" Fill="{DynamicResource Spark.Chip.Dot}"
                                                      VerticalAlignment="Center"/>
-                                            <TextBlock x:Name="txt" Text="{services:Loc spark.chip}" FontSize="11.5" FontWeight="SemiBold"
+                                            <TextBlock x:Name="txt" Text="{Binding SparkChipText}" FontSize="11.5" FontWeight="SemiBold"
+                                                       MaxWidth="190" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
                                                        Foreground="{DynamicResource Spark.Chip.Foreground}" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </Border>
@@ -378,9 +387,18 @@
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="bd" Property="Background" Value="{DynamicResource Spark.Chip.Hover.Background}"/>
                                         </Trigger>
-                                        <DataTrigger Binding="{Binding IsSparkActive}" Value="True">
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Checking">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Status.Warning}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Online">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="InUse">
                                             <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
                                             <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.Spark.Active}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Unreachable">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Status.Danger}"/>
                                         </DataTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -613,11 +631,33 @@
                                             </EventTrigger>
                                         </Ellipse.Triggers>
                                     </Ellipse>
-                                    <Border Width="36" Height="36" CornerRadius="18"
-                                            Background="{DynamicResource ActivityBar.Logo.Background}">
-                                        <Image Source="Assets/logo.png" Width="32" Height="32"
-                                               RenderOptions.BitmapScalingMode="HighQuality"/>
-                                    </Border>
+                                    <!-- น้อง CluadeX, moving with the work: busy, waiting for you, pleased, asleep when idle.
+                                         A click (or Tab to her + Enter/Space) goes Home: the Chat page, an empty chat, no
+                                         folder open; running chats carry on in the background. -->
+                                    <Button Width="36" Height="36" Cursor="Hand"
+                                            Command="{Binding ChatVM.GoHomeCommand}" ToolTip="{Binding ChatVM.BuddyTip}"
+                                            AutomationProperties.Name="{services:Loc buddy.goHomeName}"
+                                            AutomationProperties.HelpText="{Binding ChatVM.BuddyMoodTip}">
+                                        <!-- keyboard focus only (not after a mouse click): a ring just outside her rim -->
+                                        <Button.FocusVisualStyle>
+                                            <Style>
+                                                <Setter Property="Control.Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate>
+                                                            <Ellipse Margin="-3" StrokeThickness="1.5" Stroke="{DynamicResource Accent.1}"/>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </Button.FocusVisualStyle>
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Grid Background="Transparent">
+                                                    <views:CluadexBuddy DataContext="{Binding ChatVM}"/>
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
                                 </Grid>
                                 <Border Width="28" Height="1" Margin="0,10,0,0" Background="{DynamicResource ActivityBar.Logo.Divider}"/>
                             </StackPanel>
@@ -1181,6 +1221,8 @@
                                                                             <DataTrigger Binding="{Binding RunStatus}" Value="working"><Setter Property="Fill" Value="{DynamicResource Accent.1}"/></DataTrigger>
                                                                             <DataTrigger Binding="{Binding RunStatus}" Value="waiting"><Setter Property="Fill" Value="{DynamicResource Status.Warning}"/></DataTrigger>
                                                                             <DataTrigger Binding="{Binding RunStatus}" Value="done"><Setter Property="Fill" Value="{DynamicResource Status.Success}"/></DataTrigger>
+                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="failed"><Setter Property="Fill" Value="{DynamicResource Status.Danger}"/></DataTrigger>
+                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="stopped"><Setter Property="Fill" Value="{DynamicResource Status.Danger.Soft}"/></DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>
                                                                 </Ellipse.Style>
@@ -1241,93 +1283,10 @@
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <!-- The chat's icon tells how its run stands: idle = a chat bubble; working = a turning
-                                                             arc; waiting for the owner = a pulsing amber dot with a ripple; finished while the
-                                                             owner was elsewhere = a green check that pops in. -->
-                                                        <Grid Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top">
-                                                            <TextBlock Text="&#xE8BD;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Text.Muted}"
-                                                                       Visibility="{Binding HasRunStatus, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
-                                                            <!-- working -->
-                                                            <Path views:AmbientAnimation.WhileVisible="True" Stroke="{DynamicResource Accent.1}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                                                  Data="M7,1 A6,6 0 1 1 1,7" RenderTransformOrigin="0.5,0.5">
-                                                                <Path.RenderTransform><RotateTransform/></Path.RenderTransform>
-                                                                <Path.Style>
-                                                                    <Style TargetType="Path">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="working">
-                                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Path.Style>
-                                                                <Path.Triggers>
-                                                                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                        <BeginStoryboard x:Name="AmbientMain1">
-                                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
-                                                                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(RotateTransform.Angle)" From="0" To="360" Duration="0:0:1.1"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </EventTrigger>
-                                                                </Path.Triggers>
-                                                            </Path>
-                                                            <!-- waiting -->
-                                                            <Grid views:AmbientAnimation.WhileVisible="True">
-                                                                <Grid.Style>
-                                                                    <Style TargetType="Grid">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="waiting">
-                                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Grid.Style>
-                                                                <Ellipse x:Name="Ripple" Width="14" Height="14" Stroke="{DynamicResource Status.Warning}" StrokeThickness="1.5"
-                                                                         RenderTransformOrigin="0.5,0.5">
-                                                                    <Ellipse.RenderTransform><ScaleTransform ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
-                                                                </Ellipse>
-                                                                <Ellipse Width="7" Height="7" Fill="{DynamicResource Status.Warning}"/>
-                                                                <Grid.Triggers>
-                                                                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                        <BeginStoryboard x:Name="AmbientMain2">
-                                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
-                                                                                <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" From="0.4" To="1.1" Duration="0:0:1.2"/>
-                                                                                <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" From="0.4" To="1.1" Duration="0:0:1.2"/>
-                                                                                <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="Opacity" From="1" To="0" Duration="0:0:1.2"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </EventTrigger>
-                                                                </Grid.Triggers>
-                                                            </Grid>
-                                                            <!-- done -->
-                                                            <!-- The pop animates FontSize, not a RenderTransform: a chat that is already "done" when its row is built (a
-                                                                 Stop, a reload) starts this trigger while the template still holds a frozen transform, and
-                                                                 WPF threw "Cannot animate 'RenderTransform.(0)' on an immutable object instance" (owner 2026-10-18). -->
-                                                            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Status.Success}"
-                                                                       HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                                <TextBlock.Style>
-                                                                    <Style TargetType="TextBlock">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="done">
-                                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                                <DataTrigger.EnterActions>
-                                                                                    <BeginStoryboard>
-                                                                                        <Storyboard>
-                                                                                            <DoubleAnimation Storyboard.TargetProperty="FontSize" From="3" To="12" Duration="0:0:0.45">
-                                                                                                <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
-                                                                                            </DoubleAnimation>
-                                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.25"/>
-                                                                                        </Storyboard>
-                                                                                    </BeginStoryboard>
-                                                                                </DataTrigger.EnterActions>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </TextBlock.Style>
-                                                            </TextBlock>
-                                                        </Grid>
+                                                        <!-- The chat's icon tells how its run stands: a grey node when idle, a turning neon arc while it
+                                                             works, an amber ripple while it waits for the owner, a green check with a pink dot for a
+                                                             result not opened yet, red when the turn failed or was stopped (Views/RunBadgeIcon.xaml). -->
+                                                        <views:RunBadgeIcon Margin="0,2,10,0" VerticalAlignment="Top"/>
                                                         <StackPanel Grid.Column="1">
                                                             <DockPanel LastChildFill="True">
                                                                 <!-- a chat that split work off: a git-branch badge with how many split chats are open (tooltip: how they stand) -->
@@ -1369,7 +1328,16 @@
                                                                 </Grid>
                                                                 <TextBlock Text="{Binding Title}" FontSize="12"
                                                                            Foreground="{DynamicResource Text.Primary}"
-                                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
+                                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}">
+                                                                    <!-- a result not opened yet reads bolder -->
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding RunStatus}" Value="done"><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
                                                             </DockPanel>
                                                             
 
@@ -1994,7 +1962,13 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets"
                                                    FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0"
-                                                   Foreground="{DynamicResource Text.Muted}"/>
+                                                   Foreground="{DynamicResource Text.Muted}"
+                                                   Visibility="{Binding HasLogo, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                        <!-- A brand row (DGX Spark): the vendor's own logo on white, at its minimum size or larger. -->
+                                        <Border CornerRadius="4" Background="White" Padding="5,3" Margin="0,0,10,0" VerticalAlignment="Center"
+                                                Visibility="{Binding HasLogo, Converter={StaticResource BoolVis}}">
+                                            <Image Source="{Binding Logo}" Height="15" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                        </Border>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" FontSize="13"
                                                        Foreground="{DynamicResource Text.Primary}"
