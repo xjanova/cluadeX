@@ -51,8 +51,8 @@ public partial class CluadexBuddy : UserControl
     {
         if (_window != null || Window.GetWindow(this) is not { } w) return;
         _window = w;
-        w.Activated += (_, _) => SyncPause();
-        w.Deactivated += (_, _) => SyncPause();
+        w.Activated += (_, _) => { SyncPause(); OnFocusChanged(); };
+        w.Deactivated += (_, _) => { SyncPause(); OnFocusChanged(); };
         w.StateChanged += (_, _) => SyncPause();
     }
 
