@@ -114,7 +114,8 @@ internal static partial class Program
                 case "--hero": HeroOnly = true; break;       // น้อง CluadeX in the corner + text size and font (HeroRenders.cs)
                 case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
                 case "--setup-wizard": SetupWizardOnly = true; break;   // the first-run setup wizard, every page and state (SetupWizardRenders.cs)
-                case "--titlebar": TitleBarOnly = true; break;   // the main title bar in every theme and width (TitleBarRenders.cs)
+                case "--titlebar": TitleBarOnly = true; break;
+                case "--uninstall": UninstallOnly = true; break;   // the uninstall page, every page and state (UninstallRenders.cs)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
             }
         }
@@ -562,6 +563,11 @@ internal static partial class Program
         {
             if (OutRoot.StartsWith("E:", StringComparison.OrdinalIgnoreCase)) { Log("FATAL --setup-wizard needs --out on D: (E: is the USB disk)"); return 2; }
             return await SetupWizardShots();
+        }
+        if (UninstallOnly)
+        {
+            if (OutRoot.StartsWith("E:", StringComparison.OrdinalIgnoreCase)) { Log("FATAL --uninstall needs --out on D: (E: is the USB disk)"); return 2; }
+            return await UninstallShots();
         }
         if (TitleBarOnly)
         {

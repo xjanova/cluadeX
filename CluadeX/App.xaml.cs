@@ -182,6 +182,14 @@ public partial class App : Application
         var setupGate = showSetup ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
         dbg?.Info("Setup", $"setup wizard: {(showSetup ? "shown" : "not shown")} · forced={forceSetup} · noSettingsBefore={setupSettings.NoSettingsBeforeLaunch} · velopackFirstRun={Program.VelopackFirstRun}");
 
+        // Windows' "Uninstall" for this install opens CluadeX's own uninstall page (tick what to keep) instead of
+        // Velopack's silent remover — checked every start, since only a fresh Setup.exe rewrites that row.
+        _ = Task.Run(() =>
+        {
+            try { if (Services.Uninstall.UninstallEntry.Detect() is { } inst) dbg?.Info("Uninstall", Services.Uninstall.UninstallEntry.EnsurePointsAtPage(inst)); }
+            catch (Exception ex) { dbg?.Warn("Uninstall", "the Installed-apps row could not be checked", ex); }
+        });
+
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
         {

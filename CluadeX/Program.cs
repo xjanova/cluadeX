@@ -66,6 +66,14 @@ public static class Program
             return;
         }
 
+        // Windows' "Uninstall" button (UninstallEntry points it here): the uninstall page — no Velopack startup, no
+        // single-instance lock, no services, no log in ~/.cluadex (the page may be about to delete that folder).
+        if (args.Length > 0 && string.Equals(args[0], Services.Uninstall.UninstallEntry.Flag, StringComparison.OrdinalIgnoreCase))
+        {
+            Environment.Exit(Services.Uninstall.UninstallHost.Run(args));
+            return;
+        }
+
         try
         {
             // Velopack's own startup apply is ON by default: it would install any downloaded package right here, before
@@ -75,7 +83,12 @@ public static class Program
             // (AutoUpdateService.OnAppShutdown) and Install & Restart start Update.exe themselves and are unaffected.
             Velopack.VelopackApp.Build()
                 .SetAutoApplyOnStartup(false)
-                .OnBeforeUninstallFastCallback(_ => Services.Chrome.ChromeBridgeInstall.Unregister())
+                // Only this install's Chrome host: the key is shared by every copy on the PC (UnregisterIfFor).
+                .OnBeforeUninstallFastCallback(_ =>
+                {
+                    if (Services.Uninstall.UninstallEntry.Detect() is { } inst) Services.Chrome.ChromeBridgeInstall.UnregisterIfFor(inst.Root);
+                    else Services.Chrome.ChromeBridgeInstall.Unregister();
+                })
                 .OnFirstRun(_ => VelopackFirstRun = true)
                 .Run();
         }
