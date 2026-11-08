@@ -1205,6 +1205,8 @@ public partial class App : Application
         services.AddSingleton<ChatViewModel>();
         services.AddSingleton<ModelManagerViewModel>();
         services.AddSingleton<SettingsViewModel>();
+        services.AddSingleton<Services.Colibri.ColibriService>();
+        services.AddSingleton<ColibriPluginViewModel>();
         services.AddSingleton<PluginManagerViewModel>();
         services.AddSingleton<PermissionsViewModel>();
         services.AddSingleton<TaskManagerViewModel>();

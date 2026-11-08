@@ -235,6 +235,31 @@
             </StackPanel>
         </Border>
 
+        <!-- Saved by AI on this PC (Colibri, llama.cpp, Ollama, LM Studio…): bars per day, the line is the running total -->
+        <Border Style="{StaticResource Card}" Margin="0,12,10,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Ellipse Grid.Column="0" Width="52" Height="52" VerticalAlignment="Top" Margin="0,2,14,0"
+                         Fill="{Binding LocalMascot.FaceBrush}" Stroke="{Binding LocalMascot.AccentBrush}" StrokeThickness="2"/>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{services:Loc usage.localTitle}" Style="{StaticResource CardTitle}"/>
+                    <TextBlock Text="{Binding LocalTotals}" FontSize="15" FontWeight="Bold" Margin="0,4,0,0"
+                               Foreground="{Binding LocalMascot.AccentBrush}"/>
+                    <TextBlock Text="{services:Loc usage.localDesc}" Style="{StaticResource Note}" FontSize="11" Margin="0,4,0,8" TextWrapping="Wrap"/>
+                    <Grid>
+                        <billing:SpendChart Height="150" Bars="{Binding LocalBars}" LineBrush="{Binding LocalMascot.AccentBrush}"
+                                            GridBrush="{DynamicResource Border.Subtle}" TextBrush="{DynamicResource Text.Muted}"/>
+                        <TextBlock Text="{services:Loc usage.localEmpty}" Style="{StaticResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="420" TextAlignment="Center"
+                                   Visibility="{Binding HasLocal, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- Where the savings came from | dispatch strategies -->
         <Grid Margin="0,12,0,0">
             <Grid.ColumnDefinitions>

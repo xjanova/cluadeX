@@ -152,6 +152,13 @@ internal static class AggregatorKeys
             "Free — it runs on this PC's own hardware. No key unless you turned on “Require authentication”.",
             "ฟรี — รันด้วยฮาร์ดแวร์ของเครื่องนี้ ไม่ต้องใช้คีย์ เว้นแต่เปิด “Require authentication” ไว้"),
 
+        ["agg.colibri.steps"] = E(
+            "1. Plugins page ▸ On-PC AI · Colibri ▸ Install Colibri (needs Python 3).\n2. Models this PC can run ▸ pick one ▸ Download and set up.\n3. Start — the Base URL and model are filled in by themselves once she is ready.",
+            "1. หน้า Plugins ▸ AI ในเครื่อง · น้อง Colibri ▸ ติดตั้ง Colibri (ต้องมี Python 3)\n2. ดูโมเดลที่เครื่องนี้รันได้ ▸ เลือก ▸ ดาวน์โหลดและตั้งค่า\n3. กด เปิดน้อง — Base URL และโมเดลจะถูกกรอกให้เองเมื่อพร้อม"),
+        ["agg.colibri.free"] = E(
+            "Free — big mixture-of-experts models on this PC: the core in RAM, the experts read from the SSD, the busiest on the GPU.",
+            "ฟรี — โมเดล MoE ตัวใหญ่บนเครื่องนี้: ส่วนหลักอยู่ใน RAM ผู้เชี่ยวชาญอ่านจาก SSD ตัวที่ใช้บ่อยอยู่บนการ์ดจอ"),
+
         ["agg.vllm.steps"] = E(
             "1. Start the server: vllm serve <model> --enable-auto-tool-choice --tool-call-parser <parser>\n2. It listens on port 8000 by default; change the Base URL if not.\n3. Press Test Connection.",
             "1. เปิดเซิร์ฟเวอร์: vllm serve <model> --enable-auto-tool-choice --tool-call-parser <parser>\n2. ค่าเริ่มต้นฟังที่พอร์ต 8000 ถ้าไม่ใช่ให้แก้ Base URL\n3. กด ทดสอบการเชื่อมต่อ"),
