@@ -358,19 +358,28 @@
                                 </Grid>
                             </StackPanel>
                         </Button>
-                        <!-- DGX Spark chip — opens the Spark window; solid green while CluadeX runs on a Spark -->
+                        <!-- DGX Spark chip — opens the Spark window. NVIDIA's own logo on white (never under its 15 px digital minimum),
+                             then the live status of the remembered Spark: grey = not set up, amber = connecting, green = online,
+                             glowing green = in use (with the model), red = not reachable (the tooltip says why and what to do). -->
                         <Button Height="26" Margin="4,0,2,0" Cursor="Hand"
                                 Command="{Binding OpenDgxSparkCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
-                                ToolTip="{services:Loc spark.chipTip}">
+                                AutomationProperties.Name="{Binding SparkChipText}"
+                                ToolTip="{Binding SparkChipTip}">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
-                                    <Border x:Name="bd" CornerRadius="13" Padding="10,0" BorderThickness="1"
+                                    <Border x:Name="bd" CornerRadius="13" BorderThickness="1"
                                             Background="{DynamicResource Spark.Chip.Background}" BorderBrush="{DynamicResource Spark.Chip.Border}">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="0,0,6,0" Fill="{DynamicResource Spark.Chip.Dot}"
+                                            <Border CornerRadius="12,0,0,12" Background="White" Padding="10,4,10,4" VerticalAlignment="Stretch">
+                                                <Image Source="/CluadeX;component/Assets/Logos/nvidia.png" Height="15" Stretch="Uniform"
+                                                       VerticalAlignment="Center"
+                                                       RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True"/>
+                                            </Border>
+                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="9,0,6,0" Fill="{DynamicResource Spark.Chip.Dot}"
                                                      VerticalAlignment="Center"/>
-                                            <TextBlock x:Name="txt" Text="{services:Loc spark.chip}" FontSize="11.5" FontWeight="SemiBold"
+                                            <TextBlock x:Name="txt" Text="{Binding SparkChipText}" FontSize="11.5" FontWeight="SemiBold"
+                                                       MaxWidth="190" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
                                                        Foreground="{DynamicResource Spark.Chip.Foreground}" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </Border>
@@ -378,9 +387,18 @@
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="bd" Property="Background" Value="{DynamicResource Spark.Chip.Hover.Background}"/>
                                         </Trigger>
-                                        <DataTrigger Binding="{Binding IsSparkActive}" Value="True">
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Checking">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Status.Warning}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Online">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="InUse">
                                             <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
                                             <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.Spark.Active}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Unreachable">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Status.Danger}"/>
                                         </DataTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -1994,7 +2012,13 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets"
                                                    FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0"
-                                                   Foreground="{DynamicResource Text.Muted}"/>
+                                                   Foreground="{DynamicResource Text.Muted}"
+                                                   Visibility="{Binding HasLogo, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                        <!-- A brand row (DGX Spark): the vendor's own logo on white, at its minimum size or larger. -->
+                                        <Border CornerRadius="4" Background="White" Padding="5,3" Margin="0,0,10,0" VerticalAlignment="Center"
+                                                Visibility="{Binding HasLogo, Converter={StaticResource BoolVis}}">
+                                            <Image Source="{Binding Logo}" Height="15" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                        </Border>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" FontSize="13"
                                                        Foreground="{DynamicResource Text.Primary}"

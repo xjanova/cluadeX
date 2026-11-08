@@ -7,6 +7,9 @@ namespace CluadeX.ViewModels;
 public class PaletteItem
 {
     public string Icon { get; set; } = "";      // Segoe MDL2 glyph
+    /// <summary>A brand's own logo drawn on a white tile instead of <see cref="Icon"/> (the DGX Spark row: NVIDIA's logo).</summary>
+    public System.Windows.Media.ImageSource? Logo { get; set; }
+    public bool HasLogo => Logo != null;
     public string Title { get; set; } = "";
     public string Subtitle { get; set; } = "";
     /// <summary>Short badge: Page / Skill / File.</summary>

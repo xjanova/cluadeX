@@ -151,6 +151,10 @@ public partial class App : Application
         // each helper TryLogToDebugService call no-ops silently.
         var dbg = _serviceProvider.GetService<DebugLogService>();
         dbg?.Info("App", "MainWindow shown, starting background services");
+        // The title-bar DGX Spark chip shows the remembered Spark's live status: checked now and every 30 s
+        // (nothing goes on the network until a Spark has been used once).
+        try { _serviceProvider.GetService<DgxSparkService>()?.StartLinkMonitor(); }
+        catch (Exception ex) { dbg?.Warn("App", "DGX Spark link monitor did not start", ex); }
         CluadeX.Helpers.UiStallWatchdog.Start(Dispatcher, dbg);
         if (dbg != null) CluadeX.Services.Safety.SafeDelete.Log = m => dbg.Warn("Safety", m);   // every refused delete is visible
 
@@ -1076,6 +1080,7 @@ public partial class App : Application
         services.AddSingleton<XmanLicenseService>();
         // DgxSparkService — CluadeX driving the model an NVIDIA DGX Spark serves on the LAN (Ollama).
         services.AddSingleton<DgxSparkService>();
+        services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<DgxSparkService>());   // stops the link monitor
         services.AddSingleton<BugReportService>();
         services.AddSingleton<AutoUpdateService>();
         // On exit: a downloaded update installs once the process is gone; a download stops and resumes next launch.
