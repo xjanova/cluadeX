@@ -408,6 +408,7 @@ public partial class CluadexBuddy
             _clipLoop = loop;
             _clipThen = then;
             _front.Position = TimeSpan.Zero;
+            SetMuted(_front, name);
             if (!_paused) _front.Play();
             return true;
         }
@@ -421,14 +422,51 @@ public partial class CluadexBuddy
         next.Opacity = 0;
         Panel.SetZIndex(next, 2);
         if (_front != null) Panel.SetZIndex(_front, 1);
-        // her sound: on when CluadeX is in front, or for what is meant to reach the owner wherever they are (a spoken
-        // line, an away call); muted otherwise, so a sip of coffee never sounds from a window in the background
-        next.IsMuted = !(SoundsOn && (Spoken.Contains(name) || _forcePlay || _window is not { IsActive: false }));
+        Silence(next);   // not on screen yet: silent until it opens and fades in (OnClipOpened)
         next.Source = new Uri(Path.Combine(ClipDir, name + ".mp4"), UriKind.Absolute);
         next.Play();
         if (_paused) next.Pause();
         return true;
     }
+
+    /// <summary>
+    /// Her sound for <paramref name="name"/> on <paramref name="me"/>, decided NOW: on when CluadeX is in front, or for
+    /// what is meant to reach the owner wherever they are (a spoken line, an away call); muted otherwise, so a sip of
+    /// coffee never sounds from a window in the background. Asked again whenever that can change — each loop, the window
+    /// losing or getting the focus, the sound setting (owner 2026-11-08: "ปิดเสียงอวาต้าแล้วทำไมยังมีเสียงหลุดมาอีก …
+    /// โดยเฉพาะเวลาไม่ได้โฟกัสโปรแกรม"): it used to be decided once when a clip started, so a working loop begun while the
+    /// owner was here went on talking for as long as the run lasted after they left.
+    /// </summary>
+    /// <para>Only the clip ON SCREEN (<see cref="_front"/>) may ever be heard: the other player, opening or fading out
+    /// underneath, is always silent — the owner heard clapping while she was seen playing on her iPad (a clip with no
+    /// sound track at all), i.e. the player hidden under her.</para>
+    private void SetMuted(MediaElement me, string name)
+    {
+        bool muted = me != _front || !(SoundsOn && (Spoken.Contains(name) || _forcePlay || _window is not { IsActive: false }));
+        me.IsMuted = muted;
+        me.Volume = muted ? 0 : 0.5;   // a second guard: silent even if the player missed the mute
+    }
+
+    private static void Silence(MediaElement me) { me.IsMuted = true; me.Volume = 0; }
+
+    /// <summary>The clip a player holds ("" when none).</summary>
+    private static string ClipName(MediaElement? me) => Path.GetFileNameWithoutExtension(me?.Source?.LocalPath ?? "");
+
+    /// <summary>Both players' sound asked again (the focus or the sound setting changed).</summary>
+    private void ResyncSound()
+    {
+        if (!_clipsHooked) return;
+        foreach (var me in new[] { ClipA, ClipB })
+        {
+            // a player that is neither on screen nor opening is left over: it must not go on playing under her
+            if (me.Source != null && me != _front && me != _pending) Close(me);
+            if (me.Source != null) SetMuted(me, ClipName(me));
+            else Silence(me);
+        }
+    }
+
+    /// <summary>The window lost or got the focus: the clips playing now follow at once, not only the next one.</summary>
+    public void OnFocusChanged() => ResyncSound();
 
     private void OnClipOpened(object sender, RoutedEventArgs e)
     {
@@ -436,6 +474,8 @@ public partial class CluadexBuddy
         _pending = null;
         var old = _front;
         _front = me;
+        if (old != null && old != me) Silence(old);   // fading out: seen a moment longer, never heard
+        SetMuted(me, ClipName(me));
         var fadeIn = new DoubleAnimation(1, TimeSpan.FromMilliseconds(260)) { FillBehavior = FillBehavior.HoldEnd };
         fadeIn.Completed += (_, _) =>
         {
@@ -452,6 +492,7 @@ public partial class CluadexBuddy
         if (_clipLoop)
         {
             me.Position = TimeSpan.Zero;
+            SetMuted(me, ClipName(me));
             me.Play();
             return;
         }
@@ -494,6 +535,7 @@ public partial class CluadexBuddy
         me.Opacity = 0;
         try { me.Close(); } catch (InvalidOperationException) { }
         me.Source = null;
+        Silence(me);
     }
 
     /// <summary>The clip pauses and resumes with her storyboard (hidden, minimised, or calm while CluadeX is in the background).</summary>

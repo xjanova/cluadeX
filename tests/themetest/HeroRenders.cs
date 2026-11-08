@@ -231,7 +231,14 @@ internal static partial class Program
         Field("_workingSince", DateTime.UtcNow - TimeSpan.FromSeconds(20));
         await Mood(BuddyMood.Happy);
         Check("voice [done]: a long turn ends with a \"done!\" line", CluadexBuddy.DoneLines.Contains(buddy.ClipShown), buddy.ClipShown);
+        // the line is heard once its player is the one on screen (it opens silent underneath, then fades in)
+        for (int i = 0; i < 20 && !players.Any(p => p.Source != null && !p.IsMuted); i++) await Idle(100);
         Check("voice [done]: a spoken line can be heard", players.Any(p => p.Source != null && !p.IsMuted));
+        // owner 2026-11-08: clapping while she was seen on her iPad — the player hidden under her was heard
+        var front = (System.Windows.Controls.MediaElement)typeof(CluadexBuddy).GetField("_front", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(buddy);
+        Check("voice: only the clip on screen can be heard (the other player is silent)",
+              front != null && !front.IsMuted && players.Count(p => !p.IsMuted) == 1 && players.Where(p => p != front).All(p => p.Volume == 0),
+              string.Join(" | ", players.Select(p => $"{System.IO.Path.GetFileName(p.Source?.LocalPath ?? "-")} muted={p.IsMuted} vol={p.Volume}")));
         await Mood(BuddyMood.Waiting);
         Check("voice [gap]: right after a line she only gestures", !CluadexBuddy.Spoken.Contains(buddy.ClipShown) && buddy.SceneShown == BuddyMood.Waiting, buddy.ClipShown);
         await Mood(BuddyMood.Working);
@@ -364,6 +371,31 @@ internal static partial class Program
             Check("clips again: saved, her clip plays, the slideshow is gone",
                   cfg.BuddyDisplay == "clips" && buddy.ClipShown != "" && buddy.SlideShown == "" && stills.IsVisible,
                   $"{cfg.BuddyDisplay} '{buddy.ClipShown}' '{buddy.SlideShown}'");
+        }
+        {
+            // CluadeX in the background, whatever the harness window's focus: she is handed a window that is never active
+            var realWindow = typeof(CluadexBuddy).GetField("_window", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(buddy);
+            Field("_window", new Window());
+            try {
+            // what plays follows the focus at once: a working loop (not a spoken line) heard while it may be (as during an
+            // away call), quiet the moment it may not — before, it kept the sound it started with for the whole run
+            CluadexBuddy.SoundsOn = true;
+            await Mood(BuddyMood.Idle);
+            await Mood(BuddyMood.Working);
+            System.Windows.Controls.MediaElement Front() =>
+                (System.Windows.Controls.MediaElement)typeof(CluadexBuddy).GetField("_front", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(buddy);
+            for (int i = 0; i < 20 && (Front() is not { } f || System.IO.Path.GetFileNameWithoutExtension(f.Source?.LocalPath ?? "") != buddy.ClipShown); i++) await Idle(100);
+            bool quietAway = Front() is { IsMuted: true };   // started with CluadeX in the background: quiet from the start
+            Field("_forcePlay", true);                        // an away call: she may be heard — the clip playing follows
+            buddy.OnFocusChanged();
+            bool heard = Front() is { IsMuted: false };
+            Field("_forcePlay", false);
+            buddy.OnFocusChanged();
+            Check("voice: CluadeX in the background — the working clip playing goes quiet at once, not only the next one",
+                  quietAway && heard && !CluadexBuddy.Spoken.Contains(buddy.ClipShown) && players.All(p => p.IsMuted && p.Volume == 0),
+                  $"{buddy.ClipShown} quiet={quietAway} heard={heard} sounds={CluadexBuddy.SoundsOn} mood={buddy.Shown} | " + string.Join(" | ", players.Select(p => $"{System.IO.Path.GetFileName(p.Source?.LocalPath ?? "-")} muted={p.IsMuted}")));
+            } finally { Field("_forcePlay", false); Field("_window", realWindow); buddy.OnFocusChanged(); }
+            await Mood(BuddyMood.Idle);
         }
         CluadexBuddy.SoundsOn = soundsWere;
 

@@ -155,8 +155,8 @@ public sealed class NodeGraphGpu : Border, INodeGraphSurface
     {
         _ready = false;
         ResetSent();
-        var web = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 11, 15, 23) };
-        if (TryColor("Surface.Sunken") is { } bg) web.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, bg.R, bg.G, bg.B);
+        var bg = CanvasBackground();
+        var web = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, bg.R, bg.G, bg.B) };
         _web = web;
         Child = web;
         try
@@ -383,7 +383,27 @@ public sealed class NodeGraphGpu : Border, INodeGraphSurface
         if (json == _sentTheme) return;
         _sentTheme = json;
         Post(json);
-        if (TryColor("Surface.Sunken") is { } bg && _web != null) _web.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, bg.R, bg.G, bg.B);
+        if (_web != null) { var bg = CanvasBackground(); _web.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, bg.R, bg.G, bg.B); }
+    }
+
+    /// <summary>
+    /// The canvas colour as the eye sees it: Surface.Sunken laid over the page behind it. Most themes make it a dark,
+    /// near-opaque colour, but Neon's is a 4 % cyan TINT (#0A00E5FF); taken as-is with its alpha forced to 255 it turned
+    /// the whole canvas solid cyan and made the graph read as a light theme (owner 2026-11-08 screenshot).
+    /// </summary>
+    internal Color CanvasBackground()
+    {
+        var page = TryColor("Page.Background") ?? TryColor("Bg.Base") ?? Color.FromRgb(11, 15, 23);
+        if (page.A < 255) page = Over(page, Colors.Black);
+        return TryColor("Surface.Sunken") is { } sunken ? Over(sunken, page) : page;
+    }
+
+    /// <summary><paramref name="top"/> painted over the opaque <paramref name="under"/>.</summary>
+    public static Color Over(Color top, Color under)
+    {
+        double a = top.A / 255.0;
+        byte Mix(byte t, byte u) => (byte)Math.Round(t * a + u * (1 - a));
+        return Color.FromRgb(Mix(top.R, under.R), Mix(top.G, under.G), Mix(top.B, under.B));
     }
 
     private Color? TryColor(string key) => (TryFindResource(key) ?? Application.Current?.TryFindResource(key)) switch
@@ -397,7 +417,7 @@ public sealed class NodeGraphGpu : Border, INodeGraphSurface
     private string ThemeJson()
     {
         string C(string key, string fallback) => TryColor(key) is { } c ? Hex(c) : fallback;
-        var bg = TryColor("Surface.Sunken") ?? Color.FromRgb(11, 15, 23);
+        var bg = CanvasBackground();
         bool light = (0.2126 * bg.R + 0.7152 * bg.G + 0.0722 * bg.B) / 255 > 0.5;
         string L(string key) => Loc?.Invoke(key) ?? key;
         using var ms = new MemoryStream();

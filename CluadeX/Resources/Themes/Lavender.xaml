@@ -531,6 +531,12 @@
 
     <!-- Code editor (AvalonEdit + minimap + breakpoint gutter) and syntax colours -->
     <SolidColorBrush x:Key="Editor.Background" Color="Transparent"/>
+    <!-- Embedded terminal: always a console, so it never reads as more editor (owner 2026-11-08) -->
+    <SolidColorBrush x:Key="Terminal.Background" Color="#F20C0512"/>
+    <SolidColorBrush x:Key="Terminal.Foreground" Color="#FFEAD8F5"/>
+    <SolidColorBrush x:Key="Terminal.Prompt" Color="#FF5CFFB0"/>
+    <SolidColorBrush x:Key="Terminal.Input" Color="#FF1C0F26"/>
+    <SolidColorBrush x:Key="Terminal.Accent" Color="#FFC77DFF"/>
     <SolidColorBrush x:Key="Editor.Foreground" Color="#F6E8FF"/>
     <SolidColorBrush x:Key="Editor.LineNumber" Color="#7F33AE"/>
     <SolidColorBrush x:Key="Editor.Caret" Color="#A44CFF"/>

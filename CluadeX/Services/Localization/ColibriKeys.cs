@@ -33,8 +33,8 @@ internal static class ColibriKeys
 
         ["colibri.noPython"] = new()
         {
-            ["en"] = "Colibri's launcher needs Python 3 (the engines are C). Install it, then press Refresh.",
-            ["th"] = "ตัวเปิดของ Colibri ต้องใช้ Python 3 (ตัวเครื่องยนต์เป็น C) ติดตั้งก่อน แล้วกดรีเฟรช",
+            ["en"] = "Colibri's launcher needs Python 3.10 or newer (the engines are C). Install it, then press Refresh.",
+            ["th"] = "ตัวเปิดของ Colibri ต้องใช้ Python 3.10 ขึ้นไป (ตัวเครื่องยนต์เป็น C) ติดตั้งก่อน แล้วกดรีเฟรช",
         },
         ["colibri.installPython"] = new() { ["en"] = "Install Python (winget)", ["th"] = "ติดตั้ง Python (winget)" },
 
@@ -108,7 +108,7 @@ internal static class ColibriKeys
         ["colibri.err.checksum"] = new() { ["en"] = "The download did not match the release checksum — nothing was installed.", ["th"] = "ไฟล์ที่ดาวน์โหลดไม่ตรงกับ checksum ของรุ่นนี้ — ยังไม่ได้ติดตั้งอะไร" },
         ["colibri.err.noAsset"] = new() { ["en"] = "The release has no Windows build.", ["th"] = "รุ่นนี้ไม่มีไฟล์สำหรับ Windows" },
         ["colibri.err.tooBig"] = new() { ["en"] = "The release file is far bigger than expected — stopped.", ["th"] = "ไฟล์รุ่นนี้ใหญ่ผิดปกติ — หยุดไว้ก่อน" },
-        ["colibri.err.noPython"] = new() { ["en"] = "Python 3 was not found.", ["th"] = "ไม่พบ Python 3 ในเครื่อง" },
+        ["colibri.err.noPython"] = new() { ["en"] = "Python 3.10 or newer was not found.", ["th"] = "ไม่พบ Python 3.10 ขึ้นไปในเครื่อง" },
         ["colibri.err.notInstalled"] = new() { ["en"] = "Colibri is not installed.", ["th"] = "ยังไม่ได้ติดตั้ง Colibri" },
         ["colibri.err.start"] = new() { ["en"] = "Could not start the setup.", ["th"] = "เริ่มการตั้งค่าไม่ได้" },
         ["colibri.err.network"] = new() { ["en"] = "Could not reach GitHub: {0}", ["th"] = "ติดต่อ GitHub ไม่ได้: {0}" },

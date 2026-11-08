@@ -2380,13 +2380,49 @@
                             </ControlTemplate>
                         </Button.Template>
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE756;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock Text="{services:Loc editor.terminal}" FontSize="11" Foreground="{DynamicResource Text.Muted}"
-                                       VerticalAlignment="Center"/>
-                            <TextBlock Text="·" Margin="8,0" FontSize="11" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
-                            <TextBlock Text="pwsh" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
-                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center"/>
+                            <!-- Reads as a terminal at a glance (owner 2026-11-08: "ให้เด่น มันไม่รู้ว่าเป็นเทอร์มินัล"):
+                                 a console tile, the name in full colour, the shell it really runs, and whether it is alive. -->
+                            <Border Background="{DynamicResource Terminal.Background}" CornerRadius="4" Width="24" Height="18"
+                                    BorderBrush="{DynamicResource Terminal.Accent}" BorderThickness="1" Margin="0,0,8,0">
+                                <TextBlock Text="&gt;_" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10" FontWeight="Bold"
+                                           Foreground="{DynamicResource Terminal.Prompt}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Text="{services:Loc editor.terminal}" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                            <Border Background="{DynamicResource Terminal.Background}" CornerRadius="3" Padding="6,1" Margin="8,0,0,0"
+                                    VerticalAlignment="Center">
+                                <TextBlock Text="{services:Loc ide.termShell}" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                           Foreground="{DynamicResource Terminal.Prompt}"/>
+                            </Border>
+                            <Ellipse Width="7" Height="7" Margin="10,0,5,0" VerticalAlignment="Center">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Fill" Value="{DynamicResource Text.Faint}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsTerminalRunning}" Value="True">
+                                                <Setter Property="Fill" Value="{DynamicResource Status.Success}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <TextBlock FontSize="11" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="{services:Loc ide.termIdle}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsTerminalRunning}" Value="True">
+                                                <Setter Property="Text" Value="{services:Loc ide.termReady}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{services:Loc ide.termOpenHint}" FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Text.Muted}"
+                                       Visibility="{Binding IsTerminalOpen, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                             <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="9" Margin="10,0,0,0"
                                        VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}">
                                 <TextBlock.Style>
@@ -2407,7 +2443,10 @@
                     </Button>
 
                     <!-- Expanded terminal: output + input line -->
-                    <Grid Visibility="{Binding IsTerminalOpen, Converter={StaticResource BoolVis}}">
+                    <Border Background="{DynamicResource Terminal.Background}" BorderThickness="0,2,0,0"
+                            BorderBrush="{DynamicResource Terminal.Accent}"
+                            Visibility="{Binding IsTerminalOpen, Converter={StaticResource BoolVis}}">
+                    <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="170"/>
                             <RowDefinition Height="Auto"/>
@@ -2415,9 +2454,9 @@
                         <!-- No Text binding: the code-behind feeds this box chunk by chunk (OnTerminalText). -->
                         <TextBox x:Name="TerminalOut" Grid.Row="0"
                                  IsReadOnly="True" TextWrapping="NoWrap"
-                                 Background="{DynamicResource Editor.Background}" BorderThickness="0"
-                                 Foreground="{DynamicResource Text.Secondary}"
-                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
+                                 Background="Transparent" BorderThickness="0"
+                                 Foreground="{DynamicResource Terminal.Foreground}"
+                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
                                  Padding="12,6"
                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                  TextChanged="OnTerminalOutputChanged"/>
@@ -2427,17 +2466,34 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="&gt;" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
-                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="4,0,6,0"/>
-                            <Border Grid.Column="1" Background="{DynamicResource Surface.Input}" CornerRadius="4"
-                                    BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
+                            <TextBlock Text="PS&gt;" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12" FontWeight="Bold"
+                                       Foreground="{DynamicResource Terminal.Prompt}" VerticalAlignment="Center" Margin="4,0,8,0"/>
+                            <Border Grid.Column="1" Background="{DynamicResource Terminal.Input}" CornerRadius="4"
+                                    BorderBrush="{DynamicResource Terminal.Accent}" BorderThickness="1">
+                                <Grid>
+                                <!-- Placeholder: says what the box is for until something is typed -->
+                                <TextBlock Text="{services:Loc ide.termPlaceholder}" Margin="10,0" VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12" IsHitTestVisible="False"
+                                           Foreground="{DynamicResource Terminal.Foreground}" Opacity="0.4">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding TerminalInput}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                                 <TextBox Text="{Binding TerminalInput, UpdateSourceTrigger=PropertyChanged}"
                                          Background="Transparent" BorderThickness="0" Padding="8,4"
-                                         Foreground="{DynamicResource Text.Primary}"
-                                         CaretBrush="{DynamicResource Status.Warning}"
+                                         Foreground="{DynamicResource Terminal.Foreground}"
+                                         CaretBrush="{DynamicResource Terminal.Prompt}"
                                          FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
                                          KeyDown="OnTerminalInputKeyDown"
                                          PreviewKeyDown="OnTerminalInputPreviewKeyDown"/>
+                                </Grid>
                             </Border>
                             <Button Grid.Column="2" Command="{Binding InterruptTerminalCommand}" Cursor="Hand"
                                     Margin="6,0,0,0" Padding="8,3" Background="Transparent" BorderThickness="1"
@@ -2463,6 +2519,7 @@
                             </Button>
                         </Grid>
                     </Grid>
+                    </Border>
                 </StackPanel>
             </Border>
         </Grid>

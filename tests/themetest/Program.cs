@@ -26,8 +26,8 @@ namespace ThemeTest;
 /// shown OFF-SCREEN (never on the desktop, never activated) at 1440×900, and every main page and dialog is
 /// rendered with RenderTargetBitmap into PNGs:
 ///
-///   E:\cluadex-bld\themes\golden\&lt;page&gt;.png              the look BEFORE the theme work (captured once, --golden)
-///   E:\cluadex-bld\themes\renders\&lt;theme&gt;\&lt;page&gt;.png    every theme the build ships (Midnight first, at startup)
+///   D:\Temp\cluadex-bld\themes\golden\&lt;page&gt;.png              the look BEFORE the theme work (captured once, --golden)
+///   D:\Temp\cluadex-bld\themes\renders\&lt;theme&gt;\&lt;page&gt;.png    every theme the build ships (Midnight first, at startup)
 ///   ...\_contact.png                                         one contact sheet per set
 ///   ...\diff\&lt;page&gt;.png                                   changed pixels in red over the golden, when any changed
 ///
@@ -48,8 +48,8 @@ namespace ThemeTest;
 internal static partial class Program
 {
     const int W = 1440, H = 900;
-    static string OutRoot = @"E:\cluadex-bld\themes";
-    static string FixtureRoot = @"E:\cluadex-bld\themes";   // --titlebar moves it under --out (never E: for that mode)
+    static string OutRoot = @"D:\Temp\cluadex-bld\themes";
+    static string FixtureRoot = @"D:\Temp\cluadex-bld\themes";   // --titlebar moves it under --out
     static int Tolerance = 8;
     static double MaxChangedPct = 0.1;
     static bool GoldenMode, Force;
@@ -114,7 +114,7 @@ internal static partial class Program
                 case "--hero": HeroOnly = true; break;       // น้อง CluadeX in the corner + text size and font (HeroRenders.cs)
                 case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
                 case "--setup-wizard": SetupWizardOnly = true; break;   // the first-run setup wizard, every page and state (SetupWizardRenders.cs)
-                case "--titlebar": TitleBarOnly = true; break;
+                case "--titlebar": TitleBarOnly = true; break;   // the main title bar in every theme and width (TitleBarRenders.cs)
                 case "--uninstall": UninstallOnly = true; break;   // the uninstall page, every page and state (UninstallRenders.cs)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
             }
@@ -558,7 +558,7 @@ internal static partial class Program
         Directory.CreateDirectory(Settings.DataRoot);
 
         // The setup wizard needs none of the fixture project, the debug-log redirect or the theme pages, all of
-        // which live on E: — branch before any of them. Its renders go to --out (never the E: default).
+        // which live in the fixture area — branch before any of them. Its renders go to --out.
         if (SetupWizardOnly)
         {
             if (OutRoot.StartsWith("E:", StringComparison.OrdinalIgnoreCase)) { Log("FATAL --setup-wizard needs --out on D: (E: is the USB disk)"); return 2; }
@@ -998,6 +998,41 @@ internal static partial class Program
     }
 
     /// <summary>Render every page and dialog into renders\&lt;set&gt;\ (or golden\). Returns page → saved PNG path.</summary>
+    /// <summary>
+    /// The Code Editor's terminal, open, after a real command (owner 2026-11-08: "เทอมินัล ให้เด่น … มันใช้ได้จริงไหม"):
+    /// the shell is alive, the command and its answer are in the box, and the drawer is painted as a console, not as
+    /// more editor. Saved as code-editor-terminal.png (no golden: a live shell's output is not pixel-stable); closed again after.
+    /// </summary>
+    static async Task TerminalLook(string set, string dir)
+    {
+        var vm = MainVm.CodeEditorVM;
+        var view = Find<CluadeX.Views.CodeEditorView>((DependencyObject)RootVisual(MainWin)).FirstOrDefault();
+        var box = view?.FindName("TerminalOut") as TextBox;
+        if (box == null) { Check($"{set}/terminal: the drawer is on the code page", false); return; }
+        try
+        {
+            vm.IsTerminalOpen = true;
+            vm.TerminalInput = "Write-Output \"terminal-ok $((Get-Location).ProviderPath)\"";
+            vm.RunTerminalCommand.Execute(null);
+            bool answered = false;
+            for (int i = 0; i < 60 && !answered; i++) { await Idle(150); answered = box.Text.Contains("terminal-ok " + FixtureProject); }
+            Check($"{set}/terminal: opening it starts a live shell that answers a typed command in the project folder",
+                vm.IsTerminalRunning && answered && box.Text.Contains("PS> Write-Output"), box.Text.Length > 400 ? box.Text[^400..] : box.Text);
+            var bg = (box.Parent as FrameworkElement)?.Parent as Border;
+            var editorBg = view.TryFindResource("Editor.Background") as SolidColorBrush;
+            Check($"{set}/terminal: the drawer has its own console background, not the editor's",
+                bg?.Background is SolidColorBrush b && b.Color.A > 0xC0 && (editorBg == null || b.Color != editorBg.Color),
+                (bg?.Background as SolidColorBrush)?.Color.ToString() ?? "no border");
+            var bmp = await Stable(() => (RootVisual(MainWin), W, H), $"{set}/code-editor-terminal");
+            SavePng(bmp, Path.Combine(dir, "code-editor-terminal.png"));
+        }
+        finally
+        {
+            vm.IsTerminalOpen = false;
+            await Idle(100);
+        }
+    }
+
     static async Task<Dictionary<string, string>> RenderSet(string set, string dirOverride = null)
     {
         string dir = dirOverride ?? Path.Combine(OutRoot, "renders", set);
@@ -1036,6 +1071,7 @@ internal static partial class Program
                 await Idle(200);
                 await ExpandFolderCheck(set);
                 await EditorToolsCheck(set);
+                await TerminalLook(set, dir);
             }
         }
         settingsVm.SelectedCategory = "provider";
