@@ -76,7 +76,15 @@ internal static partial class Program
         // One sub-agent the way agent_spawn runs it: its own control on the run's token, its loop on the control's token.
         Task<string> Spawn(int id, SubAgentControl ctl) => (Task<string>)held.Invoke(agent, [provider,
             new SubAgentRequest($"Steer task {id}", "", "explore"), ctl.Token,
-            Activator.CreateInstance(optsType, id, $"Steer #{id}", "explore", "claude-haiku-5-5", null, null, true, null, null, ctl)])!;
+            Options(id, $"Steer #{id}", "explore", "claude-haiku-5-5", null, null, true, null, null, ctl)])!;
+        // The record's constructor: the leading arguments given here, every later one its own default (Activator does not
+        // fill optional parameters, so a field added to SubAgentRunOptions used to break this test).
+        object Options(params object?[] lead)
+        {
+            var ps = optsType.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First().GetParameters();
+            var all = ps.Select((p, i) => i < lead.Length ? lead[i] : p.DefaultValue).ToArray();
+            return Activator.CreateInstance(optsType, all)!;
+        }
         var runs = (System.Collections.IList)typeof(ChatViewModel).GetField("_runs", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(Vm)!;
         object chatRun = null;
         AgentNode NodeOf(int id) => Vm.Messages.Where(m => m.AgentNodes != null).SelectMany(m => m.AgentNodes!).LastOrDefault(n => n.Id == id);

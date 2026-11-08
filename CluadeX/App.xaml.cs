@@ -133,6 +133,9 @@ public partial class App : Application
         // fails to load (or a damaged setting) leaves the default Midnight in place — never a startup failure.
         try { _serviceProvider.GetRequiredService<ThemeService>().ApplySaved(); }
         catch (Exception ex) { WriteCrashLog("theme", ex); }
+        // The text size and font (Settings › General): the font goes on top of the theme's, so it comes after it.
+        try { _serviceProvider.GetRequiredService<TypographyService>().ApplySaved(); }
+        catch (Exception ex) { WriteCrashLog("typography", ex); }
 
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         // Shown after the splash (end of this method), once the startup checks have run.
@@ -1076,6 +1079,8 @@ public partial class App : Application
         services.AddSingleton<LocalizationService>();
         // ThemeService — swaps Resources/Themes/<id>.xaml in Application.Resources at runtime (Settings › General).
         services.AddSingleton<ThemeService>();
+        // TypographyService — the owner's text size (a zoom of the main window) and UI font (Settings › General).
+        services.AddSingleton<TypographyService>();
         services.AddSingleton<ActivationService>();
         services.AddSingleton<XmanLicenseService>();
         // DgxSparkService — CluadeX driving the model an NVIDIA DGX Spark serves on the LAN (Ollama).
@@ -1384,7 +1389,7 @@ public partial class App : Application
         catch { /* logging must never crash crash handling */ }
     }
 
-    private static void WriteCrashLog(string source, Exception ex)
+    internal static void WriteCrashLog(string source, Exception ex)
     {
         try
         {

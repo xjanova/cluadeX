@@ -42,6 +42,11 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
   </ItemGroup>
 
+  <!-- น้อง CluadeX's clips sit next to the exe (CluadexBuddy.ClipDir): copied from the build under test. -->
+  <ItemGroup>
+    <None Include="$(CluadeXBin)Assets\Buddy\Clips\*.mp4" Link="Assets\Buddy\Clips\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- portable.txt next to the exe => SettingsService uses <exe>\Data as its data root, so this
        harness never touches the user's real ~/.cluadex (settings, chat DB, buddy, license). -->
   <ItemGroup>
