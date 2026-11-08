@@ -48,6 +48,20 @@ internal static class ColibriWire
         string noSums = Release.Replace("SHA256SUMS.txt", "NOTES.txt");
         check("colibri-release", "a release with no checksum list is not installed", ColibriFacts.PickRelease(noSums) == null, "");
 
+        // owner 2026-11-08: `py -3` gave Visual Studio's 3.9 and colibri died on @dataclass(slots=True) (needs 3.10)
+        string pyList = " -3.9-64        C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\Python39_64\\python.exe\r\n"
+                      + " -3.12-64 *     C:\\Users\\x\\AppData\\Local\\Programs\\Python\\Python312\\python.exe\r\n"
+                      + " -V:3.13 *        C:\\Py313\\python.exe\r\n\r\nInstalled Pythons found by py Launcher for Windows\r\n";
+        var paths = ColibriService.ParsePyListPaths(pyList).ToList();
+        check("colibri-python", "every interpreter `py -0p` lists is a candidate, in both launcher formats (default * marker dropped)",
+            paths.Count == 3 && paths[0].EndsWith(@"Python39_64\python.exe") && paths[1].EndsWith(@"Python312\python.exe") && paths[2] == @"C:\Py313\python.exe",
+            string.Join(" | ", paths));
+        check("colibri-python", "Python below 3.10 is refused (colibri uses dataclass slots); 3.10 and newer, incl. 3.100, pass",
+            ColibriService.ParsePythonVersion("3 9\r\n") is { } v39 && v39 < ColibriService.MinPython
+            && ColibriService.ParsePythonVersion("3 10") >= ColibriService.MinPython
+            && ColibriService.ParsePythonVersion("3 100") >= ColibriService.MinPython
+            && ColibriService.ParsePythonVersion("Python 3.12") == null, "");
+
         string hex = new string('a', 64), hex2 = new string('B', 64);
         string sums = $"{hex}  colibri-v2.1.0-windows-x86_64.zip\n{hex2} *colibri-v2.1.0-windows-x86_64-cuda.zip\nnot a line\n";
         check("colibri-sha", "checksums are read in both sha256sum styles, lower-cased; a file not listed has none",

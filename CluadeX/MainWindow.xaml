@@ -228,6 +228,61 @@
                                RenderOptions.BitmapScalingMode="HighQuality"/>
                         <TextBlock FontSize="19" FontWeight="Black" FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"
                                    Margin="7,0,0,1"><Run Text="Cluade" Foreground="{DynamicResource Text.Primary}"/><Run Text="X" Foreground="{DynamicResource Accent.1}"/></TextBlock>
+                        <!-- License chip — right after the name (owner 2026-11-08) and outside the gliding row, so it is
+                             always in view: a glowing invitation when this PC has no key, a countdown during the free
+                             trial, a quiet "Pro" once bought. Opens the license dialog. -->
+                        <Button Height="26" Margin="12,0,0,0" VerticalAlignment="Center"
+                                Command="{Binding OpenLicenseCommand}" Cursor="Hand"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="{Binding LicenseChipTip}">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Foreground" Value="{DynamicResource License.Chip.Foreground}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Border}"/>
+                                    <Setter Property="Background" Value="{DynamicResource License.Chip.Background}"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                                        CornerRadius="13" Padding="12,0"
+                                                        Effect="{DynamicResource Glow.License.Chip}">
+                                                    <ContentPresenter VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
+                                                    </Trigger>
+                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
+                                                        <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.License.Trial}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
+                                                        <Setter TargetName="bd" Property="Effect" Value="{x:Null}"/>
+                                                    </DataTrigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
+                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Trial.Foreground}"/>
+                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Trial.Background}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
+                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Active.Foreground}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Active.Border}"/>
+                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Active.Background}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding LicenseChipText}" FontSize="11.5" FontWeight="SemiBold"
+                                           FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
                     <!-- Too narrow for everything: the row glides to show each item in turn, and follows the mouse -->
                     <views:MarqueeScroller Grid.Column="1">
@@ -240,7 +295,7 @@
                                  caption buttons on the right are never pushed off-screen (they were at 1280 px). -->
                             <ColumnDefinition Width="6*"/>    <!-- Cmd palette pill -->
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>  <!-- License chip -->
+                            <ColumnDefinition Width="Auto"/>  <!-- Today + DGX Spark chips -->
                             <ColumnDefinition Width="Auto"/>  <!-- New Chat -->
                             <ColumnDefinition Width="Auto"/>  <!-- Open folder -->
                             <ColumnDefinition Width="Auto"/>  <!-- Bell -->
@@ -321,8 +376,7 @@
                             </Grid>
                         </Button>
 
-                        <!-- License chip — always in view: a glowing invitation when this PC has no key, a countdown
-                             during the free trial, a quiet "Pro" once bought. Opens the license dialog. -->
+                        <!-- Today's spend and the DGX Spark chip (the license chip moved next to the name, owner 2026-11-08) -->
                         <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
 
                         <!-- Today: what CluadeX spent on paid APIs, against the daily budget when one is set. Click: set it. -->
@@ -403,58 +457,6 @@
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Button.Template>
-                        </Button>
-                        <Button Height="26" Margin="4,0,2,0"
-                                Command="{Binding OpenLicenseCommand}" Cursor="Hand"
-                                WindowChrome.IsHitTestVisibleInChrome="True"
-                                ToolTip="{Binding LicenseChipTip}">
-                            <Button.Style>
-                                <Style TargetType="Button">
-                                    <Setter Property="Foreground" Value="{DynamicResource License.Chip.Foreground}"/>
-                                    <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Border}"/>
-                                    <Setter Property="Background" Value="{DynamicResource License.Chip.Background}"/>
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="Button">
-                                                <Border x:Name="bd" Background="{TemplateBinding Background}"
-                                                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                                                        CornerRadius="13" Padding="12,0"
-                                                        Effect="{DynamicResource Glow.License.Chip}">
-                                                    <ContentPresenter VerticalAlignment="Center"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
-                                                    </Trigger>
-                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
-                                                        <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.License.Trial}"/>
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
-                                                        <Setter TargetName="bd" Property="Effect" Value="{x:Null}"/>
-                                                    </DataTrigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
-                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Trial.Foreground}"/>
-                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Trial.Background}"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
-                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Active.Foreground}"/>
-                                            <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Active.Border}"/>
-                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Active.Background}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                <TextBlock Text="{Binding LicenseChipText}" FontSize="11.5" FontWeight="SemiBold"
-                                           FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"/>
-                            </StackPanel>
                         </Button>
                         </StackPanel>
 

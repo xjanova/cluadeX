@@ -48,12 +48,11 @@ public partial class CluadexBuddy
         _forcePlay = false;
     }
 
-    /// <summary>Sound turned off: the clip playing goes quiet at once (turned on, the next clip has sound).</summary>
+    /// <summary>Sound turned off: the clips playing go quiet at once; turned on: they follow the same rule as a new one.</summary>
     private void OnSoundsChanged()
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(OnSoundsChanged); return; }
-        if (SoundsOn) return;
-        ClipA.IsMuted = ClipB.IsMuted = true;
+        ResyncSound();
     }
 
     /// <summary>One check of the timer, with how long the owner has been idle (public for tests).</summary>
@@ -98,6 +97,7 @@ public partial class CluadexBuddy
         bool ok = PlayChain(chain, 0, () =>
         {
             _forcePlay = false;
+            ResyncSound();   // the call is over: what plays next in the background is quiet again
             bool going = StartScene(back, skipIntro: asleep);
             SyncPause();
             return going;

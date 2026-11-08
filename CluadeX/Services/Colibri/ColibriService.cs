@@ -145,14 +145,49 @@ public sealed class ColibriService
 
     // ─── Python (colibri's launcher, API gateway and setup are Python; the engines are C) ───
 
-    /// <summary>The Python 3 to run colibri with: the py launcher first (stays right with several versions installed), then
-    /// python on PATH. Null when there is none.</summary>
+    /// <summary>colibri's Python code uses <c>@dataclass(slots=True)</c>, which needs 3.10.</summary>
+    public static readonly Version MinPython = new(3, 10);
+
+    /// <summary>The interpreter paths `py -0p` lists, in its order (newest first). Both the classic launcher
+    /// (" -3.12-64 *   C:\...\python.exe") and the install manager (" -V:3.12 *   C:\...") formats are read. Asking
+    /// `py -3.N` for each version instead would let the install manager offer to download a missing one.</summary>
+    public static IEnumerable<string> ParsePyListPaths(string output)
+    {
+        foreach (var raw in output.Split('\n'))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(raw, @"^\s*-(?:V:)?\d\S*\s+(?:\*\s+)?(.+?)\s*$");
+            if (m.Success) yield return m.Groups[1].Value;
+        }
+    }
+
+    /// <summary>Candidates in the order they are tried. `py -3` alone is not enough: it can resolve to an older 3.x that
+    /// another product registered (Visual Studio ships a 3.9), so every interpreter the launcher knows comes next, then
+    /// the bare names on PATH.</summary>
+    private async Task<List<(string Exe, string[] Prefix)>> PythonCandidatesAsync(CancellationToken ct)
+    {
+        var list = new List<(string Exe, string[] Prefix)> { ("py", new[] { "-3" }) };
+        var listed = await RunAsync("py", new[] { "-0p" }, TimeSpan.FromSeconds(15), ct, env: false);
+        if (listed.Code == 0) list.AddRange(ParsePyListPaths(listed.Out).Select(p => (p, Array.Empty<string>())));
+        list.Add(("python", Array.Empty<string>()));
+        list.Add(("python3", Array.Empty<string>()));
+        return list;
+    }
+
+    /// <summary>Parse "major minor" printed by the probe; null when it is not a version.</summary>
+    public static Version? ParsePythonVersion(string output)
+    {
+        var parts = output.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 2 && int.TryParse(parts[0], out int major) && int.TryParse(parts[1], out int minor) ? new Version(major, minor) : null;
+    }
+
+    /// <summary>The Python (3.10 or newer) to run colibri with: the py launcher first (stays right with several versions
+    /// installed), then python on PATH. Null when there is none new enough.</summary>
     public async Task<(string Exe, string[] Prefix)?> FindPythonAsync(CancellationToken ct = default)
     {
-        foreach (var (exe, prefix) in new[] { ("py", new[] { "-3" }), ("python", Array.Empty<string>()), ("python3", Array.Empty<string>()) })
+        foreach (var (exe, prefix) in await PythonCandidatesAsync(ct))
         {
-            var r = await RunAsync(exe, prefix.Concat(new[] { "-c", "import sys;print(sys.version_info[0])" }), TimeSpan.FromSeconds(15), ct, env: false);
-            if (r.Code == 0 && r.Out.Trim().StartsWith("3", StringComparison.Ordinal)) return (exe, prefix);
+            var r = await RunAsync(exe, prefix.Concat(new[] { "-c", "import sys;print(sys.version_info[0], sys.version_info[1])" }), TimeSpan.FromSeconds(15), ct, env: false);
+            if (r.Code == 0 && ParsePythonVersion(r.Out) is { } v && v.Major == 3 && v >= MinPython) return (exe, prefix);
         }
         return null;
     }

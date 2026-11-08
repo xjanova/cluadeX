@@ -609,6 +609,12 @@
 
     <!-- Code editor: white page, Visual Studio 2005-era syntax colours (the XP-period IDE look) -->
     <SolidColorBrush x:Key="Editor.Background" Color="#FFFFFF"/>
+    <!-- Embedded terminal: always a console, so it never reads as more editor (owner 2026-11-08) -->
+    <SolidColorBrush x:Key="Terminal.Background" Color="#FF1E1F2B"/>
+    <SolidColorBrush x:Key="Terminal.Foreground" Color="#FFE3E5EE"/>
+    <SolidColorBrush x:Key="Terminal.Prompt" Color="#FF5FD38A"/>
+    <SolidColorBrush x:Key="Terminal.Input" Color="#FF2A2C3B"/>
+    <SolidColorBrush x:Key="Terminal.Accent" Color="#FF5B5FC7"/>
     <SolidColorBrush x:Key="Editor.Foreground" Color="#1C1E33"/>
     <SolidColorBrush x:Key="Editor.LineNumber" Color="#2B91AF"/>
     <SolidColorBrush x:Key="Editor.Caret" Color="#000000"/>
