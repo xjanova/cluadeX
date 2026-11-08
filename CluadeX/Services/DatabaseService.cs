@@ -574,18 +574,21 @@ public sealed class DatabaseService : IDisposable
     private const string PlanTag = "@plan";
 
     /// <summary>An agent map node as saved. A node saved while it was still running (the app closed mid-run) comes
-    /// back as stopped — nothing is running it any more.</summary>
+    /// back as stopped — nothing is running it any more. Color, Tier and Model came later (2026-11-08): a row saved
+    /// before them reads back empty, as it showed then.</summary>
     private sealed record AgentNodeRow(int Id, string Label, string Kind, string Task, string State, string Action,
-        int Steps, int ToolCalls, string Elapsed)
+        int Steps, int ToolCalls, string Elapsed, string? Color = null, string? Tier = null, string? Model = null)
     {
         public static AgentNodeRow From(AgentNode n) =>
-            new(n.Id, n.Label, n.Kind, n.Task, n.State, n.Action, n.Steps, n.ToolCalls, n.Elapsed);
+            new(n.Id, n.Label, n.Kind, n.Task, n.State, n.Action, n.Steps, n.ToolCalls, n.Elapsed,
+                n.Color.Length > 0 ? n.Color : null, n.Tier.Length > 0 ? n.Tier : null, n.Model.Length > 0 ? n.Model : null);
 
         public AgentNode ToNode() => new()
         {
             Id = Id, Label = Label ?? "", Kind = Kind ?? "", Task = Task ?? "",
             State = State == "running" ? "stopped" : State ?? "done",
             Action = Action ?? "", Steps = Steps, ToolCalls = ToolCalls, Elapsed = Elapsed ?? "",
+            Color = Color ?? "", Tier = Tier ?? "", Model = Model ?? "",
         };
     }
 

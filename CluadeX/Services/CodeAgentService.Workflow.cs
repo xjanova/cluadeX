@@ -65,9 +65,18 @@ public partial class CodeAgentService
                     ?? new AgentRunScope(call.SessionKey, worktree ?? (_fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null))
                     { Provider = provider, ProviderType = _providerManager.ActiveProviderType, AcceptEditsRoot = worktree };
         var kind = DispatchPolicy.KindOf(edit);
-        if (kind == SubAgentKind.Explore) scope.StepEffort = "low";
+        // Auto model (Settings ▸ Agent): a read-only workflow agent runs cheap — the cheapest model at low effort, a
+        // ceiling its own loop cannot raise. Off: the run's own model and effort.
+        bool auto = _settingsService.Settings.SubAgentAutoModel;
+        if (auto && kind == SubAgentKind.Explore)
+        {
+            scope.EffortCap = DispatchPolicy.EffortCapFor(Models.SubAgentTier.Cheap);
+            scope.SubAgentTier = "cheap";
+            scope.TierRunModel = RunModel() is { Length: > 0 } rm ? rm : null;
+        }
         AgentRunScope.Enter(scope);
-        string? model = RoutedModel(kind);
+        string? model = auto ? RoutedModel(kind)
+            : DispatchPolicy.ManualModelFor(kind, RunModel() is { Length: > 0 } run ? run : null, _settingsService.Settings.SubAgentModelOverrides);
         SubAgentModel.Use(model);
         int n = Interlocked.Increment(ref _subAgentCounter);
         string warm = call.Attempt == 1 ? WarmContext() : "";

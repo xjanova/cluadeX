@@ -62,6 +62,28 @@ public sealed class SubAgentControl : IDisposable
         return id;
     }
 
+    private int _upgrade;
+    /// <summary>The owner asked for a stronger model (the window's Upgrade): read once by the agent at its next step.</summary>
+    public bool UpgradeRequested => Volatile.Read(ref _upgrade) == 1;
+    /// <summary>It can climb at all (it runs below deep); set by the engine, cleared once it climbed.</summary>
+    public bool CanUpgrade { get; set; }
+
+    /// <summary>Ask it to carry on on the run's own model and effort from its next step. True only for the press that
+    /// asked — a second press, or one when it is already deep or ended, does nothing.</summary>
+    public bool RequestUpgrade()
+    {
+        if (IsClosed || StopRequested || !CanUpgrade) return false;
+        return Interlocked.Exchange(ref _upgrade, 1) == 0;
+    }
+
+    /// <summary>The engine takes the request (true once), at the top of a step.</summary>
+    public bool TakeUpgrade()
+    {
+        if (Interlocked.Exchange(ref _upgrade, 0) != 1) return false;
+        CanUpgrade = false;
+        return true;
+    }
+
     /// <summary>The engine takes what waits (in the order it was typed).</summary>
     public List<(string Id, string Text)> TakeNotes()
     {
