@@ -293,6 +293,37 @@ public class ActivationService
             r.ErrorCode);
     }
 
+    /// <summary>
+    /// Activate a key the account sign-in handed back (installer contract 2.3) — the same /activate as a typed key, but
+    /// without raising <see cref="DeviceConflictDetected"/>: the sign-in asks "move it to this PC?" itself, so the
+    /// Features page's own prompt must not open as well. Adopted on success.
+    /// </summary>
+    public async Task<LicenseCallResult> ActivateLinkedAsync(string key, bool forceRebind, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return new LicenseCallResult(false, null, "", "EMPTY");
+        var r = await _licenseService.ActivateAsync(key.Trim(), forceRebind, ct);
+        if (r.Success && r.Grant != null)
+        {
+            Adopt(r.Grant.Key, r.Grant.Type, r.Grant.ExpiresUtc);
+            Report();
+        }
+        return r;
+    }
+
+    /// <summary>
+    /// Take a key the server already tied to this PC (a free key from app-auth/free-license, or this PC's own trial key
+    /// claimed by the account). A free key never replaces a license that is active here. False = not taken.
+    /// </summary>
+    public bool AdoptServerGrant(LicenseGrant grant)
+    {
+        if (string.IsNullOrWhiteSpace(grant.Key)) return false;
+        if (grant.ExpiresUtc is { } exp && exp <= DateTime.UtcNow) return false;
+        if (IsActivated && TierFor(grant.Type) == "free") return false;
+        Adopt(grant.Key.Trim(), grant.Type, grant.ExpiresUtc);
+        Report();
+        return true;
+    }
+
     /// <summary>Move the key here from the PC it is active on (the server releases the old one).</summary>
     public async Task<(bool success, string message)> ActivateForceAsync(string key, CancellationToken ct = default)
     {

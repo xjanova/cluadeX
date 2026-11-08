@@ -28,6 +28,10 @@ public class XmanLicenseService
 
     public event Action<string>? OnStatusChanged;
 
+    /// <summary>The product API this copy talks to (…/api/v1/product/cluadex-ai-coding-assistant, or the debug-build
+    /// override). The account sign-in (app-auth/*) and the connection doctor use the same one.</summary>
+    public string BaseUrl => _baseUrl;
+
     public XmanLicenseService(SettingsService settingsService)
     {
         _baseUrl = DefaultBaseUrl;

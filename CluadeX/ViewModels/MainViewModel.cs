@@ -249,6 +249,13 @@ public class MainViewModel : ViewModelBase
     private bool _canInstallUpdate;
     /// <summary>The banner's Install button: only when a release was actually found (or staged).</summary>
     public bool CanInstallUpdate { get => _canInstallUpdate; set => SetProperty(ref _canInstallUpdate, value); }
+    private bool _showUpdateNow, _showLinkHint, _installWhenStaged;
+    /// <summary>A new version is out but this install does not update by itself (installer contract 2.1): "อัปเดตเลย".</summary>
+    public bool ShowUpdateNow { get => _showUpdateNow; set => SetProperty(ref _showUpdateNow, value); }
+    /// <summary>…because neither a paid/trial license nor a linked account allows it (not merely the user's switch):
+    /// the line "เชื่อมบัญชี Xman Studio เพื่อให้อัปเดตเองอัตโนมัติ" and the "เชื่อมบัญชี" button.</summary>
+    public bool ShowLinkHint { get => _showLinkHint; set => SetProperty(ref _showLinkHint, value); }
+    public string LinkHintText => L("update.linkHint");
     public string AppVersion => $"v{AutoUpdateService.CurrentVersion}";
 
     public ChatViewModel ChatVM { get; }
@@ -391,8 +398,14 @@ public class MainViewModel : ViewModelBase
     }
     public ICommand PetBuddyCommand { get; }
     public ICommand InstallUpdateCommand { get; }
+    /// <summary>"อัปเดตเลย": download the release that was found, then install and restart.</summary>
+    public ICommand UpdateNowCommand { get; }
     public ICommand DismissUpdateCommand { get; }
     public ICommand CheckUpdateCommand { get; }
+    /// <summary>Settings › "เปิดตัวช่วยติดตั้งอีกครั้ง".</summary>
+    public ICommand OpenSetupWizardCommand { get; }
+    /// <summary>The update banner's "เชื่อมบัญชี": the wizard's sign-in only.</summary>
+    public ICommand LinkAccountCommand { get; }
     public ICommand OpenLicenseCommand { get; }
     public ICommand OpenDgxSparkCommand { get; }
     /// <summary>The status-bar brain chip: the MCP page while a configured brain is up or coming up (Ready, Starting,
@@ -602,13 +615,16 @@ public class MainViewModel : ViewModelBase
             try { item.Run(); } catch (Exception ex) { CommandErrorSink.Report("CommandPalette", ex); }
         });
         PetBuddyCommand = new RelayCommand(() => _pet.Pat());
-        InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
+        InstallUpdateCommand = new AsyncRelayCommand(InstallFromBannerAsync);
+        UpdateNowCommand = new AsyncRelayCommand(UpdateNowAsync);
         DismissUpdateCommand = new RelayCommand(() =>
         {
             ShowUpdateBar = false;
             _dismissedUpdateKey = _pendingUpdate != null && !_autoUpdate.CanSelfUpdate ? "offer:" + _pendingUpdate.NewVersion : UpdateKey(_autoUpdate.Progress);
         });
         CheckUpdateCommand = new AsyncRelayCommand(() => CheckForUpdate(manual: true));
+        OpenSetupWizardCommand = new RelayCommand(() => App.ShowSetupWizard(ViewModels.Setup.WizardMode.Reopen));
+        LinkAccountCommand = new RelayCommand(() => { App.ShowSetupWizard(ViewModels.Setup.WizardMode.LinkAccount); RenderUpdateEntitlement(); });
         OpenLicenseCommand = new RelayCommand(() => OpenLicense(null));
         OpenDgxSparkCommand = new RelayCommand(OpenDgxSpark);
         OpenBrainCommand = new RelayCommand(() =>
@@ -621,6 +637,9 @@ public class MainViewModel : ViewModelBase
             else OpenBrainXInvite();
         });
 
+        // Who gets updates by themselves: a paid/trial license or a linked account, and the user's switch on. Set before
+        // the splash runs its startup check (App resolves this view model first).
+        _autoUpdate.AutomaticAllowed = () => AutoUpdateEntitlement.Automatic(_activation, _settingsService.Settings);
         // Wire up auto-update events. BeginInvoke: a download reports from a pool thread and must never wait on the UI.
         _autoUpdate.ProgressChanged += p => App.Current?.Dispatcher.BeginInvoke(() => RenderUpdate(p));
         // A portable copy's background check found a release (an installed copy downloads it instead — ProgressChanged).
@@ -684,7 +703,7 @@ public class MainViewModel : ViewModelBase
 
         if (_activation != null)
         {
-            _activation.ActivationChanged += () => App.Current?.Dispatcher.BeginInvoke(RefreshLicenseChip);
+            _activation.ActivationChanged += () => App.Current?.Dispatcher.BeginInvoke(() => { RefreshLicenseChip(); RenderUpdateEntitlement(); });
             _activation.Notice += notice => App.Current?.Dispatcher.BeginInvoke(() => OnLicenseNotice(notice));
             _loc.LanguageChanged += RefreshLicenseChip;
             RefreshLicenseChip();
@@ -1075,7 +1094,7 @@ public class MainViewModel : ViewModelBase
                 var now = _autoUpdate.Progress;
                 App.Current?.Dispatcher.Invoke(() =>
                 {
-                    if (now.Phase == UpdatePhase.Failed) return;   // RenderUpdate said why
+                    if (now.Phase is UpdatePhase.Failed or UpdatePhase.Available) return;   // RenderUpdate said why / offers it
                     UpdateMessage = paused != null ? "⚠ " + paused : string.Format(L("update.upToDate"), AutoUpdateService.CurrentVersion);
                     CanInstallUpdate = false;
                     ShowUpdateBar = true;
@@ -1147,6 +1166,8 @@ public class MainViewModel : ViewModelBase
         {
             case UpdatePhase.Downloading:
                 _sawDownload = true;
+                ShowUpdateNow = false;
+                ShowLinkHint = false;
                 UpdateMessage = string.Format(L("update.bgDownloading"), p.Version, p.Describe(thai));
                 UpdateProgress = p.Percent;
                 UpdateProgressText = p.Describe(thai);
@@ -1163,8 +1184,28 @@ public class MainViewModel : ViewModelBase
                 CanInstallUpdate = false;
                 ShowUpdateBar = true;
                 break;
+            case UpdatePhase.Available:
+                // Found, not downloaded: this install does not update by itself. Say so every time, with the way to do it.
+                UpdateMessage = "🔔 " + string.Format(L("update.available"), p.Version);
+                IsUpdating = false;
+                CanInstallUpdate = false;
+                ShowUpdateNow = true;
+                ShowLinkHint = !AutoUpdateEntitlement.Allowed(_activation, _settingsService.Settings);
+                OnPropertyChanged(nameof(LinkHintText));
+                ShowUpdateBar = true;
+                break;
             case UpdatePhase.Staged when _autoUpdate.HasStagedUpdate:
                 _sawDownload = false;
+                ShowUpdateNow = false;
+                ShowLinkHint = false;
+                if (_installWhenStaged)
+                {
+                    // "อัปเดตเลย" was pressed: the user already asked for the install — go on to it (the save questions
+                    // still come first in InstallUpdate).
+                    _installWhenStaged = false;
+                    _ = InstallUpdate();
+                    break;
+                }
                 // A version the circuit breaker paused does not install on exit: the bar says so, Install is the way.
                 UpdateMessage = !_autoUpdate.MayAutoInstall(p.Version) && _autoUpdate.PausedReason is { } paused
                     ? "⚠ " + paused
@@ -1174,8 +1215,10 @@ public class MainViewModel : ViewModelBase
                 CanInstallUpdate = true;
                 ShowUpdateBar = true;
                 break;
-            case UpdatePhase.Failed when _sawDownload || _manualCheck:
+            case UpdatePhase.Failed when _sawDownload || _manualCheck || _installWhenStaged:
                 _sawDownload = false;
+                _installWhenStaged = false;
+                ShowUpdateNow = _autoUpdate.AvailableVersion != null;
                 UpdateMessage = "⚠ " + string.Format(L("update.bgFailed"), p.Version ?? "", p.Error ?? "");
                 IsUpdating = false;
                 CanInstallUpdate = false;
@@ -1241,6 +1284,77 @@ public class MainViewModel : ViewModelBase
             }
             catch (Exception ex) { _log?.Warn("Update", $"restart: saving {tab.FullPath} failed", ex); }
         }
+    }
+
+    /// <summary>"อัปเดตเลย" on the banner: download the release now (this install does not do it by itself), then
+    /// install and restart through <see cref="InstallUpdate"/> once it is staged. Double-click safe (AsyncRelayCommand).</summary>
+    private async Task UpdateNowAsync()
+    {
+        if (IsUpdating || !_autoUpdate.CanSelfUpdate) return;
+        if (_autoUpdate.HasStagedUpdate) { await InstallUpdate(); return; }
+        string v = _autoUpdate.AvailableVersion ?? "";
+        _installWhenStaged = true;
+        _dismissedUpdateKey = null;
+        ShowUpdateNow = false;
+        ShowLinkHint = false;
+        IsUpdating = true;
+        UpdateProgress = 0;
+        UpdateMessage = string.Format(L("update.nowDownloading"), v);
+        ShowUpdateBar = true;
+        try
+        {
+            // Progress, staged (→ install) and failure arrive through RenderUpdate. Nothing newer after all (the release
+            // was pulled): the bar must not keep saying "downloading".
+            string? staged = await _autoUpdate.DownloadNowAsync();
+            if (staged == null && !_autoUpdate.HasStagedUpdate && _autoUpdate.Progress.Phase is not (UpdatePhase.Failed or UpdatePhase.Downloading or UpdatePhase.Preparing))
+            {
+                _installWhenStaged = false;
+                IsUpdating = false;
+                UpdateMessage = string.Format(L("update.upToDate"), AutoUpdateService.CurrentVersion);
+            }
+        }
+        catch (Exception ex)
+        {
+            _installWhenStaged = false;
+            IsUpdating = false;
+            ShowUpdateNow = true;
+            UpdateMessage = "⚠ " + string.Format(L("update.bgFailed"), v, ex.Message);
+        }
+    }
+
+    /// <summary>The license or the account link changed (or the wizard closed): a release that waited for "อัปเดตเลย"
+    /// downloads by itself now when this install became entitled; the banner's link line follows.</summary>
+    public void RenderUpdateEntitlement()
+    {
+        if (_autoUpdate.AvailableVersion != null && !_autoUpdate.HasStagedUpdate && _autoUpdate.Automatic && !_autoUpdate.IsBusy)
+        {
+            ShowUpdateNow = false;
+            ShowLinkHint = false;
+            _ = _autoUpdate.VelopackCheckAndStageAsync();   // downloads now; staged → the usual Install & Restart / on exit
+            return;
+        }
+        if (ShowUpdateNow) ShowLinkHint = !AutoUpdateEntitlement.Allowed(_activation, _settingsService.Settings);
+    }
+
+    /// <summary>The banner's Install &amp; Restart: a staged Velopack update first shows "A new version is ready" (what is
+    /// new, the auto-update switch); only "Update and restart" goes on to <see cref="InstallUpdate"/>. "อัปเดตเลย" and an
+    /// update staged after it skip the dialog — the person already said yes.</summary>
+    private async Task InstallFromBannerAsync()
+    {
+        if (IsUpdating) return;
+        if (_autoUpdate.HasStagedUpdate)
+        {
+            var choice = App.ShowUpdateReady(AutoUpdateService.CurrentVersion, _autoUpdate.StagedVersion ?? "", _autoUpdate.StagedNotes,
+                _autoUpdate.StagedSize, AutoUpdateEntitlement.Allowed(_activation, _settingsService.Settings), _settingsService);
+            if (choice == Views.Setup.UpdateReadyChoice.LinkAccount)
+            {
+                App.ShowSetupWizard(ViewModels.Setup.WizardMode.LinkAccount);
+                RenderUpdateEntitlement();
+                return;
+            }
+            if (choice != Views.Setup.UpdateReadyChoice.Now) return;
+        }
+        await InstallUpdate();
     }
 
     private async Task InstallUpdate()

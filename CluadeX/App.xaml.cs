@@ -161,6 +161,35 @@ public partial class App : Application
         CluadeX.Helpers.UiStallWatchdog.Start(Dispatcher, dbg);
         if (dbg != null) CluadeX.Services.Safety.SafeDelete.Log = m => dbg.Warn("Safety", m);   // every refused delete is visible
 
+        // ─── First-run setup wizard (installer contract 2.x) ───
+        // Shown on a fresh install only — no settings file before this launch, or Velopack's first-run hook — or when
+        // started with --setup. An install that already existed before the wizard did is marked done silently, so an
+        // update never shows it. The startup license work waits for the wizard (its sign-in / quick path decides the
+        // license, and the automatic trial must not race it).
+        var setupSettings = _serviceProvider.GetRequiredService<SettingsService>();
+        bool forceSetup = Environment.GetCommandLineArgs().Skip(1).Any(a => string.Equals(a, "--setup", StringComparison.OrdinalIgnoreCase));
+        bool freshInstall = !setupSettings.Settings.SetupWizardCompleted && (setupSettings.NoSettingsBeforeLaunch || Program.VelopackFirstRun);
+        bool showSetup = forceSetup || freshInstall;
+        if (!showSetup && !setupSettings.Settings.SetupWizardCompleted)
+            setupSettings.UpdateSettings(s => s.SetupWizardCompleted = true);
+        if (freshInstall && setupSettings.NoSettingsBeforeLaunch)
+        {
+            // A brand-new install speaks the PC's language from the first screen (the default setting is English).
+            string lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "th" ? "th" : "en";
+            setupSettings.UpdateSettings(s => s.Language = lang);
+            _serviceProvider.GetRequiredService<LocalizationService>().SetLanguage(lang);
+        }
+        var setupGate = showSetup ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+        dbg?.Info("Setup", $"setup wizard: {(showSetup ? "shown" : "not shown")} · forced={forceSetup} · noSettingsBefore={setupSettings.NoSettingsBeforeLaunch} · velopackFirstRun={Program.VelopackFirstRun}");
+
+        // Windows' "Uninstall" for this install opens CluadeX's own uninstall page (tick what to keep) instead of
+        // Velopack's silent remover — checked every start, since only a fresh Setup.exe rewrites that row.
+        _ = Task.Run(() =>
+        {
+            try { if (Services.Uninstall.UninstallEntry.Detect() is { } inst) dbg?.Info("Uninstall", Services.Uninstall.UninstallEntry.EnsurePointsAtPage(inst)); }
+            catch (Exception ex) { dbg?.Warn("Uninstall", "the Installed-apps row could not be checked", ex); }
+        });
+
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
         {
@@ -170,6 +199,7 @@ public partial class App : Application
             {
                 try
                 {
+                    if (setupGate != null) await setupGate.Task;
                     var activation = _serviceProvider!.GetRequiredService<ActivationService>();
                     // Validate license key against online API
                     await activation.ValidateOnlineAsync();
@@ -326,6 +356,22 @@ public partial class App : Application
             }
         });
 
+        // ─── The setup wizard, before the splash. Closing it at any point starts the app; only Done › "ปิด" with
+        // "open CluadeX when setup finishes" cleared quits instead. ───
+        if (showSetup)
+        {
+            bool openApp = true;
+            try
+            {
+                var wizard = new Views.Setup.SetupWizardWindow(_serviceProvider, ViewModels.Setup.WizardMode.FirstRun);
+                wizard.ShowDialog();
+                openApp = wizard.ViewModel.OpenAppAfter;
+            }
+            catch (Exception ex) { WriteCrashLog("setup-wizard", ex); }
+            finally { setupGate!.TrySetResult(); }
+            if (!openApp) { Shutdown(); return; }
+        }
+
         // ─── Splash: the startup checks, shown — then the app ───
         // Modal, so OnStartup waits here while the background services above (license, MCP, hooks) run; the splash
         // reports them as they resolve. A splash that fails to show never blocks the app.
@@ -340,6 +386,34 @@ public partial class App : Application
 
     /// <summary>The startup license check (validate + auto-provision), awaited by the splash instead of repeated.</summary>
     public static Task? LicenseStartup { get; private set; }
+
+    /// <summary>Settings › "เปิดตัวช่วยติดตั้งอีกครั้ง" (Reopen) and the update banner's "เชื่อมบัญชี" (LinkAccount): the
+    /// setup wizard over the running app. It never closes the app.</summary>
+    public static void ShowSetupWizard(ViewModels.Setup.WizardMode mode)
+    {
+        if (Current is not App app || app._serviceProvider == null) return;
+        try
+        {
+            var w = new Views.Setup.SetupWizardWindow(app._serviceProvider, mode);
+            if (app.MainWindow is { IsVisible: true } owner) w.Owner = owner;
+            w.ShowDialog();
+        }
+        catch (Exception ex) { WriteCrashLog("setup-wizard", ex); }
+    }
+
+    /// <summary>"A new version is ready" over the main window; Later when it cannot be shown.</summary>
+    public static Views.Setup.UpdateReadyChoice ShowUpdateReady(string from, string to, string? notes, long size, bool allowed, SettingsService settings)
+    {
+        try
+        {
+            var w = new Views.Setup.UpdateReadyWindow(from, to, notes, size, allowed, settings);
+            if (Current?.MainWindow is { IsVisible: true } owner) w.Owner = owner;
+            else w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            w.ShowDialog();
+            return w.Choice;
+        }
+        catch (Exception ex) { WriteCrashLog("update-ready", ex); return Views.Setup.UpdateReadyChoice.Later; }
+    }
 
     // ════════════════════════════════════════════════════════════════════
     //  MCP tool dispatcher
@@ -1083,6 +1157,9 @@ public partial class App : Application
         services.AddSingleton<TypographyService>();
         services.AddSingleton<ActivationService>();
         services.AddSingleton<XmanLicenseService>();
+        // The Xman Studio account sign-in (app-auth/*) and "ตรวจการเชื่อมต่อ" — the setup wizard and the update screens.
+        services.AddSingleton<Services.Account.XmanAccountService>();
+        services.AddSingleton<Services.Account.ConnectionDoctor>();
         // DgxSparkService — CluadeX driving the model an NVIDIA DGX Spark serves on the LAN (Ollama).
         services.AddSingleton<DgxSparkService>();
         services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<DgxSparkService>());   // stops the link monitor

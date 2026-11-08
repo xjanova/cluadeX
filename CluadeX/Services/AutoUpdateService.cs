@@ -222,6 +222,48 @@ public class AutoUpdateService : IAppShutdownHook
     private Task<string?>? _job;
     private volatile bool _applying;
 
+    // ─── who gets updates by themselves (installer contract 2.1) ──────────────────────
+
+    /// <summary>Set once at startup (MainViewModel): <see cref="AutoUpdateEntitlement.Automatic"/> — a valid paid or trial
+    /// license, or a linked Xman Studio account, AND the user's switch on. Null = allowed (harnesses, older callers).
+    /// When it says no, a new release is still FOUND and announced (<see cref="UpdatePhase.Available"/>), but nothing is
+    /// downloaded, and nothing installs at startup or on exit; "อัปเดตเลย" (<see cref="DownloadNowAsync"/>) does it by hand.</summary>
+    public Func<bool>? AutomaticAllowed { get; set; }
+
+    /// <summary>May updates download and install without being asked right now?</summary>
+    public bool Automatic
+    {
+        get { try { return AutomaticAllowed?.Invoke() ?? true; } catch { return true; } }
+    }
+
+    /// <summary>A newer release that was found but not downloaded because <see cref="Automatic"/> said no; null otherwise.</summary>
+    public string? AvailableVersion { get; private set; }
+
+    /// <summary>
+    /// The user pressed "อัปเดตเลย": check and download now even when <see cref="Automatic"/> says no. A check-only job
+    /// that is running is awaited first (it ends at Available), then the download starts. The splash and the update bar
+    /// show its progress as usual; the caller installs when it is staged. Returns the staged version, or null (nothing
+    /// newer after all, or it failed — the phase says which).
+    /// </summary>
+    public async Task<string?> DownloadNowAsync()
+    {
+        Task<string?>? running;
+        lock (_jobLock) running = _job is { IsCompleted: false } ? _job : null;
+        if (running != null)
+        {
+            string? v = await running.ConfigureAwait(false);
+            if (v != null || HasStagedUpdate) return v ?? StagedVersion;
+        }
+        Task<string?> job;
+        lock (_jobLock)
+        {
+            // Someone else started a job meanwhile: join it (it reports progress the same way).
+            if (_job is not { IsCompleted: false }) _job = Task.Run(() => CheckAndStageCoreAsync(manual: true));
+            job = _job;
+        }
+        return await job.ConfigureAwait(false);
+    }
+
     /// <summary>True while a check or download runs.</summary>
     public bool IsBusy { get { lock (_jobLock) return _job is { IsCompleted: false }; } }
 
@@ -236,12 +278,12 @@ public class AutoUpdateService : IAppShutdownHook
         lock (_jobLock)
         {
             if (_job is { IsCompleted: false }) return _job;
-            _job = Task.Run(CheckAndStageCoreAsync);
+            _job = Task.Run(() => CheckAndStageCoreAsync(manual: false));
             return _job;
         }
     }
 
-    private async Task<string?> CheckAndStageCoreAsync()
+    private async Task<string?> CheckAndStageCoreAsync(bool manual)
     {
         if (!CanSelfUpdate) { _log?.Info("Update", "Velopack: not an installed build — self-update unavailable (portable/dev)"); return null; }
         AdoptStagedFromDisk();   // a package an earlier run downloaded is known before (and without) the network
@@ -259,6 +301,14 @@ public class AutoUpdateService : IAppShutdownHook
             }
 
             target = info.TargetFullRelease.Version.ToString();
+            // Not entitled to automatic updates (or the user turned them off): say a new version is out, download nothing.
+            if (!manual && !Automatic)
+            {
+                AvailableVersion = target;
+                _log?.Info("Update", $"Velopack: v{target} is out — automatic update is off for this install (no paid/trial license, no linked account, or switched off); waiting for \"Update now\"");
+                SetPhase(UpdatePhase.Available, target);
+                return null;
+            }
             // The circuit breaker. Without it a package that cannot be applied gets
             // retried on every launch forever — which is exactly how BrainX ended up
             // relaunching itself every 18 seconds. It stops the AUTOMATIC install only (splash, exit): the package is
@@ -277,6 +327,7 @@ public class AutoUpdateService : IAppShutdownHook
             using (new System.Threading.Timer(_ => Publish(force: true), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)))
                 await Vpk.DownloadUpdatesAsync(info, OnVelopackPercent, _shutdown.Token).ConfigureAwait(false);
             _vpkPending = info;
+            AvailableVersion = null;   // it is downloaded now: Staged says the rest
             MarkDownloadStaged(target, sw.Elapsed);
             OnUpdateStatus?.Invoke($"Update v{target} downloaded — restart to apply.");
             return target;
@@ -346,7 +397,7 @@ public class AutoUpdateService : IAppShutdownHook
 
     /// <summary>May <paramref name="version"/> be installed without the user asking (splash, exit)? Not when the
     /// circuit breaker tripped for it — see <see cref="StartupUpdatePolicy.MayAutoInstall"/>.</summary>
-    public bool MayAutoInstall(string? version) => StartupUpdatePolicy.MayAutoInstall(_attempts, version);
+    public bool MayAutoInstall(string? version) => Automatic && StartupUpdatePolicy.MayAutoInstall(_attempts, version);
 
     // ─── finding a new release while the app runs ─────────────────────────────────────
 
@@ -383,7 +434,7 @@ public class AutoUpdateService : IAppShutdownHook
         if (IsBusy || _applying) return;
         string? latest = await ProbeLatestReleaseAsync(ct).ConfigureAwait(false);
         // What this copy already has in hand: the downloaded update (installed copy) or the release it was told about (portable).
-        string? inHand = CanSelfUpdate ? StagedVersion : _lastOffered;
+        string? inHand = CanSelfUpdate ? StagedVersion ?? AvailableVersion : _lastOffered;
         if (!ShouldCheckNow(latest, CurrentVersion, inHand, DateTime.UtcNow - _lastFullCheckUtc)) return;
         _lastFullCheckUtc = DateTime.UtcNow;
         _log?.Info("Update", latest != null ? $"background: v{latest} is out — checking" : "background: hourly check");
@@ -508,6 +559,55 @@ public class AutoUpdateService : IAppShutdownHook
 
     /// <summary>Version of the staged update, or null.</summary>
     public string? StagedVersion => _vpkPending?.TargetFullRelease?.Version?.ToString();
+
+    /// <summary>The staged release's notes (markdown, as packed with vpk --releaseNotes), or null.</summary>
+    public string? StagedNotes
+    {
+        get { try { return _vpkPending?.TargetFullRelease?.NotesMarkdown; } catch { return null; } }
+    }
+
+    /// <summary>The staged package's size in bytes (0 when unknown).</summary>
+    public long StagedSize
+    {
+        get { try { return _vpkPending?.TargetFullRelease?.Size ?? 0; } catch { return 0; } }
+    }
+
+    /// <summary>
+    /// Up to <paramref name="max"/> short lines for "what's new" out of release-notes markdown: list items first
+    /// (headings, links, emphasis, code ticks and trailing commit hashes stripped); plain lines when there is no list.
+    /// Empty when there is nothing readable. Pure, for the test harness.
+    /// </summary>
+    public static IReadOnlyList<string> ReleaseNotesBullets(string? markdown, int max = 4)
+    {
+        var items = new List<string>();
+        var plain = new List<string>();
+        if (string.IsNullOrWhiteSpace(markdown) || max <= 0) return items;
+        foreach (string raw in markdown.Replace("\r", "").Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#') || line.StartsWith("---") || line.StartsWith("```") || line.StartsWith('>')) continue;
+            var m = System.Text.RegularExpressions.Regex.Match(line, @"^(?:[-*+]|\d+[.)])\s+(.*)$");
+            string text = CleanNote(m.Success ? m.Groups[1].Value : line);
+            if (text.Length < 3) continue;
+            if (m.Success) { if (!raw.StartsWith("  ") && !raw.StartsWith('\t')) items.Add(text); }   // nested items are detail
+            else plain.Add(text);
+        }
+        var pick = items.Count > 0 ? items : plain;
+        return pick.Distinct(StringComparer.OrdinalIgnoreCase).Take(max).ToList();
+    }
+
+    private static string CleanNote(string s)
+    {
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"!\[[^\]]*\]\([^)]*\)", "");                 // images
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\[([^\]]+)\]\([^)]*\)", "$1");              // [text](url)
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*\(?\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b\)?\s*$", "");      // trailing commit hash
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*\(#\d+\)\s*$", "");                       // trailing (#123)
+        s = s.Replace("**", "").Replace("__", "").Replace("`", "");
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"(?<![\w*])[*_](\S(?:[^*_]*\S)?)[*_](?![\w*])", "$1");   // *one* _one_
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"^\[[ xX]\]\s*", "");                         // task-list box
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
+        return s.Length > 120 ? s[..117].TrimEnd() + "…" : s;
+    }
 
     /// <summary>Why automatic updating is paused (or what the last attempt did), in the UI's language; null when there
     /// is nothing to say.</summary>
@@ -880,7 +980,9 @@ public class UpdateInfo
 
 /// <summary>Preparing (appended, so the other values keep their numbers): every byte is in and Velopack verifies the
 /// package / Update.exe applies the delta patches — no bytes move, so it is its own step, not a bar stuck at a split.</summary>
-public enum UpdatePhase { Idle, Checking, Downloading, Staged, Failed, Preparing }
+/// <summary>Available (appended last: the order is part of the harness's wire) = a newer release is out but this install
+/// does not update by itself; it waits for "อัปเดตเลย".</summary>
+public enum UpdatePhase { Idle, Checking, Downloading, Staged, Failed, Preparing, Available }
 
 /// <summary>Where the update stands, for the splash and the update bar. Percent, Bytes and Total come from one source
 /// (<see cref="UpdateProgressComposer"/>): bytes over the sizes the release feed states up front, never backwards within

@@ -123,6 +123,10 @@ public class SettingsService
 
     public AppSettings Settings => _settings;
 
+    /// <summary>settings.json did not exist when this process started (a fresh install, or one whose data was wiped).
+    /// Read once, before anything could write the file.</summary>
+    public bool NoSettingsBeforeLaunch { get; }
+
     public event Action? SettingsChanged;
 
     /// <summary>The data home this build uses: &lt;exe&gt;\Data next to a "portable" / "portable.txt" marker, else
@@ -169,6 +173,8 @@ public class SettingsService
             MigrateLegacyDataRoot();
         }
 
+        // No settings.json before this launch (after the legacy move): a brand-new install — the setup wizard's cue.
+        try { NoSettingsBeforeLaunch = !File.Exists(_settingsPath); } catch { NoSettingsBeforeLaunch = false; }
         Load();
         ApplyDefaultDirectories();
         EnsureDirectoriesExist();

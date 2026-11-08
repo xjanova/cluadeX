@@ -33,6 +33,30 @@ public partial class SplashWindow : Window
         public void Bad(string d) { Mark = "✕"; MarkBrush = BadBrush; Detail = d; }
     }
 
+    /// <summary>One of the four steps of the update mode (design board UpdateSplash).</summary>
+    public sealed class UpStep : INotifyPropertyChanged
+    {
+        private int _state;   // 0 pending · 1 running · 2 done
+        private string _detail = "", _label = "";
+        public string Label { get => _label; set { _label = value; On(); } }
+        public string Detail { get => _detail; set { _detail = value; On(); } }
+        public int State
+        {
+            get => _state;
+            set { _state = value; On(nameof(Mark)); On(nameof(RingBrush)); On(nameof(FillBrush)); On(nameof(MarkBrush)); On(nameof(LabelBrush)); On(nameof(Weight)); }
+        }
+        public string Mark => _state switch { 2 => "✓", 1 => "↓", _ => "" };
+        public Brush RingBrush => _state == 0 ? UpRing0 : _state == 1 ? UpRing1 : Brushes.Transparent;
+        public Brush FillBrush => _state == 1 ? UpFill1 : _state == 2 ? UpFill2 : Brushes.Transparent;
+        public Brush MarkBrush => _state == 2 ? Good : Brushes.White;
+        public Brush LabelBrush => _state == 0 ? UpLabel0 : UpLabel1;
+        public FontWeight Weight => _state == 1 ? FontWeights.SemiBold : FontWeights.Normal;
+        public event PropertyChangedEventHandler? PropertyChanged;
+        private void On([CallerMemberName] string? n = null) => PropertyChanged?.Invoke(this, new(n));
+    }
+    private static readonly Brush UpRing0 = Frozen("#40FFFFFF"), UpRing1 = Frozen("#C084FC"), UpFill1 = Frozen("#A855F7"), UpFill2 = Frozen("#2E4ADE80"),
+        UpLabel0 = Frozen("#BBA9DD"), UpLabel1 = Frozen("#F4EEFF");
+
     private static readonly Brush Pending = Frozen("#9B87C9"), Good = Frozen("#6EE7B7"), WarnBrush = Frozen("#FCD34D"), BadBrush = Frozen("#FB7185");
     private static Brush Frozen(string hex) { var b = (Brush)new BrushConverter().ConvertFromString(hex)!; b.Freeze(); return b; }
 
@@ -45,6 +69,12 @@ public partial class SplashWindow : Window
     private bool _updateRowDone;                  // the update row shows its final state
     private long _updateSeq;                      // the newest update snapshot drawn
     private bool _handingOver;                    // the restart into the new version has begun: no Enter/Skip any more
+
+    private readonly ObservableCollection<UpStep> _upSteps = new();
+    private bool _updateMode;
+
+    /// <summary>The test renders build the window without running the checks (no network, no MCP, no restart).</summary>
+    public static bool PreviewOnly { get; set; }
 
     /// <summary>The splash ran the startup update check (MainViewModel skips its own silent one).</summary>
     public static bool StartupUpdateHandled { get; private set; }
@@ -69,7 +99,8 @@ public partial class SplashWindow : Window
             SplashGirl.Source = art;
             SplashGirlGlow.Color = GirlArt.Glow(girl);
         }
-        Loaded += async (_, _) => await RunAsync();
+        UpSteps.ItemsSource = _upSteps;
+        Loaded += async (_, _) => { if (!PreviewOnly) await RunAsync(); };
         // Any close counts as going in — Alt+F4 included: the update must never restart under a user who is in the app.
         Closing += (_, _) => _entered = true;
     }
@@ -266,11 +297,15 @@ public partial class SplashWindow : Window
                 {
                     StartupUpdateHandled = true;   // the background probe retries; the main window does not start a second check
                     EndUpdateRow();
-                    if (end.Phase == UpdatePhase.Failed)
+                    // Found but not downloaded: this install does not update by itself (installer contract 2.1).
+                    if (end.Phase == UpdatePhase.Available && up.AvailableVersion is { } avail)
+                        update.Warn(string.Format(LocalizedResources.Instance["update.available.splash"], avail));
+                    else if (end.Phase == UpdatePhase.Failed)
                         update.Bad(T($"อัปเดตไม่สำเร็จ: {end.Error} — จะลองใหม่เองเบื้องหลัง", $"update failed: {end.Error} — it retries in the background"));
                     // A downloaded version the circuit breaker holds is waiting — not "up to date".
                     else if (up.StagedVersion is { } held && !up.MayAutoInstall(held))
-                        update.Warn(up.PausedReason ?? T($"v{held} รอติดตั้งเอง", $"v{held} waits for a manual install"));
+                        update.Warn(!up.Automatic ? string.Format(LocalizedResources.Instance["update.available.splash"], held)
+                            : up.PausedReason ?? T($"v{held} รอติดตั้งเอง", $"v{held} waits for a manual install"));
                     else update.Ok(T("เป็นเวอร์ชันล่าสุดแล้ว", "up to date"));
                     return false;
                 }
@@ -307,6 +342,12 @@ public partial class SplashWindow : Window
                 row.Detail = T("กำลังตรวจหาเวอร์ชันใหม่…", "checking for a new version…");
                 break;
             case UpdatePhase.Downloading:
+                ShowUpdateMode(p.Version, p.Delta);
+                if (p.FellBackToFull && _upSteps.Count > 0) _upSteps[0].Label = L("splash.up.s1");   // the deltas failed: the whole package now
+                SetRing(p.Percent, p.Total > 0 ? $"{p.Bytes / 1048576.0:0.0} / {p.Total / 1048576.0:0.0} MB" : "");
+                SetUpStep(0, p.StalledSeconds is double sst ? string.Format(L("splash.up.stalled"), sst.ToString("0"))
+                    : p.Resuming ? L("splash.up.resuming")
+                    : p.BytesPerSecond > 1 ? (p.BytesPerSecond >= 1048576 ? $"{p.BytesPerSecond / 1048576:0.0} MB/s" : $"{p.BytesPerSecond / 1024:0} KB/s") : "");
                 ShowSkip(true, downloading: true);
                 HeadText.Text = T($"กำลังดาวน์โหลดอัปเดต v{p.Version} — ติดตั้งก่อนเปิดโปรแกรม", $"Downloading update v{p.Version} — it installs before the app opens");
                 UpdatePanel.Visibility = Visibility.Visible;
@@ -324,6 +365,9 @@ public partial class SplashWindow : Window
                 _updateShare = 0.95 * p.Percent / 100;   // the rest: preparing, saving, the restart
                 break;
             case UpdatePhase.Preparing:
+                ShowUpdateMode(p.Version, p.Delta);
+                SetRing(100, _upMb);
+                SetUpStep(1, $"{p.PhaseSeconds:0} s");
                 ShowSkip(true, downloading: true);
                 UpdatePanel.Visibility = Visibility.Visible;
                 UpdateBar.Value = 100;
@@ -342,6 +386,7 @@ public partial class SplashWindow : Window
     /// line stops promising an install that will not happen before the app opens (the other checks may still run).</summary>
     private void EndUpdateRow()
     {
+        HideUpdateMode();
         _updateRowDone = true;
         UpdateBar.IsIndeterminate = false;
         UpdatePanel.Visibility = Visibility.Collapsed;
@@ -369,6 +414,9 @@ public partial class SplashWindow : Window
         UpdateBar.IsIndeterminate = false;
         UpdateBar.Value = 100;
         UpdateText.Text = T("กำลังบันทึกการตั้งค่าและแชทก่อนเริ่มใหม่…", "saving settings and chats before the restart…");
+        ShowUpdateMode(version, delta: false);
+        SetRing(100, _upMb);
+        SetUpStep(2, "");
         _updateShare = 0.98;
         Progress();
 
@@ -379,6 +427,7 @@ public partial class SplashWindow : Window
         EnterButton.Visibility = Visibility.Collapsed;   // from here it is the restart
         update.Detail = T($"กำลังติดตั้ง v{version} และเปิดใหม่…", $"installing v{version} and restarting…");
         UpdateText.Text = T("CluadeX จะเปิดขึ้นมาใหม่เองในเวอร์ชันใหม่", "CluadeX opens again by itself in the new version");
+        SetUpStep(3, "");
         UpdateBar.IsIndeterminate = true;
         await Task.Delay(400);   // drawn before the process hands over
         if (_entered) return false;
@@ -396,7 +445,14 @@ public partial class SplashWindow : Window
     /// <summary>Enter, or — while the startup update downloads or installs — Skip, saying what skipping does.</summary>
     private void ShowSkip(bool on, bool downloading)
     {
-        if (on)
+        if (on && _updateMode)
+        {
+            // the update view: "เข้าใช้งานก่อน", and the line beside it says what that means
+            EnterTitle.Text = L("splash.up.enter");
+            EnterSub.Visibility = Visibility.Collapsed;
+            if (!_entered && !_handingOver) EnterButton.Visibility = Visibility.Visible;
+        }
+        else if (on)
         {
             EnterTitle.Text = T("ข้าม", "Skip");
             EnterSub.Text = downloading
@@ -419,6 +475,76 @@ public partial class SplashWindow : Window
     }
 
     private void Enter_Click(object sender, RoutedEventArgs e) => Enter();
+
+    // ── update mode ──
+
+    private static string L(string key) => LocalizedResources.Instance[key];
+    private string _upMb = "";
+
+    /// <summary>The card turns into the update view (once): brand and checks step aside, the four steps appear.</summary>
+    private void ShowUpdateMode(string? version, bool delta)
+    {
+        if (_updateMode) return;
+        _updateMode = true;
+        _upSteps.Clear();
+        foreach (string k in new[] { delta ? "splash.up.s1delta" : "splash.up.s1", "splash.up.s2", "splash.up.s3", "splash.up.s4" })
+            _upSteps.Add(new UpStep { Label = L(k) });
+        UpHead.Text = L("splash.up.head");
+        UpVersions.Text = $"{AutoUpdateService.CurrentVersion} → {version}";
+        UpSafe.Text = L("splash.up.safe");
+        UpSlowHint.Text = L("splash.up.slow");
+        BrandPanel.Visibility = Visibility.Hidden;
+        ChecksPanel.Visibility = Visibility.Hidden;
+        UpdateMode.Visibility = Visibility.Visible;
+        OverallBar.Visibility = Visibility.Collapsed;
+        UpSlowHint.Visibility = Visibility.Visible;
+        SetRing(0, "");
+    }
+
+    private void HideUpdateMode()
+    {
+        if (!_updateMode) return;
+        _updateMode = false;
+        UpdateMode.Visibility = Visibility.Collapsed;
+        BrandPanel.Visibility = Visibility.Visible;
+        ChecksPanel.Visibility = Visibility.Visible;
+        OverallBar.Visibility = Visibility.Visible;
+        UpSlowHint.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>Step <paramref name="running"/> runs (earlier ones done); its detail is the speed, a stall, the seconds.</summary>
+    private void SetUpStep(int running, string detail)
+    {
+        for (int i = 0; i < _upSteps.Count; i++)
+        {
+            _upSteps[i].State = i < running ? 2 : i == running ? 1 : 0;
+            _upSteps[i].Detail = i == running ? detail : "";
+        }
+    }
+
+    /// <summary>The ring's arc from 12 o'clock, clockwise, and the figure in its middle.</summary>
+    private void SetRing(double percent, string mb)
+    {
+        double pct = Math.Clamp(percent, 0, 100);
+        _upMb = mb;
+        UpPct.Text = $"{pct:0}%";
+        UpMb.Text = mb;
+        UpMb.Visibility = mb.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        const double size = 168, r = (size - 10) / 2 - 5, c = size / 2;
+        if (pct <= 0) { UpArc.Data = null; return; }
+        double a = Math.Min(pct, 99.99) / 100 * 2 * Math.PI;
+        var start = new Point(c, c - r);
+        var end = new Point(c + r * Math.Sin(a), c - r * Math.Cos(a));
+        var fig = new PathFigure { StartPoint = start, IsClosed = false };
+        fig.Segments.Add(new ArcSegment(end, new Size(r, r), 0, a > Math.PI, SweepDirection.Clockwise, true));
+        var g = new PathGeometry();
+        g.Figures.Add(fig);
+        g.Freeze();
+        UpArc.Data = g;
+    }
+
+    /// <summary>For the renders only: the update view as it looks at <paramref name="p"/>.</summary>
+    public void PreviewUpdate(UpdateProgressInfo p) => RenderUpdate(new Check { Label = "update" }, p);
 
     private void Enter()
     {

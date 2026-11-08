@@ -34,7 +34,7 @@
             </Grid.RowDefinitions>
 
             <!-- Mascot + wordmark -->
-            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+            <StackPanel x:Name="BrandPanel" Grid.Column="0" VerticalAlignment="Center">
                 <Image Source="/CluadeX;component/Assets/mascot.png" Width="200" Height="200" RenderOptions.BitmapScalingMode="HighQuality"/>
                 <Image Source="/CluadeX;component/Assets/logo-wordmark.png" Width="230" Margin="0,6,0,0" RenderOptions.BitmapScalingMode="HighQuality"/>
                 <TextBlock x:Name="VersionText" HorizontalAlignment="Center" Margin="0,6,0,0" FontSize="12"
@@ -42,7 +42,7 @@
             </StackPanel>
 
             <!-- Checks -->
-            <StackPanel Grid.Column="1" Margin="22,4,0,0" VerticalAlignment="Center">
+            <StackPanel x:Name="ChecksPanel" Grid.Column="1" Margin="22,4,0,0" VerticalAlignment="Center">
                 <TextBlock x:Name="HeadText" FontSize="17" FontWeight="SemiBold" Foreground="#F3E8FF" Margin="0,0,0,10"/>
                 <ItemsControl x:Name="CheckList">
                     <ItemsControl.ItemTemplate>
@@ -69,12 +69,68 @@
                 </StackPanel>
             </StackPanel>
 
+            <!-- Update mode (design board UpdateSplash): while the startup update downloads, verifies, installs and restarts,
+                 the card is about that alone — a ring with the real figure, the four steps, and that nothing is lost. -->
+            <Grid x:Name="UpdateMode" Grid.ColumnSpan="2" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="UpHead" FontSize="21" FontWeight="SemiBold" Foreground="#F4EEFF" VerticalAlignment="Center"/>
+                    <Border CornerRadius="8" Padding="10,3" Margin="14,0,0,0" VerticalAlignment="Center" Background="#4D7C3AED" BorderBrush="#99C084FC" BorderThickness="1">
+                        <TextBlock x:Name="UpVersions" FontFamily="Consolas" FontSize="12.5" FontWeight="SemiBold" Foreground="#F4EEFF"/>
+                    </Border>
+                </StackPanel>
+                <Grid Grid.Row="1" Margin="0,16,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <!-- the ring: the figure in the middle, the arc drawn in code (UpdateRing) -->
+                    <Grid Width="168" Height="168" VerticalAlignment="Center">
+                        <Ellipse Stroke="#2EFFFFFF" StrokeThickness="10" Margin="5"/>
+                        <Path x:Name="UpArc" StrokeThickness="10" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+                            <Path.Stroke>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#C084FC" Offset="0"/><GradientStop Color="#A21CAF" Offset="1"/></LinearGradientBrush>
+                            </Path.Stroke>
+                            <Path.Effect><DropShadowEffect Color="#C084FC" BlurRadius="14" ShadowDepth="0" Opacity="0.7"/></Path.Effect>
+                        </Path>
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <TextBlock x:Name="UpPct" FontSize="38" FontWeight="Bold" Foreground="#F4EEFF" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="UpMb" FontSize="12" Foreground="#BBA9DD" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Grid>
+                    <ItemsControl x:Name="UpSteps" Grid.Column="1" Margin="30,0,0,0" VerticalAlignment="Center" Focusable="False">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,6">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="32"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <Grid Width="22" Height="22" HorizontalAlignment="Left">
+                                        <Ellipse Stroke="{Binding RingBrush}" StrokeThickness="1.5" Fill="{Binding FillBrush}"/>
+                                        <TextBlock Text="{Binding Mark}" FontSize="11" FontWeight="Bold" Foreground="{Binding MarkBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="13.5" Foreground="{Binding LabelBrush}" FontWeight="{Binding Weight}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Detail}" FontSize="12" Foreground="#C4B5FD" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Grid>
+                <Border Grid.Row="2" CornerRadius="12" Padding="14,9" Margin="0,14,0,0" Background="#1A4ADE80" BorderBrush="#4D4ADE80" BorderThickness="1">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Data="M8,1 L14,3.5 L14,8 C14,11.5 11.5,14 8,15 C4.5,14 2,11.5 2,8 L2,3.5 Z M5,8 L7.2,10.2 L11,6.4" Stroke="#4ADE80" StrokeThickness="1.5"
+                              Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="UpSafe" FontSize="12.5" Foreground="#E4D7FF" Margin="10,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
             <!-- Footer: overall progress + Enter -->
             <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
+                <TextBlock x:Name="UpSlowHint" FontSize="11.5" Foreground="#BBA9DD" VerticalAlignment="Center" TextWrapping="Wrap" Visibility="Collapsed"/>
                 <ProgressBar x:Name="OverallBar" Height="4" Minimum="0" Maximum="100" VerticalAlignment="Center"
                              Foreground="#E879F9" Background="#33204F" BorderThickness="0"/>
                 <!-- "Enter" — or, while the startup update downloads / installs, "Skip" with what skipping means

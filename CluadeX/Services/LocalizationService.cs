@@ -36,7 +36,8 @@ public class LocalizationService
                                       Localization.PopOutKeys.Keys,
                                       Localization.ModelPickerKeys.Keys,
                                       Localization.MediaKeys.Keys, Localization.VibeKeys.Keys, Localization.PlanKeys.Keys, Localization.TierKeys.Keys,
-                                      Localization.TypographyKeys.Keys, Localization.BuddyBubbleKeys.Keys, Localization.ColibriKeys.Keys })
+                                      Localization.TypographyKeys.Keys, Localization.BuddyBubbleKeys.Keys, Localization.ColibriKeys.Keys,
+                                      Localization.SetupWizardKeys.Keys, Localization.UninstallKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

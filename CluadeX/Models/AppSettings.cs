@@ -491,6 +491,23 @@ public class AppSettings
     /// <summary>The "your free trial has ended" invitation has been shown.</summary>
     public bool LicenseTrialEndedNoticeShown { get; set; }
 
+    // ─── Xman Studio account (installer contract 2.2) — never a password, a token or a device code ───
+    /// <summary>This PC is linked to an Xman Studio account (sign-in from the app). Entitles auto-update on its own.</summary>
+    public bool AccountLinked { get; set; }
+    /// <summary>The account's e-mail as the server masked it (xj***@gmail.com) — shown, never the full address.</summary>
+    public string? AccountEmailMasked { get; set; }
+    /// <summary>The account's display name.</summary>
+    public string? AccountName { get; set; }
+    /// <summary>When the account was linked on this PC (UTC).</summary>
+    public DateTime? AccountLinkedUtc { get; set; }
+
+    /// <summary>The first-run setup wizard ran (or this install was already in use before the wizard existed).</summary>
+    public bool SetupWizardCompleted { get; set; }
+
+    /// <summary>The user's own switch for automatic updates (the update dialog). Automatic updating also needs the
+    /// entitlement (a paid or trial license, or a linked account) — see <see cref="Services.AutoUpdateEntitlement"/>.</summary>
+    public bool AutoUpdateEnabled { get; set; } = true;
+
     /// <summary>The user chose "Not interested" / "don't show again" on the BrainX invitation — never opened by
     /// itself again (the brain chip still opens it on request).</summary>
     public bool BrainXInviteDismissed { get; set; }

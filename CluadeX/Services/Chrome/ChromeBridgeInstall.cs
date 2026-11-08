@@ -99,6 +99,36 @@ public static class ChromeBridgeInstall
     /// <summary>The registry half of <see cref="Uninstall"/> (the app's own uninstaller has no data folder to hand).</summary>
     public static void Unregister() => Registry.CurrentUser.DeleteSubKey(HostsKey + HostName, throwOnMissingSubKey: false);
 
+    /// <summary>
+    /// The registry half for one install being removed (Velopack's uninstall hook): only when the host names a program
+    /// inside <paramref name="installRoot"/>, or a program / manifest that no longer exists. The key is per user and
+    /// shared by every copy on the PC, so removing a second copy (a test install, an old one) must not cut the Chrome
+    /// connection of the copy still in use. Returns true when the key was removed.
+    /// </summary>
+    public static bool UnregisterIfFor(string installRoot)
+    {
+        try
+        {
+            string? manifest;
+            using (var key = Registry.CurrentUser.OpenSubKey(HostsKey + HostName))
+            {
+                if (key == null) return false;
+                manifest = key.GetValue(null) as string;
+            }
+            bool dead = string.IsNullOrWhiteSpace(manifest) || !File.Exists(manifest);
+            if (!dead)
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllBytes(manifest!));
+                string? exe = doc.RootElement.TryGetProperty("path", out var p) ? p.GetString() : null;
+                dead = string.IsNullOrWhiteSpace(exe) || !File.Exists(exe);
+                if (!dead && !Safety.ProtectedPaths.IsInside(Path.GetFullPath(exe!), installRoot)) return false;
+            }
+            Unregister();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or System.Security.SecurityException) { return false; }
+    }
+
     private static void WriteIfChanged(string path, byte[] content)
     {
         if (File.Exists(path) && File.ReadAllBytes(path).AsSpan().SequenceEqual(content)) return;
