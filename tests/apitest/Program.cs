@@ -112,6 +112,9 @@ internal static class Program
         loc.SetLanguage("en");
         LocalizedResources.Instance.Initialize(loc);
 
+        // --account: only the Xman Studio account sign-in + connection doctor wire (installer contract 1, 2.2–2.5).
+        if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
+
         await Offline();
 
         // --brain: connect BrainX exactly the way the app does (the real McpServerManager + the user's own
@@ -519,6 +522,7 @@ internal static class Program
 
         await MockProviders.Run(Check, Section);
         await MockLicense.Run(Check, Section);
+        await AccountWire.Run(Check, Section);
         await MockSpark.Run(Check, Section);
         await McpConfigSafety.Run(Check, Section);
         await BrainLaunchPath.Run(Check, Section);

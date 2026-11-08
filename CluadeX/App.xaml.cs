@@ -1083,6 +1083,9 @@ public partial class App : Application
         services.AddSingleton<TypographyService>();
         services.AddSingleton<ActivationService>();
         services.AddSingleton<XmanLicenseService>();
+        // The Xman Studio account sign-in (app-auth/*) and "ตรวจการเชื่อมต่อ" — the setup wizard and the update screens.
+        services.AddSingleton<Services.Account.XmanAccountService>();
+        services.AddSingleton<Services.Account.ConnectionDoctor>();
         // DgxSparkService — CluadeX driving the model an NVIDIA DGX Spark serves on the LAN (Ollama).
         services.AddSingleton<DgxSparkService>();
         services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<DgxSparkService>());   // stops the link monitor
