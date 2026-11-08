@@ -103,6 +103,7 @@ internal static partial class Program
             AutoUpdateService.ReleaseNotesBullets("- tells you *why* and _how_ in my_file_name").Single() == "tells you why and how in my_file_name",
             AutoUpdateService.ReleaseNotesBullets("- tells you *why* and _how_ in my_file_name").Single());
         Check("update notes: a word made of hex letters is not a commit hash", AutoUpdateService.ReleaseNotesBullets("- Fixed the defaced").Single() == "Fixed the defaced");
+        await InstallerSplash(Path.Combine(OutRoot, "installer", "setup-splash.png"));
         loc.SetLanguage("en");
         return Finish();
     }
@@ -197,6 +198,70 @@ internal static partial class Program
             CheckWizardLayout(win, name);
         }
         finally { win.Close(); CluadeX.Views.SplashWindow.PreviewOnly = false; await Idle(); }
+    }
+
+    /// <summary>
+    /// The picture Setup.exe shows while it installs (vpk pack --splashImage; the release copies it from
+    /// CluadeX/Assets/Installer/setup-splash.png): the purple card, the wordmark, the CluadeX girl. Opaque — the
+    /// installer draws it as is — and in both languages, because it shows before a language is picked.
+    /// </summary>
+    static async Task InstallerSplash(string path)
+    {
+        const int w = 640, h = 400;
+        var font = TypographyService.BundledFamily;
+        BitmapImage Pack(string rel)
+        {
+            var b = new BitmapImage();
+            b.BeginInit();
+            b.UriSource = new Uri("pack://application:,,,/CluadeX;component/" + rel, UriKind.Absolute);
+            b.CacheOption = BitmapCacheOption.OnLoad;
+            b.EndInit();
+            b.Freeze();
+            return b;
+        }
+        var root = new Grid { Width = w, Height = h, ClipToBounds = true };
+        root.Background = new LinearGradientBrush(new GradientStopCollection
+        {
+            new GradientStop(Color.FromRgb(0x1B, 0x0F, 0x2E), 0), new GradientStop(Color.FromRgb(0x2A, 0x16, 0x48), 0.55), new GradientStop(Color.FromRgb(0x3A, 0x1F, 0x5E), 1),
+        }, new Point(0, 0), new Point(1, 1));
+        root.Children.Add(new Border
+        {
+            Background = new RadialGradientBrush(Color.FromArgb(0x66, 0x9B, 0x6B, 0xFF), Color.FromArgb(0, 0, 0, 0))
+            { Center = new Point(0.78, 0.7), GradientOrigin = new Point(0.78, 0.7), RadiusX = 0.42, RadiusY = 0.6 },
+        });
+        root.Children.Add(new Border { BorderBrush = new SolidColorBrush(Color.FromArgb(0x80, 0x9B, 0x6B, 0xFF)), BorderThickness = new Thickness(1) });
+        var girl = new Image
+        {
+            Source = GirlArt.PoseImage("cluadex", 1), Height = 430, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 6, 18, 0), Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = GirlArt.Glow("cluadex"), BlurRadius = 24, ShadowDepth = 0, Opacity = 0.6 },
+        };
+        RenderOptions.SetBitmapScalingMode(girl, BitmapScalingMode.HighQuality);
+        root.Children.Add(girl);
+        var left = new StackPanel { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(44, 0, 0, 10), Width = 330 };
+        var mascot = new Image { Source = Pack("Assets/mascot.png"), Width = 120, Height = 120, HorizontalAlignment = HorizontalAlignment.Left };
+        var mark = new Image { Source = Pack("Assets/logo-wordmark.png"), Width = 250, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 10, 0, 0) };
+        RenderOptions.SetBitmapScalingMode(mascot, BitmapScalingMode.HighQuality);
+        RenderOptions.SetBitmapScalingMode(mark, BitmapScalingMode.HighQuality);
+        left.Children.Add(mascot);
+        left.Children.Add(mark);
+        TextBlock T(string text, double size, Color c, FontWeight wgt, double top) => new()
+        {
+            Text = text, FontFamily = font, FontSize = size, Foreground = new SolidColorBrush(c), FontWeight = wgt, Margin = new Thickness(2, top, 0, 0), TextWrapping = TextWrapping.Wrap,
+        };
+        left.Children.Add(T("กำลังติดตั้ง CluadeX…", 19, Color.FromRgb(0xF4, 0xEE, 0xFF), FontWeights.SemiBold, 18));
+        left.Children.Add(T("Installing CluadeX…", 13, Color.FromRgb(0xBB, 0xA9, 0xDD), FontWeights.Normal, 2));
+        left.Children.Add(T("Xman Studio", 11, Color.FromRgb(0x9F, 0x8C, 0xC6), FontWeights.Normal, 26));
+        root.Children.Add(left);
+
+        root.Measure(new Size(w, h));
+        root.Arrange(new Rect(0, 0, w, h));
+        root.UpdateLayout();
+        await Idle(100);
+        var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+        rtb.Render(root);
+        SavePng(rtb, path);
+        Log($"  installer splash: {path}");
+        Check("installer splash: the girl and the wordmark are there", girl.Source != null && mark.Source != null);
     }
 
     /// <summary>Every visible TextBlock fits its own box (no cut-off Thai), and nothing shown leaves the window.</summary>

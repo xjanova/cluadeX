@@ -98,6 +98,7 @@ jobs:
               --packDir publish `
               --mainExe CluadeX.exe `
               --icon CluadeX/Assets/app.ico `
+              --splashImage CluadeX/Assets/Installer/setup-splash.png `
               --packTitle "CluadeX" `
               --packAuthors "Xman Studio" `
               --outputDir Releases
