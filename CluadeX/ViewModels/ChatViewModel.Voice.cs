@@ -235,14 +235,20 @@ public partial class ChatViewModel
         if (!s.VoiceSpeakReplies) return;
         string engine = VoiceSpeaker.EngineOf(s);
         bool micOpen = IsDictating && _dictation != null;
-        var rows = TurnMessages;
+        var rows = TurnMessages.ToList();
+        int userAt = rows.IndexOf(userMsg);
         // Only the reply bubble that ends the turn (SpokenReply): not a card, a tool row or the "no summary" note.
-        var reply = SpokenReply.Of(rows.ToList(), rows.IndexOf(userMsg));
-        if (reply == null) return;
+        var reply = SpokenReply.Of(rows, userAt);
+        if (reply == null)
+        {
+            _debugLog?.Info("Voice", userAt < 0 ? "nothing read: the turn's message is not in its chat"
+                : "nothing read: the turn ended on " + SpokenReply.Describe(SpokenReply.LastRow(rows, userAt)));
+            return;
+        }
         bool thai = reply.Content.Any(c => c >= '\u0e00' && c <= '\u0e7f');
         int max = Math.Clamp(s.Voice?.MaxChars ?? 1200, 100, 10000);
         string text = SpeechText.ForSpeech(reply.Content, thai, max);
-        if (text.Length == 0) return;
+        if (text.Length == 0) { _debugLog?.Info("Voice", "nothing read: the reply is only code or links"); return; }
         string lang = thai ? "th-TH" : "en-US";
         string girl = reply.Character.Own;
         _speaker ??= new VoiceSpeaker(() => _settingsService.Settings);
@@ -258,6 +264,8 @@ public partial class ChatViewModel
 
         StopReplyVoice();
         var cts = _speakCts = new CancellationTokenSource();
+        var took = System.Diagnostics.Stopwatch.StartNew();
+        string used = edge ? Models.VoiceSettings.Edge : engine;
         try
         {
             SpeechAudio audio;
@@ -269,25 +277,39 @@ public partial class ChatViewModel
             catch (WindowsVoiceMissingException)
             {
                 // The Windows voice made no sound after all (a voice that claims the language but reads none of it).
+                used = Models.VoiceSettings.Edge;
                 audio = await _speaker.SynthesizeEdgeAsync(text, thai, girl, cts.Token);
             }
+            _debugLog?.Info("Voice", $"reply read aloud · {used}{(used == Models.VoiceSettings.Edge ? " via " + EdgeTts.LastHost : "")}"
+                + $" · {text.Length} chars · {audio.Bytes.Length / 1024} KB in {took.ElapsedMilliseconds} ms");
             OnUi(() =>
             {
                 if (cts.IsCancellationRequested) return;
                 if (IsDictating && _dictation != null && _dictation.SpeakAudio(audio.Bytes, audio.Mime, text, lang)) return;
-                (_replyPlayer ??= new VoicePlayer(_settingsService.DataRoot)).Play(audio);
+                if (_replyPlayer == null)
+                {
+                    _replyPlayer = new VoicePlayer(_settingsService.DataRoot);
+                    _replyPlayer.Finished += error => { if (error != null) _debugLog?.Warn("Voice", "the reply's audio did not play: " + error); };
+                }
+                _replyPlayer.Play(audio);
             });
         }
         catch (OperationCanceledException) { }
         catch (VoiceKeyMissingException ex)
         {
+            _debugLog?.Warn("Voice", $"reply not read: no {ex.Engine} key");
             OnUi(() => StatusText = Loc(ex.Engine == Models.VoiceSettings.OpenAI ? "voice.openai.noKey" : "voice.eleven.noKey"));
         }
         catch (EdgeTtsException ex)
         {
+            _debugLog?.Warn("Voice", $"reply not read: Edge failed after {took.ElapsedMilliseconds} ms ({text.Length} chars)", ex);
             OnUi(() => StatusText = LocF(thai && engine != Models.VoiceSettings.Edge ? "voice.chat.noThaiVoice" : "voice.chat.failed", ex.Message));
         }
-        catch (Exception ex) { OnUi(() => StatusText = LocF("voice.chat.failed", ex.Message)); }
+        catch (Exception ex)
+        {
+            _debugLog?.Warn("Voice", $"reply not read: {used} failed", ex);
+            OnUi(() => StatusText = LocF("voice.chat.failed", ex.Message));
+        }
     }
 
     // ─── the speaker button by the girls' faces in the chat ───
