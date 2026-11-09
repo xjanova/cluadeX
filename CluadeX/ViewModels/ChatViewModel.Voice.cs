@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services.Voice;
+using CluadeX.Services.Voice.Tts;
 
 namespace CluadeX.ViewModels;
 
@@ -217,18 +218,74 @@ public partial class ChatViewModel
         });
     }
 
-    /// <summary>Settings › Voice › Read replies aloud, with the mic window open: the reply of the turn that just ended
-    /// is read out (code and links left out). Nothing is read for a turn that was stopped or failed.</summary>
-    private void SpeakReplyIfWanted(ChatMessage userMsg)
+    private VoiceSpeaker? _speaker;
+    private VoicePlayer? _replyPlayer;
+    private CancellationTokenSource? _speakCts;
+
+    /// <summary>Settings › Voice › Read replies aloud: the reply of the turn that just ended is read out (code and links
+    /// left out) by the girl who wrote it, in her own voice and mood (VoicePersona). The browser voice speaks in the mic
+    /// window only; Windows, ElevenLabs and OpenAI make the audio here and play it in the mic window when it is open
+    /// (it stops listening while she talks), else in the app. Nothing is read for a turn that was stopped or failed.</summary>
+    private async void SpeakReplyIfWanted(ChatMessage userMsg)
     {
-        if (!_settingsService.Settings.VoiceSpeakReplies || !IsDictating || _dictation == null) return;
+        var s = _settingsService.Settings;
+        if (!s.VoiceSpeakReplies) return;
+        string engine = VoiceSpeaker.EngineOf(s);
+        if (VoiceSpeaker.NeedsMicWindow(engine) && (!IsDictating || _dictation == null)) return;
         var rows = TurnMessages;
         int at = rows.IndexOf(userMsg);
         if (at < 0) return;
         var reply = rows.Skip(at + 1).LastOrDefault(m => m.Role == MessageRole.Assistant);
         if (reply == null || reply.HasError || reply.IsInterrupted || string.IsNullOrWhiteSpace(reply.Content)) return;
-        bool thai = reply.Content.Any(c => c >= '฀' && c <= '๿');
-        string text = SpeechText.ForSpeech(reply.Content, thai);
-        if (text.Length > 0) _dictation.Speak(text, thai ? "th-TH" : "en-US");
+        bool thai = reply.Content.Any(c => c >= '\u0e00' && c <= '\u0e7f');
+        int max = Math.Clamp(s.Voice?.MaxChars ?? 1200, 100, 10000);
+        string text = SpeechText.ForSpeech(reply.Content, thai, max);
+        if (text.Length == 0) return;
+        string lang = thai ? "th-TH" : "en-US";
+        string girl = reply.Character.Own;
+        _speaker ??= new VoiceSpeaker(() => _settingsService.Settings);
+
+        if (VoiceSpeaker.NeedsMicWindow(engine))
+        {
+            var b = _speaker.BrowserStyle(girl);
+            _dictation!.Speak(text, lang, b.Voice, b.Rate, b.Pitch);
+            return;
+        }
+
+        StopReplyVoice();
+        var cts = _speakCts = new CancellationTokenSource();
+        try
+        {
+            var audio = await _speaker.SynthesizeAsync(text, thai, girl, cts.Token);
+            OnUi(() =>
+            {
+                if (cts.IsCancellationRequested) return;
+                if (IsDictating && _dictation != null && _dictation.SpeakAudio(audio.Bytes, audio.Mime, text, lang)) return;
+                (_replyPlayer ??= new VoicePlayer(_settingsService.DataRoot)).Play(audio);
+            });
+        }
+        catch (OperationCanceledException) { }
+        catch (VoiceKeyMissingException ex)
+        {
+            OnUi(() => StatusText = Loc(ex.Engine == Models.VoiceSettings.OpenAI ? "voice.openai.noKey" : "voice.eleven.noKey"));
+        }
+        catch (Exception ex) { OnUi(() => StatusText = LocF("voice.chat.failed", ex.Message)); }
+    }
+
+    /// <summary>A reply being made or played aloud stops (the user sent something new, or turned the voice off).</summary>
+    private void StopReplyVoice()
+    {
+        try { _speakCts?.Cancel(); } catch { }
+        _speakCts = null;
+        _replyPlayer?.Stop();
+    }
+
+    /// <summary>The mic window reported its browser's voices: remembered for the picker in Settings › Voice.</summary>
+    private void RememberBrowserVoices(IReadOnlyList<string> names)
+    {
+        if (names.Count == 0) return;
+        var v = _settingsService.Settings.Voice;
+        if (v != null && v.KnownBrowserVoices.SequenceEqual(names)) return;
+        _settingsService.UpdateSettings(st => (st.Voice ??= new Models.VoiceSettings()).KnownBrowserVoices = names.ToList());
     }
 }

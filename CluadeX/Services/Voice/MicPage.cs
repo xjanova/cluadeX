@@ -231,6 +231,7 @@ button.b:hover{filter:brightness(1.15)}
     closing = true; want = false;
     try { rec && rec.abort(); } catch (e) {}
     try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) {}
+    stopClip();
     micBtn.classList.remove('on');
     show(M.closed, '');
     window.close();
@@ -239,8 +240,11 @@ button.b:hover{filter:brightness(1.15)}
   // ── Reading replies aloud: the browser's own speech synthesis, free ──
   const hushBtn = $('hush');
   let talkGen = 0, lastSay = null, lastHush = null, pendingSay = null;
-  function pickVoice(l) {
+  function pickVoice(l, want) {
     const vs = (window.speechSynthesis && speechSynthesis.getVoices()) || [];
+    // Settings › Voice may name one ("Microsoft Premwadee Online (Natural) - Thai (Thailand) | th-TH").
+    const named = want ? String(want).split(' | ')[0].trim() : '';
+    if (named) { const hit = vs.find(v => v.name === named); if (hit) return hit; }
     const base = (l || '').slice(0, 2).toLowerCase();
     const same = vs.filter(v => (v.lang || '').toLowerCase().replace('_', '-').startsWith(base));
     return same.find(v => /natural|online|google/i.test(v.name)) || same[0] || null;
@@ -255,19 +259,22 @@ button.b:hover{filter:brightness(1.15)}
     }
     return out;
   }
-  function sayAloud(text, l) {
+  function sayAloud(text, l, opt) {
     if (!text) return;
     if (!window.speechSynthesis) { post('/event', { type: 'error', detail: 'no-tts' }); return; }
     const gen = ++talkGen;
     try { speechSynthesis.cancel(); } catch (e) {}
-    talking = true; pendingSay = { text, l };
+    stopClip();
+    talking = true; pendingSay = { text, l, opt };
     if (busy) { try { rec.abort(); } catch (e) {} }   // onend does not restart while talking
     show(M.speaking, M.speakingHint); hushBtn.textContent = M.hush; hushBtn.hidden = false;
     post('/event', { type: 'speaking', detail: l });
-    const parts = pieces(text), voice = pickVoice(l);
+    const parts = pieces(text), voice = pickVoice(l, opt && opt.voice);
+    const rate = opt && +opt.rate > 0 ? +opt.rate : 1, pitch = opt && +opt.pitch > 0 ? +opt.pitch : 1;
     parts.forEach((p, i) => {
       const u = new SpeechSynthesisUtterance(p);
       u.lang = l; if (voice) u.voice = voice;
+      u.rate = rate; u.pitch = pitch;
       u.onend = () => { if (gen === talkGen && i === parts.length - 1) doneTalking(gen); };
       u.onerror = e => {
         if (gen !== talkGen) return;
@@ -275,6 +282,35 @@ button.b:hover{filter:brightness(1.15)}
         if (e.error !== 'interrupted' && e.error !== 'canceled') doneTalking(gen);
       };
       speechSynthesis.speak(u);
+    });
+  }
+  // A reply another engine spoke (ElevenLabs, OpenAI, Windows): CluadeX hands the audio over at /audio.
+  let clip = null;
+  function stopClip() {
+    if (!clip) return;
+    const a = clip; clip = null;
+    try { a.pause(); a.removeAttribute('src'); a.load(); } catch (e) {}
+  }
+  function playAudio(id, text, l) {
+    const gen = ++talkGen;
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) {}
+    stopClip();
+    talking = true; pendingSay = { text, l, id, audio: true };
+    if (busy) { try { rec.abort(); } catch (e) {} }   // onend does not restart while talking
+    show(M.speaking, M.speakingHint); hushBtn.textContent = M.hush; hushBtn.hidden = false;
+    post('/event', { type: 'speaking', detail: l });
+    const a = new Audio('/audio?t=' + encodeURIComponent(T) + '&id=' + encodeURIComponent(id));
+    clip = a;
+    a.onended = () => { if (clip === a) clip = null; doneTalking(gen); };
+    a.onerror = () => {
+      if (clip !== a) return;
+      clip = null;
+      if (gen === talkGen) { post('/event', { type: 'error', detail: 'audio' }); doneTalking(gen); }
+    };
+    const p = a.play();
+    if (p && p.catch) p.catch(e => {
+      if (gen !== talkGen || clip !== a) return;
+      if (e && e.name === 'NotAllowedError') { show(M.tapToHear, M.tapToHearHint, true); hushBtn.textContent = M.replay; talking = false; resumeRec(); }
     });
   }
   function doneTalking(gen) {
@@ -290,12 +326,14 @@ button.b:hover{filter:brightness(1.15)}
   }
   function hushNow() {
     talkGen++;
-    try { speechSynthesis.cancel(); } catch (e) {}
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) {}
+    stopClip();
     if (talking) { talking = false; pendingSay = null; post('/event', { type: 'spoke', detail: '' }); }
     hushBtn.hidden = true; resumeRec();
   }
   hushBtn.onclick = () => {
-    if (hushBtn.textContent === M.replay && pendingSay) sayAloud(pendingSay.text, pendingSay.l);
+    if (hushBtn.textContent === M.replay && pendingSay)
+      pendingSay.audio ? playAudio(pendingSay.id, pendingSay.text, pendingSay.l) : sayAloud(pendingSay.text, pendingSay.l, pendingSay.opt);
     else hushNow();
   };
 
@@ -474,7 +512,10 @@ button.b:hover{filter:brightness(1.15)}
           if (lastHush !== null && st.hush !== lastHush && talking) hushNow();
           lastHush = st.hush;
           // CluadeX empties the text when a session starts or is hushed, so text here is a reply of this window's.
-          if (st.say.id !== lastSay) { lastSay = st.say.id; if (st.say.text && SPEAK && !LIVE) sayAloud(st.say.text, st.say.lang || lang); }
+          if (st.say.id !== lastSay) { lastSay = st.say.id; if (st.say.text && SPEAK && !LIVE) {
+            if (st.say.audio) playAudio(st.say.id, st.say.text, st.say.lang || lang);
+            else sayAloud(st.say.text, st.say.lang || lang, st.say);
+          } }
         }
         if (st.out) for (const m of st.out) if (m.n > outSent && !outQ.some(x => x.n === m.n)) outQ.push(m);
         flushOut();
@@ -485,7 +526,19 @@ button.b:hover{filter:brightness(1.15)}
     }
   }
 
-  if (window.speechSynthesis) try { speechSynthesis.getVoices(); } catch (e) {}   // starts loading the voice list
+  // The browser's voices go to Settings › Voice (pick one there); the list loads a moment after the page.
+  let voicesSent = false;
+  function reportVoices() {
+    const vs = (window.speechSynthesis && speechSynthesis.getVoices()) || [];
+    if (!vs.length || voicesSent || closing) return;
+    voicesSent = true;
+    post('/event', { type: 'voices', detail: vs.map(v => v.name + ' | ' + v.lang).join('\n') });
+  }
+  if (window.speechSynthesis) try {
+    speechSynthesis.getVoices();   // starts loading the voice list
+    speechSynthesis.addEventListener('voiceschanged', reportVoices);
+    setTimeout(reportVoices, 1500);
+  } catch (e) {}
   if (LIVE) { textEl.dataset.empty = ''; watch(); runLive(); }
   else { render(); watch(); startRec(); }
 })();
