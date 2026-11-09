@@ -236,10 +236,9 @@ public partial class ChatViewModel
         string engine = VoiceSpeaker.EngineOf(s);
         bool micOpen = IsDictating && _dictation != null;
         var rows = TurnMessages;
-        int at = rows.IndexOf(userMsg);
-        if (at < 0) return;
-        var reply = rows.Skip(at + 1).LastOrDefault(m => m.Role == MessageRole.Assistant);
-        if (reply == null || reply.HasError || reply.IsInterrupted || string.IsNullOrWhiteSpace(reply.Content)) return;
+        // Only the reply bubble that ends the turn (SpokenReply): not a card, a tool row or the "no summary" note.
+        var reply = SpokenReply.Of(rows.ToList(), rows.IndexOf(userMsg));
+        if (reply == null) return;
         bool thai = reply.Content.Any(c => c >= '\u0e00' && c <= '\u0e7f');
         int max = Math.Clamp(s.Voice?.MaxChars ?? 1200, 100, 10000);
         string text = SpeechText.ForSpeech(reply.Content, thai, max);
