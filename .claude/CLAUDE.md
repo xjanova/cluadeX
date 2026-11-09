@@ -248,6 +248,20 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
 - Proven by `tests/chattest` COP0–COP4 (`CHATTEST_ONLY=COP`, scripted CLI through the real chat page) and safetytest's
   Antigravity card checks. Not yet tried with a real Codex turn.
 
+## Codex's Windows sandbox — what CluadeX repairs (2026-11-09)
+- Codex gives a folder two write SIDs (`~/.codex/cap_sid`): `workspace_by_cwd` for runs whose cwd it is (shell commands) and
+  `writable_root_by_path` for runs that have it as a writable root — the file-edit helper (`codex --codex-run-as-fs-helper`)
+  starts at the drive root, so its edits use the second. The setup step grants each SID on the root when it is first used and
+  cannot re-stamp anything the sandbox account owns. A folder the sandbox made before the second SID existed keeps only
+  the first: edits in it fail ("write file … failed"), shell writes work. XSurLab, 2026-11-09: src/tests/design/docs/scripts.
+- `CodexSandboxRepair` rebuilds (copy as the user, swap, delete) a sandbox-owned `.git`, and every sandbox-owned file or
+  folder missing one of the root's inherited grants (`StaleEntries`). Before a turn: folders + root files, skipped when the
+  root's grants are unchanged since the last walk; after a failed edit/command: every file, 10 s budget. Package caches and
+  build output are never walked; a tree over 20,000 files / 1 GB or written while copying is left as it was.
+- Proven by `tests/apitest --codex-sandbox` (offline with real ACLs + live `codex sandbox` reproducing the gap and the fix).
+  `apitest --repair-sandbox <dir> [--dry]` runs the same repair on a real folder.
+- Python edits on Windows: open with `newline=''` (else LF files come back CRLF) and keep the BOM.
+
 ## CLI parity — what Claude Dev gets, every CLI gets (2026-11-06, audit = brain note 77faca9ac76d)
 - `ChatToolBridge.ChatToolsHint(CliToolNames, splitChats, plan)` names new_chat / close_chat, wrap_up, every
   `EngineeringToolModule` tool and add_code_comments in each CLI's own names (Plain "… (MCP server cluadex)", Claude

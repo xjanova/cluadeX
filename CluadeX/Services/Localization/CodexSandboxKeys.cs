@@ -34,6 +34,21 @@ internal static class CodexSandboxKeys
             ["en"] = "CluadeX rebuilt {0} before this turn: it belonged to Codex's sandbox account, which stops the sandbox from starting.",
             ["th"] = "ก่อนเริ่มเทิร์นนี้ CluadeX สร้าง {0} ใหม่ให้เป็นของคุณ เพราะมันเป็นของบัญชี sandbox ของ Codex ซึ่งทำให้ sandbox เริ่มไม่ได้",
         },
+        ["codex.sandbox.folderRepaired"] = new()
+        {
+            ["en"] = "CluadeX: Codex's sandbox could not write in {0}: the folder belonged to the sandbox's own account and missed its current write permission. CluadeX rebuilt it as yours (same files); the next edit will work.",
+            ["th"] = "CluadeX: sandbox ของ Codex เขียนใน {0} ไม่ได้ เพราะโฟลเดอร์เป็นของบัญชี sandbox เองและไม่มีสิทธิ์เขียนชุดปัจจุบัน CluadeX สร้างใหม่ให้เป็นของคุณแล้ว (ไฟล์เหมือนเดิม) แก้ไฟล์ครั้งถัดไปจะได้",
+        },
+        ["codex.sandbox.folderRepairFailed"] = new()
+        {
+            ["en"] = "CluadeX: Codex's sandbox cannot write in {0} (the folder belongs to the sandbox's own account and misses its write permission), and CluadeX could not rebuild it ({1}). Close what uses that folder and send the message again.",
+            ["th"] = "CluadeX: sandbox ของ Codex เขียนใน {0} ไม่ได้ (โฟลเดอร์เป็นของบัญชี sandbox และไม่มีสิทธิ์เขียน) และ CluadeX สร้างใหม่ไม่สำเร็จ ({1}) ปิดโปรแกรมที่ใช้โฟลเดอร์นั้นแล้วส่งข้อความอีกครั้ง",
+        },
+        ["codex.sandbox.folderPreflight"] = new()
+        {
+            ["en"] = "CluadeX rebuilt {0} before this turn: it belonged to Codex's sandbox account and missed the sandbox's write permission, so every edit in it would have failed.",
+            ["th"] = "ก่อนเริ่มเทิร์นนี้ CluadeX สร้าง {0} ใหม่ให้เป็นของคุณ เพราะมันเป็นของบัญชี sandbox ของ Codex และไม่มีสิทธิ์เขียนของ sandbox ทำให้แก้ไฟล์ในนั้นไม่ได้ทุกครั้ง",
+        },
         ["codex.mcp.failedNoMessage"] = new()
         {
             ["en"] = "The {0} tool reported a failure without a message.",

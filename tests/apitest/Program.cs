@@ -113,6 +113,26 @@ internal static class Program
         LocalizedResources.Instance.Initialize(loc);
 
         // --account: only the Xman Studio account sign-in + connection doctor wire (installer contract 1, 2.2–2.5).
+        // A one-off repair of a real folder (what CluadeX does before a Codex turn): --repair-sandbox <dir> [--dry].
+        if (Array.IndexOf(args, "--repair-sandbox") is int ri and >= 0 && ri + 1 < args.Length)
+        {
+            string target = Path.GetFullPath(args[ri + 1]);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var git = CluadeX.Services.Providers.CodexSandboxRepair.SandboxOwned(new[] { target });
+            long tGit = sw.ElapsedMilliseconds;
+            var quick = CluadeX.Services.Providers.CodexSandboxRepair.StaleEntries(target, allFiles: false);
+            long tQuick = sw.ElapsedMilliseconds - tGit;
+            sw.Restart();
+            var stale = CluadeX.Services.Providers.CodexSandboxRepair.StaleEntries(target);
+            Console.WriteLine($"scan {sw.ElapsedMilliseconds} ms (.git check {tGit} ms · before-a-turn look {tQuick} ms, {quick.Count} found · full look below) · sandbox-owned .git: {git.Count} · stale entries: {stale.Count}");
+            foreach (var x in git.Concat(stale)) Console.WriteLine("  " + x);
+            if (args.Contains("--dry")) return 0;
+            foreach (var o in CluadeX.Services.Providers.CodexSandboxRepair.RepairRoots(new[] { target }))
+                Console.WriteLine($"  {(o.Repaired ? "REBUILT" : "FAILED ")} {o.Path}{(o.Error != null ? "  (" + o.Error + ")" : "")}");
+            var left = CluadeX.Services.Providers.CodexSandboxRepair.StaleEntries(target);
+            Console.WriteLine($"after: {left.Count} stale");
+            return left.Count == 0 ? 0 : 1;
+        }
         if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--codex-sandbox")) { await CodexSandboxWire.Run(Check, Section); await CodexSandboxRepairWire.Run(Check, Section); return Finish(); }
