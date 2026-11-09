@@ -22,7 +22,19 @@ public sealed class ColibriPluginState
     public string? ModelsDir { get; set; }
     public DateTime? LastUpdateCheck { get; set; }
     public string? LatestSeenTag { get; set; }
+    /// <summary>The chosen model's size in billions, from the catalog (<see cref="ColibriFacts.CatalogBillions"/>) —
+    /// what decides which sub-agent tiers it takes. Null = not known (set up before CluadeX kept it).</summary>
+    public double? ModelBillions { get; set; }
+    /// <summary>The chosen model's catalog kind ("text", "vision", "image").</summary>
+    public string? ModelKind { get; set; }
+    /// <summary>The KV slots CluadeX started the server with (COLI_KV_SLOTS): how many sub-agents it serves at once.
+    /// Null = a server CluadeX did not start (colibri's default, 1).</summary>
+    public int? KvSlots { get; set; }
 }
+
+/// <summary>What a sub-agent needs to know about the model the plugin set up: its catalog id, size, whether it chats,
+/// and how many requests its server answers at once.</summary>
+public sealed record ColibriModelFacts(string? Id, double? Billions, bool Chat, int Slots);
 
 /// <summary>
 /// The colibri plugin (owner 2026-11-08: "ทำเรื่อง colibri ต่อเป็น plugin เสริม … ให้มันเรียกมาติดตั้งเอง เรามีหน้าปลั๊กอินอยู่แล้ว").
@@ -73,14 +85,50 @@ public sealed class ColibriService
 
     /// <summary>The catalog id of the model the plugin set up ("qwen36-35b-a3b"), read from plugin.json under
     /// <paramref name="dataRoot"/>: it names the size when the running server's own model id does not. Null when none.</summary>
-    public static string? CatalogModelId(string dataRoot)
+    public static string? CatalogModelId(string dataRoot) => ReadState(dataRoot)?.ModelId;
+
+    /// <summary>The plugin's engine is installed under <paramref name="dataRoot"/> (plugin.json names a release).</summary>
+    public static bool IsPluginInstalled(string dataRoot) => !string.IsNullOrWhiteSpace(ReadState(dataRoot)?.InstalledTag);
+
+    private static ColibriPluginState? ReadState(string dataRoot)
     {
         try
         {
             string path = Path.Combine(dataRoot, "plugins", "colibri", "plugin.json");
-            return File.Exists(path) ? JsonSerializer.Deserialize<ColibriPluginState>(File.ReadAllText(path))?.ModelId : null;
+            return File.Exists(path) ? JsonSerializer.Deserialize<ColibriPluginState>(File.ReadAllText(path)) : null;
         }
         catch { return null; }
+    }
+
+    /// <summary>The cached `coli setup --list --json` (catalog.json, written by <see cref="ListModelsAsync"/>).</summary>
+    public static List<ColibriModelOption> CachedCatalog(string dataRoot)
+    {
+        try
+        {
+            string path = Path.Combine(dataRoot, "plugins", "colibri", "catalog.json");
+            return File.Exists(path) ? ColibriFacts.ParseModels(File.ReadAllText(path)) : new();
+        }
+        catch { return new(); }
+    }
+
+    /// <summary>
+    /// The set-up model as a sub-agent sees it, from the catalog rather than the name: plugin.json's size and kind (kept
+    /// at setup), else the cached catalog's entry for its id, else the id itself parsed for a size. Null = no model set up.
+    /// </summary>
+    public static ColibriModelFacts? ModelFacts(string dataRoot)
+    {
+        var st = ReadState(dataRoot);
+        if (st == null || string.IsNullOrWhiteSpace(st.ModelId)) return null;
+        double? billions = st.ModelBillions;
+        string? kind = st.ModelKind;
+        if ((billions == null || kind == null)
+            && CachedCatalog(dataRoot).FirstOrDefault(o => string.Equals(o.Id, st.ModelId, StringComparison.OrdinalIgnoreCase)) is { } o)
+        {
+            billions ??= o.Billions;
+            kind ??= o.Kind;
+        }
+        billions ??= Agents.ModelCapability.ParseBillions(st.ModelId);
+        return new ColibriModelFacts(st.ModelId, billions, ColibriFacts.IsChatKind(kind), Math.Max(1, st.KvSlots ?? 1));
     }
 
     public void SaveState()
@@ -310,7 +358,10 @@ public sealed class ColibriService
         Directory.CreateDirectory(ModelsDir);
         var r = await ColiAsync(new[] { "setup", "--list", "--json", "--dir", ModelsDir }, TimeSpan.FromMinutes(2), ct);
         if (r.Code != 0) throw new InvalidOperationException(Tail(r.Err.Length > 0 ? r.Err : r.Out));
-        return ColibriFacts.ParseModels(r.Out);
+        var list = ColibriFacts.ParseModels(r.Out);
+        // Kept for the sub-agents: the catalog's size of the model set up (its name often says nothing).
+        if (list.Count > 0) try { File.WriteAllText(Path.Combine(Root, "catalog.json"), r.Out[r.Out.IndexOf('[')..]); } catch { }
+        return list;
     }
 
     public async Task<ColibriStatus> StatusAsync(CancellationToken ct = default)
@@ -332,6 +383,9 @@ public sealed class ColibriService
         Directory.CreateDirectory(ModelsDir);
         State.ModelId = modelId;
         State.ModelsDir = ModelsDir;
+        var entry = CachedCatalog(_settings.DataRoot).FirstOrDefault(o => string.Equals(o.Id, modelId, StringComparison.OrdinalIgnoreCase));
+        State.ModelBillions = entry?.Billions;
+        State.ModelKind = entry?.Kind;
         SaveState();
         File.AppendAllText(SetupLogPath, $"\n--- {DateTime.Now:yyyy-MM-dd HH:mm:ss} setup {modelId} → {ModelsDir}\n");
         int pid = await LaunchLoggedAsync(new[] { "setup", "--yes", "--model", modelId, "--no-start", "--dir", ModelsDir }, SetupLogPath, null, ct);
@@ -344,12 +398,41 @@ public sealed class ColibriService
     public async Task<ColibriStatus> StartServerAsync(CancellationToken ct = default)
     {
         string log = Path.Combine(Root, "server.log");
-        File.AppendAllText(log, $"\n--- {DateTime.Now:yyyy-MM-dd HH:mm:ss} start\n");
-        await LaunchLoggedAsync(new[] { "start", "--background", "--no-browser" }, log, TimeSpan.FromMinutes(2), ct);
+        // One KV slot per sub-agent that may run at once (bounded by the machine): colibri's default is 1, behind a queue
+        // that answers 429 after 300 s. A server already up keeps what it was started with.
+        var before = await StatusAsync(ct);
+        IReadOnlyDictionary<string, string>? env = null;
+        if (!before.IsReady && !before.IsLoading)
+        {
+            int slots = await Task.Run(() => SlotsForThisMachine(ModelFacts(_settings.DataRoot)?.Chat ?? true), ct);
+            env = StartEnv(slots);
+            State.KvSlots = slots;
+            SaveState();
+        }
+        File.AppendAllText(log, $"\n--- {DateTime.Now:yyyy-MM-dd HH:mm:ss} start"
+            + (env != null ? $" · kv slots {env["COLI_KV_SLOTS"]}" : " · already running") + "\n");
+        await LaunchLoggedAsync(new[] { "start", "--background", "--no-browser" }, log, TimeSpan.FromMinutes(2), ct, env);
         var s = await StatusAsync(ct);
         ApplyProvider(s);
         return s;
     }
+
+    /// <summary>The slot count for this PC: the parallel-agent limit, bounded by its RAM and graphics memory.</summary>
+    private int SlotsForThisMachine(bool chat)
+    {
+        double ram = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1e9;
+        double vram = 0;
+        try { vram = new GpuDetectionService().DetectGpu().VramTotalBytes / 1e9; } catch { }
+        return ColibriFacts.KvSlots(_settings.Settings.MaxParallelAgents, ram, vram, chat);
+    }
+
+    /// <summary>What `coli start` gets for the slot count: COLI_KV_SLOTS, which its `web --kv-slots` reads (colibri 2.1.0
+    /// has no start flag for it; the setup's saved arguments never carry one, so the variable decides).</summary>
+    public static IReadOnlyDictionary<string, string> StartEnv(int slots) =>
+        new Dictionary<string, string>
+        {
+            ["COLI_KV_SLOTS"] = Math.Clamp(slots, 1, ColibriFacts.MaxKvSlots).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
 
     /// <summary>The last lines of a log the plugin writes (setup.log / server.log), for an error message.</summary>
     public string LogTail(string path)
@@ -363,7 +446,8 @@ public sealed class ColibriService
     /// <paramref name="wait"/>, wait that long for coli itself to return; a non-zero exit is an error carrying the log's tail.
     /// Returns the cmd process id.
     /// </summary>
-    private async Task<int> LaunchLoggedAsync(string[] coliArgs, string log, TimeSpan? wait, CancellationToken ct)
+    private async Task<int> LaunchLoggedAsync(string[] coliArgs, string log, TimeSpan? wait, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? extraEnv = null)
     {
         var py = await FindPythonAsync(ct) ?? throw new InvalidOperationException("colibri.err.noPython");
         string engine = InstalledEngineDir ?? throw new InvalidOperationException("colibri.err.notInstalled");
@@ -372,6 +456,7 @@ public sealed class ColibriService
         string line = $"\"{Quote(py.Exe)} {string.Join(' ', args.Select(Quote))} >> {Quote(log)} 2>&1\"";
         var psi = new ProcessStartInfo("cmd.exe", "/d /s /c " + line) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = engine };
         ApplyEnv(psi);
+        foreach (var (k, v) in extraEnv ?? new Dictionary<string, string>()) psi.Environment[k] = v;
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("colibri.err.start");
         int pid = p.Id;
         if (wait is { } w)

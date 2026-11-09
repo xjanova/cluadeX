@@ -2530,6 +2530,12 @@ public partial class CodeAgentService
             Providers.ClaudeDevProvider.Extras.Value = new Providers.ClaudeDevProvider.TurnExtras(chatTools?.ConfigFile, dirs, browserRefusal,
                 provider.RunsOwnSubAgents ? CurrentDispatch : null, spawnGate != null ? chatTools?.Token : null, CliBudgetLeft(),
                 desktopRefusal);
+            // Every CLI turn says what Ultra and the policy decided (none did: the 2026-11-09 Codex chat had Ultra on, and
+            // its log showed no [Dispatch] line at all — nothing to tell why it never split).
+            string? ultraChat = Agents.WorkflowGate.CurrentChat;
+            _debugLog?.Info("Dispatch", $"{delegated} turn · " + (provider.RunsOwnSubAgents
+                ? DescribeDispatch(CurrentDispatch(), ultraChat, Agents.WorkflowGate.Why(ultraChat))
+                : $"ultra={Agents.WorkflowGate.Why(ultraChat) ?? "off"} · this CLI spawns no sub-agents of its own"));
             _debugLog?.Info("Agent", $"{delegated} extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}"
                 + (chatTools != null ? $" · browser={(browserRefusal == null ? "on" : "off")} · desktop={(desktopRefusal == null ? "on" : "off")}" : ""));
         }

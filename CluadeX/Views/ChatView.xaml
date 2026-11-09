@@ -3520,8 +3520,21 @@
                                     </StackPanel>
                                 </CheckBox>
 
-                                <!-- Design: this chat's design turns bring the UI Studio forward (off by default, per chat) -->
+                                <!-- Colibri: read-only sub-agents on the model already loaded on this PC instead of a cheap API model
+                                     (the same setting as Settings ▸ Agent and the Colibri card); shown once a local engine is installed -->
+                                <CheckBox x:Name="LocalAgentsToggle" IsChecked="{Binding SubAgentsOnLocal}" Foreground="{DynamicResource Accent.2}"
+                                          Visibility="{Binding LocalAgentsSwitchVisible, Converter={StaticResource BoolVis}}"
+                                          VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc orch.localAgentsTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE7F4;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{services:Loc orch.localAgents}" FontSize="12" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
+
+                                <!-- Design: this chat's design turns bring the UI Studio forward. Hidden for now (owner 2026-11-09):
+                                     a turn follows the Code page only (DesignGate.Enabled) -->
                                 <CheckBox x:Name="DesignToggle" IsChecked="{Binding IsDesignMode}" Foreground="{DynamicResource Accent.2}"
+                                          Visibility="{Binding DesignModeAvailable, Converter={StaticResource BoolVis}}"
                                           VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc chat.designTip}">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>

@@ -577,6 +577,7 @@ internal static class Program
         await VibeWire.Run(Check, Section);
         await PlanWire.Run(Check, Section);
         await ColibriWire.Run(Check, Section);
+        await UltraWire.Run(Check, Section);
         await NodeGraphBgWire.Run(Check, Section);
     }
 
