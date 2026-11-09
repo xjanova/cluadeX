@@ -33,7 +33,7 @@ public sealed class VoiceSpeaker
     public static bool NeedsMicWindow(string engine) => engine == VoiceSettings.Browser;
 
     public static string EngineOf(AppSettings s) =>
-        Array.IndexOf(VoiceSettings.Engines, s.Voice?.Engine) >= 0 ? s.Voice!.Engine : VoiceSettings.Browser;
+        Array.IndexOf(VoiceSettings.Engines, s.Voice?.Engine) >= 0 ? s.Voice!.Engine : VoiceSettings.Edge;
 
     /// <summary>The OpenAI key and endpoint from AI Provider › OpenAI (entered once, shared with GPT-Live).</summary>
     public static (string Key, string Base) OpenAiKey(AppSettings s)
@@ -107,6 +107,25 @@ public sealed class VoiceSpeaker
         return (model, voice, speed, instructions);
     }
 
+    /// <summary>The Edge request for one reply: the girl's own Edge voice or the main one when it speaks the reply's
+    /// language (else Premwadee for Thai), and her pace and pitch on top of the page's.</summary>
+    public static (string Voice, string Rate, string Pitch) EdgeRequest(VoiceSettings v, bool thai, string? girl)
+    {
+        var style = v.PersonaVoices ? VoicePersona.For(girl) : VoicePersona.Neutral;
+        string? own = v.PersonaVoices ? v.For(girl)?.EdgeVoice : null;
+        string voice = EdgeTts.VoiceFor(!string.IsNullOrWhiteSpace(own) && EdgeTts.VoiceFor(own, thai) == own!.Trim() ? own : v.EdgeVoice, thai);
+        return (voice, EdgeTts.RateText(v.EdgeRate * style.RateFactor), EdgeTts.PitchText(v.EdgePitch * style.PitchFactor));
+    }
+
+    /// <summary>Speak with Edge's free voices whatever engine is chosen — what the free engines fall back to when they
+    /// cannot speak the reply (Windows without a Thai voice, the browser voice with no mic window open).</summary>
+    public async Task<SpeechAudio> SynthesizeEdgeAsync(string text, bool thai, string? girl, CancellationToken ct = default)
+    {
+        var (voice, rate, pitch) = EdgeRequest(_settings().Voice ?? new VoiceSettings(), thai, girl);
+        var bytes = await EdgeTts.SpeakAsync(text, voice, rate, pitch, ct).ConfigureAwait(false);
+        return new SpeechAudio(bytes, "audio/mpeg", ".mp3");
+    }
+
     /// <summary>Speak <paramref name="text"/> with the chosen engine (not the browser one). Throws with a short message
     /// the user can act on (no key, the API's own error).</summary>
     public async Task<SpeechAudio> SynthesizeAsync(string text, bool thai, string? girl, CancellationToken ct = default)
@@ -115,6 +134,8 @@ public sealed class VoiceSpeaker
         var v = s.Voice ?? new VoiceSettings();
         switch (EngineOf(s))
         {
+            case VoiceSettings.Edge:
+                return await SynthesizeEdgeAsync(text, thai, girl, ct).ConfigureAwait(false);
             case VoiceSettings.ElevenLabs:
             {
                 string key = v.ElevenLabsApiKey?.Trim() ?? "";

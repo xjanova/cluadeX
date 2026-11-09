@@ -107,6 +107,35 @@ internal static class Program
             Check($"{engine}: every picker shows a name, not an object", objects.Count == 0, string.Join(", ", objects.Take(3)));
         }
 
+        // The settings grid gives this panel a card of a few hundred pixels, not 900: 2026-11-09 the labels there
+        // were one letter wide and the pickers clipped off the right edge. Every engine at card widths.
+        foreach (double width in new[] { 520.0, 420.0, 900.0 })
+        {
+            host.Width = width;
+            win.Width = width + 40;
+            foreach (var engine in VoiceSettings.Engines)
+            {
+                vm.Engine = engine;
+                await Idle(200);
+                string tag = $"{engine} @ {width:0}";
+                Save(host, $"voice-{engine}-{width:0}.png");
+                bool narrow = panel.ActualWidth < VoiceSettingsPanel.NarrowBelow;
+                Check($"{tag}: the girl stands {(narrow ? "above" : "beside")} the settings", panel.IsNarrow == narrow
+                    && panel.MascotTop.IsVisible == narrow && panel.MascotSide.IsVisible == !narrow, $"panel {panel.ActualWidth:0} px");
+                // Squeezed = a wrapping text pushed into a thin column, so it runs down in many short lines (a
+                // button's own one-line label is narrow on purpose and is not counted).
+                var squeezed = Texts(panel).Where(t => t.IsVisible && t.TextWrapping != TextWrapping.NoWrap && t.Text.Trim().Length >= 6
+                                                       && t.ActualWidth < 120 && t.ActualHeight > t.FontSize * 3.5)
+                                           .Select(t => $"'{Short(t.Text)}' {t.ActualWidth:0}px").ToList();
+                Check($"{tag}: no text squeezed narrow", squeezed.Count == 0, string.Join(", ", squeezed.Take(4)));
+                var clipped = Controls(panel).Where(c => c.IsVisible && c.ActualWidth > 0)
+                    .Select(c => (c, r: c.TransformToAncestor(panel).TransformBounds(new Rect(0, 0, c.ActualWidth, c.ActualHeight))))
+                    .Where(x => x.r.Left < -1 || x.r.Right > panel.ActualWidth + 1)
+                    .Select(x => $"{x.c.GetType().Name} {x.r.Left:0}..{x.r.Right:0}").ToList();
+                Check($"{tag}: every control inside the card", clipped.Count == 0, string.Join(", ", clipped.Take(4)));
+            }
+        }
+
         vm.Engine = VoiceSettings.ElevenLabs;
         vm.SelectedModel = vm.Models.First(m => m.Model.Id == "eleven_multilingual_v2");
         await Idle(150);
@@ -136,6 +165,19 @@ internal static class Program
             foreach (var x in Texts(c)) yield return x;
         }
     }
+
+    static IEnumerable<Control> Controls(DependencyObject root)
+    {
+        int n = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < n; i++)
+        {
+            var c = VisualTreeHelper.GetChild(root, i);
+            if (c is ComboBox or Slider or Button or TextBox or CheckBox) { yield return (Control)c; continue; }
+            foreach (var x in Controls(c)) yield return x;
+        }
+    }
+
+    static string Short(string s) => s.Length <= 24 ? s : s[..24] + "…";
 
     static int Save(FrameworkElement el, string name)
     {

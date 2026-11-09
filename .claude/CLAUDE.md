@@ -243,6 +243,20 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
 - The app's ComboBox template ignores DisplayMemberPath in the closed box: give records `ToString() => Label`.
 - Proven offline by `tests/apitest --voice` (stand-in ElevenLabs/OpenAI server) and `tests/voicetest` (renders the panel
   per engine to PNGs). **No live ElevenLabs/OpenAI call yet** — set ELEVENLABS_API_KEY for apitest's live check.
+- **Edge is the default engine** (`Services/Voice/Tts/EdgeTts.cs`): Microsoft Edge read-aloud's free neural voices over a
+  WebSocket, Thai Premwadee/Niwat. It is unofficial: the service wants a `Sec-MS-GEC` **v2** token (v1 now gets 403) —
+  a port of edge-tts 7.3.1 `drm.py`, pinned by 4 vectors in `tests/apitest/EdgeTtsWire.cs`. If it starts failing, re-check
+  edge-tts's drm.py and `SEC_MS_GEC_VERSION` first. `apitest --edge` makes the live Thai + English call.
+- **Trap: Windows voices read Thai as silence.** System.Speech sees desktop voices only; this PC has en-US only, and an
+  English voice given Thai text writes a 46-byte WAV with no error. `WindowsTts` now throws `WindowsVoiceMissingException`
+  (no voice for the language, or a silent WAV) and the chat/test fall back to Edge. Windows' own Thai voice (Pattara) is
+  OneCore — System.Speech cannot use it even when installed.
+- The browser engine is used only while the mic window is open; otherwise the reply goes through Edge.
+- The speaker under the girl's face on each reply (`ChatView.xaml`, `ToggleSpeakRepliesCommand`) flips the same switch as
+  Settings › Voice; turning it off stops her mid-sentence.
+- Settings cards can be narrow: rows are `Views/Settings/FitRow.cs` (label + controls on one line until the label would
+  drop under 180 px, then controls under the label); the mascot moves above the settings below 640 px. voicetest checks
+  420/520/900 px for squeezed text and controls outside the card.
 
 ## A CLI agent in a chat with no project (2026-11-06)
 - A CLI agent (Codex, Gemini Dev, Antigravity, Claude Dev, Grok Dev) gets its sandbox from `DecideWorkerGrant`: no folder,

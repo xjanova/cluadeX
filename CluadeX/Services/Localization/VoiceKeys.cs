@@ -9,6 +9,9 @@ internal static class VoiceKeys
     internal static readonly Dictionary<string, Dictionary<string, string>> Keys = new()
     {
         // engines
+        ["voice.engine.edge"] = L("Edge voice (free, natural Thai)", "เสียง Edge (ฟรี เสียงไทยธรรมชาติ)"),
+        ["voice.engine.edgeNote"] = L("Microsoft Edge's read-aloud voices over the internet — free, no key, no window. Natural Thai (Premwadee, Niwat) and English. Plays in the app.",
+            "เสียงอ่านออกเสียงของ Microsoft Edge ผ่านเน็ต ฟรี ไม่ต้องใช้คีย์ ไม่ต้องเปิดหน้าต่างไหน — เสียงไทยธรรมชาติ (เปรมวดี, นิวัฒน์) และภาษาอังกฤษ เล่นในแอปเลย"),
         ["voice.engine.browser"] = L("Browser voice (free)", "เสียงเบราว์เซอร์ (ฟรี)"),
         ["voice.engine.browserNote"] = L("The mic window's own voice — free. Microsoft Edge has natural Thai voices (Premwadee, Niwat). Speaks only while the mic window is open.",
             "เสียงของหน้าต่างไมค์เอง ฟรี — Microsoft Edge มีเสียงไทยธรรมชาติ (เปรมวดี, นิวัฒน์) พูดได้เฉพาะตอนเปิดหน้าต่างไมค์"),
@@ -25,6 +28,8 @@ internal static class VoiceKeys
         ["voice.saveFailed"] = L("Could not save the voice settings:", "บันทึกการตั้งค่าเสียงไม่สำเร็จ:"),
 
         // the girl on the right
+        ["voice.mascot.edge"] = L("Edge's voices are free and speak real Thai — no key, nothing to install. I'll read every reply to you~",
+            "เสียงของ Edge ฟรีและพูดไทยชัดเลยค่ะ ไม่ต้องใช้คีย์ ไม่ต้องติดตั้งอะไร เดี๋ยวหนูอ่านทุกคำตอบให้ฟังนะคะ~"),
         ["voice.mascot.elevenlabs"] = L("Hi, I'm ElevenLabs! Give me a key and I'll lend every girl a real voice — or clone yours.",
             "สวัสดีค่ะ ElevenLabs เองค่ะ ใส่คีย์ให้หน่อย เดี๋ยวพากย์เสียงให้สาว ๆ ทุกคน หรือโคลนเสียงคุณก็ได้นะ"),
         ["voice.mascot.codex"] = L("Same OpenAI key, no extra setup. Pick a voice. Done.", "ใช้คีย์ OpenAI เดิม ไม่ต้องตั้งเพิ่ม เลือกเสียงแล้วจบ"),
@@ -84,9 +89,17 @@ internal static class VoiceKeys
         ["voice.test.making"] = L("Making {0}'s voice…", "กำลังสร้างเสียงของ {0}…"),
         ["voice.test.playing"] = L("Playing {0} ({1} KB).", "กำลังเล่นเสียง {0} ({1} KB)"),
         ["voice.test.failed"] = L("Test failed:", "ทดสอบไม่สำเร็จ:"),
+        ["voice.test.playingEdge"] = L("Playing {0} ({1} KB) — with Edge's free voice: Windows here has no voice for this language.",
+            "กำลังเล่นเสียง {0} ({1} KB) — ใช้เสียง Edge (ฟรี) แทน เพราะ Windows เครื่องนี้ไม่มีเสียงภาษานี้"),
 
         // chat
         ["voice.chat.failed"] = L("Could not read the reply aloud: {0}", "อ่านคำตอบออกเสียงไม่ได้: {0}"),
+        ["voice.chat.noThaiVoice"] = L("No Thai voice: Windows here has English voices only, and Edge's free voice could not be reached ({0}). Check the internet, or pick ElevenLabs / OpenAI in Settings › Voice.",
+            "ไม่มีเสียงภาษาไทย: Windows เครื่องนี้มีแต่เสียงอังกฤษ และเรียกเสียง Edge (ฟรี) ไม่ได้ ({0}) — เช็คเน็ต หรือเลือก ElevenLabs / OpenAI ในตั้งค่า › เสียง"),
+        ["voice.chat.on"] = L("Replies are read aloud.", "เปิดเสียงอ่านคำตอบแล้ว"),
+        ["voice.chat.off"] = L("Replies are no longer read aloud.", "ปิดเสียงอ่านคำตอบแล้ว"),
+        ["voice.chat.toggleOn"] = L("Reading replies aloud — click to mute", "กำลังอ่านคำตอบออกเสียง — กดเพื่อปิดเสียง"),
+        ["voice.chat.toggleOff"] = L("Replies are silent — click to have them read aloud", "ไม่ได้อ่านคำตอบออกเสียง — กดเพื่อให้น้องอ่านให้ฟัง"),
 
         // the page
         ["voice.ui.engine"] = L("Who reads the replies", "ใครเป็นคนอ่านคำตอบ"),
@@ -151,6 +164,11 @@ internal static class VoiceKeys
         ["voice.ui.noBrowserVoices"] = L("Open the mic window once — it reports the browser's voices here.",
             "เปิดหน้าต่างไมค์สักครั้ง รายชื่อเสียงของเบราว์เซอร์จะขึ้นที่นี่"),
         ["voice.ui.pitch"] = L("Pitch", "ระดับเสียง"),
+        ["voice.edge.auto"] = L("Auto — by the reply's language", "อัตโนมัติ — ตามภาษาของคำตอบ"),
+        ["voice.ui.edgeVoiceDesc"] = L("Auto = Premwadee for Thai, Ava for English. A Thai reply always gets a Thai voice.",
+            "อัตโนมัติ = เปรมวดีสำหรับภาษาไทย, Ava สำหรับภาษาอังกฤษ — คำตอบภาษาไทยจะได้เสียงไทยเสมอ"),
+        ["voice.ui.windowsNoThai"] = L("Windows here has no Thai voice (only English ones) — Thai replies are read with Edge's free voice instead.",
+            "Windows เครื่องนี้ไม่มีเสียงภาษาไทย (มีแต่เสียงอังกฤษ) — คำตอบภาษาไทยจะใช้เสียง Edge (ฟรี) อ่านแทนให้เอง"),
         ["voice.ui.windowsVoiceDesc"] = L("Empty = a voice for the reply's language when one is installed.", "เว้นว่าง = ใช้เสียงตามภาษาของคำตอบ (ถ้าติดตั้งไว้)"),
         ["voice.ui.girls"] = L("Each girl's own voice", "เสียงประจำตัวของสาวแต่ละคน"),
         ["voice.ui.girlsDesc"] = L("For the engine above. (main voice) = the voice chosen above, with her mood.",
