@@ -2970,7 +2970,8 @@ public class AgentToolService : IDisposable
     /// only because a running program holds an output file says who holds it and how to build into scratch — it never
     /// kills anything. Callers have already passed the permission gate.
     /// </summary>
-    public async Task<BuildRun> RunBuildCoreAsync(ToolCall call, string? command, bool scratch, CancellationToken ct)
+    public async Task<BuildRun> RunBuildCoreAsync(ToolCall call, string? command, bool scratch, CancellationToken ct,
+        int timeoutMs = DefaultRunTimeoutMs)
     {
         string cmd = command ?? "";
         string foundIn = "";
@@ -3003,13 +3004,13 @@ public class AgentToolService : IDisposable
         if (danger != null) return Failed(danger);
 
         // Always from the project root: detected commands are root-relative, whatever `cd` the model did.
-        var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
+        var run = await RunShellAsync(cmd, timeoutMs, useSessionCwd: false, ct);
         if (run.Error != null) return Failed(run.Error);
         var r = run.Result!;
 
         bool ok = r.ExitCode == 0 && !r.TimedOut && !r.Cancelled;
         string body = r.TimedOut
-            ? "Build timed out after 300 s. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
+            ? $"Build timed out after {TimeoutText(timeoutMs)} and was stopped. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
             : CluadeX.Helpers.BuildOutputDistiller.Distill(r.Output, ok, _fileSystem.WorkingDirectory, ShellOutputBudget());
 
         var locked = ok ? new List<CluadeX.Helpers.LockedFiles.LockedOutput>()
@@ -3037,6 +3038,24 @@ public class AgentToolService : IDisposable
         return new BuildRun(result, cmd, r.Output ?? "", locked, scratchDir);
     }
 
+    /// <summary>How long run_build / run_tests / verify_change wait for a command unless told otherwise.</summary>
+    public const int DefaultRunTimeoutMs = 300_000;
+
+    private static string TimeoutText(int ms) => ms % 60_000 == 0 ? $"{ms / 60_000} min" : $"{ms / 1000} s";
+
+    /// <summary>
+    /// The guards a project command passes before it runs, for one that will not run through <see cref="RunShellAsync"/>
+    /// (verify_change's tests_background starts it as a background process): an open project, the dangerous-command
+    /// check and the red prompt. Null = it may run; else why not. Callers have already passed the permission gate.
+    /// </summary>
+    public async Task<string?> GateProjectCommandAsync(string command)
+    {
+        if (!_fileSystem.HasWorkingDirectory) return "No project folder is open — open one first so commands have a working directory.";
+        if (CheckDangerousCommand(command, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell)) is { } danger) return danger;
+        return await Safety.DangerApproval.GateAsync("run_command", command,
+            await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.WorkingDirectory));
+    }
+
     /// <summary>The build or test command the project's files point to, or null (verify_change's prompt and report).</summary>
     public string? DetectedProjectCommand(bool test) => _fileSystem.HasWorkingDirectory ? _fileSystem.DetectProjectCommand(test)?.Command : null;
 
@@ -3045,7 +3064,8 @@ public class AgentToolService : IDisposable
 
     /// <summary>The project's tests (detected, or <paramref name="command"/>) as run_tests runs them, with the runner's
     /// whole output (verify_change reads the counts from it). Callers have already passed the permission gate.</summary>
-    public async Task<(ToolResult Result, string RawOutput)> RunTestsCoreAsync(ToolCall call, string? command, CancellationToken ct)
+    public async Task<(ToolResult Result, string RawOutput)> RunTestsCoreAsync(ToolCall call, string? command, CancellationToken ct,
+        int timeoutMs = DefaultRunTimeoutMs)
     {
         string cmd = command ?? "";
         string foundIn = "";
@@ -3060,7 +3080,7 @@ public class AgentToolService : IDisposable
         var danger = CheckDangerousCommand(cmd, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell));
         if (danger != null) return (Fail(call, danger), "");
 
-        var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
+        var run = await RunShellAsync(cmd, timeoutMs, useSessionCwd: false, ct);
         if (run.Error != null) return (Fail(call, run.Error), "");
         var r = run.Result!;
 
@@ -3068,7 +3088,7 @@ public class AgentToolService : IDisposable
         // text into a pass/fail summary + failing tests so a weak model gets an actionable signal.
         bool ok = r.ExitCode == 0 && !r.TimedOut && !r.Cancelled;
         string distilled = r.TimedOut
-            ? "Tests timed out after 300 s. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
+            ? $"Tests timed out after {TimeoutText(timeoutMs)} and were stopped. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
             : CluadeX.Helpers.OutputBudget.HeadAndTail(
                 CluadeX.Helpers.TestOutputDistiller.Distill(r.Output, ok ? "" : $"Exit code: {r.ExitCode}", cmd), ShellOutputBudget());
 
