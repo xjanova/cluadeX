@@ -20,12 +20,14 @@ internal static partial class Program
     {
         if (text == null) return null;
         string nl = Environment.NewLine.Length == 2 ? "\n" : Environment.NewLine;
-        foreach (var head in new[] { nl + nl + "[Skill ที่เข้ากับงานนี้", nl + nl + "[Skills that fit this task" })
+        // The chat's reference line (ChatRef.TurnNote) rides at the end of every turn too: cut at whichever comes first.
+        int cut = text.Length;
+        foreach (var head in new[] { nl + nl + "[Skill ที่เข้ากับงานนี้", nl + nl + "[Skills that fit this task", "\n\n" + ChatRef.TurnNoteHead })
         {
             int at = text.IndexOf(head, StringComparison.Ordinal);
-            if (at >= 0) return text[..at];
+            if (at >= 0 && at < cut) cut = at;
         }
-        return text;
+        return text[..cut];
     }
 
     static async Task TestSkillPick()

@@ -2093,7 +2093,8 @@ public partial class CodeAgentService
     {
         // Build system prompt on background thread (avoids blocking UI with git/file I/O)
         string systemPrompt = await GetSystemPromptAsync();
-        userMessage = WithGitStatus(userMessage, await Task.Run(GitStatusTurnNote, ct));
+        // The chat's reference (CX-…) rides on the turn too: the owner may quote it, the model may use it (ChatRef).
+        userMessage = ChatRef.WithTurnNote(WithGitStatus(userMessage, await Task.Run(GitStatusTurnNote, ct)));
 
         await foreach (var token in _providerManager.ActiveProvider.ChatAsync(history, userMessage, systemPrompt, ct))
         {
@@ -2476,7 +2477,8 @@ public partial class CodeAgentService
                 AgentRunScope.Current?.TaskRequest);
         }
         var sendHistory = brief != null ? new List<ChatMessage>() : history;
-        string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage, brief) : userMessage;
+        // A CLI agent gets no CluadeX system prompt: the chat's reference (CX-…) rides on its message, as on every other path.
+        string sendMessage = ChatRef.WithTurnNote(brief != null ? AgentHandoff.WithBrief(userMessage, brief) : userMessage);
         // A CLI agent on this machine (Claude Dev, Gemini Dev): the edit/run grant, the guard, the chat tools, the rows.
         bool cliAgent = delegated is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.GrokDev;
         var grant = cliAgent ? WorkerGrantFor(folder) : null;
@@ -3183,7 +3185,7 @@ public partial class CodeAgentService
 
         // The working tree's state rides on the turn, not in the system prompt (GitStatusTurnNote) — after the mentioned-file
         // scan above, which would otherwise load every file a status line names.
-        string currentMessage = WithCarriedPlan(WithGitStatus(enrichedMessage, await Task.Run(GitStatusTurnNote, ct)));
+        string currentMessage = WithCarriedPlan(ChatRef.WithTurnNote(WithGitStatus(enrichedMessage, await Task.Run(GitStatusTurnNote, ct))));
         int maxTokenRecoveryCount = 0;
         bool hasAttemptedReactiveCompact = false;
         const int MaxOutputTokenRecoveries = 3;
@@ -3928,7 +3930,8 @@ public partial class CodeAgentService
         }
         // The working tree's state rides on the turn, not in the system prompt (GitStatusTurnNote). Added to the block
         // only — userMessage is still read for mentioned files and task size above and below, and a status line names files.
-        currentUserBlock.Text = WithCarriedPlan(WithGitStatus(currentUserBlock.Text, await Task.Run(GitStatusTurnNote, ct)));
+        // …and the chat's reference (CX-…), which the owner may quote (ChatRef).
+        currentUserBlock.Text = WithCarriedPlan(ChatRef.WithTurnNote(WithGitStatus(currentUserBlock.Text, await Task.Run(GitStatusTurnNote, ct))));
         nativeMessages.Add(new Services.Providers.NativeMessage
         {
             Role = "user",

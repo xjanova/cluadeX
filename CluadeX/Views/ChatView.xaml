@@ -304,6 +304,57 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <!-- ═══ THE CHAT'S REFERENCE (CX-8cf58c2a), pinned above the messages ═══
+             Owner 2026-11-09: a copyable id per chat, so the owner, the team and the AI can say which chat they mean. Row 0 of
+             its own (a slim strip), not an overlay on the messages: it never moves with the scroll and never sits under the
+             Ctrl+F bar or the floating plan card (both float over the top of row 1). Hidden on the new-chat page (no rows yet).
+             A click copies it (ChatView.xaml.cs ChatRefChip_Click); a drag over the text selects it instead. -->
+        <Grid x:Name="ChatRefBar" Grid.Row="0" MaxWidth="1000" Margin="24,6,24,0"
+              Visibility="{Binding Messages.Count, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+            <Border x:Name="ChatRefChip" HorizontalAlignment="Right" CornerRadius="10" BorderThickness="1" Padding="9,1,2,1"
+                    BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource State.Fill.Faint}" Cursor="Hand"
+                    ToolTip="{services:Loc chat.ref.tip}" AutomationProperties.AutomationId="CxChat.RefChip"
+                    AutomationProperties.Name="{Binding CurrentChatRef}"
+                    Visibility="{Binding CurrentChatRef, Converter={StaticResource BoolVis}}"
+                    PreviewMouseLeftButtonUp="ChatRefChip_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="#" FontFamily="{DynamicResource Font.Mono}" FontSize="11.5" FontWeight="SemiBold"
+                               Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <TextBox x:Name="ChatRefText" Text="{Binding CurrentChatRef, Mode=OneWay}" IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                             FontFamily="{DynamicResource Font.Mono}" FontSize="11.5" VerticalAlignment="Center" Cursor="Hand"
+                             Foreground="{DynamicResource Text.Secondary}" SelectionBrush="{DynamicResource Accent.1}"
+                             Background="Transparent" BorderThickness="0" Padding="0" AutomationProperties.AutomationId="CxChat.RefText">
+                        <TextBox.Template>
+                            <ControlTemplate TargetType="TextBox">
+                                <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                                    <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                                  VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Hidden"/>
+                                </Border>
+                            </ControlTemplate>
+                        </TextBox.Template>
+                    </TextBox>
+                    <TextBlock Text="{services:Loc chat.ref.copied}" FontSize="11" Foreground="{DynamicResource Status.Success}"
+                               VerticalAlignment="Center" Margin="6,0,0,0"
+                               Visibility="{Binding ChatRefCopied, Converter={StaticResource BoolVis}}"/>
+                    <Button x:Name="ChatRefCopyButton" Width="22" Height="20" FontSize="11" Margin="3,0,0,0"
+                            Command="{Binding CopyChatRefCommand}" ToolTip="{services:Loc chat.ref.copyTip}"
+                            AutomationProperties.AutomationId="CxChat.RefCopy">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                <Setter Property="Content" Value="&#xE8C8;"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ChatRefCopied}" Value="True">
+                                        <Setter Property="Content" Value="&#xE73E;"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Grid>
+
         <!-- ═══ IN-CHAT SEARCH BAR (Ctrl+F) ═══ -->
         <Border Grid.Row="1" VerticalAlignment="Top" Panel.ZIndex="10"
                 Background="{DynamicResource Bg.Panel}"

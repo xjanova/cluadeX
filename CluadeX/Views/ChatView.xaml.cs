@@ -825,6 +825,18 @@ public partial class ChatView : UserControl
         catch { /* Explorer could not be started — nothing else to do */ }
     }
 
+    // ─── The chat's reference chip (CX-8cf58c2a) at the top of the chat ───
+
+    /// <summary>A click anywhere on the chip copies the reference — except on its copy button (its own command does) and
+    /// after a drag over the text, which selected part of it for the owner to copy themselves.</summary>
+    private void ChatRefChip_Click(object sender, MouseButtonEventArgs e)
+    {
+        for (var d = e.OriginalSource as DependencyObject; d != null && d != ChatRefChip; d = d is Visual ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d == ChatRefCopyButton) return;
+        if (ChatRefText.SelectionLength > 0) return;
+        if (DataContext is ChatViewModel vm && vm.CopyChatRefCommand.CanExecute(null)) vm.CopyChatRefCommand.Execute(null);
+    }
+
     // ─── Tool-row thumbnail → the full image ───
 
     /// <summary>Opens the image a tool saved, in the system's image viewer. Only an existing local .jpg/.png/.webp/.gif

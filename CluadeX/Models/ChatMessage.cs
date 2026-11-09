@@ -800,6 +800,11 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     public sealed record MeasuredContext(int Tokens, ChatMessage? Anchor, AiProviderType Provider);
 
     public string Id { get; set; } = Guid.NewGuid().ToString();
+
+    /// <summary>The chat's short reference ("CX-8cf58c2a"), computed from <see cref="Id"/> (Services.ChatRef): shown at
+    /// the top of the chat and in the sidebar row's tip, so the owner can name this chat to the team or the AI.</summary>
+    public string Ref => Services.ChatRef.Of(Id);
+
     private string _title = "New Chat";
     /// <summary>Raises its change: opening a chat copies the stored title onto the sidebar's own row (the row is no longer
     /// swapped for a new object, which is what redrew it before).</summary>
