@@ -1064,6 +1064,8 @@ public class LocalizationService
         ["sidebar.filter.inProject"] = new() { ["en"] = "Project {0} · {1} of {2} chats", ["th"] = "โปรเจกต์ {0} · {1} จาก {2} แชท" },
         ["sidebar.search.titleHit"] = new() { ["en"] = "The chat's name matches", ["th"] = "ชื่อแชทตรงกับคำค้น" },
         ["sidebar.search.inProject"] = new() { ["en"] = "In project {0}", ["th"] = "ในโปรเจกต์ {0}" },
+        ["sidebar.search.refHit"] = new() { ["en"] = "Reference {0}", ["th"] = "รหัสอ้างอิง {0}" },
+        ["sidebar.chat.refLabel"] = new() { ["en"] = "Reference: ", ["th"] = "รหัสอ้างอิง: " },
         ["chat.estimate.short"] = new() { ["en"] = "≈ ${0}/step", ["th"] = "≈ ${0}/ขั้น" },
         ["chat.side.files"] = new() { ["en"] = "Project files", ["th"] = "ไฟล์ในโปรเจกต์" },
         ["chat.side.image"] = new() { ["en"] = "Latest image", ["th"] = "ภาพล่าสุด" },

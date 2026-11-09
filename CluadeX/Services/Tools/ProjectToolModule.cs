@@ -44,7 +44,7 @@ public sealed class ProjectToolModule : IAgentToolModule
 
     /// <summary>
     /// close_chat (UI thread work, set by the chat page): the asking chat's split chats — list them (target "" / "list"),
-    /// or put away the finished ones ("done") or one by id / title. Returns what the tool reports. Null in harnesses.
+    /// or put away the finished ones ("done") or one by reference (CX-…) / id / title. Returns what the tool reports. Null in harnesses.
     /// </summary>
     public static Func<string, Task<string>>? CloseChatHandler;
 
@@ -157,7 +157,7 @@ public sealed class ProjectToolModule : IAgentToolModule
                 ["chat"] = new Dictionary<string, string>
                 {
                     ["type"] = "string",
-                    ["description"] = "Which split chat to put away: its id or title, or \"done\" for every finished one. "
+                    ["description"] = "Which split chat to put away: its reference (CX-…), id or title, or \"done\" for every finished one. "
                         + "Omit (or \"list\") to only list this chat's split chats and how each stands.",
                 },
             },

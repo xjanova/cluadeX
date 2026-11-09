@@ -1298,9 +1298,16 @@
                                                                                    Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center"/>
                                                                     </StackPanel>
                                                                 </Grid>
+                                                                <!-- the tip: the whole title and the chat's reference (CX-…), to quote to the team or the AI -->
                                                                 <TextBlock Text="{Binding Title}" FontSize="12"
                                                                            Foreground="{DynamicResource Text.Primary}"
-                                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}">
+                                                                           TextTrimming="CharacterEllipsis">
+                                                                    <TextBlock.ToolTip>
+                                                                        <TextBlock>
+                                                                            <Run Text="{Binding Title, Mode=OneWay}"/><LineBreak/>
+                                                                            <Run Text="{services:Loc sidebar.chat.refLabel}"/><Run Text="{Binding Ref, Mode=OneWay}" FontFamily="{DynamicResource Font.Mono}"/>
+                                                                        </TextBlock>
+                                                                    </TextBlock.ToolTip>
                                                                     <!-- a result not opened yet reads bolder -->
                                                                     <TextBlock.Style>
                                                                         <Style TargetType="TextBlock">
@@ -1476,7 +1483,14 @@
                                                             </Grid.ColumnDefinitions>
                                                             <TextBlock Text="{Binding SessionTitle}" FontSize="11" FontWeight="SemiBold"
                                                                        Foreground="{DynamicResource Accent.2}"
-                                                                       TextTrimming="CharacterEllipsis" MaxWidth="160"/>
+                                                                       TextTrimming="CharacterEllipsis" MaxWidth="160">
+                                                                <TextBlock.ToolTip>
+                                                                    <TextBlock>
+                                                                        <Run Text="{Binding SessionTitle, Mode=OneWay}"/><LineBreak/>
+                                                                        <Run Text="{services:Loc sidebar.chat.refLabel}"/><Run Text="{Binding Ref, Mode=OneWay}" FontFamily="{DynamicResource Font.Mono}"/>
+                                                                    </TextBlock>
+                                                                </TextBlock.ToolTip>
+                                                            </TextBlock>
                                                             <Border Grid.Column="1" Background="{DynamicResource Surface.Badge}" CornerRadius="8" Padding="6,1">
                                                                 <TextBlock Text="{Binding MatchCount, StringFormat='{}{0} hits'}"
                                                                            FontSize="9" FontFamily="{DynamicResource Font.Mono.Display}"

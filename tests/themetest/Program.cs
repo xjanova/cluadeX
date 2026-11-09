@@ -88,8 +88,9 @@ internal static partial class Program
         ("license", "License"), ("brainx-invite", "BrainX invite"), ("dgx-spark", "DGX Spark"), ("preview-pane", "Preview pane"),
     };
     /// <summary>Pages whose look is SUPPOSED to change against the golden (reported, never a failure):
-    /// Settings › General gained the theme picker.</summary>
-    static readonly HashSet<string> ExpectedToChange = new() { "settings-general" };
+    /// Settings › General gained the theme picker; the chat gained the reference strip above its messages (2026-11-09) —
+    /// on the Chat page and in the chat docked beside the Code Editor.</summary>
+    static readonly HashSet<string> ExpectedToChange = new() { "settings-general", "chat", "code-editor" };
 
     [STAThread]
     static int Main(string[] args)
@@ -114,7 +115,8 @@ internal static partial class Program
                 case "--hero": HeroOnly = true; break;       // น้อง CluadeX in the corner + text size and font (HeroRenders.cs)
                 case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
                 case "--setup-wizard": SetupWizardOnly = true; break;   // the first-run setup wizard, every page and state (SetupWizardRenders.cs)
-                case "--titlebar": TitleBarOnly = true; break;   // the main title bar in every theme and width (TitleBarRenders.cs)
+                case "--titlebar": TitleBarOnly = true; break;
+                case "--chat-ref": ChatRefOnly = true; break;   // the chat's reference chip at the top of the chat, every theme (ChatRefRenders.cs)   // the main title bar in every theme and width (TitleBarRenders.cs)
                 case "--uninstall": UninstallOnly = true; break;   // the uninstall page, every page and state (UninstallRenders.cs)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
             }
@@ -653,6 +655,7 @@ internal static partial class Program
         if (BadgesOnly) { await RunBadgeShots(); return Finish(); }
         if (HeroOnly) { await HeroShots(); return Finish(); }
         if (TitleBarOnly) { if (themes != null) await TitleBarShots(themes); else Log("FATAL no ThemeService"); return Finish(); }
+        if (ChatRefOnly) { await ChatRefShots(themes); return Finish(); }
         if (BuddyClipsOnly) { CluadeX.Views.CluadexBuddy.ClipsAllowed = false; await ClipChecks(); await BubbleChecks(); return Finish(); }   // the chat's speech bubbles alone, for a quick look
 
         // 1. Midnight at startup vs the golden.
@@ -700,6 +703,7 @@ internal static partial class Program
         await LinkRenders();
         await SplitTreeShots(themes, all);
         await RunBadgeShots();
+        await ChatRefShots(themes);
 
         return Finish();
     }
@@ -813,7 +817,13 @@ internal static partial class Program
                       "```csharp\npublic bool Apply(string id)\n{\n    var dict = new ResourceDictionary { Source = Uri(id) };\n    Swap(dict);\n    return true;\n}\n```\n\n> The default theme stays exactly as it looks today.",
         });
         foreach (var s in chat.Sessions) { s.UpdatedAt = FixedTime; s.CreatedAt = FixedTime; }
-        if (chat.CurrentSession != null) chat.CurrentSession.Title = "Theme switch";
+        if (chat.CurrentSession != null)
+        {
+            chat.CurrentSession.Title = "Theme switch";
+            // A fixed id: the chat's reference chip (CX-…, from the id) reads the same in every render.
+            chat.CurrentSession.Id = "8cf58c2a-1b2c-4d3e-9f00-0123456789ab";
+            if (chat.GetType().GetProperty("CurrentChatRef") != null) Invoke(chat, "OnPropertyChanged", "CurrentChatRef");
+        }
         Invoke(chat, "RebuildVisibleSessions");
     }
 

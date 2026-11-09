@@ -1037,6 +1037,8 @@ public sealed class DatabaseService : IDisposable
 public class SearchResult
 {
     public string SessionId { get; set; } = "";
+    /// <summary>The chat's short reference (ChatRef), for the result row's tip.</summary>
+    public string Ref => ChatRef.Of(SessionId);
     public string SessionTitle { get; set; } = "";
     public DateTime UpdatedAt { get; set; }
     public string Snippet { get; set; } = "";

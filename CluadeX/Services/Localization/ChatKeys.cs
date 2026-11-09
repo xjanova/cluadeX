@@ -64,6 +64,12 @@ internal static class ChatKeys
         ["chat.cleanup.previewClosed"] = new() { ["en"] = ", preview closed", ["th"] = " ปิดหน้าพรีวิว" },
         ["chat.status.deleted"] = new() { ["en"] = "Chat deleted", ["th"] = "ลบแชทแล้ว" },
         ["chat.status.copied"] = new() { ["en"] = "Copied!", ["th"] = "คัดลอกแล้ว!" },
+        // ─── The chat's reference (CX-8cf58c2a), pinned at the top of the chat ───
+        ["chat.ref.tip"] = new() { ["en"] = "This chat's reference — click to copy. Use it to tell your team or the AI which chat you mean.", ["th"] = "รหัสอ้างอิงแชทนี้ — คลิกเพื่อคัดลอก ใช้บอกทีมหรือ AI ว่าหมายถึงแชทไหน" },
+        ["chat.ref.copyTip"] = new() { ["en"] = "Copy the reference", ["th"] = "คัดลอกรหัสอ้างอิง" },
+        ["chat.ref.copied"] = new() { ["en"] = "Copied", ["th"] = "คัดลอกแล้ว" },
+        ["chat.ref.copiedStatus"] = new() { ["en"] = "Copied {0} — paste it to say which chat you mean.", ["th"] = "คัดลอก {0} แล้ว — วางเพื่อบอกว่าหมายถึงแชทไหน" },
+        ["chat.ref.copyFailed"] = new() { ["en"] = "Couldn't copy — another program is using the clipboard. Select the reference and press Ctrl+C.", ["th"] = "คัดลอกไม่ได้ — มีโปรแกรมอื่นใช้คลิปบอร์ดอยู่ ลองเลือกรหัสแล้วกด Ctrl+C" },
         ["chat.status.working"] = new() { ["en"] = "Working...", ["th"] = "กำลังทำงาน..." },
         ["chat.status.workingSecs"] = new() { ["en"] = "Working... ({0}s)", ["th"] = "กำลังทำงาน... ({0} วิ)" },
         ["chat.status.generating"] = new() { ["en"] = "Generating...", ["th"] = "กำลังเขียนคำตอบ..." },
