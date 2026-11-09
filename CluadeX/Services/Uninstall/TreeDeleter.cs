@@ -11,7 +11,7 @@ public sealed record DeleteProblem(string Path, DeleteFailure Kind, string Messa
 /// <summary>
 /// Deletes a tree the way an uninstaller must: everything it can, never stopping at the first locked file, never
 /// following a junction or symlink into its target (the link is removed, the target stays), never outside the folder
-/// it was given (<see cref="SafeDelete.Check"/>). Counts what it freed and collects what it could not delete.
+/// it was given (<see cref="SafeDelete.CheckInside"/>). Counts what it freed and collects what it could not delete.
 /// </summary>
 public sealed class TreeDeleter
 {
@@ -24,7 +24,9 @@ public sealed class TreeDeleter
     /// <summary>Delete a file or a folder inside the owned root. Returns true when it is gone afterwards.</summary>
     public bool Delete(string path)
     {
-        if (SafeDelete.Check(path, _ownedRoot) is { } why)
+        // CheckInside, not Check: the data folder (~/.cluadex) and %TEMP% are protected themselves, and the uninstall
+        // empties what CluadeX put in them (v3.0.275 refused every one: "the owning folder is protected").
+        if (SafeDelete.CheckInside(path, _ownedRoot) is { } why)
         {
             Problems.Add(new DeleteProblem(path, DeleteFailure.Denied, "refused: " + why));
             return false;

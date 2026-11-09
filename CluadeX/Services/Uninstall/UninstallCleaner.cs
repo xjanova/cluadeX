@@ -208,6 +208,28 @@ public sealed class UninstallCleaner
         catch (Exception ex) { Problems.Add(TreeDeleter.Classify(settingsFile, ex)); _report.Line("could not strip the license: " + ex.Message); }
     }
 
+    /// <summary>
+    /// Settings kept: mark the setup wizard as not done in the kept settings.json, so installing CluadeX again opens it
+    /// (pre-filled from these settings and the license, so nothing is asked twice). v3.0.275 left it "done" and the
+    /// reinstall skipped the wizard. A license-only settings.json holds no such flag. True when the file was changed.
+    /// </summary>
+    public bool ResetSetupWizard()
+    {
+        if (!Keeps(KeepGroupId.Settings)) return false;
+        string file = Path.Combine(_scan.DataRoot, "settings.json");
+        if (!File.Exists(file)) return false;
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(file)) is not JsonObject node) return false;
+            if (node["SetupWizardCompleted"] is not JsonValue v || !v.TryGetValue(out bool done) || !done) return false;
+            node["SetupWizardCompleted"] = false;
+            WriteJson(file, node);
+            _report.Line("settings.json: the setup wizard will open on the next install");
+            return true;
+        }
+        catch (Exception ex) { _report.Line("could not reset the setup wizard flag: " + ex.Message); return false; }
+    }
+
     private static void WriteJson(string file, JsonObject node)
     {
         string tmp = file + ".uninstall-tmp";

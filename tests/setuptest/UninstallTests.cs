@@ -1,6 +1,8 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using CluadeX.Services.Safety;
+using CluadeX.Services.Setup;
 using CluadeX.Services.Uninstall;
 using Microsoft.Win32;
 
@@ -168,6 +170,87 @@ static partial class Program
             bool removedLive = CluadeX.Services.Chrome.ChromeBridgeInstall.UnregisterIfFor(inst);
             Check("U19", "Velopack's uninstall hook of another copy leaves the Chrome host of the copy in use alone",
                 !removedLive && liveHost == Registry.CurrentUser.OpenSubKey(hostKey)?.GetValue(null) as string, $"live host: {liveHost ?? "(none on this PC)"}");
+
+            // ── G: v3.0.275 on the owner's PC freed 0 bytes — the data folder IS ~/.cluadex and the turn folders sit in
+            //    %TEMP%, both protected, so every delete was refused. Decisions only against the real paths (nothing deleted). ──
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string realData = Path.Combine(profile, ".cluadex");
+            string temp = Path.GetTempPath();
+            string?[] allowed =
+            {
+                SafeDelete.CheckInside(Path.Combine(realData, "logs"), realData),
+                SafeDelete.CheckInside(Path.Combine(realData, "settings.json.bak"), realData),
+                SafeDelete.CheckInside(Path.Combine(realData, "Models", "m.gguf"), realData),
+                SafeDelete.CheckInside(Path.Combine(temp, "cluadex-turn-1"), temp),
+            };
+            Check("U20", "inside ~/.cluadex and %TEMP% (protected themselves) a CluadeX item may be deleted",
+                allowed.All(a => a == null) && ProtectedPaths.WhyProtected(realData) != null && ProtectedPaths.WhyProtected(temp) != null,
+                string.Join(" | ", allowed.Select(a => a ?? "ok")));
+            string?[] refusedAll =
+            {
+                SafeDelete.CheckInside(realData, realData),                                 // the owner itself
+                SafeDelete.CheckInside(temp, temp),
+                SafeDelete.CheckInside(Path.Combine(profile, "some-folder"), profile),      // the profile holds .ssh, Documents …
+                SafeDelete.CheckInside(Path.Combine(profile, ".ssh"), profile),
+                SafeDelete.CheckInside(Path.Combine(realData, "..", ".ssh"), realData),     // climbs out
+                SafeDelete.CheckInside(Path.Combine(profile, "Documents", "x"), realData),  // outside the owner
+                SafeDelete.CheckInside(Path.Combine(Path.GetPathRoot(temp)!, "cluadex-x"), Path.GetPathRoot(temp)),   // a drive as owner
+                SafeDelete.CheckInside(Path.Combine(realData, "logs"), ""),
+            };
+            Check("U21", "never: the owner itself, the profile or a drive as owner, a protected folder, a path outside or climbing out",
+                refusedAll.All(r => r != null), string.Join(" | ", refusedAll.Select(r => r ?? "ALLOWED")));
+            Check("U22", "the app-wide rule (SafeDelete.Check) is unchanged: it still refuses a protected owner",
+                SafeDelete.Check(Path.Combine(realData, "logs"), realData) != null && SafeDelete.Check(Path.Combine(temp, "cluadex-turn-1"), temp) != null);
+
+            // the same, deleting for real: a fake data folder registered as protected stands in for ~/.cluadex
+            var (rootG, victimG) = MakeFakeRoot(work, "G");
+            UninstallCleaner cG;
+            bool rootRefused, nestedRefused;
+            string nested = Path.Combine(rootG, "plugins", "p");
+            using (ProtectedPaths.ProtectForTest(rootG))
+            {
+                cG = Clean(DataScan.Run(rootG), new[] { KeepGroupId.Settings, KeepGroupId.License, KeepGroupId.Chats }, Array.Empty<string>());
+                var self = new TreeDeleter(rootG);
+                rootRefused = !self.Delete(rootG) && self.Problems.Count == 1 && Directory.Exists(rootG);
+                Directory.CreateDirectory(Path.Combine(nested, "own"));
+                using (ProtectedPaths.ProtectForTest(Path.Combine(nested, "own")))
+                {
+                    var holder = new TreeDeleter(rootG);
+                    nestedRefused = !holder.Delete(Path.Combine(rootG, "plugins")) && Directory.Exists(Path.Combine(nested, "own"));
+                }
+            }
+            Check("U23", "data folder protected (as ~/.cluadex is): the unticked rows are deleted, the ticked kept, nothing refused",
+                cG.Problems.Count == 0 && cG.BytesFreed >= 3000 && !Directory.Exists(Path.Combine(rootG, "Models"))
+                && !Directory.Exists(Path.Combine(rootG, "logs")) && !Directory.Exists(Path.Combine(rootG, "chrome"))
+                && File.Exists(Path.Combine(rootG, "codex.db")) && File.Exists(Path.Combine(rootG, "settings.json"))
+                && File.Exists(Path.Combine(victimG, "precious.txt")),
+                string.Join(" | ", cG.Problems.Select(p => p.Path + ": " + p.Message)));
+            Check("U24", "…but the data folder itself is refused, and so is a folder that holds a protected one", rootRefused && nestedRefused);
+
+            string tempItem = Path.Combine(temp, "cluadex-uninstalltest-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(Path.Combine(tempItem, "hooks"));
+            File.WriteAllText(Path.Combine(tempItem, "hooks", "h.json"), "{}");
+            var tempDel = new TreeDeleter(temp);
+            bool tempGone = tempDel.Delete(tempItem) && !Directory.Exists(tempItem);
+            try { if (Directory.Exists(tempItem)) Directory.Delete(tempItem, true); } catch { }
+            Check("U25", "a %TEMP%\\cluadex-* turn folder is deleted (%TEMP% itself is protected)", tempGone && tempDel.Problems.Count == 0 && Directory.Exists(temp),
+                string.Join(" | ", tempDel.Problems.Select(p => p.Message)));
+
+            // ── H: a reinstall after an uninstall that kept the settings opens the setup wizard ──
+            var sC = JsonNode.Parse(File.ReadAllText(Path.Combine(rootC, "settings.json"))) as JsonObject;
+            var sG = JsonNode.Parse(File.ReadAllText(Path.Combine(rootG, "settings.json"))) as JsonObject;
+            var cNot = new UninstallCleaner(DataScan.Run(rootA), new[] { KeepGroupId.License }, Array.Empty<string>(), null, isolated: true, new UninstallReport());
+            Check("U26", "settings kept → the wizard flag is reset, the rest stays; license only → no flag at all; settings not kept → untouched",
+                sC?["SetupWizardCompleted"]?.GetValue<bool>() == false && sC["Theme"]?.GetValue<string>() == "NeonCyber"
+                && sG?["SetupWizardCompleted"]?.GetValue<bool>() == false && sG["ActivationKey"]?.GetValue<string>() == "TEST-KEY-1234"
+                && settingsA != null && !settingsA.ContainsKey("SetupWizardCompleted") && !cNot.ResetSetupWizard(),
+                $"{sC?.ToJsonString()} · {sG?.ToJsonString()}");
+            Check("U27", "the wizard opens: fresh install, Velopack's first run even with settings kept and marked done, --setup",
+                SetupWizardGate.Show(false, false, true, false) && SetupWizardGate.Show(false, true, false, true)
+                && SetupWizardGate.Show(false, false, false, true) && SetupWizardGate.Show(true, true, false, false));
+            Check("U28", "…and never on the restart after an auto-update, nor on an old install that already had settings",
+                !SetupWizardGate.Show(false, true, false, false) && !SetupWizardGate.Show(false, false, false, false)
+                && !SetupWizardGate.FreshInstall(true, false, false));
         }
         finally
         {
@@ -180,6 +263,7 @@ static partial class Program
     {
         var c = new UninstallCleaner(scan, keep, keepCustom, null, isolated: true, new UninstallReport());
         foreach (var g in c.GroupsToDelete()) c.DeleteGroup(g);
+        c.ResetSetupWizard();
         c.RemoveLinks();
         return c;
     }
@@ -195,7 +279,7 @@ static partial class Program
         var settings = new JsonObject
         {
             ["Theme"] = "NeonCyber", ["Language"] = "th", ["ModelDirectory"] = Path.Combine(root, "Models"),
-            ["ActivationKey"] = "TEST-KEY-1234", ["LicenseType"] = "lifetime", ["AccountLinked"] = true, ["AccountEmailMasked"] = "te***@example.com",
+            ["ActivationKey"] = "TEST-KEY-1234", ["LicenseType"] = "lifetime", ["AccountLinked"] = true, ["AccountEmailMasked"] = "te***@example.com", ["SetupWizardCompleted"] = true,
         };
         Directory.CreateDirectory(root);
         File.WriteAllText(Path.Combine(root, "settings.json"), settings.ToJsonString());
