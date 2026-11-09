@@ -239,6 +239,10 @@ internal static partial class Program
         Check("voice: only the clip on screen can be heard (the other player is silent)",
               front != null && !front.IsMuted && players.Count(p => !p.IsMuted) == 1 && players.Where(p => p != front).All(p => p.Volume == 0),
               string.Join(" | ", players.Select(p => $"{System.IO.Path.GetFileName(p.Source?.LocalPath ?? "-")} muted={p.IsMuted} vol={p.Volume}")));
+        // owner 2026-11-09: a themetest run was what the owner heard with her sound off — a test process is never audible
+        Check("voice: a test process is never heard (volume 0 even when the line is unmuted)",
+              !CluadexBuddy.AudioAllowed && players.All(p => p.Volume == 0),
+              string.Join(" | ", players.Select(p => $"muted={p.IsMuted} vol={p.Volume}")));
         await Mood(BuddyMood.Waiting);
         Check("voice [gap]: right after a line she only gestures", !CluadexBuddy.Spoken.Contains(buddy.ClipShown) && buddy.SceneShown == BuddyMood.Waiting, buddy.ClipShown);
         await Mood(BuddyMood.Working);

@@ -444,8 +444,17 @@ public partial class CluadexBuddy
     {
         bool muted = me != _front || !(SoundsOn && (Spoken.Contains(name) || _forcePlay || _window is not { IsActive: false }));
         me.IsMuted = muted;
-        me.Volume = muted ? 0 : 0.5;   // a second guard: silent even if the player missed the mute
+        me.Volume = muted || !AudioAllowed ? 0 : 0.5;   // a second guard: silent even if the player missed the mute
     }
+
+    /// <summary>
+    /// Can she be heard from this process at all: only from CluadeX itself. A test harness (themetest, animtest, chattest …)
+    /// builds her too and never reads settings.json, so <see cref="SoundsOn"/> starts on there — owner 2026-11-09: "ยังได้ยิน
+    /// เสียงของน้องอวาต้า ทั้งๆที่ปิดเสียงแล้ว", and the speaker heard was a themetest run (peak 0.88; CluadeX itself 0.00).
+    /// The mute logic still runs and is still checked there (<see cref="MediaElement.IsMuted"/>); only the volume stays 0.
+    /// </summary>
+    public static bool AudioAllowed { get; set; } =
+        string.Equals(System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name, "CluadeX", StringComparison.OrdinalIgnoreCase);
 
     private static void Silence(MediaElement me) { me.IsMuted = true; me.Volume = 0; }
 
