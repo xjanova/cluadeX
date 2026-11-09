@@ -105,19 +105,19 @@ internal static class UpdateDownloadWire
         public void Dispose() { try { _listener.Stop(); _listener.Close(); } catch { } }
     }
 
-    /// <summary>--live-update: the real thing, against GitHub. The newest release's page redirect, then a real release
-    /// asset through GitHub's 302 to its CDN: stopped at ~2 MB, resumed by a new downloader (the next launch) and
-    /// stopped again at ~4 MB — the second run must go on from the first one's bytes (Range + If-Range survive the
-    /// redirect). About 4 MB of traffic.</summary>
+    /// <summary>--live-update: the real thing, against xman4289.com (the app's only update source since 2026-11-09). The
+    /// feed's newest version, then a real package streamed by the site: stopped at ~2 MB, resumed by a new downloader
+    /// (the next launch) and stopped again at ~4 MB — the second run must go on from the first one's bytes (Range +
+    /// If-Range). About 4 MB of traffic. Needs the site's /cluadex/download/ feed deployed.</summary>
     public static async Task RunLive(Action<string, string, bool, string> check, Action<string> section)
     {
-        section("live · GitHub: probe + resume across a restart");
+        section("live · xman4289.com: probe + resume across a restart");
         var svc = new AutoUpdateService(new SettingsService());
         string? latest = await svc.ProbeLatestReleaseAsync();
-        check("update-live", "the probe reads the newest release from GitHub's redirect", latest != null && AutoUpdateService.IsNewer(latest, "3.0.0"), latest ?? "null");
+        check("update-live", "the probe reads the newest release from the site's feed", latest != null && AutoUpdateService.IsNewer(latest, "3.0.0"), latest ?? "null");
         if (latest == null) return;
 
-        string url = $"https://github.com/xjanova/cluadeX/releases/download/v{latest}/CluadeX-{latest}-full.nupkg";
+        string url = $"{AutoUpdateService.FeedBase}CluadeX-{latest}-full.nupkg";
         string root = Path.Combine(Path.GetTempPath(), "cx-apitest-live-" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
@@ -132,7 +132,7 @@ internal static class UpdateDownloadWire
             }
             var one = await RunTo(2 * 1024 * 1024);
             var two = await RunTo(4 * 1024 * 1024);
-            check("update-live", "a real GitHub asset, stopped and started again, goes on from the first run's bytes",
+            check("update-live", "a real package from the site, stopped and started again, goes on from the first run's bytes",
                 one.Last >= 2 * 1024 * 1024 && two.Resumed && two.First >= one.Last && two.Last >= 4 * 1024 * 1024,
                 $"run1 stopped at {one.Last:N0} · run2 first={two.First:N0} last={two.Last:N0} resumed={two.Resumed}");
         }
@@ -277,14 +277,47 @@ internal static class UpdateDownloadWire
         finally { try { Directory.Delete(root, true); } catch { } }
 
         section("offline · finding a new release while the app runs");
-        check("update-probe", "the latest-release redirect is read as a version",
-            AutoUpdateService.ParseReleaseTagUrl(new Uri("https://github.com/xjanova/cluadeX/releases/tag/v3.0.178")) == "3.0.178"
-            && AutoUpdateService.ParseReleaseTagUrl(new Uri("https://github.com/xjanova/cluadeX/releases/tag/3.1.0/")) == "3.1.0", "");
-        check("update-probe", "a page that did not redirect to a tag is no answer",
-            AutoUpdateService.ParseReleaseTagUrl(new Uri("https://github.com/xjanova/cluadeX/releases/latest")) == null
-            && AutoUpdateService.ParseReleaseTagUrl(new Uri("https://github.com/login?return_to=x")) == null
-            && AutoUpdateService.ParseReleaseTagUrl(new Uri("https://github.com/xjanova/cluadeX/releases/tag/nightly")) == null
-            && AutoUpdateService.ParseReleaseTagUrl(null) == null, "");
+        const string feed = "﻿{\"Assets\":[{\"PackageId\":\"CluadeX\",\"Version\":\"3.0.277\",\"Type\":\"Full\"},"
+            + "{\"PackageId\":\"CluadeX\",\"Version\":\"3.0.1000\",\"Type\":\"Delta\"},{\"version\":\"3.0.999\"}]}";
+        check("update-probe", "the feed's highest version is the newest release (numbers, not text; BOM and key case ignored)",
+            AutoUpdateService.LatestFeedVersion(feed) == "3.0.1000", AutoUpdateService.LatestFeedVersion(feed) ?? "null");
+        check("update-probe", "an answer that is not a feed is no answer",
+            AutoUpdateService.LatestFeedVersion("<html>Please log in to the hotel Wi-Fi</html>") == null
+            && AutoUpdateService.LatestFeedVersion("{\"success\":false,\"error\":\"x\"}") == null
+            && AutoUpdateService.LatestFeedVersion("{\"Assets\":[{\"Version\":\"nightly\"}]}") == null
+            && AutoUpdateService.LatestFeedVersion(null) == null, "");
+        check("update-probe", "the updater and the feed live on xman4289.com — nothing names GitHub",
+            AutoUpdateService.FeedUrl == "https://xman4289.com/cluadex/download/releases.win.json"
+            && AutoUpdateService.VersionsApi.StartsWith("https://xman4289.com/api/v1/products/", StringComparison.Ordinal)
+            && typeof(AutoUpdateService).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+                .Where(f => f.IsLiteral && f.FieldType == typeof(string)).All(f => ((string?)f.GetRawConstantValue() ?? "").IndexOf("github", StringComparison.OrdinalIgnoreCase) < 0), "");
+
+        section("offline · the update window's notes (from the site, never a link)");
+        const string versions = "{\"versions\":["
+            + "{\"version\":\"3.0.280\",\"changelog\":\"- too new\"},"
+            + "{\"version\":\"3.0.279\",\"changelog\":\"### มีอะไรใหม่\\n- แจ้งปัญหาจากในแอปได้ ([#105](https://github.com/x/y/pull/105))\\n- เชื่อม GitHub integration เร็วขึ้น\\n\\n**Full Changelog**: https://github.com/x/y/compare/a...b\",\"released_at\":\"2026-11-09T03:00:00+00:00\"},"
+            + "{\"version\":\"3.0.278\",\"changelog\":\"- แก้แอปค้าง\"},"
+            + "{\"version\":\"3.0.277\",\"changelog\":\"- the running one\"},"
+            + "{\"version\":\"3.0.276\",\"changelog\":\"\"}]}";
+        var notes = AutoUpdateService.ParseVersionNotes(versions, "3.0.277", "3.0.279");
+        check("update-notes", "every version after the running one up to the new one, newest first",
+            notes.Select(n => n.Version).SequenceEqual(new[] { "3.0.279", "3.0.278" }), string.Join(",", notes.Select(n => n.Version)));
+        string n279 = notes.FirstOrDefault()?.Notes ?? "";
+        check("update-notes", "a GitHub link left in old notes goes; the words and a feature named GitHub stay",
+            n279.Contains("แจ้งปัญหาจากในแอปได้") && n279.Contains("GitHub integration") && !n279.Contains("github.com", StringComparison.OrdinalIgnoreCase)
+            && !n279.Contains("Full Changelog") && !n279.Contains("#105"), n279);
+        var bullets = AutoUpdateService.ReleaseNotesBullets("- แก้ปัญหา ([#9](https://github.com/x/y/pull/9))\n- [ดูเพิ่ม](https://github.com/x/y)\n**Full Changelog**: https://github.com/x/y/compare/a...b", 4);
+        check("update-notes", "the four lines of the update window carry no GitHub link either",
+            bullets.Count == 2 && bullets.All(b => b.IndexOf("github", StringComparison.OrdinalIgnoreCase) < 0) && bullets[0] == "แก้ปัญหา", string.Join(" | ", bullets));
+        string page = "## CluadeX v3.0.279\n\n### มีอะไรใหม่\n- แจ้งปัญหาจากในแอป\n\n### Install\n- **First time:** download Setup.exe\n\n### Requirements\n- Windows 10";
+        string news = AutoUpdateService.WhatsNewOnly(page);
+        var pageNotes = AutoUpdateService.ParseVersionNotes("{\"versions\":[{\"version\":\"3.0.279\",\"changelog\":" + System.Text.Json.JsonSerializer.Serialize(page) + "}]}", "3.0.278", "3.0.279");
+        check("update-notes", "a release's install and requirements sections are not news — the window shows only what is new",
+            news.Contains("แจ้งปัญหาจากในแอป") && !news.Contains("Setup.exe") && !news.Contains("Windows 10")
+            && pageNotes.Count == 1 && !pageNotes[0].Notes.Contains("Setup.exe"), news);
+        check("update-notes", "not the version list (the site down, an error page) → nothing, and the window shows the staged notes",
+            AutoUpdateService.ParseVersionNotes("<html>502</html>", "3.0.1", "3.0.9").Count == 0
+            && AutoUpdateService.ParseVersionNotes(null, "3.0.1", "3.0.9").Count == 0, "");
         check("update-probe", "versions compare as numbers, build metadata ignored",
             AutoUpdateService.IsNewer("3.0.179", "3.0.178+26993b4") && AutoUpdateService.IsNewer("3.0.1000", "3.0.999")
             && !AutoUpdateService.IsNewer("3.0.178", "3.0.178+26993b4") && !AutoUpdateService.IsNewer("3.0.99", "3.0.178")

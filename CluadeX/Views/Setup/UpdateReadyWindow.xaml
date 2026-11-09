@@ -80,6 +80,12 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <!-- "all the details": every version between this one and the new one, with its notes, from
+                             xman4289.com — shown here, never a web page -->
+                        <ScrollViewer x:Name="AllNotesScroll" MaxHeight="230" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                      Focusable="False" Visibility="Collapsed">
+                            <StackPanel x:Name="AllNotesPanel"/>
+                        </ScrollViewer>
                     </StackPanel>
                 </Border>
                 <Grid Margin="0,16,0,0">
@@ -103,7 +109,7 @@
                         </StackPanel>
                     </Button>
                     <Button Grid.Column="1" Style="{StaticResource BtnBase}" Content="{services:Loc upd.later}" Margin="12,0,0,0" Click="Later_Click"/>
-                    <Button Grid.Column="2" Style="{StaticResource BtnLink}" Content="{services:Loc upd.details}" FontSize="12.5" HorizontalAlignment="Right" VerticalAlignment="Center" Click="Details_Click"/>
+                    <Button x:Name="DetailsButton" Grid.Column="2" Style="{StaticResource BtnLink}" Content="{services:Loc upd.details}" FontSize="12.5" HorizontalAlignment="Right" VerticalAlignment="Center" Click="Details_Click"/>
                 </Grid>
             </StackPanel>
         </Border>
