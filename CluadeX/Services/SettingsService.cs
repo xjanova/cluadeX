@@ -13,13 +13,9 @@ public class SettingsService
     private static string EncryptString(string plainText)
     {
         if (string.IsNullOrEmpty(plainText)) return plainText;
-        try
-        {
-            byte[] data = Encoding.UTF8.GetBytes(plainText);
-            byte[] encrypted = ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
-            return "ENC:" + System.Convert.ToBase64String(encrypted);
-        }
-        catch { return plainText; }
+        byte[] data = Encoding.UTF8.GetBytes(plainText);
+        byte[] encrypted = ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
+        return "ENC:" + System.Convert.ToBase64String(encrypted);
     }
 
     /// <summary>Decrypt an "ENC:" value. <paramref name="failed"/> is true when it could not be decrypted here.</summary>
