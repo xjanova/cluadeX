@@ -306,7 +306,7 @@ internal static class AggregatorWire
         await or.TestConnectionAsync();
         var h = Last("openrouter", "/models").Headers;
         check("openrouter", "sends HTTP-Referer + X-OpenRouter-Title (+ the old X-Title)",
-            h.GetValueOrDefault("HTTP-Referer") == "https://github.com/xjanova/cluadeX" && h.GetValueOrDefault("X-OpenRouter-Title") == "CluadeX"
+            h.GetValueOrDefault("HTTP-Referer") == XmanLicenseService.DefaultPurchaseUrl && h.GetValueOrDefault("X-OpenRouter-Title") == "CluadeX"
             && h.GetValueOrDefault("X-Title") == "CluadeX", string.Join(", ", h.Select(kv => kv.Key + "=" + kv.Value)));
         var orList = await or.ListModelsAsync();
         check("openrouter", "image-only models dropped, newest first", orList != null && string.Join(",", orList) == "vendor/coder,vendor/no-tools",

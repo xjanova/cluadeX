@@ -114,6 +114,7 @@ internal static class Program
 
         // --account: only the Xman Studio account sign-in + connection doctor wire (installer contract 1, 2.2–2.5).
         if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
 
         await Offline();
 

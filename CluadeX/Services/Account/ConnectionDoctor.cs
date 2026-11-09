@@ -36,7 +36,6 @@ public sealed record DoctorReport(string Id, DateTimeOffset Time, IReadOnlyList<
 /// </summary>
 public sealed class ConnectionDoctor
 {
-    public const string GitHubLatestApi = "https://api.github.com/repos/xjanova/cluadeX/releases/latest";
     private static readonly TimeSpan StepTimeout = TimeSpan.FromSeconds(5);
 
     private readonly SettingsService _settings;
@@ -47,8 +46,9 @@ public sealed class ConnectionDoctor
 
     /// <summary>The updates step's HTTP handler (a harness swaps it).</summary>
     public Func<HttpMessageHandler> UpdatesHandler { get; set; } = () => new HttpClientHandler();
-    /// <summary>The release feed the updates step asks (a harness points it elsewhere).</summary>
-    public string UpdatesUrl { get; set; } = GitHubLatestApi;
+    /// <summary>The update feed the updates step asks — the one the updater uses, on xman4289.com (a harness points it
+    /// elsewhere).</summary>
+    public string UpdatesUrl { get; set; } = AutoUpdateService.FeedUrl;
 
     public ConnectionDoctor(SettingsService settings, XmanAccountService account, LocalizationService loc,
         BugReportService? bugs = null, DebugLogService? log = null)
@@ -230,14 +230,16 @@ public sealed class ConnectionDoctor
         {
             using var http = new HttpClient(UpdatesHandler(), true) { Timeout = TimeSpan.FromSeconds(10) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd($"CluadeX/{AutoUpdateService.CurrentVersion}");
-            http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+            http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
             using var resp = await http.GetAsync(UpdatesUrl, ct).ConfigureAwait(false);
             int code = (int)resp.StatusCode;
             if (resp.IsSuccessStatusCode)
             {
                 string body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                var m = Regex.Match(body, "\"tag_name\"\\s*:\\s*\"v?([^\"]+)\"");
-                return new DoctorStep("updates", DoctorStatus.Ok, null, $"HTTP {code}; latest {(m.Success ? "v" + m.Groups[1].Value : "?")}");
+                string? latest = AutoUpdateService.LatestFeedVersion(body);
+                // a 200 that is not the feed (a captive portal, a proxy's page) is not a working update path
+                if (latest == null) return new DoctorStep("updates", DoctorStatus.Warn, L("acct.doc.updates.fail"), $"HTTP {code}; not an update feed");
+                return new DoctorStep("updates", DoctorStatus.Ok, null, $"HTTP {code}; latest v{latest}");
             }
             return new DoctorStep("updates", code is 403 or 429 ? DoctorStatus.Warn : DoctorStatus.Fail, L("acct.doc.updates.fail"), $"HTTP {code}");
         }
@@ -262,17 +264,13 @@ public sealed class ConnectionDoctor
     public async Task<(bool Sent, string Message)> SendToTeamAsync(DoctorReport report, CancellationToken ct = default)
     {
         if (_bugs == null) return (false, L("acct.doc.send.fail"));
-        var (ok, _) = await _bugs.SubmitAsync(new BugReportData
-        {
-            Title = $"Connection report {report.Id}",
-            Description = report.Text,
-            Type = "bug",
-            Priority = "medium",
-            Severity = "minor",
-            AppVersion = AutoUpdateService.CurrentVersion,
-            Metadata = new Dictionary<string, string> { ["kind"] = "connection-report", ["report_id"] = report.Id },
-        }, ct).ConfigureAwait(false);
-        _log?.Info("Doctor", $"{report.Id} sent to the team: {ok}");
+        // the report text never holds a key or a password (see the class summary); the scrubber runs on it again anyway
+        var result = await _bugs.SubmitTextAsync("connection", $"Connection report {report.Id}\n\n{report.Text}",
+            new Dictionary<string, object?> { ["kind"] = "connection-report", ["report_id"] = report.Id, ["version"] = AutoUpdateService.CurrentVersion },
+            ct).ConfigureAwait(false);
+        bool ok = result.Outcome == BugReportOutcome.Sent;
+        _log?.Info("Doctor", $"{report.Id} sent to the team: {result.Outcome} {result.Ticket ?? result.ErrorCode}");
+        if (result.Outcome == BugReportOutcome.Queued) return (false, L("bug.result.queued"));
         return ok ? (true, LF("acct.doc.send.ok", report.Id)) : (false, L("acct.doc.send.fail"));
     }
 

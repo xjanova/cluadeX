@@ -90,6 +90,55 @@ public class DebugLogViewModel : ViewModelBase
 
     public string LogDirectory => _log.LogDirectory;
 
+    // ─── Log files: how long they stay, detailed logging (owner 2026-11-09: "ผู้ใช้เครียดีบั๊กได้ หรือให้ระบบเครียออโต้") ───
+    private readonly SettingsService? _settings;
+
+    /// <summary>3 / 7 / 14 / 30 days, or forever (<see cref="DebugLogService.RetentionChoices"/>).</summary>
+    public ObservableCollection<RetentionChoice> RetentionChoices { get; } = new();
+
+    public int RetentionDays
+    {
+        get => _log.RetentionDays;
+        set
+        {
+            if (_log.RetentionDays == value) return;
+            _log.RetentionDays = value;
+            _settings?.UpdateSettings(s => s.DebugLogRetentionDays = value);
+            OnPropertyChanged();
+            // the new limit applies now, off the UI thread; the file count refreshes after it
+            _ = Task.Run(() => _log.PruneFiles()).ContinueWith(_ => App.Current?.Dispatcher.BeginInvoke(new Action(RefreshFileStats)));
+        }
+    }
+
+    public bool Verbose
+    {
+        get => _log.Verbose;
+        set
+        {
+            if (_log.Verbose == value) return;
+            _log.Verbose = value;
+            _settings?.UpdateSettings(s => s.DebugLogVerbose = value);
+            if (value && _filterMinLevel > LogLevel.Trace) FilterMinLevel = LogLevel.Trace;   // so the new lines show
+            _log.Info("DebugLog", $"detailed logging {(value ? "on" : "off")}");
+            OnPropertyChanged();
+        }
+    }
+
+    public string RetentionTip => _loc.T("dbglog.retentionTip", _log.MaxTotalBytes / 1048576);
+
+    private string _fileStats = "";
+    /// <summary>"12 ไฟล์ · 4.2 MB" — the log files on disk now.</summary>
+    public string FileStats { get => _fileStats; private set => SetProperty(ref _fileStats, value); }
+
+    private void RefreshFileStats()
+    {
+        var (n, bytes) = _log.MeasureFiles();
+        FileStats = _loc.T("dbglog.files", n, FormatBytes(bytes));
+    }
+
+    public static string FormatBytes(long bytes)
+        => bytes >= 1048576 ? $"{bytes / 1048576.0:0.0} MB" : bytes >= 1024 ? $"{bytes / 1024.0:0} KB" : $"{bytes} B";
+
     // ─── Commands ───────────────────────────────────────────────────
     public ICommand RefreshCommand { get; }
     public ICommand ClearCommand { get; }
@@ -97,11 +146,45 @@ public class DebugLogViewModel : ViewModelBase
     public ICommand SaveDumpCommand { get; }
     public ICommand OpenLogFolderCommand { get; }
     public ICommand TestCommand { get; }
+    /// <summary>"แจ้งปัญหา": the report window.</summary>
+    public ICommand ReportCommand { get; }
+    /// <summary>"ล้างไฟล์ล็อก": every log file and crash log, after the user says yes.</summary>
+    public ICommand ClearFilesCommand { get; }
 
-    public DebugLogViewModel(DebugLogService log, LocalizationService loc)
+    /// <summary>The yes/no before the log files go (a harness swaps it). Default: a Windows message box, "No" focused.</summary>
+    public Func<string, string, bool> Confirm { get; set; } = (title, text) =>
+        System.Windows.MessageBox.Show(text, title, System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.No) == System.Windows.MessageBoxResult.Yes;
+
+    public DebugLogViewModel(DebugLogService log, LocalizationService loc, SettingsService? settings = null)
     {
         _log = log;
         _loc = loc;
+        _settings = settings;
+        foreach (int days in DebugLogService.RetentionChoices) RetentionChoices.Add(new RetentionChoice(days));
+        _loc.LanguageChanged += () =>
+        {
+            foreach (var c in RetentionChoices) c.Refresh();
+            OnPropertyChanged(nameof(RetentionTip));
+            RefreshFileStats();
+        };
+        RefreshFileStats();
+
+        ReportCommand = new RelayCommand(() => App.ShowReportProblem());
+        ClearFilesCommand = new RelayCommand(() =>
+        {
+            var (n, bytes) = _log.MeasureFiles();
+            if (n == 0 && !Directory.Exists(App.CrashLogDir))
+            {
+                StatusMessage = _loc.T("dbglog.clearFiles.none");
+                return;
+            }
+            if (!Confirm(_loc.T("dbglog.clearFiles.confirmTitle"), _loc.T("dbglog.clearFiles.confirm", n, FormatBytes(bytes)))) return;
+            var (gone, freed) = _log.DeleteLogFiles(App.CrashLogDir);
+            Rebuild();
+            RefreshFileStats();
+            StatusMessage = gone == 0 ? _loc.T("dbglog.clearFiles.none") : _loc.T("dbglog.clearFiles.done", gone, FormatBytes(freed));
+        });
 
         foreach (var level in new[] { LogLevel.Trace, LogLevel.Debug, LogLevel.Info, LogLevel.Warning, LogLevel.Error, LogLevel.Critical })
             LevelChoices.Add(new FilterChoice(level.ToString(), "dbglog.level." + level, isKey: true));
@@ -234,4 +317,18 @@ public class DebugLogViewModel : ViewModelBase
         // Hard cap visible to keep WPF list snappy
         while (Entries.Count > 1500) Entries.RemoveAt(0);
     }
+}
+
+/// <summary>One "keep logs" choice: N days, or 0 = forever. The label follows the app's language.</summary>
+public sealed class RetentionChoice : ViewModelBase
+{
+    public RetentionChoice(int days) => Days = days;
+
+    public int Days { get; }
+
+    public string Label => Days > 0
+        ? string.Format(LocalizedResources.Instance["dbglog.retention.days"], Days)
+        : LocalizedResources.Instance["dbglog.retention.forever"];
+
+    public void Refresh() => OnPropertyChanged(nameof(Label));
 }
