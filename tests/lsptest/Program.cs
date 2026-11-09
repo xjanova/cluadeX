@@ -45,15 +45,22 @@ internal static partial class Program
         try
         {
             Console.WriteLine("CluadeX live-errors harness — " + typeof(EditorLanguageService).Assembly.Location);
-            Paths();
-            Catalog();
-            Markers();
-            Parsing();
-            Service();
-            if (!args.Contains("--offline")) LiveDart();
-            Extras();
-            BuildProblems();
-            AiChangeMarks();
+            if (args.Contains("--build-problems-only"))
+            {
+                BuildProblems();
+            }
+            else
+            {
+                Paths();
+                Catalog();
+                Markers();
+                Parsing();
+                Service();
+                if (!args.Contains("--offline")) LiveDart();
+                Extras();
+                BuildProblems();
+                AiChangeMarks();
+            }
         }
         catch (Exception ex) { Console.WriteLine("FATAL " + ex); Fail++; }
         finally

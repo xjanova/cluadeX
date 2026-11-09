@@ -429,7 +429,7 @@ public static class ChatToolBridge
     /// of the agent's next CluadeX tool call — the only way in while a CLI runs. It was read by the native loop alone, so a
     /// Claude Dev turn never saw an item added to its plan until the turn had ended (GigLive, 2026-11-03).</summary>
     private static string NotesFor(Registration reg) =>
-        reg.Scope?.TakeUserNotes() is { } notes ? "\n\n" + notes : "";
+        reg.Scope?.TakeUserNotes(PlanToolName) is { } notes ? "\n\n" + notes : "";
 
     /// <summary>The pipe's name for a spawn the CLI's hook asks about (never offered to a model).</summary>
     public const string AgentGateToolName = "agent_gate";

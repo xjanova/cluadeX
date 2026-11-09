@@ -563,6 +563,7 @@ internal static class Program
         await GeminiDevWire.Run(Check, Section);
         await AntigravityDevWire.Run(Check, Section);
         await OpenAIDevWire.Run(Check, Section);
+        await CodexSandboxWire.Run(Check, Section);
         await GrokDevWire.Run(Check, Section);
         await CliParityWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);

@@ -341,8 +341,10 @@ public sealed class AgentRunScope
     /// showing them as waiting.</summary>
     public event Action<IReadOnlyList<object?>>? UserNotesTaken;
 
-    /// <summary>Everything typed since the agent last looked, as one block for the model; null when nothing waits.</summary>
-    public string? TakeUserNotes()
+    /// <summary>Everything typed since the agent last looked, as one block for the model; null when nothing waits.
+    /// <paramref name="planTool"/>: the plan tool this agent really has — a CLI reached through CluadeX's MCP server has
+    /// update_plan, not the native loop's todo_write (a Codex turn was told to call a tool it did not have, 2026-11-09).</summary>
+    public string? TakeUserNotes(string planTool = "todo_write")
     {
         bool urgent;
         lock (_callGate) { urgent = _interrupt; _interrupt = false; }
@@ -360,7 +362,7 @@ public sealed class AgentRunScope
                    : "[The user sent this while you were working. Decide which it is, ")
                + "say so in one short line, then carry on:\n"
                + "- It corrects the current work, or says stop/cancel: apply it now.\n"
-               + "- It adds to the current work: put it into your plan with todo_write where it belongs — next, when it "
+               + "- It adds to the current work: put it into your plan with " + planTool + " where it belongs — next, when it "
                + "changes what you were about to do; otherwise after the items already there — say in one line where you put "
                + "it, and do it in this turn.\n"
                + "- It is a NEW request that stands on its own (it does not need what you are doing and touches other files "

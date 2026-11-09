@@ -30,6 +30,12 @@ internal static class GeminiCliReal
     public static void Run(string work, Action<string, bool, string> check, Func<string?> matchingExe)
     {
         Console.WriteLine("Gemini Dev on the real Gemini CLI (recorded model, no account, no network)");
+        if (!typeof(GeminiDevProvider).Assembly.GetCustomAttributes(typeof(DebuggableAttribute), inherit: false)
+            .Cast<DebuggableAttribute>().Any(a => a.IsJITOptimizerDisabled))
+        {
+            Console.WriteLine("  SKIP recorded Gemini model requires a Debug CluadeX.dll; the Release build has no fake-response seam");
+            return;
+        }
         if (!GeminiDevProvider.IsInstalled()) { Console.WriteLine("  SKIP the Gemini CLI is not installed here"); return; }
         string? exe = matchingExe();
         if (exe == null) return;

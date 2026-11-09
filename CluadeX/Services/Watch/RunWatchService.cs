@@ -171,6 +171,26 @@ public sealed class RunWatchService
         return Begin(job, note, Clamp(timeout, DefaultProcessTimeout, MaxProcessTimeout, MinTimeout));
     }
 
+    /// <summary>
+    /// Start <paramref name="command"/> as a background process (it shows on the Background page with its live output)
+    /// and watch it for <paramref name="chatId"/>: when it ends, the chat gets its exit code and last lines as a turn of
+    /// its own. verify_change's tests_background: a harness longer than a tool call may wait (300 s cut the BrainX harness
+    /// off, 2026-11-09) runs to the end instead of being killed. The caller has already gated the command.
+    /// </summary>
+    public async Task<StartResult> StartCommandAsync(string chatId, string command, string cwd, string name, string? note,
+        TimeSpan? timeout, CancellationToken ct = default)
+    {
+        if (_bg == null) return new(null, "Background processes are not available in this build.");
+        if (string.IsNullOrWhiteSpace(chatId)) return new(null, "A watch belongs to a chat, and this call came from none.");
+        var started = await _bg.StartAsync(new BgStartRequest
+        {
+            Command = command, Cwd = cwd, Name = name, WaitForReady = false, StartedBy = "agent",
+        }, ct).ConfigureAwait(false);
+        if (started.Process == null || started.Status is BgStartStatus.Refused or BgStartStatus.Failed or BgStartStatus.Cancelled)
+            return new(null, started.Message is { Length: > 0 } m ? m : $"The background run did not start ({started.Status}).");
+        return StartProcess(chatId, started.Process.Id, note, timeout);
+    }
+
     private StartResult Begin(WatchJob job, string? note, TimeSpan timeout)
     {
         if (string.IsNullOrWhiteSpace(job.ChatId)) return new(null, "A watch belongs to a chat, and this call came from none.");

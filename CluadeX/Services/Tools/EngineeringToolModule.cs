@@ -133,7 +133,10 @@ public sealed partial class EngineeringToolModule : IAgentToolModule
             ("command", "string", "Build command (default: auto-detected, as run_build)", false),
             ("test_command", "string", "Test command (default: auto-detected, as run_tests)", false),
             ("tests", "string", "\"auto\" (default: run when a test runner is found) or \"skip\"", false),
-            ("binary", "string", "Path of a binary something else loads (a harness's linked DLL, the exe you will run); checked for staleness too", false));
+            ("binary", "string", "Path of a binary something else loads (a harness's linked DLL, the exe you will run); checked for staleness too", false),
+            ("timeout_minutes", "integer", "How long the build and the tests may each run before they are stopped (default 5, max 120)", false),
+            ("tests_background", "boolean", "\"true\": after the build, start the tests as a background process and return at once; its result "
+                + "(exit code, last lines) comes to this chat as a later turn. For a harness that runs longer than a few minutes", false));
         yield return Schema("find_references",
             "Every whole-word, case-sensitive use of a symbol across the project, grouped by file with line numbers; the lines "
             + "that DEFINE it are marked [definition]. Textual (no compiler): same-named members of other types show up too.",
