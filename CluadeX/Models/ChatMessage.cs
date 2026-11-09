@@ -122,6 +122,10 @@ public class ChatMessage : INotifyPropertyChanged
         set { if (_isQueuedNote != value) { _isQueuedNote = value; OnPropertyChanged(); } }
     }
 
+    /// <summary>The line the app writes when a turn ended with no answer of the model's own ("ran 5 tools, no summary"):
+    /// it sits where a reply would, but it is not one, so it is never read aloud. Not saved.</summary>
+    public bool IsTurnNote { get; set; }
+
     /// <summary>The system row under a queued bubble that says where it stands (queued, sending now, read).</summary>
     public ChatMessage? QueueRow { get; set; }
 

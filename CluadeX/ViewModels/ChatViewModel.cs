@@ -3367,6 +3367,7 @@ public partial class ChatViewModel : ViewModelBase
                     Content = finalText
                         ?? (toolsRun > 0 ? $"*{LocF("chat.agent.noSummary", toolsRun)}*" : $"*{Loc("chat.agent.noReply")}*"),
                     HasError = nothing,
+                    IsTurnNote = finalText == null,
                     CodeBlocks = finalText != null ? _vm._codeExecutionService.ExtractCodeBlocks(finalText) : new(),
                 };
                 _vm.PostTurnMessage(_target, final);
@@ -4623,6 +4624,7 @@ public partial class ChatViewModel : ViewModelBase
                 {
                     Role = MessageRole.Assistant,
                     Content = note,
+                    IsTurnNote = true,
                     HasError = toolsRun == 0,
                     CanRetry = toolsRun == 0,
                 };
