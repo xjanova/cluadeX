@@ -131,7 +131,11 @@ public static class CodexSandbox
             + "fails for one of those reasons (NuGet.Config unauthorized access, \"Access to the path 'C:\\Users\\…' is denied\", "
             + "DPAPI \"user profile not loaded\" / \"impersonating\", WMI \"Access denied\") failed because of the sandbox, not "
             + "because of the code: never fix code for it or count it as a test failure; tell the user plainly that the sandbox "
-            + "blocked it. ";
+            + "blocked it. "
+            + "A command that fails with \"setup refresh had errors\" never ran: the sandbox itself could not start, usually because "
+            + "a `.git` was made inside the sandbox (`git init` there makes it belong to the sandbox account). CluadeX rebuilds such "
+            + "a `.git` as the user's as soon as that failure shows, so run the command once more; if it fails the same way again, "
+            + "stop and tell the user rather than looking for another way to run it (desktop tools, terminals). ";
         s += chatTools
             ? "Build and test with CluadeX's verify_change tool (MCP server cluadex): it runs as the user, outside the sandbox, under "
               + "the user's own approval rules, so restore, DPAPI and WMI work there. Pass test_command for a project's own harness; "
