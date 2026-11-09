@@ -66,7 +66,7 @@ public static class CompatiblePresets
     // OpenRouter asks apps to identify themselves; X-OpenRouter-Title is the current name, X-Title the old one.
     private static readonly Dictionary<string, string> OpenRouterHeaders = new()
     {
-        ["HTTP-Referer"] = "https://github.com/xjanova/cluadeX",
+        ["HTTP-Referer"] = XmanLicenseService.DefaultPurchaseUrl,   // the product page, not the source repository
         ["X-OpenRouter-Title"] = "CluadeX",
         ["X-Title"] = "CluadeX",
     };

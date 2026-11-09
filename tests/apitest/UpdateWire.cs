@@ -28,7 +28,7 @@ internal static class UpdateWire
         var old = AutoUpdateService.ParseXmanCheck("""{"update_available":true,"version":"9.9.9","download_url":"https://xman4289.com/x","download_filename":"a.zip"}""", "1.0.0");
         check("update", "the old flat shape is still read", old is { NewVersion: "9.9.9", FileName: "a.zip" }, old?.NewVersion ?? "null");
         var notFound = AutoUpdateService.ParseXmanCheck("""{"success":false,"error":"Product not found"}""", "1.0.0");
-        check("update", "the store's 404 body → no update (and the caller falls back to GitHub)", notFound == null, "");
+        check("update", "the store's 404 body → no update (and the caller offers none — there is no GitHub fallback)", notFound == null, "");
         return Task.CompletedTask;
     }
 }

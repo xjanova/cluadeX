@@ -134,11 +134,16 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>The brain tools a headless turn may call without asking, as bare names (brain_search…): exactly the brain
     /// part of what --allowedTools gives Claude Dev — recall and the agent bus always, the brain's write tools with the
     /// edit grant. OpenAI Dev hands the same set to Codex (OpenAIDevProvider.BuildArgs).</summary>
+    /// <remarks>Every look-up of the brain is in it (Mcp.McpToolClassifier.BrainLookupTools): Codex runs with
+    /// approval_policy=never, so a read left out — brain_list, brain_walk, brain_lookup — was refused outright ("MCP tool
+    /// call requires approval, but approval policy is never", BrainX chat 2026-11-09).</remarks>
     public static List<string> BrainToolsFor(WorkerGrant? grant)
     {
         const string prefix = "mcp__brainx-brain__";
         string all = AllowedTools + "," + AgentTools + (grant is { Edit: true } ? "," + EditTools : "");
-        return all.Split(',').Where(t => t.StartsWith(prefix)).Select(t => t[prefix.Length..]).ToList();
+        return all.Split(',').Where(t => t.StartsWith(prefix)).Select(t => t[prefix.Length..])
+            .Concat(Mcp.McpToolClassifier.BrainLookupTools)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>Extra folders a turn may add with --add-dir.</summary>
@@ -591,7 +596,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         if (ReportedCliVersion == null && !_versionProbed) { _versionProbed = true; await ProbeCliVersionAsync(ct); }
         bool allLevels = CliTakesAllLevels(ReportedCliVersion);
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
-            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
+            CodeCommentPolicy.ForAgent(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
             extras?.DesktopRefusal, Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, cli: true),
             noProject: !_fileSystemService.HasWorkingDirectory);
         // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.

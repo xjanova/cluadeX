@@ -45,29 +45,60 @@ public partial class CodeAgentService
         var provider = _providerManager.ActiveProvider;
         bool edit = string.Equals(call.Type, "general", StringComparison.OrdinalIgnoreCase);
         string? worktree = call.WorkingDirectory;
+        var kind = DispatchPolicy.KindOf(edit);
+        bool auto = _settingsService.Settings.SubAgentAutoModel;
+        var parent = AgentRunScope.Current;
+        AgentRunScope NewScope(Providers.IAiProvider p, AiProviderType t) =>
+            // In a turn: a child of its run. Resumed from the card: a scope of its own for that chat. An isolated agent's
+            // scope is its worktree, and Accept edits covers that worktree only (as a worker's does).
+            (worktree != null ? parent?.CreateChild(worktree, acceptEditsInFolder: true) : parent?.CreateChild())
+            ?? new AgentRunScope(call.SessionKey, worktree ?? (_fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null))
+            { Provider = p, ProviderType = t, AcceptEditsRoot = worktree };
+
+        // A read-only agent goes to the model already up on this PC (Colibri, llama-server, Ollama…) when the owner chose
+        // that and it can do the work — for a CLI chat too, whose own spawns can never reach it. Never one that would
+        // have to load, and never a server whose slots are all taken (it would queue and time out).
+        if (!edit && auto && await LocalSubAgentProviderAsync(Models.SubAgentTier.Cheap, false, new HashSet<string>(), ct) is { } local)
+        {
+            using (local.Lease)
+            {
+                var ls = NewScope(local.Provider, _providerManager.ActiveProviderType);
+                ls.EffortCap = DispatchPolicy.EffortCapFor(Models.SubAgentTier.Cheap);
+                ls.SubAgentTier = "cheap";
+                AgentRunScope.Enter(ls);
+                SubAgentModel.Use(null);   // a local model reads its own configuration
+                int ln = Interlocked.Increment(ref _subAgentCounter);
+                string localModel = LocalModelNameFor(local.Provider) is { Length: > 0 } lm ? System.IO.Path.GetFileName(lm) : local.Provider.ProviderId;
+                _debugLog?.Info("Dispatch", $"workflow agent {call.Label} · read-only · local {local.Provider.ProviderId} ({localModel})");
+                string r = await RunHeldSubAgentAsync(local.Provider, new SubAgentRequest(call.Prompt, "", "explore"), ct,
+                    new SubAgentRunOptions(ln, call.Label, "explore", localModel, ls, call.Attempt == 1 ? WarmContext() : "",
+                        WorkflowId: call.WorkflowId, Provider: local.Provider)) ?? "";
+                return new WorkflowAgentResult(r, ls.CostUsd);
+            }
+        }
+
         if (provider is { RunsOwnSubAgents: true, IsReady: true } && !provider.SupportsNativeToolUse)
         {
-            // Claude Dev runs in the project folder itself: an agent meant for its own worktree would edit the real one.
-            if (worktree != null)
-                throw new InvalidOperationException("This agent must work in its own git worktree, which a Claude Dev (CLI) agent cannot do — "
-                    + "it would edit the project itself. Run the workflow on a model with native tools (Claude / OpenAI / Gemini API, "
-                    + "llama-server), or leave isolation out.");
-            string? cd = await RunSubAgentOnClaudeDevAsync(call.Prompt, edit, ct);
-            return cd != null ? new WorkflowAgentResult(cd, 0)
-                : throw new InvalidOperationException("Claude Dev (the Claude Code CLI) is not ready, so this workflow agent could not run.");
+            // A CLI chat: each workflow agent is a CLI process of its own, in its own worktree when it has one (the CLI
+            // runs there and nowhere else — WorkerGrant.Folder). A Codex chat's agents run on Codex, the plan the owner
+            // picked (`codex exec -C <worktree>`); the others on Claude Dev. Until 2026-11-09 a worktree agent on a CLI
+            // chat threw, so a Codex chat could never split its edits.
+            var cli = WorkflowCliFor(_providerManager.ActiveProviderType);
+            _debugLog?.Info("Dispatch", $"workflow agent {call.Label} · {(edit ? "edit" : "read-only")} · {cli}"
+                + (worktree != null ? $" in worktree {worktree}" : ""));
+            string? cliReport = cli == AiProviderType.OpenAIDev
+                ? await RunSubAgentOnCodexAsync(call.Prompt, edit, ct, worktree)
+                : await RunSubAgentOnClaudeDevAsync(call.Prompt, edit, ct, worktree);
+            if (cliReport == null && cli != AiProviderType.ClaudeDev)
+                cliReport = await RunSubAgentOnClaudeDevAsync(call.Prompt, edit, ct, worktree);
+            return cliReport != null ? new WorkflowAgentResult(cliReport, 0)
+                : throw new InvalidOperationException($"Neither {cli} nor Claude Dev (a CLI on this PC) is ready, so this workflow agent could not run.");
         }
         if (provider == null || !provider.SupportsNativeToolUse || !provider.IsReady)
             throw new InvalidOperationException(WorkflowRunnerRefusal() ?? "no model");
-        // In a turn: a child of its run. Resumed from the card: a scope of its own for that chat. An isolated agent's scope
-        // is its worktree, and Accept edits covers that worktree only (as a worker's does).
-        var parent = AgentRunScope.Current;
-        var scope = (worktree != null ? parent?.CreateChild(worktree, acceptEditsInFolder: true) : parent?.CreateChild())
-                    ?? new AgentRunScope(call.SessionKey, worktree ?? (_fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null))
-                    { Provider = provider, ProviderType = _providerManager.ActiveProviderType, AcceptEditsRoot = worktree };
-        var kind = DispatchPolicy.KindOf(edit);
+        var scope = NewScope(provider, _providerManager.ActiveProviderType);
         // Auto model (Settings ▸ Agent): a read-only workflow agent runs cheap — the cheapest model at low effort, a
         // ceiling its own loop cannot raise. Off: the run's own model and effort.
-        bool auto = _settingsService.Settings.SubAgentAutoModel;
         if (auto && kind == SubAgentKind.Explore)
         {
             scope.EffortCap = DispatchPolicy.EffortCapFor(Models.SubAgentTier.Cheap);

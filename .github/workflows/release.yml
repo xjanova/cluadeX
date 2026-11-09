@@ -78,10 +78,42 @@ jobs:
           if (Get-ChildItem Releases -Filter "CluadeX-$v-*" -ErrorAction SilentlyContinue) { Write-Host "::warning::v$v is already published — no delta"; Remove-Item Releases -Recurse -Force; exit 0 }
           Get-ChildItem Releases | ForEach-Object { Write-Host "delta base: $($_.Name) ($([math]::Round($_.Length / 1MB, 1)) MB)" }
 
+      - name: Release notes (what the update window shows)
+        # The update window reads these from xman4289.com (the feed's NotesMarkdown and the versions list), never
+        # from here (owner 2026-11-09: "อย่ามีอะไร โยงไปถึง github เด็ดขาด"). So they are plain lines: the feat/fix/perf
+        # subjects since the previous tag, without PR numbers, links or trailers.
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $prev = git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>$null
+          $range = if ($LASTEXITCODE -eq 0 -and $prev) { "$prev..HEAD" } else { "HEAD~30..HEAD" }
+          $seen = @{}
+          $lines = foreach ($s in (git log $range --no-merges --format='%s')) {
+            if ($s -notmatch '^(feat|fix|perf)(\([^)]*\))?!?:\s*(.+)$') { continue }
+            $t = $Matches[3] -replace '\s*\(#\d+\)', '' -replace '\[([^\]]+)\]\([^)]*\)', '$1' -replace 'https?://\S+', '' -replace '\s{2,}', ' '
+            $t = $t.Trim()
+            if ($t -and -not $seen.ContainsKey($t)) { $seen[$t] = 1; "- $t" }
+          }
+          if (-not $lines) { $lines = @('- ปรับปรุงความเสถียรและแก้ไขข้อบกพร่องเล็กน้อย') }
+          $notes = "### มีอะไรใหม่`n" + ($lines -join "`n") + "`n"
+          [IO.File]::WriteAllText("$PWD/notes.md", $notes, [Text.UTF8Encoding]::new($false))
+          $install = @(
+            '', '### Install',
+            '- **First time / switching from portable:** download **`CluadeX-win-Setup.exe`** and run it.',
+            '  Installed builds update themselves from then on — new versions download in the',
+            '  background as deltas and apply on restart.',
+            '- **Portable:** download `CluadeX-win-Portable.zip`, extract, run `CluadeX.exe`.',
+            '  Portable builds detect new releases but cannot self-update.',
+            '', '### Requirements', '- Windows 10 1809+ (x64)', '- Local mode: a GGUF model, or Ollama', ''
+          ) -join "`n"
+          [IO.File]::WriteAllText("$PWD/release-body.md", "## CluadeX v${{ steps.version.outputs.VERSION }}`n`n$notes$install", [Text.UTF8Encoding]::new($false))
+          Get-Content notes.md | Write-Host
+          Get-Content notes.md | Add-Content $env:GITHUB_STEP_SUMMARY
+
       - name: Velopack pack (self-update assets)
         # Produces Releases/ — *-full.nupkg, *-delta.nupkg, CluadeX-win-Setup.exe
-        # and RELEASES. AutoUpdateService's UpdateManager(GithubSource) reads
-        # exactly these assets off the release to self-update.
+        # and RELEASES. xman4289.com mirrors these assets and AutoUpdateService's SimpleWebSource reads
+        # them from there to self-update (never from GitHub).
         #
         # NOTE: only builds INSTALLED from Setup.exe can auto-update. Moving off
         # the portable zip is a ONE-TIME manual install; every version after that
@@ -101,6 +133,7 @@ jobs:
               --splashImage CluadeX/Assets/Installer/setup-splash.png `
               --packTitle "CluadeX" `
               --packAuthors "Xman Studio" `
+              --releaseNotes notes.md `
               --outputDir Releases
           }
           Pack
@@ -134,21 +167,8 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.TAG }}
           name: CluadeX ${{ steps.version.outputs.TAG }}
-          body: |
-            ## CluadeX ${{ steps.version.outputs.TAG }}
-
-            AI Coding Assistant by Xman Studio — https://xman4289.com
-
-            ### Install
-            - **First time / switching from portable:** download **`CluadeX-win-Setup.exe`** and run it.
-              Installed builds update themselves from then on — new versions download in the
-              background as deltas and apply on restart.
-            - **Portable:** download `CluadeX-win-Portable.zip`, extract, run `CluadeX.exe`.
-              Portable builds detect new releases but cannot self-update.
-
-            ### Requirements
-            - Windows 10 1809+ (x64)
-            - Local mode: a GGUF model, or [Ollama](https://ollama.com)
+          # what is new first (the notes step), then how to install
+          body_path: release-body.md
           files: Releases/*
           draft: false
           prerelease: false

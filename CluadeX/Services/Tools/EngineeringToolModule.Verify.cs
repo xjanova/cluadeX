@@ -42,9 +42,11 @@ public sealed partial class EngineeringToolModule
         var sb = new StringBuilder();
         var gaps = new List<string>();
         string? command = Arg(call, "command") is { Length: > 0 } c ? c : null;
+        int timeoutMs = TimeoutMsOf(call);
+        bool testsInBackground = IsTrue(Arg(call, "tests_background"));
 
         // 1. Build from the current source. A locked output is rebuilt into scratch — nothing is killed.
-        var build = await tools.RunBuildCoreAsync(call, command, scratch: false, ct);
+        var build = await tools.RunBuildCoreAsync(call, command, scratch: false, ct, timeoutMs);
         var lockedFirst = build.Locked;
         if (!build.Result.Success && build.Locked.Count > 0 && LockedFiles.AcceptsOutDir(build.Command))
         {
@@ -52,7 +54,7 @@ public sealed partial class EngineeringToolModule
                 + string.Join("; ", build.Locked.Select(l => $"{Path.GetFileName(l.Path)} held by "
                     + (l.Holders.Count == 0 ? "an unnamed process" : string.Join(", ", l.Holders.Select(h => $"PID {h.Pid} ({h.Name})")))))
                 + ". Nothing was killed; rebuilt into a scratch folder instead.");
-            build = await tools.RunBuildCoreAsync(call, command, scratch: true, ct);
+            build = await tools.RunBuildCoreAsync(call, command, scratch: true, ct, timeoutMs);
         }
         if (!build.Result.Success)
         {
@@ -116,6 +118,7 @@ public sealed partial class EngineeringToolModule
         string? testCommand = Arg(call, "test_command") is { Length: > 0 } tc ? tc : tools.DetectedProjectCommand(test: true);
         TestCounts? counts = null;
         bool testsFailed = false;
+        string? testsPending = null, testsNotStarted = null;
         if (testsMode == "skip")
         {
             sb.AppendLine("3. Tests: skipped on request");
@@ -126,11 +129,30 @@ public sealed partial class EngineeringToolModule
             sb.AppendLine("3. Tests: no test runner found in the project");
             gaps.Add("No automated test ran — the project has no test runner CluadeX can find (pass test_command if it has one).");
         }
+        else if (testsInBackground)
+        {
+            if (build.ScratchDir != null && LockedFiles.AcceptsOutDir(testCommand))
+                testCommand = LockedFiles.WithOutDir(testCommand, build.ScratchDir);
+            (testsPending, testsNotStarted) = await StartTestsInBackgroundAsync(tools, call, testCommand, root, ct);
+            if (testsPending != null)
+            {
+                sb.AppendLine($"3. Tests: RUNNING in the background as {testsPending} — $ {testCommand}");
+                sb.AppendLine("   Its output is live on CluadeX's Background page. When it ends, its exit code and last lines come to "
+                              + "this chat as a turn of their own: end your turn now with one short line saying you are waiting for "
+                              + "it. Do not poll, sleep or start it again.");
+                gaps.Add("The tests have not finished yet: nothing about them is proven until their result arrives.");
+            }
+            else
+            {
+                testsFailed = true;
+                sb.AppendLine($"3. Tests: NOT STARTED in the background — {testsNotStarted} — $ {testCommand}");
+            }
+        }
         else
         {
             if (build.ScratchDir != null && LockedFiles.AcceptsOutDir(testCommand))
                 testCommand = LockedFiles.WithOutDir(testCommand, build.ScratchDir);
-            var (test, raw) = await tools.RunTestsCoreAsync(call, testCommand, ct);
+            var (test, raw) = await tools.RunTestsCoreAsync(call, testCommand, ct, timeoutMs);
             counts = ParseTestCounts(raw);
             testsFailed = !test.Success;
             string tally = counts.Passed != null || counts.Failed != null
@@ -139,6 +161,10 @@ public sealed partial class EngineeringToolModule
             sb.AppendLine($"3. Tests: {(test.Success ? "PASSED" : "FAILED")} — {tally} — $ {testCommand}");
             if (!test.Success)
                 sb.AppendLine("   " + OutputBudget.HeadAndTail(test.Output.Length > 0 ? test.Output : test.Error, 6000).Replace("\n", "\n   "));
+            // Stopped at the limit, not failed: a long harness gets the time it needs, or runs on in the background.
+            if (test.Error == "Tests timed out")
+                sb.AppendLine($"   The run was STOPPED at the {timeoutMs / 60_000} min limit before it finished — that is not a test "
+                              + $"failure. Run it again with timeout_minutes (up to {MaxVerifyMinutes}) or tests_background=\"true\".");
             if (counts.Skipped is > 0) gaps.Add($"{counts.Skipped} test(s) were skipped.");
             if (test.Success && counts.Passed is 0) gaps.Add("The test runner ran but reported 0 passed tests.");
         }
@@ -166,12 +192,14 @@ public sealed partial class EngineeringToolModule
             gaps.Add($"The build went to the scratch folder {build.ScratchDir}: whatever loads the normal output (the running app, a harness that links it) still runs the OLD code until it is closed and rebuilt normally.");
         gaps.Add("Nothing here ran the app itself: UI, runtime and integration behaviour are unchecked unless a test covers them.");
 
-        string verdict = testsFailed ? "FAILED — tests failed"
+        string verdict = testsNotStarted != null ? "FAILED — the tests could not start in the background"
+            : testsFailed ? "FAILED — tests failed"
             : stale.Count > 0 ? "STALE — a binary is older than its source, so testing or running it checks old code"
+            : testsPending != null ? "BUILT — the tests are still running in the background; their result comes in a later turn"
             : gaps.Count > 1 ? "VERIFIED WITH GAPS"
             : "VERIFIED";
         bool success = !testsFailed && stale.Count == 0;
-        if (success)
+        if (success && testsPending == null)
             SaveBaseline(root, new VerifyRecord(DateTime.UtcNow, commit, dirty?.Count ?? 0, warnings, testCommand,
                 counts?.Passed, counts?.Failed, counts?.Skipped, counts?.Failing ?? new List<string>()));
 
@@ -189,6 +217,32 @@ public sealed partial class EngineeringToolModule
             : Fail(call, report.ToString().TrimEnd());
         if (!success) result.Summary = "verify: " + verdict.Split(' ')[0];
         return result;
+    }
+
+    /// <summary>The longest verify_change may wait for its build or tests (timeout_minutes).</summary>
+    public const int MaxVerifyMinutes = 120;
+
+    /// <summary>timeout_minutes as milliseconds (1 to <see cref="MaxVerifyMinutes"/>); the 5-minute default without it.</summary>
+    public static int TimeoutMsOf(ToolCall call) =>
+        int.TryParse(Arg(call, "timeout_minutes"), out int m) && m > 0
+            ? Math.Clamp(m, 1, MaxVerifyMinutes) * 60_000
+            : AgentToolService.DefaultRunTimeoutMs;
+
+    /// <summary>
+    /// tests_background: the test command as a background process of CluadeX's, watched for this chat (RunWatchService),
+    /// after the same guards as a test run. Returns its "bg#N" label, or why it did not start.
+    /// </summary>
+    private static async Task<(string? Started, string? Error)> StartTestsInBackgroundAsync(AgentToolService tools, ToolCall call,
+        string testCommand, string root, CancellationToken ct)
+    {
+        var svc = Watch.RunWatchService.Current;
+        if (svc == null) return (null, "this CluadeX has no watch service, so no turn could carry the result — run them without tests_background");
+        if (WatchChat() is not { } chat) return (null, "this call came from no chat, so no turn could carry the result");
+        if (await tools.GateProjectCommandAsync(testCommand) is { } refused) return (null, refused);
+        var r = await svc.StartCommandAsync(chat, testCommand, root, "verify_change tests", "verify_change tests: " + testCommand,
+            Minutes(call), ct);
+        if (r.Job == null) return (null, r.Error ?? "the background run did not start");
+        return ($"bg#{r.Job.ProcessId} (watch {r.Job.Id})", null);
     }
 
     private static int? SumMatches(Regex re, string text)

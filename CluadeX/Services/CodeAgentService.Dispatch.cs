@@ -43,8 +43,14 @@ public partial class CodeAgentService
             SpeculativeFixCount = s.SpeculativeFixCount,
             CanEditProject = DecideWorkerGrant(_permissionService, folder)?.Edit == true,
             IsGitRepo = folder != null && HasGitFolder(folder),
+            Ultra = WorkflowGate.Allowed(WorkflowGate.CurrentChat),
         });
     }
+
+    /// <summary>One line for the log: the chat's Ultra state and what the policy decided for this step.</summary>
+    internal static string DescribeDispatch(DispatchDecision d, string? chat, string? why) =>
+        $"ultra={(why ?? "off")} · chat={chat ?? "-"} · sub-agents={(d.SubAgents ? (d.ReadOnlyOnly ? "read-only" : "edit") : "off")}"
+        + $" · workers={d.Workers} · speculative={d.SpeculativeFix} · max {d.MaxConcurrency} at once · {d.Reason}";
 
     private decimal TodayCliUsd() =>
         _costTrackingService?.TodayPackageUsd(_providerManager.ActiveProviderType.ToString()) ?? 0;
@@ -153,7 +159,8 @@ public partial class CodeAgentService
         var cd = _providerManager.GetProvider(AiProviderType.ClaudeDev);
         try { await cd.InitializeAsync(ct); } catch (OperationCanceledException) { throw; } catch { }
         if (!cd.IsReady) return null;
-        Providers.ClaudeDevProvider.Grant.Value = canEdit ? new Providers.ClaudeDevProvider.WorkerGrant(true, false, folder) : null;
+        // A folder pins the CLI there even when it only reads (a read-only workflow agent in its worktree).
+        Providers.ClaudeDevProvider.Grant.Value = canEdit || folder != null ? new Providers.ClaudeDevProvider.WorkerGrant(canEdit, false, folder) : null;
         try
         {
             var sb = new System.Text.StringBuilder();
@@ -162,6 +169,34 @@ public partial class CodeAgentService
         }
         finally { Providers.ClaudeDevProvider.Grant.Value = null; }
     }
+
+    /// <summary>One sub-agent's brief through Codex (the user's ChatGPT plan): <c>codex exec -C &lt;folder&gt;</c>, read-only
+    /// or workspace-write when <paramref name="canEdit"/>. <paramref name="folder"/>: the agent's git worktree — Codex runs
+    /// there and nowhere else. A fresh turn of its own: no chat tools, no sub-agents of its own, no rows on the calling
+    /// turn. Null when the CLI is not there.</summary>
+    private async Task<string?> RunSubAgentOnCodexAsync(string brief, bool canEdit, CancellationToken ct, string? folder = null)
+    {
+        var cx = _providerManager.GetProvider(AiProviderType.OpenAIDev);
+        if (cx == null) return null;
+        try { await cx.InitializeAsync(ct); } catch (OperationCanceledException) { throw; } catch { }
+        if (!cx.IsReady) return null;
+        Providers.ClaudeDevProvider.Grant.Value = canEdit || folder != null ? new Providers.ClaudeDevProvider.WorkerGrant(canEdit, false, folder) : null;
+        // What the calling turn set for itself must not leak into this one (its stream sink would swallow the report).
+        Providers.ClaudeDevProvider.StreamSink.Value = null;
+        Providers.ClaudeDevProvider.Extras.Value = null;
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            await foreach (var chunk in cx.ChatAsync(new List<ChatMessage>(), brief, null, ct)) sb.Append(chunk);
+            return sb.ToString().Trim();
+        }
+        finally { Providers.ClaudeDevProvider.Grant.Value = null; }
+    }
+
+    /// <summary>Which CLI runs a workflow agent for a CLI chat: the chat's own when it can run a brief in a given folder
+    /// (Claude Dev, Codex — so the work stays on the plan the user picked), else Claude Dev. Pure.</summary>
+    public static AiProviderType WorkflowCliFor(AiProviderType active) =>
+        active == AiProviderType.OpenAIDev ? AiProviderType.OpenAIDev : AiProviderType.ClaudeDev;
 
     // ─── warm start: the repo map and the run's brain recall, once ───
 

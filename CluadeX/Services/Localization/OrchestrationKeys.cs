@@ -51,6 +51,9 @@ internal static class OrchestrationKeys
 
         // ─── the Ultra switch ───
         ["orch.ultra"] = new() { ["en"] = "Ultra", ["th"] = "อัลตร้า" },
+        // ─── the composer's switch: read-only sub-agents on a cheap API model, or on the model on this PC (Colibri) ───
+        ["orch.localAgents"] = new() { ["en"] = "Colibri", ["th"] = "Colibri" },
+        ["orch.localAgentsTip"] = new() { ["en"] = "On: read-only sub-agents run on the model already loaded on this PC (Colibri, llama-server, Ollama) — free, slower, for work that can wait. Only when that model can do the job (7B+; 30B+ for mid-tier work), never one that would have to load, and only while the server has a free slot; otherwise they use a cheap API model. Edits always stay on the API. Off: a cheap API model.", ["th"] = "เปิด: เอเจนต์ย่อยที่อ่านอย่างเดียวไปใช้โมเดลที่โหลดอยู่บนเครื่องนี้ (Colibri, llama-server, Ollama) — ฟรี ช้ากว่า สำหรับงานที่ไม่เร่ง เฉพาะเมื่อโมเดลนั้นทำงานนี้ได้จริง (7B ขึ้นไป งานระดับกลาง 30B ขึ้นไป) ไม่โหลดโมเดลใหม่ และเฉพาะตอนที่ server มีช่องว่าง ไม่งั้นใช้โมเดล API ราคาถูก งานแก้ไฟล์ใช้ API เสมอ ปิด: ใช้โมเดล API ราคาถูก" },
         ["orch.ultraTip"] = new() { ["en"] = "Ultra: the agent may run multi-agent workflows in this chat (many agents, many more tokens). Off by default — asking for a workflow in your message also allows one for that turn.", ["th"] = "อัลตร้า: ให้เอเจนต์รันเวิร์กโฟลว์หลายเอเจนต์ในแชทนี้ได้ (ใช้เอเจนต์และโทเค็นมากขึ้นมาก) ปิดไว้เป็นค่าเริ่มต้น — ถ้าพิมพ์ขอเวิร์กโฟลว์ในข้อความก็ใช้ได้เฉพาะรอบนั้น" },
 
         // ─── split-chat chips ───

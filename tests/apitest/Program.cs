@@ -114,6 +114,7 @@ internal static class Program
 
         // --account: only the Xman Studio account sign-in + connection doctor wire (installer contract 1, 2.2–2.5).
         if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
 
         await Offline();
 
@@ -563,6 +564,7 @@ internal static class Program
         await GeminiDevWire.Run(Check, Section);
         await AntigravityDevWire.Run(Check, Section);
         await OpenAIDevWire.Run(Check, Section);
+        await CodexSandboxWire.Run(Check, Section);
         await GrokDevWire.Run(Check, Section);
         await CliParityWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
@@ -577,6 +579,7 @@ internal static class Program
         await VibeWire.Run(Check, Section);
         await PlanWire.Run(Check, Section);
         await ColibriWire.Run(Check, Section);
+        await UltraWire.Run(Check, Section);
         await NodeGraphBgWire.Run(Check, Section);
     }
 

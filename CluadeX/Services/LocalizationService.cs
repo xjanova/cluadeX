@@ -29,15 +29,16 @@ public class LocalizationService
                                       Localization.GitPanelKeys.Keys,
                                       Localization.OrchestrationKeys.Keys,
                                       Localization.DesignKeys.Keys, Localization.SkillPickKeys.Keys,
-                                      Localization.WatchKeys.Keys,
+                                      Localization.WatchKeys.Keys, Localization.CodexSandboxKeys.Keys,
                                       Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
                                       Localization.AggregatorKeys.Keys,
-                                      Localization.LspKeys.Keys,
+                                      Localization.LspKeys.Keys, Localization.ChangeMarkKeys.Keys,
                                       Localization.PopOutKeys.Keys,
                                       Localization.ModelPickerKeys.Keys,
                                       Localization.MediaKeys.Keys, Localization.VibeKeys.Keys, Localization.PlanKeys.Keys, Localization.TierKeys.Keys,
                                       Localization.TypographyKeys.Keys, Localization.BuddyBubbleKeys.Keys, Localization.ColibriKeys.Keys,
-                                      Localization.SetupWizardKeys.Keys, Localization.UninstallKeys.Keys })
+                                      Localization.SetupWizardKeys.Keys, Localization.UninstallKeys.Keys,
+                                      Localization.BugReportKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }
@@ -1064,6 +1065,8 @@ public class LocalizationService
         ["sidebar.filter.inProject"] = new() { ["en"] = "Project {0} · {1} of {2} chats", ["th"] = "โปรเจกต์ {0} · {1} จาก {2} แชท" },
         ["sidebar.search.titleHit"] = new() { ["en"] = "The chat's name matches", ["th"] = "ชื่อแชทตรงกับคำค้น" },
         ["sidebar.search.inProject"] = new() { ["en"] = "In project {0}", ["th"] = "ในโปรเจกต์ {0}" },
+        ["sidebar.search.refHit"] = new() { ["en"] = "Reference {0}", ["th"] = "รหัสอ้างอิง {0}" },
+        ["sidebar.chat.refLabel"] = new() { ["en"] = "Reference: ", ["th"] = "รหัสอ้างอิง: " },
         ["chat.estimate.short"] = new() { ["en"] = "≈ ${0}/step", ["th"] = "≈ ${0}/ขั้น" },
         ["chat.side.files"] = new() { ["en"] = "Project files", ["th"] = "ไฟล์ในโปรเจกต์" },
         ["chat.side.image"] = new() { ["en"] = "Latest image", ["th"] = "ภาพล่าสุด" },

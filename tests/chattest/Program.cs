@@ -471,6 +471,7 @@ internal static partial class Program
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
+        await TestChatRef();                  // CR: the chat's reference (CX-…): parsing, search, the model's line, the pinned chip
         await TestRunBadges();                // RB: run badges on real runs (unread, failed, stopped, restart ledger), the buddy's mood
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
@@ -824,7 +825,7 @@ internal static partial class Program
         Check("L3 the turn finishes", await WaitIdle(30000));
         var calls = Fake.Calls.Skip(callsBefore).ToList();
         Check("L3 a 503 is retried once", calls.Count == 2, $"{calls.Count} calls");
-        Check("L3 the retry sends the same question", calls.All(c => c.Input == "q1"));
+        Check("L3 the retry sends the same question", calls.All(c => WithoutSkills(c.Input) == "q1"));
         Check("L3 the question is not duplicated on screen", Vm.Messages.Count(m => m.Role == MessageRole.User && m.Content == "q1") == 1);
         Check("L3 the retry's history equals the first attempt's (no duplicate, no error bubble)",
             calls.Count == 2 && calls[0].History.SequenceEqual(calls[1].History), calls.Count == 2 ? $"{calls[0].History.Count} vs {calls[1].History.Count}" : "");

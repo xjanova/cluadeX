@@ -416,7 +416,7 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
             using (var stdin = new StreamWriter(proc.StandardInput.BaseStream, new UTF8Encoding(false)))
             {
                 string prompt = BuildPrompt(cwd, grant, ClaudeDevProvider.TurnAddDirs(extras), ClaudeDevProvider.BuildTranscript(history),
-                    userMessage, CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
+                    userMessage, CodeCommentPolicy.ForAgent(_settingsService.Settings, cwd),
                     chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
                     noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
                     splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.AntigravityDev));

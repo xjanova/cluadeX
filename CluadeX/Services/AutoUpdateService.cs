@@ -10,7 +10,14 @@ namespace CluadeX.Services;
 /// <summary>
 /// Auto-update: an installed build (Velopack) finds a new release while it runs, downloads it in the background —
 /// resuming after any drop — and installs it when the app closes or when the user presses Install. A portable or dev
-/// build is told a new version exists. Checks: xman4289.com's version API, then GitHub.
+/// build is told a new version exists. Checks: xman4289.com only — its update feed (<see cref="FeedUrl"/>, Velopack) and
+/// its version API.
+///
+/// Owner 2026-11-09: "ดูรายละเอียดการอัพเดท ต้องคัดมาไว้ในตัวอัพเดทเลย … อย่ามีอะไร โยงไปถึง github เด็ดขาด ไม่ต้องการให้รู้
+/// repo". Nothing here names GitHub any more: the packages, the feed and the release notes all come from
+/// https://xman4289.com/cluadex/download/ (the site streams them from the release and strips GitHub from the notes), the
+/// "all the details" button opens the notes inside the update window (<see cref="FetchReleaseNotesAsync"/>), and the
+/// portable copy's fallback to the GitHub releases API is gone.
 ///
 /// Owner 2026-10-20: "ระบบอัพเดทอัตโนมัติยังไม่โอเค มีเวอร์ชั่นใหม่ก็เจอช้า โหลดช้าก็ตัด". What the log showed that day:
 /// the app checked only at launch; the splash and the main window started two Velopack downloads at the same moment
@@ -27,14 +34,15 @@ public class AutoUpdateService : IAppShutdownHook
     // The store's slug for CluadeX. It was "cluadex", which the store does not have: every check got 404 and fell
     // through to GitHub (checked 2026-10-13 — /api/v1/products/cluadex-ai-coding-assistant/version answers).
     private const string BaseUrl = "https://xman4289.com/api/v1/products/cluadex-ai-coding-assistant";
-    private const string GitHubReleasesApi = "https://api.github.com/repos/xjanova/cluadeX/releases/latest";
-    /// <summary>Redirects to <c>…/releases/tag/vX.Y.Z</c> of the newest release. A HEAD on it costs no GitHub API quota
-    /// (60 an hour per IP, shared with everything else on the machine), so it can be asked often.</summary>
-    public const string LatestReleasePage = "https://github.com/xjanova/cluadeX/releases/latest";
+    /// <summary>The Velopack feed and its packages: xmanstudio CluadeXUpdateController (the feed's notes are cleaned there).</summary>
+    public const string FeedBase = "https://xman4289.com/cluadex/download/";
+    public const string FeedUrl = FeedBase + "releases.win.json";
+    /// <summary>The last ten versions with their notes, already free of GitHub links (xmanstudio VersionController::all).</summary>
+    public const string VersionsApi = BaseUrl + "/versions";
 
     /// <summary>How often a running app looks for a new release.</summary>
     public static readonly TimeSpan ProbeEvery = TimeSpan.FromMinutes(10);
-    /// <summary>A full check runs at least this often even when the probe says nothing (or cannot reach GitHub's page).</summary>
+    /// <summary>A full check runs at least this often even when the probe says nothing (or cannot reach the feed).</summary>
     public static readonly TimeSpan FullCheckEvery = TimeSpan.FromHours(1);
 
     public event Action<UpdateInfo>? OnUpdateAvailable;
@@ -93,7 +101,7 @@ public class AutoUpdateService : IAppShutdownHook
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex"));
 
     /// <summary>Set to a folder (or http URL) holding a Velopack release feed — the Releases/ output of
-    /// <c>vpk pack</c> — to test a self-update end to end before anything is published to GitHub.</summary>
+    /// <c>vpk pack</c> — to test a self-update end to end before anything is published.</summary>
     public const string FeedOverrideVariable = "CLUADEX_UPDATE_FEED";
 
     private Velopack.UpdateManager Vpk => _vpk ??= new Velopack.UpdateManager(CreateSource());
@@ -108,7 +116,9 @@ public class AutoUpdateService : IAppShutdownHook
                 ? new Velopack.Sources.SimpleWebSource(feed, _downloader)
                 : new Velopack.Sources.SimpleFileSource(new DirectoryInfo(feed));
         }
-        return new Velopack.Sources.GithubSource("https://github.com/xjanova/cluadeX", null, false, _downloader);
+        // xman4289.com/cluadex/download/: Velopack asks for releases.win.json there and downloads the packages it lists
+        // from the same folder — the site streams them, so the app never learns where they are kept.
+        return new Velopack.Sources.SimpleWebSource(FeedBase, _downloader);
     }
 
     // ─── progress ──────────────────────────────────────────────────────────────────────
@@ -268,7 +278,7 @@ public class AutoUpdateService : IAppShutdownHook
     public bool IsBusy { get { lock (_jobLock) return _job is { IsCompleted: false }; } }
 
     /// <summary>
-    /// Check GitHub for a Velopack release and download it in the background. Returns the staged version, or null
+    /// Check the update feed (xman4289.com) for a Velopack release and download it in the background. Returns the staged version, or null
     /// when there is nothing to stage. Everyone who asks while a check or download runs gets that same job — the
     /// splash, the main window and the periodic probe never start a second one (Velopack's lock would fail it).
     /// The job outlives its callers; it stops only when the app exits.
@@ -451,30 +461,127 @@ public class AutoUpdateService : IAppShutdownHook
         return sinceFullCheck >= FullCheckEvery;
     }
 
-    /// <summary>The newest release's version, read from where <see cref="LatestReleasePage"/> redirects; null when GitHub
-    /// cannot be reached (or the page did not redirect to a tag).</summary>
+    /// <summary>The newest release's version, read from the update feed (<see cref="FeedUrl"/>, cached by the site, a
+    /// few KB); null when the site cannot be reached or the answer is not a feed.</summary>
     public async Task<string?> ProbeLatestReleaseAsync(CancellationToken ct = default)
     {
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Head, LatestReleasePage);
-            using var resp = await _httpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            string? v = ParseReleaseTagUrl(resp.RequestMessage?.RequestUri);
+            using var resp = await _httpClient.GetAsync(FeedUrl, ct).ConfigureAwait(false);
+            string? v = resp.IsSuccessStatusCode ? LatestFeedVersion(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false)) : null;
             if (v != _lastProbed) { _lastProbed = v; _log?.Info("Update", $"probe: newest release {(v != null ? "v" + v : $"unknown (HTTP {(int)resp.StatusCode})")}"); }
             return v;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested) { return null; }
     }
 
-    /// <summary>"https://github.com/o/r/releases/tag/v3.0.178" → "3.0.178"; anything else → null. Public for the harness.</summary>
-    public static string? ParseReleaseTagUrl(Uri? url)
+    /// <summary>The highest version a Velopack feed (<c>{"Assets":[{"Version":"3.0.278",…}]}</c>, keys in any case)
+    /// lists; null when it is not a feed or lists none. Public for the harness.</summary>
+    public static string? LatestFeedVersion(string? json)
     {
-        if (url == null) return null;
-        string path = url.AbsolutePath.TrimEnd('/');
-        int i = path.LastIndexOf("/releases/tag/", StringComparison.OrdinalIgnoreCase);
-        if (i < 0) return null;
-        string tag = Uri.UnescapeDataString(path[(i + "/releases/tag/".Length)..]).TrimStart('v', 'V');
-        return VersionCore(tag) is { } core && Version.TryParse(core, out _) ? tag : null;
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json.TrimStart('﻿'));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            JsonElement assets = default;
+            foreach (var p in doc.RootElement.EnumerateObject())
+                if (string.Equals(p.Name, "Assets", StringComparison.OrdinalIgnoreCase)) assets = p.Value;
+            if (assets.ValueKind != JsonValueKind.Array) return null;
+            string? best = null;
+            foreach (var a in assets.EnumerateArray())
+            {
+                if (a.ValueKind != JsonValueKind.Object) continue;
+                foreach (var p in a.EnumerateObject())
+                {
+                    if (!string.Equals(p.Name, "Version", StringComparison.OrdinalIgnoreCase) || p.Value.ValueKind != JsonValueKind.String) continue;
+                    string v = (p.Value.GetString() ?? "").Trim().TrimStart('v', 'V');
+                    if (VersionCore(v) is { } core && Version.TryParse(core, out _) && (best == null || IsNewer(v, best))) best = v;
+                }
+            }
+            return best;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>
+    /// What changed between the running version and <paramref name="to"/>, newest first — every version in between, each
+    /// with its own notes — from the site's version list (<see cref="VersionsApi"/>, notes already free of GitHub).
+    /// Empty when the site cannot be reached; the caller then shows the notes that came with the update.
+    /// </summary>
+    public async Task<List<ReleaseNoteEntry>> FetchReleaseNotesAsync(string from, string to, CancellationToken ct = default)
+    {
+        try
+        {
+            using var resp = await _httpClient.GetAsync(VersionsApi, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return new();
+            return ParseVersionNotes(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false), from, to);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            _log?.Info("Update", $"release notes not loaded: {ex.GetType().Name}");
+            return new();
+        }
+    }
+
+    /// <summary><c>{ versions: [ { version, changelog, released_at } ] }</c> → the versions after <paramref name="from"/>
+    /// up to and including <paramref name="to"/> that carry notes, newest first. A note that still holds a link to GitHub
+    /// (an old release) loses that line. Public for the harness.</summary>
+    public static List<ReleaseNoteEntry> ParseVersionNotes(string? json, string from, string to)
+    {
+        var list = new List<ReleaseNoteEntry>();
+        if (string.IsNullOrWhiteSpace(json)) return list;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("versions", out var versions) || versions.ValueKind != JsonValueKind.Array) return list;
+            foreach (var v in versions.EnumerateArray())
+            {
+                if (v.ValueKind != JsonValueKind.Object) continue;
+                string version = v.TryGetProperty("version", out var vv) && vv.ValueKind == JsonValueKind.String ? (vv.GetString() ?? "").TrimStart('v', 'V') : "";
+                if (VersionCore(version) is not { } core || !Version.TryParse(core, out _)) continue;
+                if (!IsNewer(version, from) || IsNewer(version, to)) continue;
+                string notes = v.TryGetProperty("changelog", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
+                notes = WhatsNewOnly(WithoutGitHub(notes));
+                if (string.IsNullOrWhiteSpace(notes)) continue;
+                DateTime? when = v.TryGetProperty("released_at", out var r) && r.ValueKind == JsonValueKind.String
+                    && DateTime.TryParse(r.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var d) ? d : null;
+                if (list.Any(e => e.Version == version)) continue;
+                list.Add(new ReleaseNoteEntry(version, notes, when));
+            }
+        }
+        catch (JsonException) { }
+        list.Sort((a, b) => IsNewer(a.Version, b.Version) ? -1 : IsNewer(b.Version, a.Version) ? 1 : 0);
+        return list;
+    }
+
+    /// <summary>Release notes without a link to GitHub: " ([#104](…github…))" goes, "[text](…github…)" keeps its text,
+    /// a bare github URL goes, and the "Full Changelog" line goes. The site cleans notes already; this is the app's own
+    /// guard for an older release or a feed served by an override. A feature named "GitHub" in the words stays.</summary>
+    public static string WithoutGitHub(string? notes)
+    {
+        if (string.IsNullOrEmpty(notes)) return "";
+        const System.Text.RegularExpressions.RegexOptions I = System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+        string s = notes.Replace("\r\n", "\n");
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*\(\s*\[[^\]]*\]\([^)]*github[^)]*\)\s*\)", "", I);
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\[([^\]]*)\]\([^)]*github[^)]*\)", "$1", I);
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"<?https?://[^\s)>]*github[^\s)>]*>?", "", I);
+        var keep = s.Split('\n').Where(l => l.IndexOf("Full Changelog", StringComparison.OrdinalIgnoreCase) < 0)
+            .Select(l => l.TrimEnd())
+            .Where(l => l.Trim() is not ("-" or "*" or "" ) || l.Length == 0);
+        return System.Text.RegularExpressions.Regex.Replace(string.Join("\n", keep), @"\n{3,}", "\n\n").Trim();
+    }
+
+    /// <summary>A release's whole text → only what is new: the "Install" / "Requirements" / "การติดตั้ง" sections of the
+    /// download page are not news, so they stop at their heading. Public for the harness.</summary>
+    public static string WhatsNewOnly(string? notes)
+    {
+        if (string.IsNullOrEmpty(notes)) return "";
+        var lines = notes.Replace("\r\n", "\n").Split('\n');
+        int cut = Array.FindIndex(lines, l => System.Text.RegularExpressions.Regex.IsMatch(l,
+            @"^\s{0,3}#{1,6}\s*(install|installation|requirements|system requirements|download|การติดตั้ง|ความต้องการของระบบ|ดาวน์โหลด)\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+        return (cut >= 0 ? string.Join("\n", lines.Take(cut)) : notes).Trim();
     }
 
     /// <summary>"3.0.178+abc" / "v3.0.178-beta" → "3.0.178".</summary>
@@ -582,7 +689,7 @@ public class AutoUpdateService : IAppShutdownHook
         var items = new List<string>();
         var plain = new List<string>();
         if (string.IsNullOrWhiteSpace(markdown) || max <= 0) return items;
-        foreach (string raw in markdown.Replace("\r", "").Split('\n'))
+        foreach (string raw in WithoutGitHub(markdown).Split('\n'))
         {
             string line = raw.Trim();
             if (line.Length == 0 || line.StartsWith('#') || line.StartsWith("---") || line.StartsWith("```") || line.StartsWith('>')) continue;
@@ -659,7 +766,7 @@ public class AutoUpdateService : IAppShutdownHook
         }
     }
 
-    /// <summary>Check xman API first, fallback to GitHub releases.</summary>
+    /// <summary>Ask xman4289.com's version API (the only source; there is no GitHub fallback any more).</summary>
     public async Task<UpdateInfo?> CheckForUpdateAsync(CancellationToken ct = default)
     {
         // Both checks below swallow every exception on purpose — an update probe must
@@ -677,12 +784,8 @@ public class AutoUpdateService : IAppShutdownHook
             return info;
         }
 
-        info = await CheckGitHubAsync(ct);
-        if (info != null)
-            _log?.Info("Update", $"GitHub releases: update available v{info.NewVersion}");
-        else
-            _log?.Info("Update", $"no update offered — running v{CurrentVersion} is at or ahead of every published release");
-        return info;
+        _log?.Info("Update", $"no update offered — running v{CurrentVersion} is at or ahead of every published release");
+        return null;
     }
 
     private async Task<UpdateInfo?> CheckXmanAsync(CancellationToken ct)
@@ -735,74 +838,6 @@ public class AutoUpdateService : IAppShutdownHook
                 NewVersion = Str(root, "version"), CurrentVersion = currentVersion, DownloadUrl = Str(root, "download_url"),
                 Changelog = Str(root, "changelog"), FileSize = Num(root, "file_size"), FileName = Str(root, "download_filename"), Sha256 = Str(root, "sha256"),
             };
-        return null;
-    }
-
-    private async Task<UpdateInfo?> CheckGitHubAsync(CancellationToken ct)
-    {
-        try
-        {
-            using var response = await _httpClient.GetAsync(GitHubReleasesApi, ct);
-            var body = await response.Content.ReadAsStringAsync(ct);
-            var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-
-            string tagName = root.GetProperty("tag_name").GetString() ?? "";
-            string version = tagName.TrimStart('v', 'V');
-
-            if (IsNewer(version, CurrentVersion))
-            {
-                // Find zip asset
-                string downloadUrl = "";
-                string fileName = "";
-                long fileSize = 0;
-                string sha256 = "";
-
-                if (root.TryGetProperty("assets", out var assets))
-                {
-                    foreach (var asset in assets.EnumerateArray())
-                    {
-                        string name = asset.GetProperty("name").GetString() ?? "";
-                        if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                        {
-                            downloadUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
-                            fileName = name;
-                            fileSize = asset.GetProperty("size").GetInt64();
-                            // GitHub asset digest is "sha256:HEX" (newer API) — use it for integrity.
-                            string digest = asset.TryGetProperty("digest", out var dg) ? dg.GetString() ?? "" : "";
-                            if (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
-                                sha256 = digest["sha256:".Length..];
-                            break;
-                        }
-                    }
-                }
-
-                // Fallback to zipball
-                if (string.IsNullOrEmpty(downloadUrl))
-                {
-                    downloadUrl = root.TryGetProperty("zipball_url", out var zb) ? zb.GetString() ?? "" : "";
-                    fileName = $"CluadeX-{version}.zip";
-                }
-
-                string changelog = root.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "";
-
-                var info = new UpdateInfo
-                {
-                    NewVersion = version,
-                    CurrentVersion = CurrentVersion,
-                    DownloadUrl = downloadUrl,
-                    Changelog = changelog,
-                    FileSize = fileSize,
-                    FileName = fileName,
-                    Sha256 = sha256,
-                };
-                _lastOffered = info.NewVersion;
-                OnUpdateAvailable?.Invoke(info);
-                return info;
-            }
-            _log?.Info("Update", $"GitHub: newest published release is v{version} — not newer than v{CurrentVersion}");
-        }
-        catch (Exception ex) { _log?.Warn("Update", $"GitHub release check failed: {ex.Message}"); }
         return null;
     }
 
@@ -1035,3 +1070,6 @@ public sealed record UpdateProgressInfo(UpdatePhase Phase, string? Version, doub
         return s;
     }
 }
+
+/// <summary>One version's notes for the update window (newest first).</summary>
+public sealed record ReleaseNoteEntry(string Version, string Notes, DateTime? ReleasedAt);

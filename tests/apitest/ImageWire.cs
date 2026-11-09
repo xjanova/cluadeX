@@ -1196,6 +1196,9 @@ internal static class ImageWire
                 (h, msg) => { agent.InvalidateSystemPromptCache(); return Turn(h, msg); }, executed);
             fs.WorkingDirectory = "";
 
+            // ── Ultra on a Codex chat: a workflow agent in its own worktree runs as codex exec -C <worktree> (UltraWire) ──
+            await UltraWire.Loop(Check, providers, settings, agent, work);
+
             // ── Deleting the chat deletes its screenshots — only the store's own files, only that chat ──
             SQLitePCL.Batteries.Init();
             var persist = sp.GetRequiredService<ChatPersistenceService>();

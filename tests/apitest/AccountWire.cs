@@ -184,7 +184,7 @@ internal static class AccountWire
         check("doctor", "report masks keys, passwords, device codes and the machine id",
             !clean.Contains("AB12-CD34") && !clean.Contains("hunter2") && !clean.Contains(new string('a', 64)) && !clean.Contains(machine) && clean.Contains("DEMO…WX99"), clean);
 
-        var doctor = new ConnectionDoctor(settings, account, loc) { UpdatesUrl = $"http://localhost:{port}/github/releases/latest" };
+        var doctor = new ConnectionDoctor(settings, account, loc) { UpdatesUrl = $"http://localhost:{port}/cluadex/download/releases.win.json" };
         Mode = "";   // the server today
         var rep = await doctor.RunAsync();
         string Steps() => string.Join(" ", rep.Steps.Select(s => $"{s.Id}={s.Status}"));
@@ -207,7 +207,7 @@ internal static class AccountWire
         Fault = "";
         Environment.SetEnvironmentVariable("CLUADEX_LICENSE_API", "http://127.0.0.1:1/api/v1/product/cluadex-ai-coding-assistant");
         var deadDoctor = new ConnectionDoctor(settings, new XmanAccountService(settings, new XmanLicenseService(settings), activation2), loc)
-        { UpdatesUrl = $"http://localhost:{port}/github/releases/latest" };
+        { UpdatesUrl = $"http://localhost:{port}/cluadex/download/releases.win.json" };
         rep = await deadDoctor.RunAsync();
         check("doctor", "port refused → tcp Fail (Thai reason), api/clock/updates skipped",
             rep.Steps.First(s => s.Id == "tcp").Status == DoctorStatus.Fail && rep.Steps.Where(s => s.Id is "api" or "clock" or "updates").All(s => s.Status == DoctorStatus.Skip)
@@ -307,7 +307,7 @@ internal static class AccountWire
         JsonElement req = default;
         try { if (body.Length > 0) req = JsonDocument.Parse(body).RootElement.Clone(); } catch { }
 
-        if (path.EndsWith("/github/releases/latest")) { Json(ctx, 200, "{\"tag_name\":\"v3.0.999\"}"); return; }
+        if (path.EndsWith("/cluadex/download/releases.win.json")) { Json(ctx, 200, "{\"Assets\":[{\"Version\":\"3.0.999\",\"Type\":\"Full\"}]}"); return; }
 
         switch (Fault)
         {

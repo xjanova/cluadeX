@@ -138,6 +138,34 @@ internal static partial class Program
             "Time Elapsed 00:00:01.23\nC:\\Program Files\\dotnet\\sdk\\8.0.100\\Sdks\\Foo:12: not a source file\n"), proj);
         Check("B10", "noise (timestamps, URLs, summaries, stack-trace ':line 42', locationless errors) → nothing", ps.Count == 0, Show(ps));
 
+        string searchRows = string.Join("\n", new[]
+        {
+            ".github/workflows/build-and-release.yml:158: # so a missing or wrong secret fails the release here, not on users.",
+            ".github/workflows/build-and-release.yml:161: BRAINX_NODE_SIGNING_KEY: ${{ secrets.BRAINX_NODE_SIGNING_KEY }}",
+            ".github/workflows/build-and-release.yml:165: if ($LASTEXITCODE -ne 0) { throw \"signing the update feed failed\" }",
+            "BrainX.Client/MainWindow.CoworkSecretary.cs:250: System.Net.Http.HttpRequestException { StatusCode: null } => \"ติดต่อ Ollama ไม่ได้ (localhost:11434)\",",
+            "BrainX.Client/MainWindow.MachineSettings.cs:135: [\"MySqlConnectionStringProtected\"] = Protect(_mySqlConnString),",
+            "BrainX.Client/MainWindow.MachineSettings.cs:247: private static string? Protect(string? plain)",
+            "BrainX.Client/MainWindow.MachineSettings.cs:255: catch { return null; } // never store the plaintext as a fallback",
+            "BrainX.Client/MainWindow.xaml:683: <TextBlock x:Name=\"PeerCountText\" Text=\"0 peers · :5142\"",
+            "BrainX.Client/Services/RemoteNodeConfig.cs:39: public const string DefaultLocalAiBase = \"http://localhost:5142\";",
+            "BrainX.Client/wwwroot/office/office.js:4625: + (!models.length ? `<small>localhost:11434</small>` : '');",
+            "BrainX.Client/wwwroot/office/ship/scene/cluadex-study/crew/boss.json:1: {\"authoring\":\"Blender 4.5.10 LTS\",\"character\":\"boss\"}",
+            "BrainX.Client/wwwroot/office/tools/mask-paint.html:29: getImageData to work): http://localhost:8178/tools/mask-paint.html",
+            "src/app.js:1: errorCount = 0;",
+            "src/app.js:2: warningMessage = 'saved';",
+            "main.py:1: import os",
+            "src/main.go:1: package main",
+        });
+        ps = BuildOutputParser.Parse(searchRows, proj);
+        Check("B12", "source-search rows from the reported Problems list are not compiler diagnostics", ps.Count == 0, Show(ps));
+        ps = BuildOutputParser.Parse(searchRows + "\nApp/Program.cs(12,5): error CS1002: ; expected\n", proj, "dotnet");
+        Check("B13", "mixed search and build output retains only the actual compiler error",
+            ps.Count == 1 && ps[0].Code == "CS1002" && ps[0].Path == program, Show(ps));
+        ps = BuildOutputParser.Parse("main.go:12:5: undefined: x\n", proj, "go");
+        Check("B14", "a known Go check still accepts its diagnostics without severity or package header",
+            ps.Count == 1 && ps[0].Path == mainGo && ps[0].Severity == LspSeverity.Error, Show(ps));
+
         // B11 problem → editor diagnostic (0-based; no column = the whole line).
         var d1 = new BuildProblem(program, 12, 5, 0, 0, LspSeverity.Error, "m", "CS1", "dotnet").ToDiagnostic();
         var d2 = new BuildProblem(program, 4, 0, 0, 0, LspSeverity.Error, "m", "", "mypy").ToDiagnostic();
@@ -187,6 +215,11 @@ internal static partial class Program
         int n = svc.Ingest(failing, proj, "dotnet build", succeeded: false);
         Check("R1", "a failing build's errors are stored per file, fresh", n == 2 && svc.ProblemsFor(program).Count == 1 && !svc.ProblemsFor(program)[0].Stale && changes > 0,
             $"n={n}");
+
+        string sourceMatches = string.Join("\n", Enumerable.Range(1, 202).Select(i => $"App/Program.cs:{i}: const string DefaultLocalAiBase = \"http://localhost:5142\";"));
+        n = svc.Ingest(sourceMatches, proj, "git grep -n localhost", succeeded: true);
+        Check("R1s", "202 source matches add no Problems and leave real compiler errors in place",
+            n == 0 && svc.Count == 2 && svc.ProblemsFor(program).SingleOrDefault()?.Problem.Code == "CS1002", $"added={n}, total={svc.Count}");
 
         svc.Ingest("'dotnet' is not recognized as an internal or external command,\noperable program or batch file.\n", proj, "dotnet build", succeeded: false);
         Check("R2", "a run that died before compiling (no errors, not clean) leaves the last verdict alone", svc.ProblemsFor(program).Count == 1);

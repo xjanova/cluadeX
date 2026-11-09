@@ -70,7 +70,7 @@ public static class BuildOutputParser
         RegexOptions.Compiled);
 
     private static readonly Regex SeverityPrefix = new(
-        @"^(?<sev>fatal error|error|warning|warn|note|info|hint)(?:\[(?<code1>[^\]]+)\])?(?:\s+(?<code2>[A-Za-z]+\d+))?\s*:?\s*(?<msg>.*)$",
+        @"^(?<sev>fatal error|error|warning|warn|note|info|hint)\b(?:\[(?<code1>[^\]]+)\])?(?:\s+(?<code2>[A-Za-z]+\d+))?\s*:\s*(?<msg>.*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // eslint stylish: "  12:5  error  'x' is defined but never used  no-unused-vars"
@@ -117,6 +117,7 @@ public static class BuildOutputParser
         bool lintWithoutSeverity = tool is "pyflakes" or "flake8" or "ruff";
         if (output.Length > MaxChars) output = output[..MaxChars];
         output = Ansi.Replace(output, "");
+        bool goOutput = tool == "go" || Regex.IsMatch(output, @"^#\s+\S+\s*$", RegexOptions.Multiline);
         var seen = new HashSet<string>();
         string? eslintFile = null;
         (LspSeverity Sev, string Code, string Msg)? rustHead = null;
@@ -209,7 +210,9 @@ public static class BuildOutputParser
                     msg = sevMatch.Groups["msg"].Value;
                 }
                 // mypy / ruff / eslint-unix put the rule at the end: "… [arg-type]" / "… [Error/no-undef]"
-                var tail = Regex.Match(msg, @"\s+\[(?:(?:Error|Warning)/)?(?<rule>[\w./@-]+)\]\s*$");
+                var tail = Regex.Match(msg, @"\s+\[(?:(?<sev>Error|Warning)/)?(?<rule>[\w./@-]+)\]\s*$");
+                bool goDiagnostic = goOutput && Path.GetExtension(m.Groups["file"].Value).Equals(".go", StringComparison.OrdinalIgnoreCase);
+                if (!sevMatch.Success && !lintWithoutSeverity && !goDiagnostic && !tail.Groups["sev"].Success) continue;
                 if (tail.Success)
                 {
                     if (code.Length == 0) code = tail.Groups["rule"].Value;

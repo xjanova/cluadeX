@@ -1585,6 +1585,12 @@
                                 <Separator/>
                                 <MenuItem Header="{services:Loc edt.selectAll}" InputGestureText="Ctrl+A" Click="OnSelectAll"/>
                                 <MenuItem Header="{services:Loc edt.columnTip}" IsEnabled="False"/>
+                                <Separator/>
+                                <!-- Change marks (CodeEditorView.AiChanges.cs) -->
+                                <MenuItem Header="{services:Loc cm.compare}" Click="OnCompareChanges"/>
+                                <MenuItem Header="{services:Loc cm.menuList}" Click="OnShowUserEdits"/>
+                                <MenuItem x:Name="MiUserEditMarkers" Header="{services:Loc cm.menuMarkers}" IsCheckable="True"
+                                          Click="OnToggleUserEditMarkers" ToolTip="{services:Loc cm.menuMarkersNote}"/>
                             </ContextMenu>
                         </Button.ContextMenu>
                     </Button>
@@ -2166,9 +2172,18 @@
                                        FontFamily="{DynamicResource Font.Mono.Display}"
                                        Foreground="{DynamicResource Text.Primary}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                            <TextBlock Grid.Column="2" Text="{Binding DiffSummary}" FontSize="10" Margin="12,0,10,0"
-                                       FontFamily="{DynamicResource Font.Mono.Display}"
-                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding DiffSummary}" FontSize="10" Margin="12,0,10,0"
+                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                                <!-- Step through the changes (CodeEditorView.AiChanges.cs): F7 / Shift+F7 too -->
+                                <TextBlock x:Name="DiffPos" FontSize="10" Margin="0,0,6,0" VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Muted}"/>
+                                <Button x:Name="DiffPrevBtn" Style="{StaticResource EdToolBtn}" FontFamily="Segoe MDL2 Assets" Content="&#xE70E;"
+                                        Click="OnDiffPrev" ToolTip="{services:Loc cm.diffPrev}" Margin="0,0,2,0"/>
+                                <Button x:Name="DiffNextBtn" Style="{StaticResource EdToolBtn}" FontFamily="Segoe MDL2 Assets" Content="&#xE70D;"
+                                        Click="OnDiffNext" ToolTip="{services:Loc cm.diffNext}" Margin="0,0,8,0"/>
+                            </StackPanel>
                             <Button Grid.Column="3" Width="22" Height="22" Cursor="Hand"
                                     Background="Transparent" BorderThickness="0"
                                     Command="{Binding CloseDiffCommand}"
@@ -2259,9 +2274,11 @@
                     </Grid>
 
                     <!-- Rows -->
-                    <ListBox Grid.Row="3" ItemsSource="{Binding DiffRows}"
+                    <!-- No horizontal scroll: with it every row measures at infinite width and the two * columns size per row,
+                         so a long line pushed its own row out of line with the rest. Long lines trim instead. -->
+                    <ListBox x:Name="DiffList" Grid.Row="3" ItemsSource="{Binding DiffRows}" PreviewKeyDown="OnDiffKeys"
                              Background="Transparent" BorderThickness="0"
-                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              VirtualizingStackPanel.IsVirtualizing="True"
                              VirtualizingStackPanel.VirtualizationMode="Recycling"
@@ -2299,7 +2316,7 @@
                                         <TextBlock Text="{Binding LeftText}" FontSize="11" Padding="6,1"
                                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                                    Foreground="{DynamicResource Text.Secondary}"
-                                                   TextWrapping="NoWrap"/>
+                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                     </Border>
 
                                     <TextBlock Grid.Column="2" Text="{Binding RightLine}" FontSize="10"
@@ -2310,7 +2327,7 @@
                                         <TextBlock Text="{Binding RightText}" FontSize="11" Padding="6,1"
                                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                                    Foreground="{DynamicResource Text.Secondary}"
-                                                   TextWrapping="NoWrap"/>
+                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                     </Border>
                                 </Grid>
                                 <DataTemplate.Triggers>
@@ -2348,6 +2365,13 @@
                     <!-- How many places the AI's last turn changed in this file — click = the next one (CodeEditorView.AiChanges.cs) -->
                     <Button x:Name="StAiChanges" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="8,0,0,0"
                             Click="OnAiChangesNext" ToolTip="{services:Loc ai.changesTip}" Visibility="Collapsed"/>
+                    <!-- The user's own hand edits in this file — click = a menu: next one, every one in the project, the marker comment -->
+                    <Button x:Name="StUserEdits" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="4,0,0,0"
+                            Click="OnUserEditsMenu" ToolTip="{services:Loc cm.userTip}" Visibility="Collapsed"/>
+                    <!-- Before / after of the whole file against how it was before this chat touched it -->
+                    <Button x:Name="StCompare" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="4,0,0,0"
+                            Click="OnCompareChanges" ToolTip="{services:Loc cm.compareTip}" Visibility="Collapsed"
+                            Content="{services:Loc cm.compare}"/>
                     <Button x:Name="StZoom" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnZoomReset"
                             ToolTip="{services:Loc edt.zoomReset}" Margin="0,0,6,0"/>
                     <TextBlock x:Name="StOverwrite" DockPanel.Dock="Right" Style="{StaticResource EdStatusText}" Margin="8,0"

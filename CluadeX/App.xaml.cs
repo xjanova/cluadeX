@@ -19,7 +19,7 @@ public partial class App : Application
     private System.Threading.Mutex? _singleInstanceMutex;
 
     /// <summary>Directory crash logs are written to. Kept lightweight (no directory-exists check on each access).</summary>
-    private static string CrashLogDir => Path.Combine(
+    internal static string CrashLogDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".cluadex", "crash-logs");
 
@@ -153,7 +153,37 @@ public partial class App : Application
         // their progress / failures. If DI itself failed, this is null and
         // each helper TryLogToDebugService call no-ops silently.
         var dbg = _serviceProvider.GetService<DebugLogService>();
+        if (dbg != null)
+        {
+            // The owner's log settings (the Debug Log page): how long files stay, the size cap, detailed logging.
+            var logSettings = _serviceProvider.GetRequiredService<SettingsService>().Settings;
+            dbg.RetentionDays = Math.Max(0, logSettings.DebugLogRetentionDays);
+            dbg.MaxTotalBytes = Math.Max(0, logSettings.DebugLogMaxMegabytes) * 1024L * 1024;
+            dbg.Verbose = logSettings.DebugLogVerbose;
+            // The head of this session in the log — version, Windows, CPU, memory, GPU, locale — off the UI thread
+            // (the GPU probe can run nvidia-smi), then the old files over the retention or the cap go.
+            var sessionSettings = _serviceProvider.GetService<SettingsService>();
+            var sessionGpu = _serviceProvider.GetService<GpuDetectionService>();
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    dbg.LogSessionStart(new (string, IReadOnlyDictionary<string, object?>)[]
+                    {
+                        ("app", Services.BugReports.DiagnosticsCollector.App(sessionSettings)),
+                        ("system", Services.BugReports.DiagnosticsCollector.System(sessionGpu)),
+                        ("process", Services.BugReports.DiagnosticsCollector.ProcessInfo()),
+                    });
+                    dbg.PruneFiles();
+                }
+                catch (Exception ex) { dbg.Warn("App", "session header failed", ex); }
+            });
+        }
         dbg?.Info("App", "MainWindow shown, starting background services");
+        // Problem reports that could not go last time (offline, the server busy) go two minutes after start.
+        var bugReports = _serviceProvider.GetService<BugReportService>();
+        if (bugReports != null && bugReports.QueuedCount > 0)
+            _ = Task.Run(async () => { await Task.Delay(TimeSpan.FromMinutes(2)); await bugReports.RetryQueuedAsync(); });
         // The title-bar DGX Spark chip shows the remembered Spark's live status: checked now and every 30 s
         // (nothing goes on the network until a Spark has been used once).
         try { _serviceProvider.GetService<DgxSparkService>()?.StartLinkMonitor(); }
@@ -406,13 +436,51 @@ public partial class App : Application
     {
         try
         {
-            var w = new Views.Setup.UpdateReadyWindow(from, to, notes, size, allowed, settings);
+            var updater = (Current as App)?._serviceProvider?.GetService<AutoUpdateService>();
+            var w = new Views.Setup.UpdateReadyWindow(from, to, notes, size, allowed, settings,
+                updater == null ? null : ct => updater.FetchReleaseNotesAsync(AutoUpdateService.CurrentVersion, to, ct));
             if (Current?.MainWindow is { IsVisible: true } owner) w.Owner = owner;
             else w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
             w.ShowDialog();
             return w.Choice;
         }
         catch (Exception ex) { WriteCrashLog("update-ready", ex); return Views.Setup.UpdateReadyChoice.Later; }
+    }
+
+    /// <summary>
+    /// "แจ้งปัญหา" over the main window (the Debug Log page, the connection doctor…). The screenshot is taken first, so
+    /// it shows the app as the user saw it, not this window. <paramref name="category"/>: one of
+    /// <see cref="BugReportService.Categories"/>.
+    /// </summary>
+    public static void ShowReportProblem(string category = "bug", string? message = null)
+    {
+        try
+        {
+            if (Current is not App app || app._serviceProvider is not { } sp) return;
+            var owner = Current.MainWindow is { IsVisible: true } m ? m : null;
+            byte[]? shot = Views.Setup.ReportProblemWindow.Capture(owner);
+            var chat = sp.GetService<ViewModels.ChatViewModel>();
+            Func<string?>? chatText = chat == null || chat.Messages.Count == 0 ? null : () => ChatAsText(chat);
+            var w = new Views.Setup.ReportProblemWindow(sp.GetRequiredService<BugReportService>(), sp.GetService<DebugLogService>(),
+                sp.GetService<SettingsService>(), sp.GetService<GpuDetectionService>(), shot, chatText, owner, category, message);
+            if (owner != null) w.Owner = owner;
+            else w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            w.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            WriteCrashLog("report-problem", ex);
+            (Current as App)?.TryLogToDebugService(CluadeX.Models.LogLevel.Error, "BugReport", "the report window could not open", ex);
+        }
+    }
+
+    /// <summary>The open chat's last 60 user / assistant turns as plain text (read only when the user ticks the chat).</summary>
+    private static string ChatAsText(ViewModels.ChatViewModel chat)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var m in chat.Messages.Where(m => m.Role is CluadeX.Models.MessageRole.User or CluadeX.Models.MessageRole.Assistant).TakeLast(60))
+            sb.Append('[').Append(m.Role).Append("] ").AppendLine(m.Content).AppendLine();
+        return sb.ToString();
     }
 
     // ════════════════════════════════════════════════════════════════════

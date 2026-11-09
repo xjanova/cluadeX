@@ -204,8 +204,47 @@ public partial class ChatViewModel : ViewModelBase
             RaiseRunStateChanged();
             RefreshStickyPlan();
             OnPropertyChanged(nameof(FollowEditsHere));
+            OnPropertyChanged(nameof(CurrentChatRef));
+            ChatRefCopied = false;   // the "Copied" mark belonged to the chat that was on screen
             WatchChatProject(left, value);
         }
+    }
+
+    // ─── The chat's reference (CX-8cf58c2a), pinned at the top of the chat page ───
+    // Owner 2026-11-09: a visible, copyable id per chat, so the owner, the team and the AI can say which chat they mean.
+
+    /// <summary>The reference of the chat on screen ("" when there is none). The page shows it only once the chat has rows.</summary>
+    public string CurrentChatRef => CurrentSession?.Ref ?? "";
+
+    private bool _chatRefCopied;
+    /// <summary>True for a moment after the reference was copied: the chip says "Copied".</summary>
+    public bool ChatRefCopied { get => _chatRefCopied; private set => SetProperty(ref _chatRefCopied, value); }
+    private DispatcherTimer? _chatRefCopiedTimer;
+
+    private ICommand? _copyChatRefCommand;
+    public ICommand CopyChatRefCommand => _copyChatRefCommand ??= new RelayCommand(CopyChatRef);
+
+    /// <summary>The reference to the clipboard, with a short "Copied" on the chip. A second click restarts the mark.</summary>
+    private void CopyChatRef()
+    {
+        string reference = CurrentChatRef;
+        if (reference.Length == 0) return;
+        try { System.Windows.Clipboard.SetText(reference); }
+        catch
+        {
+            // Another program holds the clipboard: say so in words, never the exception's text.
+            StatusText = Loc("chat.ref.copyFailed");
+            return;
+        }
+        StatusText = LocF("chat.ref.copiedStatus", reference);
+        ChatRefCopied = true;
+        if (_chatRefCopiedTimer == null)
+        {
+            _chatRefCopiedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.6) };
+            _chatRefCopiedTimer.Tick += (_, _) => { _chatRefCopiedTimer!.Stop(); ChatRefCopied = false; };
+        }
+        _chatRefCopiedTimer.Stop();
+        _chatRefCopiedTimer.Start();
     }
     public string WorkingDirectory
     {
@@ -580,7 +619,7 @@ public partial class ChatViewModel : ViewModelBase
         {
             var c = Sessions.FirstOrDefault(x => x.Id == id);
             string where = string.IsNullOrEmpty(c?.ProjectPath) ? "" : $" in {c!.ProjectPath}";
-            return $"- \"{c?.Title ?? "?"}\" (id {id}){where} — {link.Task} — {StateOf(id, link)}";
+            return $"- \"{c?.Title ?? "?"}\" (ref {ChatRef.Of(id)}, id {id}){where} — {link.Task} — {StateOf(id, link)}";
         }
         string List() => "Split chats of this chat:\n" + string.Join("\n", kids.Select(k => Line(k.Id, k.Link)));
 
@@ -590,6 +629,7 @@ public partial class ChatViewModel : ViewModelBase
         bool all = target.ToLowerInvariant() is "done" or "finished" or "all" or "all-done" or "*";
         var picked = kids.Where(k => k.Link.ArchivedAt == null && (all
             || k.Id == target
+            || ChatRef.Matches(k.Id, target)
             || string.Equals(Sessions.FirstOrDefault(c => c.Id == k.Id)?.Title, target, StringComparison.OrdinalIgnoreCase))).ToList();
         if (picked.Count == 0) return $"No open split chat matches \"{target}\".\n" + List();
 
@@ -2724,9 +2764,9 @@ public partial class ChatViewModel : ViewModelBase
         });
         RebuildVisibleSessions();
         if (message == null)
-            return $"Opened a new empty chat (id {chat.Id}) in {folder}. It is on screen now; the user types there.";
+            return $"Opened a new empty chat (ref {chat.Ref}, id {chat.Id}) in {folder}. It is on screen now; the user types there.";
         _ = StartAgentChatTurnAsync(message, chat.Id);
-        return $"Opened a new chat (id {chat.Id}) in {folder} and started it with your message. It runs on its own beside "
+        return $"Opened a new chat (ref {chat.Ref}, id {chat.Id}) in {folder} and started it with your message. It runs on its own beside "
              + "this chat; the user follows it in the sidebar. Do not wait for it — carry on here or finish your reply.";
     }
 

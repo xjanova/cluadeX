@@ -32,6 +32,11 @@ public sealed record DispatchInput
     /// there) and the folder is a git repository (worktrees need one).</summary>
     public bool CanEditProject { get; init; }
     public bool IsGitRepo { get; init; }
+    /// <summary>The chat's Ultra switch is on, or the owner's own words this turn asked for multi-agent work
+    /// (<see cref="WorkflowGate.Allowed"/>). It lifts the step to at least <see cref="DispatchPolicy.UltraEffort"/>, so
+    /// writing workers are allowed: on 2026-11-09 a Codex chat with Ultra on, fixing 152–202 build errors, stayed at
+    /// "auto" → medium (read-only fan-out only) and never split the edits.</summary>
+    public bool Ultra { get; init; }
 }
 
 /// <summary>What a step may fan out to. <see cref="Ceiling"/> is the most this step may use; the run's recorded
@@ -97,6 +102,9 @@ public static class DispatchPolicy
         "low" => 0, "medium" => 1, "high" => 2, "xhigh" => 3, "max" => 4, _ => 1,
     };
 
+    /// <summary>The least level a step runs its dispatch at while Ultra is on: the one that allows writing workers.</summary>
+    public const string UltraEffort = "high";
+
     public static DispatchDecision Decide(DispatchInput i)
     {
         int par = Math.Clamp(i.MaxParallel, 1, MaxParallelCap);
@@ -106,7 +114,11 @@ public static class DispatchPolicy
         if (!i.ProviderCanRunSubAgents)
             return Single(par, "this model cannot run sub-agents");
 
-        int rank = Rank(i.Effort);
+        // Ultra = the owner opted in to splitting: never below the level that allows workers. The spend guards below
+        // still cap it — Ultra does not lift a budget.
+        int asked = i.Ultra ? Math.Max(Rank(i.Effort), Rank(UltraEffort)) : Rank(i.Effort);
+        string effortName = asked > Rank(i.Effort) ? "Ultra" : "effort " + EffortLevels.Normalize(i.Effort);
+        int rank = asked;
         if (rank == 0) return Single(par, "effort low — the main loop does it alone");
 
         // ── spend guards ──
@@ -123,7 +135,7 @@ public static class DispatchPolicy
             if (i.TodaySpentUsd >= i.DailyBudgetUsd) return Single(par, $"daily cap reached (${i.TodaySpentUsd:0.00} of ${i.DailyBudgetUsd:0.00})");
             if (i.TodaySpentUsd >= i.DailyBudgetUsd * (1 - LowBudgetShare)) { rank = Math.Min(rank, 1); low = true; }
         }
-        bool capped = rank < Rank(i.Effort);
+        bool capped = rank < asked;
 
         if (rank == 1)
             return new DispatchDecision(DispatchStrategy.FanOut, true, true, false, false, false, par, 0,
@@ -133,16 +145,16 @@ public static class DispatchPolicy
         // high and up: workers and fixers edit in git worktrees — they need a repo and the right to edit.
         if (!i.IsGitRepo || !i.CanEditProject)
             return new DispatchDecision(DispatchStrategy.FanOut, true, true, false, false, false, par, 0,
-                !i.IsGitRepo ? "not a git repository with a commit yet — no worktrees, read-only fan-out only (a first commit opens them)"
-                             : "edits need asking here — read-only fan-out only");
+                !i.IsGitRepo ? $"{effortName}, but not a git repository with a commit yet — no worktrees, read-only fan-out only (a first commit opens them)"
+                             : $"{effortName}, but edits need asking here — read-only fan-out only");
 
         int fixers = Math.Clamp(i.SpeculativeFixCount, 2, 3);
         bool spec = i.SpeculativeFixEnabled && par >= 2;
         if (spec) fixers = Math.Min(fixers, par);
         return new DispatchDecision(spec ? DispatchStrategy.SpeculativeFix : DispatchStrategy.Workers, true, false, true, true,
             spec, par, spec ? fixers : 0,
-            rank >= 3 ? $"effort {EffortLevels.Normalize(i.Effort)} — workers in worktrees, speculative fixes on the first red build"
-                      : "effort high — workers in worktrees; speculative fixes after the main fix fails once");
+            rank >= 3 ? $"{effortName} — workers in worktrees, speculative fixes on the first red build"
+                      : $"{effortName} — workers in worktrees; speculative fixes after the main fix fails once");
     }
 
     static DispatchDecision Single(int par, string reason) =>

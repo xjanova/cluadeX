@@ -188,6 +188,11 @@ public class AppSettings
     /// <summary>Code Editor view toggles (toolbar): long lines wrap, spaces/tabs/line ends shown, text zoom.</summary>
     public bool EditorWordWrap { get; set; }
     public bool EditorShowWhitespace { get; set; }
+
+    /// <summary>Code Editor: on save, put a "[user-edit yyyy-MM-dd]" comment at the end of each run of lines the user edited
+    /// by hand (in the file's comment syntax, only where it cannot change the code). Off = the lines are still remembered
+    /// and coloured, just not commented in the file.</summary>
+    public bool EditorUserEditMarkers { get; set; } = true;
     public double EditorZoom { get; set; } = 1.0;
     public string PreferredLanguage { get; set; } = "C#";
     /// <summary>Code Editor ▸ AI comments: how much the AI comments the code it writes ("none" | "key" | "detailed") and in
@@ -507,6 +512,15 @@ public class AppSettings
     /// <summary>The user's own switch for automatic updates (the update dialog). Automatic updating also needs the
     /// entitlement (a paid or trial license, or a linked account) — see <see cref="Services.AutoUpdateEntitlement"/>.</summary>
     public bool AutoUpdateEnabled { get; set; } = true;
+
+    // ─── Debug log (the Debug Log page) ───
+    /// <summary>Log files older than this many days are deleted by themselves; 0 = never (owner 2026-11-09: "ให้ระบบ
+    /// เครียออโต้"). One of 3 / 7 / 14 / 30 / 0.</summary>
+    public int DebugLogRetentionDays { get; set; } = 14;
+    /// <summary>All log files together stay under this many MB (the oldest go first); 0 = no cap.</summary>
+    public int DebugLogMaxMegabytes { get; set; } = 200;
+    /// <summary>Verbose logging: Trace lines too, and a resource line every few minutes. Off by default (big logs).</summary>
+    public bool DebugLogVerbose { get; set; }
 
     /// <summary>The user chose "Not interested" / "don't show again" on the BrainX invitation — never opened by
     /// itself again (the brain chip still opens it on request).</summary>
