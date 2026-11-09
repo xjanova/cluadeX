@@ -56,6 +56,24 @@ public static class CodeCommentPolicy
         return Build(level, language);
     }
 
+    /// <summary>
+    /// The standing note about lines the user edited by hand (owner 2026-11-09: the editor marks them with a
+    /// "[user-edit yyyy-MM-dd]" comment — UserEditMarker): the AI keeps them, and says so before it must change one.
+    /// Sent with every turn whatever the comment level (it is not about writing comments).
+    /// </summary>
+    public const string UserEditNote =
+        "# Lines the user edited by hand\n" +
+        "A line ending in a comment that contains \"[user-edit\" (for example `// [user-edit 2026-11-09]` or `# [user-edit 2026-11-09]`) " +
+        "starts code the user wrote or changed by hand in the editor. Keep those lines as they are. If the task really needs one changed, " +
+        "say which line and why in your reply before you change it. Never remove or rewrite a [user-edit] comment yourself.";
+
+    /// <summary><see cref="InstructionFor"/> followed by <see cref="UserEditNote"/>: what the agents are sent.</summary>
+    public static string ForAgent(AppSettings settings, string? projectDir)
+    {
+        string comments = InstructionFor(settings, projectDir);
+        return comments.Length > 0 ? comments + "\n\n" + UserEditNote : UserEditNote;
+    }
+
     /// <summary>The instruction for one level + language; "" for level none. Markdown section, starts with "# Code comments".</summary>
     public static string Build(string? level, string? language)
     {

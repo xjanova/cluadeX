@@ -1486,6 +1486,8 @@ public partial class CodeAgentService
         // Empty unless the user picked a level; the text changes only when the setting does, so the prompt cache holds.
         string commentPolicy = CodeCommentPolicy.InstructionFor(_settingsService.Settings, _fileSystemService.WorkingDirectory);
         if (commentPolicy.Length > 0) sb.Append("\n\n").Append(commentPolicy);
+        // Lines the user edited by hand carry a [user-edit …] comment: keep them (CodeCommentPolicy.UserEditNote).
+        sb.Append("\n\n").Append(CodeCommentPolicy.UserEditNote);
 
         // ─── BRAIN-FIRST ───
         // Same standing rule Claude Code and Codex already run under: consult the

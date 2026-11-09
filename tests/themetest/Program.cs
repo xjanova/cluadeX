@@ -112,6 +112,7 @@ internal static partial class Program
                 case "--model-shots": ModelShots = true; break;
                 case "--bubbles": BubblesOnly = true; break;
                 case "--badges": BadgesOnly = true; break;   // the sidebar run badges and the buddy alone
+                case "--change-marks": ChangeMarksOnly = true; break;   // the editor's AI / user change marks, compare and the user-edit list (ChangeMarkRenders.cs)
                 case "--hero": HeroOnly = true; break;       // น้อง CluadeX in the corner + text size and font (HeroRenders.cs)
                 case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
                 case "--setup-wizard": SetupWizardOnly = true; break;   // the first-run setup wizard, every page and state (SetupWizardRenders.cs)
@@ -653,6 +654,7 @@ internal static partial class Program
         if (GoldenMode) return await CaptureGolden();
         if (BubblesOnly) { await BubbleRenders(); await LinkRenders(); return Finish(); }
         if (BadgesOnly) { await RunBadgeShots(); return Finish(); }
+        if (ChangeMarksOnly) { await ChangeMarkShots(); return Finish(); }
         if (HeroOnly) { await HeroShots(); return Finish(); }
         if (TitleBarOnly) { if (themes != null) await TitleBarShots(themes); else Log("FATAL no ThemeService"); return Finish(); }
         if (ChatRefOnly) { await ChatRefShots(themes); return Finish(); }

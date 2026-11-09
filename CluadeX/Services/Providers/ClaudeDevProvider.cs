@@ -596,7 +596,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         if (ReportedCliVersion == null && !_versionProbed) { _versionProbed = true; await ProbeCliVersionAsync(ct); }
         bool allLevels = CliTakesAllLevels(ReportedCliVersion);
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
-            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
+            CodeCommentPolicy.ForAgent(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
             extras?.DesktopRefusal, Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, cli: true),
             noProject: !_fileSystemService.HasWorkingDirectory);
         // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.

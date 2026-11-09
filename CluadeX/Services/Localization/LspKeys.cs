@@ -101,7 +101,7 @@ internal static class LspKeys
         ["search.toChatMore"] = new() { ["en"] = "… and {0} more", ["th"] = "… และอีก {0} รายการ" },
         // What the AI changed (CodeEditorView.AiChanges.cs)
         ["ai.changes"] = new() { ["en"] = "AI changed {0}", ["th"] = "AI แก้ {0} จุด" },
-        ["ai.changesTip"] = new() { ["en"] = "Places the AI's last turn changed in this file. Click (or Alt+F5) for the next one, Shift+Alt+F5 for the previous.", ["th"] = "จุดที่ AI แก้ในไฟล์นี้ในเทิร์นล่าสุด คลิก (หรือ Alt+F5) ไปจุดถัดไป Shift+Alt+F5 ไปจุดก่อนหน้า" },
+        ["ai.changesTip"] = new() { ["en"] = "Places the AI changed in this file in this chat (green added, blue changed, red deleted). Click (or Alt+F5) for the next one, Shift+Alt+F5 for the previous.", ["th"] = "จุดที่ AI แก้ในไฟล์นี้ในแชตนี้ (เขียว = เพิ่ม ฟ้า = แก้ แดง = ลบ) คลิก (หรือ Alt+F5) ไปจุดถัดไป Shift+Alt+F5 ไปจุดก่อนหน้า" },
         // {0} which change, {1} of how many, {2}/{3} its lines
         ["ai.peekTitle"] = new() { ["en"] = "AI change {0} of {1} · lines {2}–{3}", ["th"] = "AI แก้จุดที่ {0} จาก {1} · บรรทัด {2}–{3}" },
         ["ai.peekTitleRemoved"] = new() { ["en"] = "AI change {0} of {1} · lines deleted before line {2}", ["th"] = "AI แก้จุดที่ {0} จาก {1} · ลบบรรทัดก่อนบรรทัด {2}" },
@@ -111,12 +111,12 @@ internal static class LspKeys
         ["ai.next"] = new() { ["en"] = "Next change (Alt+F5)", ["th"] = "จุดถัดไป (Alt+F5)" },
         ["ai.close"] = new() { ["en"] = "Close", ["th"] = "ปิด" },
         ["ai.revert"] = new() { ["en"] = "Revert…", ["th"] = "ย้อนกลับ…" },
-        ["ai.revertTip"] = new() { ["en"] = "Put these lines back as they were before the AI's last turn", ["th"] = "คืนบรรทัดเหล่านี้เป็นแบบก่อน AI แก้ในเทิร์นล่าสุด" },
+        ["ai.revertTip"] = new() { ["en"] = "Put these lines back as they were before this chat changed them", ["th"] = "คืนบรรทัดเหล่านี้เป็นแบบก่อนที่แชตนี้แก้" },
         ["ai.revertTitle"] = new() { ["en"] = "Revert the AI's change", ["th"] = "ย้อนการแก้ของ AI" },
         ["ai.revertConfirm"] = new()
         {
-            ["en"] = "Put lines {0}–{1} back as they were before the AI's last turn?\n\nThis changes the text in the editor: Ctrl+Z undoes it, and the file is saved only when you save it.",
-            ["th"] = "คืนบรรทัด {0}–{1} เป็นแบบก่อน AI แก้ในเทิร์นล่าสุดหรือไม่?\n\nจะเปลี่ยนข้อความใน editor (กด Ctrl+Z เพื่อยกเลิกได้) และไฟล์จะถูกบันทึกเมื่อคุณกดบันทึกเท่านั้น",
+            ["en"] = "Put lines {0}–{1} back as they were before this chat changed them?\n\nThis changes the text in the editor: Ctrl+Z undoes it, and the file is saved only when you save it.",
+            ["th"] = "คืนบรรทัด {0}–{1} เป็นแบบก่อนที่แชตนี้แก้หรือไม่?\n\nจะเปลี่ยนข้อความใน editor (กด Ctrl+Z เพื่อยกเลิกได้) และไฟล์จะถูกบันทึกเมื่อคุณกดบันทึกเท่านั้น",
         },
         ["ai.revertConfirmRemoved"] = new()
         {

@@ -9,13 +9,16 @@ using ICSharpCode.AvalonEdit.Rendering;
 namespace CluadeX.Views.Editor;
 
 /// <summary>
-/// A thin bar left of the code on the lines the AI added (green) or changed (blue), and a red wedge where it deleted
-/// lines — as in VS Code's change gutter, but against the file before the AI's last turn rather than git. Clicking a
-/// mark raises <see cref="HunkClicked"/> (the editor opens the before/after peek there).
+/// A bar left of the code on the lines the AI added (green) or changed (blue), a red wedge where it deleted lines, and
+/// the lines the user edited by hand in their own colour (orange) — as in VS Code's change gutter, but against the file
+/// before this chat touched it rather than git. Colours are theme tokens (Editor.Change.*), so every theme, light or
+/// dark, picks its own. Each run of lines is one rounded pill with a sheen (the user's with a pin head, so they read by
+/// shape too); new marks grow in and the one you land on flashes (<see cref="ChangeMarkFx"/>). Clicking a mark raises
+/// <see cref="HunkClicked"/> (the editor opens the before/after peek there).
 /// </summary>
 public sealed class AiChangeMargin : AbstractMargin
 {
-    private const double BarWidth = 3, Width = 6;
+    private const double BarWidth = 4, Width = 8;
     private IReadOnlyList<AiChangeHunk> _hunks = Array.Empty<AiChangeHunk>();
 
     public event Action<AiChangeHunk>? HunkClicked;
@@ -31,12 +34,21 @@ public sealed class AiChangeMargin : AbstractMargin
         InvalidateVisual();
     }
 
-    public static Brush BrushFor(AiChangeKind kind) => kind switch
-    {
-        AiChangeKind.Added => ThemeService.BrushOf("Status.Success", Brushes.SeaGreen),
-        AiChangeKind.Modified => ThemeService.BrushOf("Status.Info", Brushes.SteelBlue),
-        _ => ThemeService.BrushOf("Status.Danger", Brushes.IndianRed),
-    };
+    public static Brush BrushFor(AiChangeKind kind, bool byUser = false) => byUser
+        ? ThemeService.BrushOf("Editor.Change.User", Brushes.DarkOrange)
+        : kind switch
+        {
+            AiChangeKind.Added => ThemeService.BrushOf("Editor.Change.Added", Brushes.SeaGreen),
+            AiChangeKind.Modified => ThemeService.BrushOf("Editor.Change.Modified", Brushes.SteelBlue),
+            _ => ThemeService.BrushOf("Editor.Change.Removed", Brushes.IndianRed),
+        };
+
+    /// <summary>The background of a changed line (null for a deleted-lines mark: it has no line).</summary>
+    public static Brush? TintFor(AiChangeHunk h) => h.LineCount == 0 ? null : h.ByUser
+        ? ThemeService.BrushOf("Editor.Change.User.Tint", null)
+        : h.Kind == AiChangeKind.Added
+            ? ThemeService.BrushOf("Editor.Change.Added.Tint", null)
+            : ThemeService.BrushOf("Editor.Change.Modified.Tint", null);
 
     protected override Size MeasureOverride(Size availableSize) => new(_hunks.Count > 0 ? Width : 0, 0);
 
@@ -50,43 +62,47 @@ public sealed class AiChangeMargin : AbstractMargin
 
     private void OnVisualLinesChanged(object? sender, EventArgs e) => InvalidateVisual();
 
+    /// <summary>The motion (shared with the line renderer).</summary>
+    public ChangeMarkFx? Fx { get; set; }
+
     protected override void OnRender(DrawingContext dc)
     {
         // Transparent fill: the whole strip takes clicks, not only the painted bars.
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize));
         var view = TextView;
-        if (view == null || !view.VisualLinesValid || _hunks.Count == 0) return;
-        var lines = view.VisualLines;
-        if (lines.Count == 0) return;
-        int first = lines[0].FirstDocumentLine.LineNumber, last = lines[^1].LastDocumentLine.LineNumber;
-        int docLines = view.Document?.LineCount ?? last;
-        var visible = _hunks.Where(h => h.EndLine >= first - 1 && h.StartLine <= last + 1).ToList();
-        if (visible.Count == 0) return;
-        foreach (var vl in lines)
+        if (view == null || !view.VisualLinesValid || _hunks.Count == 0 || view.VisualLines.Count == 0) return;
+        foreach (var span in ChangeLineRenderer.Spans(view, _hunks))
         {
-            int line = vl.FirstDocumentLine.LineNumber;
-            double top = vl.VisualTop - view.VerticalOffset, height = vl.Height;
-            foreach (var h in visible)
-            {
-                if (h.LineCount > 0 && line >= h.StartLine && line <= h.EndLine)
-                    dc.DrawRectangle(BrushFor(h.Kind), null, new Rect(1, top, BarWidth, height));
-                else if (h.LineCount == 0 && (h.StartLine == line || h.StartLine > docLines && line == docLines))
-                    DrawWedge(dc, h.StartLine == line ? top : top + height);
-            }
+            var h = span.Hunk;
+            double p = Fx?.Appear(h) ?? 1, flash = Fx?.Flash(h) ?? 0;
+            var c = ChangeMarkPaint.ColorFor(h.Kind, h.ByUser);
+            if (h.LineCount == 0) { DrawWedge(dc, span.Top, c, p * (1 + 0.35 * flash)); continue; }
+            // One pill per run of lines (not a bar per line): it grows from its middle as it appears, widens as it flashes.
+            double full = Math.Max(2, span.Bottom - span.Top - 2), height = full * p;
+            double mid = (span.Top + span.Bottom) / 2, w = BarWidth + 2 * flash;
+            var rect = new Rect(4 - w / 2, mid - height / 2, w, height);
+            if (flash > 0) dc.DrawRoundedRectangle(ChangeMarkPaint.Solid(ChangeMarkPaint.Alpha(c, 0.35 * flash)), null, Inflate(rect, 2), 4, 4);
+            dc.DrawRoundedRectangle(ChangeMarkPaint.Pill(c), null, rect, 2, 2);
+            // The user's own carry a pin head: told apart by shape as well as colour.
+            if (h.ByUser && p > 0.6) dc.DrawEllipse(ChangeMarkPaint.Solid(c), null, new Point(4, rect.Top + 2.5), 3 * p, 3 * p);
         }
     }
 
-    private static void DrawWedge(DrawingContext dc, double y)
+    private static Rect Inflate(Rect r, double by) { r.Inflate(by, by); return r; }
+
+    private static void DrawWedge(DrawingContext dc, double y, Color c, double scale)
     {
+        if (scale <= 0) return;
+        double half = 5 * scale, len = Width * Math.Min(1.2, scale);
         var g = new StreamGeometry();
-        using (var c = g.Open())
+        using (var ctx = g.Open())
         {
-            c.BeginFigure(new Point(0, y - 4), true, true);
-            c.LineTo(new Point(Width, y), true, false);
-            c.LineTo(new Point(0, y + 4), true, false);
+            ctx.BeginFigure(new Point(0, y - half), true, true);
+            ctx.LineTo(new Point(len, y), true, false);
+            ctx.LineTo(new Point(0, y + half), true, false);
         }
         g.Freeze();
-        dc.DrawGeometry(BrushFor(AiChangeKind.Removed), null, g);
+        dc.DrawGeometry(ChangeMarkPaint.Solid(c), null, g);
     }
 
     protected override HitTestResult HitTestCore(PointHitTestParameters hitTestParameters)

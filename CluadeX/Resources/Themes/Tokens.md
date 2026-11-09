@@ -376,6 +376,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\cluadex-bld\locked.ps1 E:
 | `Editor.Minimap.Hover` | brush | `#14FFFFFF` |
 | `Editor.Minimap.Caret` | brush | `#CCFFD37E` |
 | `Editor.Minimap.Change` | brush | `#E05CFFB0` |
+| `Editor.Change.Added` | brush | `#3FE08F` — gutter bar: lines the AI added in this chat |
+| `Editor.Change.Added.Tint` | brush | `#243FE08F` — the same lines' background |
+| `Editor.Change.Modified` | brush | `#5C9DFF` — gutter bar: lines the AI changed |
+| `Editor.Change.Modified.Tint` | brush | `#245C9DFF` |
+| `Editor.Change.Removed` | brush | `#FF5F6D` — the deleted-lines wedge and rule |
+| `Editor.Change.User` | brush | `#FFA53D` — gutter bar: lines the user edited by hand |
+| `Editor.Change.User.Tint` | brush | `#2BFFA53D` |
 | `Editor.Breakpoint` | brush | `#FF5370` |
 | `Editor.Breakpoint.Halo` | brush | `#55FF5370` |
 | `Editor.ExecutionLine` | brush | `#FFD37E` |
