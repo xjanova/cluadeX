@@ -135,6 +135,7 @@ internal static class Program
         }
         if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--voice")) { await VoiceWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--codex-sandbox")) { await CodexSandboxWire.Run(Check, Section); await CodexSandboxRepairWire.Run(Check, Section); return Finish(); }
 
         await Offline();
@@ -587,6 +588,7 @@ internal static class Program
         await OpenAIDevWire.Run(Check, Section);
         await CodexSandboxWire.Run(Check, Section);
         await CodexSandboxRepairWire.Run(Check, Section);
+        await VoiceWire.Run(Check, Section);
         await GrokDevWire.Run(Check, Section);
         await CliParityWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);

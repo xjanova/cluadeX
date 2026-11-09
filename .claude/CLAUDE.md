@@ -233,6 +233,17 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   after xAI's API card. Locked while the chat's run works. Proven by `tests/chattest` PK/PR/PF/PKS.
 - Girls (owner 2026-11-06): a GGUF is CluadeX's purple girl, Ollama stays มายด์, Antigravity has her own, Grok = Grok.
 
+## Replies read aloud — ElevenLabs, OpenAI, free voices (2026-11-09)
+- Settings › Voice (`Views/Settings/VoiceSettingsPanel.xaml` + `VoiceSettingsViewModel`, settings in `Models/VoiceSettings.cs`):
+  browser (free, mic window only), Windows (free, offline System.Speech), ElevenLabs (own key, DPAPI like the others),
+  OpenAI (reuses the OpenAI provider's key). ElevenLabs controls follow what the chosen model reports (style, speaker boost,
+  v3's three stabilities, Thai or not); voice cloning needs the consent tick.
+- Each girl reads her own reply in her own mood (`Services/Voice/Tts/VoicePersona.cs`) and can have her own voice per engine.
+  Audio plays in the mic window when it is open (`/audio` on ChromeDictationService), else in the app (`VoicePlayer`).
+- The app's ComboBox template ignores DisplayMemberPath in the closed box: give records `ToString() => Label`.
+- Proven offline by `tests/apitest --voice` (stand-in ElevenLabs/OpenAI server) and `tests/voicetest` (renders the panel
+  per engine to PNGs). **No live ElevenLabs/OpenAI call yet** — set ELEVENLABS_API_KEY for apitest's live check.
+
 ## A CLI agent in a chat with no project (2026-11-06)
 - A CLI agent (Codex, Gemini Dev, Antigravity, Claude Dev, Grok Dev) gets its sandbox from `DecideWorkerGrant`: no folder,
   or a folder with no write Allow rule and Accept edits off = read-only (it cannot ask before each write). Codex answered
