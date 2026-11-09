@@ -409,7 +409,24 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
 
         string shownModel = !string.IsNullOrWhiteSpace(model) && model is not ("default" or "auto") ? model : "";
         LiveModelReport.Sent(AiProviderType.OpenAIDev, shownModel, effort, true);
-        var translator = new CodexStreamTranslator(cwd, ReadForDiff);
+        // A .git that Codex's sandbox account owns (a `git init` run inside the sandbox) stops the sandbox from starting
+        // in that folder, every command, every turn: rebuilt here before the turn, and again if a command shows it mid-turn.
+        var writeRoots = new List<string?> { cwd };
+        writeRoots.AddRange(addDirs);
+        string? preflight = null;
+        foreach (var o in CodexSandboxRepair.RepairRoots(writeRoots))
+        {
+            var loc = LocalizedResources.Instance;
+            string note = o.Repaired ? string.Format(loc["codex.sandbox.preflight"], o.Path) : string.Format(loc["codex.sandbox.repairFailed"], o.Path, o.Error);
+            preflight = preflight == null ? note : preflight + "\n" + note;
+        }
+        var translator = new CodexStreamTranslator(cwd, ReadForDiff,
+            setupFailed => CodexSandboxRepair.NoteAfterFailure(writeRoots, setupFailed));
+        if (preflight != null)
+        {
+            if (sink != null) foreach (var noticeLine in translator.Notice("⚠ " + preflight)) { try { sink(noticeLine); } catch { } }
+            else yield return "⚠ " + preflight + "\n\n";
+        }
         SetStatus("OpenAI Dev thinking…");
         Process? proc = null;
         try
@@ -631,11 +648,31 @@ public sealed class CodexStreamTranslator
     private int _message = 1;
     private bool _afterTools;
     private string? _lastError;
+    private readonly Func<bool, string?>? _afterFailure;
 
-    public CodexStreamTranslator(string cwd, Func<string, string?>? read = null)
+    /// <param name="afterFailure">Called for a failed command, edit or MCP call with "did the sandbox fail to start?";
+    /// what it returns (CodexSandboxRepair's note, after it repaired what stopped the sandbox) is added to the row.</param>
+    public CodexStreamTranslator(string cwd, Func<string, string?>? read = null, Func<bool, string?>? afterFailure = null)
     {
         _cwd = cwd;
         _read = read ?? (_ => null);
+        _afterFailure = afterFailure;
+    }
+
+    /// <summary>A line of CluadeX's own in the chat (not the model's words): an assistant text block.</summary>
+    public List<string> Notice(string text)
+    {
+        var output = new List<string>();
+        Assistant(output, new JsonObject { ["type"] = "text", ["text"] = text });
+        return output;
+    }
+
+    /// <summary>The repair note for a failed row, or null. A throwing callback never breaks the stream.</summary>
+    private string? AfterFailure(bool setupFailed)
+    {
+        if (_afterFailure == null) return null;
+        try { return _afterFailure(setupFailed); }
+        catch { return null; }
     }
 
     public bool ResultIsError { get; private set; }
@@ -753,6 +790,9 @@ public sealed class CodexStreamTranslator
                 // takes 68 DPAPI / AppData / WMI failures for broken code (BrainX chat, 2026-11-09).
                 if (commandFailed && CodexSandbox.Notice(commandOutput, _cwd) is { } sandboxNote)
                     commandOutput = commandOutput.TrimEnd() + "\n\n⚠ " + sandboxNote;
+                // The sandbox could not start at all (XSurLab chat, 2026-11-09): repair what stopped it, and say so.
+                if (commandFailed && AfterFailure(CodexSandboxRepair.LooksLikeSetupFailure(commandOutput)) is { } repairNote)
+                    commandOutput = commandOutput.TrimEnd() + "\n\n⚠ " + repairNote;
                 Result(id, output, commandOutput, failed: commandFailed);
                 return;
             case "file_change":
@@ -766,6 +806,8 @@ public sealed class CodexStreamTranslator
                 if (!_started.Contains(id)) Start(id, output, name, input);
                 bool failed = Str(item, "status") == "failed" || item["error"] is JsonObject;
                 string body = failed ? McpFailureText(item, name) : McpResultText(item["result"]);
+                if (failed && CodexSandboxRepair.LooksLikeSetupFailure(body) && AfterFailure(true) is { } mcpNote)
+                    body = body.TrimEnd() + "\n\n⚠ " + mcpNote;
                 Result(id, output, body, failed);
                 return;
             }
@@ -817,6 +859,9 @@ public sealed class CodexStreamTranslator
         }
         _before.Remove(id, out var before);
         bool failed = Str(item, "status") == "failed";
+        // An edit carries no reason; when it failed, a sandbox-owned .git is looked for (a cheap owner check).
+        string failedText = "The change was not applied";
+        if (failed && changes.Count > 0 && AfterFailure(false) is { } editNote) failedText += "\n\n⚠ " + editNote;
         int n = 0;
         foreach (var (path, kind) in changes)
         {
@@ -830,7 +875,7 @@ public sealed class CodexStreamTranslator
             string? after = failed ? null : _read(path);
             string? original = before != null && before.TryGetValue(path, out var b) ? b : (kind == "add" ? "" : null);
             Start(callId, output, "Write", new JsonObject { ["file_path"] = path, ["content"] = after ?? "" });
-            Result(callId, output, failed ? "The change was not applied" : "", failed,
+            Result(callId, output, failed ? failedText : "", failed,
                 original != null && after != null ? new JsonObject { ["originalFile"] = original } : null);
         }
     }

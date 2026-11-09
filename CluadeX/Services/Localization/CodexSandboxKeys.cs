@@ -14,6 +14,26 @@ internal static class CodexSandboxKeys
         ["codex.sandbox.why.dpapi"] = new() { ["en"] = "it cannot use your DPAPI keys", ["th"] = "ใช้กุญแจ DPAPI ของคุณไม่ได้" },
         ["codex.sandbox.why.profile"] = new() { ["en"] = "it cannot write to your user profile", ["th"] = "เขียนโฟลเดอร์โปรไฟล์ของคุณไม่ได้" },
         ["codex.sandbox.why.wmi"] = new() { ["en"] = "it cannot start processes through WMI", ["th"] = "สร้างโปรเซสผ่าน WMI ไม่ได้" },
+        ["codex.sandbox.repaired"] = new()
+        {
+            ["en"] = "CluadeX: Codex's sandbox could not start because {0} belonged to the sandbox's own account (a git init run inside the sandbox does that). CluadeX rebuilt it as yours; the next command will run.",
+            ["th"] = "CluadeX: sandbox ของ Codex เริ่มไม่ได้ เพราะ {0} เป็นของบัญชี sandbox เอง (เกิดจาก git init ที่รันใน sandbox) CluadeX สร้างใหม่ให้เป็นของคุณแล้ว คำสั่งถัดไปจะรันได้",
+        },
+        ["codex.sandbox.repairFailed"] = new()
+        {
+            ["en"] = "CluadeX: Codex's sandbox cannot start because {0} belongs to the sandbox's own account, and CluadeX could not rebuild it ({1}). Close what uses that folder and send the message again, or delete {0} and run git init yourself.",
+            ["th"] = "CluadeX: sandbox ของ Codex เริ่มไม่ได้ เพราะ {0} เป็นของบัญชี sandbox และ CluadeX สร้างใหม่ไม่สำเร็จ ({1}) ปิดโปรแกรมที่ใช้โฟลเดอร์นั้นแล้วส่งข้อความอีกครั้ง หรือลบ {0} แล้ว git init เอง",
+        },
+        ["codex.sandbox.setupFailed"] = new()
+        {
+            ["en"] = "CluadeX: Codex's sandbox could not start (\"setup refresh had errors\"), so nothing ran. The reason is in ~/.codex/.sandbox/sandbox.<date>.log.",
+            ["th"] = "CluadeX: sandbox ของ Codex เริ่มไม่ได้ (\"setup refresh had errors\") จึงไม่มีคำสั่งไหนได้รัน ดูสาเหตุได้ใน ~/.codex/.sandbox/sandbox.<วันที่>.log",
+        },
+        ["codex.sandbox.preflight"] = new()
+        {
+            ["en"] = "CluadeX rebuilt {0} before this turn: it belonged to Codex's sandbox account, which stops the sandbox from starting.",
+            ["th"] = "ก่อนเริ่มเทิร์นนี้ CluadeX สร้าง {0} ใหม่ให้เป็นของคุณ เพราะมันเป็นของบัญชี sandbox ของ Codex ซึ่งทำให้ sandbox เริ่มไม่ได้",
+        },
         ["codex.mcp.failedNoMessage"] = new()
         {
             ["en"] = "The {0} tool reported a failure without a message.",
