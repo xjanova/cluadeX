@@ -162,13 +162,13 @@ public partial class App : Application
         if (dbg != null) CluadeX.Services.Safety.SafeDelete.Log = m => dbg.Warn("Safety", m);   // every refused delete is visible
 
         // ─── First-run setup wizard (installer contract 2.x) ───
-        // Shown on a fresh install only — no settings file before this launch, or Velopack's first-run hook — or when
-        // started with --setup. An install that already existed before the wizard did is marked done silently, so an
-        // update never shows it. The startup license work waits for the wizard (its sign-in / quick path decides the
-        // license, and the automatic trial must not race it).
+        // Shown on a fresh install only — no settings file before this launch, or Velopack's first-run hook (also when an
+        // uninstall kept the settings: the reinstall still opens the wizard, pre-filled from them) — or when started with
+        // --setup. An update never fires the first-run hook, so it never shows it (SetupWizardGate). The startup license
+        // work waits for the wizard (its sign-in / quick path decides the license, and the automatic trial must not race it).
         var setupSettings = _serviceProvider.GetRequiredService<SettingsService>();
         bool forceSetup = Environment.GetCommandLineArgs().Skip(1).Any(a => string.Equals(a, "--setup", StringComparison.OrdinalIgnoreCase));
-        bool freshInstall = !setupSettings.Settings.SetupWizardCompleted && (setupSettings.NoSettingsBeforeLaunch || Program.VelopackFirstRun);
+        bool freshInstall = Services.Setup.SetupWizardGate.FreshInstall(setupSettings.Settings.SetupWizardCompleted, setupSettings.NoSettingsBeforeLaunch, Program.VelopackFirstRun);
         bool showSetup = forceSetup || freshInstall;
         if (!showSetup && !setupSettings.Settings.SetupWizardCompleted)
             setupSettings.UpdateSettings(s => s.SetupWizardCompleted = true);

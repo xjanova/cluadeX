@@ -30,6 +30,24 @@ public static class SafeDelete
     }
 
     /// <summary>
+    /// The uninstaller's rule, stricter than none and looser than <see cref="Check"/> in one place only: something
+    /// STRICTLY inside <paramref name="ownedRoot"/> may go even when the owned root is itself protected (~/.cluadex,
+    /// %TEMP%), as long as the target is not protected, holds no protected folder, and the owned root's contents are not
+    /// protected (<see cref="ProtectedPaths.WhyContentsProtected"/>: never a drive root, never the profile). The owned
+    /// root itself is judged exactly as <see cref="Check"/> does. Null = may be deleted.
+    /// </summary>
+    public static string? CheckInside(string? path, string? ownedRoot)
+    {
+        if (ProtectedPaths.WhyProtected(path) is { } why) return why;
+        if (string.IsNullOrWhiteSpace(ownedRoot)) return "no owning folder given";
+        if (!ProtectedPaths.IsInside(path!, ownedRoot)) return $"{path} is outside {ownedRoot}";
+        bool isRoot = string.Equals(ProtectedPaths.Normalize(path!), ProtectedPaths.Normalize(ownedRoot), StringComparison.OrdinalIgnoreCase);
+        if (isRoot) return ProtectedPaths.WhyProtected(ownedRoot) is { } rootWhy ? "the owning folder is protected: " + rootWhy : null;
+        if (ProtectedPaths.WhyProtected(ownedRoot) == null) return null;
+        return ProtectedPaths.WhyContentsProtected(ownedRoot) is { } inner ? "the owning folder's contents are protected: " + inner : null;
+    }
+
+    /// <summary>
     /// Delete <paramref name="path"/> (recursively) — only when it lies inside <paramref name="ownedRoot"/>, a folder the
     /// caller created or owns (its temp folder, its plugins folder). Returns false when the folder is already gone.
     /// Throws <see cref="UnsafeDeleteException"/> instead of deleting anything protected or outside.

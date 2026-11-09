@@ -82,7 +82,7 @@ public static class ProtectedPaths
         if (full.StartsWith(@"\\", StringComparison.Ordinal) && full.Count(c => c == '\\') <= 4)
             return $"{full} is a network share root";
 
-        foreach (var p in Roots.Value)
+        foreach (var p in AllRoots())
         {
             if (string.Equals(full, p, StringComparison.OrdinalIgnoreCase))
                 return $"{full} is a protected folder";
@@ -91,6 +91,54 @@ public static class ProtectedPaths
         }
         return null;
     }
+
+    /// <summary>
+    /// Why the CONTENTS of <paramref name="root"/> may not be emptied even though <paramref name="root"/> is protected
+    /// itself, or null when they may. A protected folder that is a leaf — CluadeX's own ~/.cluadex, the temp folder — keeps
+    /// itself, but what CluadeX put inside it is CluadeX's to remove. Refused: a drive root or share root, and any folder
+    /// that has another protected folder under it (the profile: emptying it would reach .ssh, Documents …).
+    /// </summary>
+    public static string? WhyContentsProtected(string? root)
+    {
+        if (string.IsNullOrWhiteSpace(root)) return "empty path";
+        string full;
+        try { full = Normalize(root); }
+        catch { return "unresolvable path"; }
+
+        string drive = Path.GetPathRoot(full) ?? "";
+        if (full.Length <= drive.Length || string.Equals(full, drive.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            return $"{full} is a drive root";
+        if (full.StartsWith(@"\\", StringComparison.Ordinal) && full.Count(c => c == '\\') <= 4)
+            return $"{full} is a network share root";
+        foreach (var p in AllRoots())
+            if (p.StartsWith(full + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return $"{full} contains the protected folder {p}";
+        return null;
+    }
+
+    // ─────────────── tests ───────────────
+
+    private static readonly List<string> TestRoots = new();
+
+    /// <summary>
+    /// Tests only: treat <paramref name="path"/> as protected until the result is disposed — so a throwaway folder can
+    /// stand in for ~/.cluadex or %TEMP%. It can only ADD protection, never remove any.
+    /// </summary>
+    public static IDisposable ProtectForTest(string path)
+    {
+        string n = Normalize(path);
+        lock (TestRoots) TestRoots.Add(n);
+        return new Release(() => { lock (TestRoots) TestRoots.Remove(n); });
+    }
+
+    private static IEnumerable<string> AllRoots()
+    {
+        List<string> extra;
+        lock (TestRoots) extra = TestRoots.Count == 0 ? null! : TestRoots.ToList();
+        return extra == null ? Roots.Value : Roots.Value.Concat(extra);
+    }
+
+    private sealed class Release(Action a) : IDisposable { public void Dispose() => a(); }
 
     /// <summary>True when <paramref name="path"/> is <paramref name="root"/> itself or inside it.</summary>
     public static bool IsInside(string path, string root)

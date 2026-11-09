@@ -298,6 +298,7 @@ public sealed class UninstallViewModel : ViewModelBase
                 await RunStep(step, () => { long freed = cleaner.DeleteCustom(c); return Freed(freed, cleaner, step); }, ex => ex.Message);
             await RunStep(links, () =>
             {
+                cleaner.ResetSetupWizard();   // kept settings: a reinstall still opens the setup wizard
                 int n = cleaner.RemoveLinks();
                 cleaner.RemoveDataRootIfEmpty();
                 return n > 0 ? _loc.T("un.prog.linksDone", n) : _loc.T("un.prog.linksNone");
