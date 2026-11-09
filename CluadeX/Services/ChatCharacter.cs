@@ -144,6 +144,9 @@ public sealed class ChatCharacter
     public static readonly ChatCharacter Azure = new("azure", "Azure", Color.FromRgb(0x00, 0x78, 0xD4), 0.48, 0.105);
     public static readonly ChatCharacter LMStudio = new("lmstudio", "LM Studio", Color.FromRgb(0x4F, 0x46, 0xE5), 0.51, 0.110);
     public static readonly ChatCharacter Vllm = new("vllm", "vLLM", Color.FromRgb(0xF7, 0xB5, 0x00), 0.61, 0.150);
+    /// <summary>The voice girl (Settings › Voice, ElevenLabs — owner 2026-11-09): a voice actress with a split black /
+    /// platinum bob, studio headphones and a silver mic. Not a chat provider; she presents the voice settings.</summary>
+    public static readonly ChatCharacter ElevenLabs = new("elevenlabs", "ElevenLabs", Color.FromRgb(0xCE, 0xBF, 0xC1), 0.34, 0.095);
 
     /// <summary>The girls with a picture of their own — what a "pick a girl" list shows (stand-ins would repeat CluadeX's).</summary>
     public static IReadOnlyList<ChatCharacter> All => _all ??= Everyone.Where(c => c.HasOwnArt).ToList();
@@ -152,7 +155,7 @@ public sealed class ChatCharacter
     /// <summary>Every provider's girl, stand-ins included (for a picture-sheet of who is drawn and who still waits).</summary>
     public static IReadOnlyList<ChatCharacter> Everyone { get; } = [Claude, Codex, Gemini, Grok, Mind, BrainX, CluadeX, Antigravity,
         Colibri, OpenRouter, Groq, DeepSeek, Mistral, Together, Fireworks, Cerebras, DeepInfra, HuggingFace, Novita, SambaNova,
-        Nebius, Qwen, Kimi, Glm, Azure, LMStudio, Vllm];
+        Nebius, Qwen, Kimi, Glm, Azure, LMStudio, Vllm, ElevenLabs];
 
     /// <summary>The girl who answers for a provider — the same girls AgentPersona gives the voices to.</summary>
     public static ChatCharacter ForProvider(AiProviderType provider) => provider switch

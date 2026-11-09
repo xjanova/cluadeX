@@ -233,6 +233,17 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   after xAI's API card. Locked while the chat's run works. Proven by `tests/chattest` PK/PR/PF/PKS.
 - Girls (owner 2026-11-06): a GGUF is CluadeX's purple girl, Ollama stays มายด์, Antigravity has her own, Grok = Grok.
 
+## Replies read aloud — ElevenLabs, OpenAI, free voices (2026-11-09)
+- Settings › Voice (`Views/Settings/VoiceSettingsPanel.xaml` + `VoiceSettingsViewModel`, settings in `Models/VoiceSettings.cs`):
+  browser (free, mic window only), Windows (free, offline System.Speech), ElevenLabs (own key, DPAPI like the others),
+  OpenAI (reuses the OpenAI provider's key). ElevenLabs controls follow what the chosen model reports (style, speaker boost,
+  v3's three stabilities, Thai or not); voice cloning needs the consent tick.
+- Each girl reads her own reply in her own mood (`Services/Voice/Tts/VoicePersona.cs`) and can have her own voice per engine.
+  Audio plays in the mic window when it is open (`/audio` on ChromeDictationService), else in the app (`VoicePlayer`).
+- The app's ComboBox template ignores DisplayMemberPath in the closed box: give records `ToString() => Label`.
+- Proven offline by `tests/apitest --voice` (stand-in ElevenLabs/OpenAI server) and `tests/voicetest` (renders the panel
+  per engine to PNGs). **No live ElevenLabs/OpenAI call yet** — set ELEVENLABS_API_KEY for apitest's live check.
+
 ## A CLI agent in a chat with no project (2026-11-06)
 - A CLI agent (Codex, Gemini Dev, Antigravity, Claude Dev, Grok Dev) gets its sandbox from `DecideWorkerGrant`: no folder,
   or a folder with no write Allow rule and Accept edits off = read-only (it cannot ask before each write). Codex answered
@@ -247,6 +258,20 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   new_chat, close_chat, update_plan, wrap_up); Codex now gets `CliAgentPolicy.PromptLine` (it has no spawn hook).
 - Proven by `tests/chattest` COP0–COP4 (`CHATTEST_ONLY=COP`, scripted CLI through the real chat page) and safetytest's
   Antigravity card checks. Not yet tried with a real Codex turn.
+
+## Codex's Windows sandbox — what CluadeX repairs (2026-11-09)
+- Codex gives a folder two write SIDs (`~/.codex/cap_sid`): `workspace_by_cwd` for runs whose cwd it is (shell commands) and
+  `writable_root_by_path` for runs that have it as a writable root — the file-edit helper (`codex --codex-run-as-fs-helper`)
+  starts at the drive root, so its edits use the second. The setup step grants each SID on the root when it is first used and
+  cannot re-stamp anything the sandbox account owns. A folder the sandbox made before the second SID existed keeps only
+  the first: edits in it fail ("write file … failed"), shell writes work. XSurLab, 2026-11-09: src/tests/design/docs/scripts.
+- `CodexSandboxRepair` rebuilds (copy as the user, swap, delete) a sandbox-owned `.git`, and every sandbox-owned file or
+  folder missing one of the root's inherited grants (`StaleEntries`). Before a turn: folders + root files, skipped when the
+  root's grants are unchanged since the last walk; after a failed edit/command: every file, 10 s budget. Package caches and
+  build output are never walked; a tree over 20,000 files / 1 GB or written while copying is left as it was.
+- Proven by `tests/apitest --codex-sandbox` (offline with real ACLs + live `codex sandbox` reproducing the gap and the fix).
+  `apitest --repair-sandbox <dir> [--dry]` runs the same repair on a real folder.
+- Python edits on Windows: open with `newline=''` (else LF files come back CRLF) and keep the BOM.
 
 ## CLI parity — what Claude Dev gets, every CLI gets (2026-11-06, audit = brain note 77faca9ac76d)
 - `ChatToolBridge.ChatToolsHint(CliToolNames, splitChats, plan)` names new_chat / close_chat, wrap_up, every

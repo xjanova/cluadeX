@@ -4,6 +4,8 @@
 // .git as the user's, before a turn and as soon as a failed row shows it. The live part runs the real `codex sandbox`.
 using System.Diagnostics;
 using System.IO;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 using CluadeX.Models;
 using CluadeX.Services;
@@ -112,6 +114,96 @@ internal static class CodexSandboxRepairWire
         }
         finally { ForceDelete(tmp); }
 
+        // ─── a work folder the sandbox made before its second write SID reached the root (XSurLab, 2026-11-09 evening) ───
+        string stale = Path.Combine(Path.GetTempPath(), "cx-stale-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            const string X = "S-1-5-21-1111-2222-3333-4444";
+            Directory.CreateDirectory(Path.Combine(stale, "src", "inner"));
+            Directory.CreateDirectory(Path.Combine(stale, "docs"));
+            Directory.CreateDirectory(Path.Combine(stale, "node_modules", "pkg"));
+            Directory.CreateDirectory(Path.Combine(stale, ".git"));
+            File.WriteAllText(Path.Combine(stale, "src", "inner", "a.cs"), "class A {}");
+            File.WriteAllText(Path.Combine(stale, "old.txt"), "old");
+            File.WriteAllText(Path.Combine(stale, "new.txt"), "new");
+            // The root hands down X, as Codex's setup step does with a write SID.
+            var di = new DirectoryInfo(stale);
+            var sec = di.GetAccessControl();
+            sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(X), FileSystemRights.Modify,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+            di.SetAccessControl(sec);
+            check("cx-folder", "the root's inherited grants are read, for folders and for files",
+                CodexSandboxRepair.InheritedGrants(stale, false).Contains(X) && CodexSandboxRepair.InheritedGrants(stale, true).Contains(X), "");
+
+            string N(string p) => Path.GetRelativePath(stale, p).Replace('\\', '/');
+            // The harness's world: src, src/inner, old.txt, node_modules/pkg and .git are the sandbox's and miss X; docs is
+            // the sandbox's but has X; new.txt is the user's.
+            var sandboxOwned = new HashSet<string> { "src", "src/inner", "old.txt", "docs", "node_modules/pkg", ".git" };
+            var missing = new HashSet<string> { "src", "src/inner", "old.txt", "node_modules/pkg", ".git" };
+            string? Owner(string p) => sandboxOwned.Contains(N(p)) ? @"PC\CodexSandboxOnline" : @"PC\xman";
+            HashSet<string>? Grants(string p) => missing.Contains(N(p)) ? new() { "S-1-1-0" } : new() { X, "S-1-1-0" };
+            HashSet<string> Root(string r, bool files) => new() { X };
+            var found = CodexSandboxRepair.StaleEntries(stale, Owner, Root, Grants).Select(N).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            check("cx-folder", "stale: the highest sandbox-owned folder and file missing the root's grant — not what is below, not .git, not inside a package cache, not one that has it, not the user's",
+                found.SequenceEqual(new[] { "old.txt", "src" }), string.Join(",", found));
+            File.WriteAllText(Path.Combine(stale, "docs", "deep.txt"), "deep");
+            sandboxOwned.Add("docs/deep.txt");
+            missing.Add("docs/deep.txt");
+            var quick = CodexSandboxRepair.StaleEntries(stale, Owner, Root, Grants, allFiles: false).Select(N).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            var full = CodexSandboxRepair.StaleEntries(stale, Owner, Root, Grants).Select(N).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            check("cx-folder", "the quick look (before a turn) skips files below the root; the full one (after a failure) finds them",
+                quick.SequenceEqual(new[] { "old.txt", "src" }) && full.SequenceEqual(new[] { "docs/deep.txt", "old.txt", "src" }),
+                string.Join(",", quick) + " / " + string.Join(",", full));
+            File.Delete(Path.Combine(stale, "docs", "deep.txt"));
+            sandboxOwned.Remove("docs/deep.txt");
+            check("cx-folder", "a root that hands nothing down, or no root → nothing to check",
+                CodexSandboxRepair.StaleEntries(stale, Owner, (_, _) => new(), Grants).Count == 0
+                && CodexSandboxRepair.StaleEntries(Path.Combine(stale, "nope"), Owner, Root, Grants).Count == 0, "");
+            int looks = 0;
+            string? Counting(string p) { looks++; return @"PC\xman"; }
+            CodexSandboxRepair.RepairRoots(new[] { stale }, Counting, Root, Grants, beforeTurn: true);
+            int first = looks;
+            CodexSandboxRepair.RepairRoots(new[] { stale }, Counting, Root, Grants, beforeTurn: true);
+            int second = looks - first;
+            CodexSandboxRepair.RepairRoots(new[] { stale }, Counting, (_, _) => new() { X, "S-1-5-21-9-9-9-9" }, Grants, beforeTurn: true);
+            int third = looks - first - second;
+            CodexSandboxRepair.RepairRoots(new[] { stale }, Counting, (_, _) => new() { X, "S-1-5-21-9-9-9-9" }, Grants);
+            int fourth = looks - first - second - third;
+            check("cx-folder", "before a turn a root walked with the same grants is not walked again; a new grant on the root, or a failure, walks it again",
+                first > 2 && second <= 1 && third > 2 && fourth > 2, $"{first}/{second}/{third}/{fourth}");
+            check("cx-folder", "a folder whose ACL is protected (someone chose that) is left alone, and what is below it is still looked at",
+                CodexSandboxRepair.StaleEntries(stale, Owner, Root, p => N(p) == "src" ? null : Grants(p)).Select(N).OrderBy(x => x, StringComparer.Ordinal).SequenceEqual(new[] { "old.txt", "src/inner" }), "");
+
+            var outs = CodexSandboxRepair.RepairRoots(new[] { stale }, p => N(p) == ".git" ? @"PC\xman" : Owner(p), Root, Grants);
+            var beside = Directory.GetFileSystemEntries(stale).Select(p => Path.GetFileName(p)!).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            check("cx-folder", "both rebuilt as work entries (the note says folder): same content, nothing left beside them",
+                outs.Count == 2 && outs.All(o => o.Repaired && o.Folder && o.Error == null)
+                && File.ReadAllText(Path.Combine(stale, "src", "inner", "a.cs")) == "class A {}"
+                && File.ReadAllText(Path.Combine(stale, "old.txt")) == "old"
+                && beside.SequenceEqual(new[] { ".git", "docs", "new.txt", "node_modules", "old.txt", "src" }),
+                $"{string.Join("; ", outs)} · beside: {string.Join(",", beside)}");
+            check("cx-folder", "the rebuilt folder, its file and the rebuilt file now carry the root's grant",
+                CodexSandboxRepair.GrantsOf(Path.Combine(stale, "src"))?.Contains(X) == true
+                && CodexSandboxRepair.GrantsOf(Path.Combine(stale, "src", "inner", "a.cs"))?.Contains(X) == true
+                && CodexSandboxRepair.GrantsOf(Path.Combine(stale, "old.txt"))?.Contains(X) == true, "");
+            string? folderNote = CodexSandboxRepair.NoteAfterFailure(new[] { stale }, false,
+                p => N(p) == "docs" ? @"PC\CodexSandboxOnline" : @"PC\xman");
+            check("cx-folder", "with the real ACLs nothing is stale any more → no note", folderNote == null, folderNote ?? "");
+
+            // A turn still writing in the folder while it is copied: the original goes back, nothing is lost.
+            string busy = Path.Combine(stale, "busy");
+            Directory.CreateDirectory(busy);
+            File.WriteAllText(Path.Combine(busy, "w.txt"), "being written");
+            File.SetLastWriteTimeUtc(Path.Combine(busy, "w.txt"), DateTime.UtcNow.AddHours(1));
+            var raced = CodexSandboxRepair.Rebuild(busy, sizeLimit: true);
+            check("cx-folder", "a folder written while it was copied → put back as it was, the copy gone, the note says why",
+                !raced.Repaired && raced.Error?.Contains("changed while") == true
+                && File.ReadAllText(Path.Combine(busy, "w.txt")) == "being written"
+                && Directory.GetFileSystemEntries(stale).Count(e => Path.GetFileName(e).StartsWith("busy", StringComparison.Ordinal)) == 1,
+                raced.ToString());
+        }
+        finally { ForceDelete(stale); }
+
         // ─── live: the real sandbox, the real failure, the real repair ───
         string? codex = FindCodex();
         if (codex == null)
@@ -144,6 +236,35 @@ internal static class CodexSandboxRepairWire
                 status.Exit == 0 && !status.Output.Contains("dubious", StringComparison.OrdinalIgnoreCase), Cap(status.Output));
         }
         finally { ForceDelete(live); }
+
+        // ─── live: a folder the sandbox made as the cwd, written as a writable root (how Codex's edit helper sees it) ───
+        // Not under %TEMP%: Codex makes TEMP a writable root of every run, and that grant would hide the gap.
+        string id = Guid.NewGuid().ToString("N")[..8];
+        string home = Path.Combine(AppContext.BaseDirectory, "cx-sid-" + id);
+        string elsewhere = Path.Combine(AppContext.BaseDirectory, "cx-sid-other-" + id);
+        Directory.CreateDirectory(home);
+        Directory.CreateDirectory(elsewhere);
+        try
+        {
+            var made = await Sandboxed(codex, home, "cmd", "/c", "mkdir sub && echo one> sub\\a.txt");
+            string asRoot = "sandbox_workspace_write.writable_roots=['" + home + "']";
+            string target = Path.Combine(home, "sub", "b.txt");
+            var denied = await Run(codex, elsewhere, "sandbox", "-c", "sandbox_mode=\"workspace-write\"", "-c", asRoot, "--", "cmd", "/c", "echo two> " + target);
+            check("cx-folder-live", "the gap is real: a folder the sandbox made as the cwd cannot be written by a run that has it as a writable root",
+                made.Exit == 0 && denied.Exit != 0 && !File.Exists(target), $"mkdir exit {made.Exit} · write exit {denied.Exit} · {Cap(denied.Output)}");
+            var outs = CodexSandboxRepair.RepairRoots(new[] { home });
+            check("cx-folder-live", "the repair finds that folder and rebuilds it as the user's",
+                outs.Count == 1 && outs[0].Repaired && outs[0].Folder && Path.GetFileName(outs[0].Path) == "sub"
+                && !CodexSandboxRepair.IsSandboxAccount(CodexSandboxRepair.OwnerOf(Path.Combine(home, "sub")))
+                && File.ReadAllText(Path.Combine(home, "sub", "a.txt")).Trim() == "one", string.Join("; ", outs));
+            var works = await Run(codex, elsewhere, "sandbox", "-c", "sandbox_mode=\"workspace-write\"", "-c", asRoot, "--", "cmd", "/c", "echo two> " + target);
+            var asCwd = await Sandboxed(codex, home, "cmd", "/c", "echo three> sub\\c.txt");
+            check("cx-folder-live", "…after which both kinds of run write in it",
+                works.Exit == 0 && asCwd.Exit == 0 && File.Exists(target) && File.Exists(Path.Combine(home, "sub", "c.txt")),
+                $"root exit {works.Exit} · cwd exit {asCwd.Exit} · {Cap(works.Output + asCwd.Output)}");
+            check("cx-folder-live", "a second look finds nothing", CodexSandboxRepair.RepairRoots(new[] { home }).Count == 0, "");
+        }
+        finally { ForceDelete(home); ForceDelete(elsewhere); }
     }
 
     static string Cap(string s) => s.Length > 300 ? s[..300] + "…" : s.Trim();

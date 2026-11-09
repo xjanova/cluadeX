@@ -37,6 +37,7 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
     <PackageReference Include="Serilog" Version="4.1.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+    <PackageReference Include="System.Speech" Version="9.0.0" />
   </ItemGroup>
 
   <!-- portable.txt next to the exe => SettingsService uses <exe>\Data as its data root, so this

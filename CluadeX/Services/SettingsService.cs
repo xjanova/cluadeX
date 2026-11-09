@@ -44,6 +44,7 @@ public class SettingsService
     // written back unchanged unless the user enters a new key.
     private readonly Dictionary<string, string> _undecryptable = new(StringComparer.Ordinal);
     private const string HfTokenSecretId = "HuggingFaceToken";
+    private const string ElevenLabsSecretId = "Voice:ElevenLabs";
     private static string ProviderSecretId(string provider) => "Provider:" + provider;
 
     /// <summary>Keys stored on disk that could not be decrypted here ("HuggingFaceToken", "Provider:Anthropic", …).
@@ -61,6 +62,12 @@ public class SettingsService
             settings.HuggingFaceToken = EncryptString(settings.HuggingFaceToken);
         else if (string.IsNullOrEmpty(settings.HuggingFaceToken) && _undecryptable.TryGetValue(HfTokenSecretId, out var hfBlob))
             settings.HuggingFaceToken = hfBlob;
+
+        settings.Voice ??= new VoiceSettings();
+        if (!string.IsNullOrEmpty(settings.Voice.ElevenLabsApiKey) && !settings.Voice.ElevenLabsApiKey.StartsWith("ENC:"))
+            settings.Voice.ElevenLabsApiKey = EncryptString(settings.Voice.ElevenLabsApiKey);
+        else if (string.IsNullOrEmpty(settings.Voice.ElevenLabsApiKey) && _undecryptable.TryGetValue(ElevenLabsSecretId, out var elBlob))
+            settings.Voice.ElevenLabsApiKey = elBlob;
 
         foreach (var kvp in settings.ProviderConfigs)
         {
@@ -82,6 +89,14 @@ public class SettingsService
             if (failed) _undecryptable[HfTokenSecretId] = blob;
         }
 
+        settings.Voice ??= new VoiceSettings();
+        if (!string.IsNullOrEmpty(settings.Voice.ElevenLabsApiKey))
+        {
+            string blob = settings.Voice.ElevenLabsApiKey;
+            settings.Voice.ElevenLabsApiKey = DecryptString(blob, out bool failed);
+            if (failed) _undecryptable[ElevenLabsSecretId] = blob;
+        }
+
         foreach (var kvp in settings.ProviderConfigs)
         {
             if (string.IsNullOrEmpty(kvp.Value.ApiKey)) continue;
@@ -95,6 +110,7 @@ public class SettingsService
     private void ForgetReplacedSecrets()
     {
         if (!string.IsNullOrEmpty(_settings.HuggingFaceToken)) _undecryptable.Remove(HfTokenSecretId);
+        if (!string.IsNullOrEmpty(_settings.Voice?.ElevenLabsApiKey)) _undecryptable.Remove(ElevenLabsSecretId);
         foreach (var kvp in _settings.ProviderConfigs)
             if (!string.IsNullOrEmpty(kvp.Value.ApiKey)) _undecryptable.Remove(ProviderSecretId(kvp.Key));
     }

@@ -366,6 +366,8 @@ public class AppSettings
     public int VoiceLiveMaxMinutes { get; set; } = 10;
     /// <summary>GPT-Live's voice (fixed for a session). marin is the API's default.</summary>
     public string VoiceLiveVoice { get; set; } = "marin";
+    /// <summary>Settings › Voice: the engine that reads replies aloud, its key, model, voice and fine settings (VoiceSettings).</summary>
+    public VoiceSettings Voice { get; set; } = new();
 
     /// <summary>Background work nobody waits for (session-memory and instinct extraction) goes through the
     /// provider's batch API when it has one — Anthropic and OpenAI: half the price, the result lands within

@@ -414,10 +414,12 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         var writeRoots = new List<string?> { cwd };
         writeRoots.AddRange(addDirs);
         string? preflight = null;
-        foreach (var o in CodexSandboxRepair.RepairRoots(writeRoots))
+        foreach (var o in CodexSandboxRepair.RepairRoots(writeRoots, beforeTurn: true))
         {
             var loc = LocalizedResources.Instance;
-            string note = o.Repaired ? string.Format(loc["codex.sandbox.preflight"], o.Path) : string.Format(loc["codex.sandbox.repairFailed"], o.Path, o.Error);
+            string note = o.Repaired
+                ? string.Format(loc[o.Folder ? "codex.sandbox.folderPreflight" : "codex.sandbox.preflight"], o.Path)
+                : string.Format(loc[o.Folder ? "codex.sandbox.folderRepairFailed" : "codex.sandbox.repairFailed"], o.Path, o.Error);
             preflight = preflight == null ? note : preflight + "\n" + note;
         }
         var translator = new CodexStreamTranslator(cwd, ReadForDiff,
@@ -859,7 +861,8 @@ public sealed class CodexStreamTranslator
         }
         _before.Remove(id, out var before);
         bool failed = Str(item, "status") == "failed";
-        // An edit carries no reason; when it failed, a sandbox-owned .git is looked for (a cheap owner check).
+        // An edit carries no reason; when it failed, a sandbox-owned .git, or a folder missing the sandbox's write grant
+        // (XSurLab, 2026-11-09), is looked for and rebuilt.
         string failedText = "The change was not applied";
         if (failed && changes.Count > 0 && AfterFailure(false) is { } editNote) failedText += "\n\n⚠ " + editNote;
         int n = 0;
