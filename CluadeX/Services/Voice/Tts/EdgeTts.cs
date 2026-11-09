@@ -11,22 +11,53 @@ namespace CluadeX.Services.Voice.Tts;
 /// account, no key, natural Thai (th-TH-PremwadeeNeural, th-TH-NiwatNeural) — the free voice for a PC whose Windows
 /// has no Thai voice (most: System.Speech sees only David and Zira, and an English voice reads Thai as silence).
 /// <para>
-/// The service is the one Edge itself calls; what it expects follows the edge-tts project (rany2/edge-tts 7.3.1):
+/// The service is the one Edge itself calls; what it expects follows the edge-tts project (rany2/edge-tts):
 /// a WebSocket, a speech.config message, an SSML message, MP3 frames back until turn.end. Each request carries a
-/// Sec-MS-GEC token: SHA-256 of a hidden 57-byte salt and "&lt;Windows file time, 5-minute steps&gt;&lt;client token&gt;",
-/// plus a CS64 digest (version 2, from late 2026; version 1 now gets 403). Microsoft changes this now and then —
-/// when it breaks, compare with edge-tts' drm.py; the test vectors in tests/apitest/EdgeTtsWire.cs come from it.
+/// Sec-MS-GEC token. Microsoft changes this now and then — when it breaks, compare with edge-tts' drm.py and
+/// constants.py; the test vectors in tests/apitest/EdgeTtsWire.cs come from them.
 /// </para>
+/// <para>Two hosts (2026-11-10, measured with Thai replies):</para>
+/// <list type="bullet">
+/// <item>api.msedgeservices.com with token version 1 — SHA-256 of "&lt;Windows file time, 5-minute steps&gt;&lt;client
+/// token&gt;" (edge-tts 7.2.3). Speaks 2,000 Thai characters in one request in about 8 s. Tried first.</item>
+/// <item>speech.platform.bing.com with token version 2 — a hidden 57-byte salt plus a CS64 digest (edge-tts 7.3.1).
+/// It drops nearly every request over about 300 Thai characters ("closed without completing the close handshake",
+/// edge-tts 7.3.1 itself gets "No audio was received") and one short one in three. That is why the replies were
+/// silent: a finished reply is longer than that. Only a fallback now.</item>
+/// </list>
+/// <para>A text is sent in pieces of at most <see cref="MaxPieceBytes"/> (edge-tts splits at 4,096 bytes) and the MP3
+/// pieces are joined — MP3 frames play back to back.</para>
 /// </summary>
 public static class EdgeTts
 {
     public const string TrustedClientToken = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
     public const string ChromiumFullVersion = "143.0.3650.75";
     public const string SecMsGecVersion = "2-" + ChromiumFullVersion;
+    /// <summary>The version edge-tts 7.2.3 sends with a version 1 token to api.msedgeservices.com.</summary>
+    public const string ServicesChromiumVersion = "140.0.3485.14";
+    public const string SecMsGecV1Version = "1-" + ServicesChromiumVersion;
     private const string WssUrl = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=" + TrustedClientToken;
+    private const string ServicesWssUrl = "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1?Ocp-Apim-Subscription-Key=" + TrustedClientToken;
 
-    /// <summary>The address the tests point at a local mock.</summary>
+    /// <summary>The bing host (token v2) — the tests point it at a local mock.</summary>
     internal static string Endpoint { get; set; } = WssUrl;
+    /// <summary>The msedgeservices host (token v1), tried first — the tests point it at a local mock.</summary>
+    internal static string ServicesEndpoint { get; set; } = ServicesWssUrl;
+
+    /// <summary>The most UTF-8 bytes of text one request carries (a Thai character is three).</summary>
+    public const int MaxPieceBytes = 3000;
+
+    /// <summary>One way to reach the service: its address, the token it takes and the browser it expects.</summary>
+    private sealed record Host(string Name, Func<string> Url, Func<double, string> Token, string Version, string Chromium);
+
+    private static readonly Host[] Hosts =
+    [
+        new("msedgeservices", () => ServicesEndpoint, TokenV1, SecMsGecV1Version, ServicesChromiumVersion),
+        new("bing", () => Endpoint, Token, SecMsGecVersion, ChromiumFullVersion),
+    ];
+
+    /// <summary>Which host spoke last ("msedgeservices" or "bing") — for the log and the tests.</summary>
+    public static string? LastHost { get; private set; }
 
     public sealed record Voice(string Name, string Label, string Lang, bool Female);
 
@@ -81,28 +112,58 @@ public static class EdgeTts
     /// makes a token the service refuses).</summary>
     private static double _skewSeconds;
 
-    /// <summary>Speak <paramref name="text"/> as 24 kHz mono MP3. Throws <see cref="EdgeTtsException"/> with the reason.</summary>
+    /// <summary>The longest text spoken (the Settings › Voice limit is 10,000 characters).</summary>
+    private const int MaxChars = 10_000;
+
+    /// <summary>Speak <paramref name="text"/> as 24 kHz mono MP3: piece by piece (<see cref="Pieces"/>), each from the
+    /// first host that speaks it. Throws <see cref="EdgeTtsException"/> with the reason.</summary>
     public static async Task<byte[]> SpeakAsync(string text, string voice, string rate, string pitch, CancellationToken ct = default)
     {
-        if (Encoding.UTF8.GetByteCount(text) > 8000) text = text[..Math.Min(text.Length, 2600)];
-        for (int attempt = 0; ; attempt++)
-        {
-            try { return await SpeakOnceAsync(text, voice, rate, pitch, ct).ConfigureAwait(false); }
-            catch (WebSocketException ex) when (!ct.IsCancellationRequested)
-            {
-                // The service now and then drops a connection before the first frame (2026-11-09: 1 request in 3),
-                // and a 403 means the token was refused — usually the PC's clock. Learn its time once, try again.
-                if (attempt >= 2) throw new EdgeTtsException("the Edge voice service refused the request (" + ex.Message + ")", ex);
-                if (attempt == 0) await LearnClockAsync(ct).ConfigureAwait(false);
-                await Task.Delay(300 * (attempt + 1), ct).ConfigureAwait(false);
-            }
-        }
+        if (text.Length > MaxChars) text = text[..MaxChars];
+        using var all = new MemoryStream();
+        foreach (var piece in Pieces(text))
+            all.Write(await SpeakPieceAsync(piece, voice, rate, pitch, ct).ConfigureAwait(false));
+        if (all.Length == 0) throw new EdgeTtsException("the Edge voice service sent no audio (is the voice name right?)");
+        return all.ToArray();
     }
 
-    private static async Task<byte[]> SpeakOnceAsync(string text, string voice, string rate, string pitch, CancellationToken ct)
+    /// <summary>The text in pieces of at most <see cref="MaxPieceBytes"/> UTF-8 bytes, cut at sentence ends or spaces.</summary>
+    public static List<string> Pieces(string text) =>
+        // A character is at most three UTF-8 bytes (a surrogate pair is two characters for four bytes).
+        SpeechText.Chunks(text, MaxPieceBytes / 3);
+
+    /// <summary>One piece: each host twice. A drop or a timeout tries again; a 403 is the token, usually the PC's clock
+    /// — the service's time is learnt first.</summary>
+    private static async Task<byte[]> SpeakPieceAsync(string text, string voice, string rate, string pitch, CancellationToken ct)
+    {
+        Exception? last = null;
+        foreach (var host in Hosts)
+        {
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                try
+                {
+                    var audio = await SpeakOnceAsync(text, voice, rate, pitch, host, ct).ConfigureAwait(false);
+                    LastHost = host.Name;
+                    return audio;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) when (ex is WebSocketException or EdgeTtsException or OperationCanceledException)
+                {
+                    last = ex;
+                    if (ex.Message.Contains("'403'", StringComparison.Ordinal)) await LearnClockAsync(ct).ConfigureAwait(false);
+                    await Task.Delay(300 * (attempt + 1), ct).ConfigureAwait(false);
+                }
+            }
+        }
+        string why = last is OperationCanceledException ? "no answer in time" : last?.Message ?? "?";
+        throw new EdgeTtsException("the Edge voice service refused the request (" + why + ")", last);
+    }
+
+    private static async Task<byte[]> SpeakOnceAsync(string text, string voice, string rate, string pitch, Host host, CancellationToken ct)
     {
         using var ws = new ClientWebSocket();
-        string major = ChromiumFullVersion.Split('.')[0];
+        string major = host.Chromium.Split('.')[0];
         ws.Options.SetRequestHeader("Pragma", "no-cache");
         ws.Options.SetRequestHeader("Cache-Control", "no-cache");
         ws.Options.SetRequestHeader("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
@@ -110,10 +171,11 @@ public static class EdgeTts
             $"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36 Edg/{major}.0.0.0");
         ws.Options.SetRequestHeader("Accept-Language", "en-US,en;q=0.9");
         ws.Options.SetRequestHeader("Cookie", "muid=" + Guid.NewGuid().ToString("N").ToUpperInvariant() + ";");
-        string url = $"{Endpoint}&ConnectionId={Guid.NewGuid():N}&Sec-MS-GEC={Token(Now())}&Sec-MS-GEC-Version={SecMsGecVersion}";
+        string url = $"{host.Url()}&ConnectionId={Guid.NewGuid():N}&Sec-MS-GEC={host.Token(Now())}&Sec-MS-GEC-Version={host.Version}";
 
+        // A piece takes a few seconds (1,000 Thai characters: about 4 s); past this the next try goes.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(45));
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
         var t = timeout.Token;
         await ws.ConnectAsync(new Uri(url), t).ConfigureAwait(false);
 
@@ -195,6 +257,17 @@ public static class EdgeTts
         BinaryPrimitives.WriteUInt32LittleEndian(cs, c0);
         BinaryPrimitives.WriteUInt32LittleEndian(cs.AsSpan(4), c1);
         return Convert.ToHexString(cs) + "-" + Convert.ToHexString(digest);
+    }
+
+    // ─── Sec-MS-GEC, version 1 (edge-tts 7.2.3 drm.py generate_sec_ms_gec), for api.msedgeservices.com ───
+
+    /// <summary>Upper-case hex SHA-256 of "&lt;Windows file time of the 5-minute step&gt;&lt;client token&gt;".</summary>
+    public static string TokenV1(double unixSeconds)
+    {
+        long s = (long)Math.Floor(unixSeconds) + WinEpoch;
+        s -= s % 300;
+        string ticks = (s * 10_000_000L).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.ASCII.GetBytes(ticks + TrustedClientToken)));
     }
 
     private static readonly uint[] ShaInitial = [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19];

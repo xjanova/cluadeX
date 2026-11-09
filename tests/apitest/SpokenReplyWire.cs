@@ -49,6 +49,13 @@ internal static class SpokenReplyWire
         check("voice", "an error, a stopped reply, one still streaming or an empty one is not read",
             bad.All(b => SpokenReply.Of(new List<ChatMessage> { U("go"), b }, 0) == null), "");
         check("voice", "a missing user row reads nothing", SpokenReply.Of(rows, -1) == null && SpokenReply.Of(rows, 99) == null, "");
+
+        // The Voice log line says why a turn was not read.
+        string why = SpokenReply.Describe(SpokenReply.LastRow(endsOnTool, 0));
+        check("voice", "the log names the row a silent turn ended on", why == "ToolAction read_file", why);
+        string streaming = SpokenReply.Describe(SpokenReply.LastRow(new List<ChatMessage> { U("go"), bad[2] }, 0));
+        check("voice", "the log says the reply was still streaming", streaming == "Assistant streaming", streaming);
+        check("voice", "the log says when nothing came after the message", SpokenReply.Describe(SpokenReply.LastRow(new List<ChatMessage> { U("go") }, 0)) == "no row after the message", "");
         return Task.CompletedTask;
     }
 }

@@ -244,9 +244,15 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
 - Proven offline by `tests/apitest --voice` (stand-in ElevenLabs/OpenAI server) and `tests/voicetest` (renders the panel
   per engine to PNGs). **No live ElevenLabs/OpenAI call yet** — set ELEVENLABS_API_KEY for apitest's live check.
 - **Edge is the default engine** (`Services/Voice/Tts/EdgeTts.cs`): Microsoft Edge read-aloud's free neural voices over a
-  WebSocket, Thai Premwadee/Niwat. It is unofficial: the service wants a `Sec-MS-GEC` **v2** token (v1 now gets 403) —
-  a port of edge-tts 7.3.1 `drm.py`, pinned by 4 vectors in `tests/apitest/EdgeTtsWire.cs`. If it starts failing, re-check
-  edge-tts's drm.py and `SEC_MS_GEC_VERSION` first. `apitest --edge` makes the live Thai + English call.
+  WebSocket, Thai Premwadee/Niwat. It is unofficial and has **two hosts**, tried in this order:
+  `api.msedgeservices.com` with a `Sec-MS-GEC` **v1** token (edge-tts 7.2.3), then `speech.platform.bing.com` with a **v2**
+  token (edge-tts 7.3.1). Both tokens are pinned by vectors in `tests/apitest/EdgeTtsWire.cs`. **Trap (2026-11-10):** the bing
+  host drops nearly every request over ~300 Thai characters, and edge-tts 7.3.1 fails the same way. A finished reply is
+  longer than that, so with bing alone every reply was silent and the only sign was a status line. Text also goes in pieces of
+  ≤3,000 UTF-8 bytes (`EdgeTts.Pieces`). `apitest --edge` speaks a 1,456-character Thai reply three times and checks it
+  came from msedgeservices. If voices fail, compare both hosts against the current edge-tts on PyPI first.
+- **Every read-aloud decision is logged under `[Voice]`**: what was read (engine, host, size, time), or why nothing was —
+  the row the turn ended on, an Edge failure, or audio that did not play. Look there before guessing.
 - **Trap: Windows voices read Thai as silence.** System.Speech sees desktop voices only; this PC has en-US only, and an
   English voice given Thai text writes a 46-byte WAV with no error. `WindowsTts` now throws `WindowsVoiceMissingException`
   (no voice for the language, or a silent WAV) and the chat/test fall back to Edge. Windows' own Thai voice (Pattara) is

@@ -13,7 +13,12 @@ public static class SpokenReply
 {
     /// <summary>The reply bubble to read for the turn the user message at <paramref name="userAt"/> started, or null.
     /// That turn is the one that just ended, the last in the list: everything after the user message belongs to it.</summary>
-    public static ChatMessage? Of(IReadOnlyList<ChatMessage> rows, int userAt)
+    public static ChatMessage? Of(IReadOnlyList<ChatMessage> rows, int userAt) =>
+        LastRow(rows, userAt) is { } m && IsReplyBubble(m) ? m : null;
+
+    /// <summary>The turn's last row that is part of the conversation (what <see cref="Of"/> reads, if it is a reply
+    /// bubble), or null when there is none — for the log, which says why nothing was read.</summary>
+    public static ChatMessage? LastRow(IReadOnlyList<ChatMessage> rows, int userAt)
     {
         if (userAt < 0 || userAt >= rows.Count) return null;
         for (int i = rows.Count - 1; i > userAt; i--)
@@ -23,10 +28,18 @@ public static class SpokenReply
             // the user typed while she worked, and her short line folded into a tool balloon.
             if (m.Role is MessageRole.System or MessageRole.AgentStatus or MessageRole.Thinking or MessageRole.User) continue;
             if (m.FoldedIntoBalloon || m.IsSideNote) continue;
-            return IsReplyBubble(m) ? m : null;
+            return m;
         }
         return null;
     }
+
+    /// <summary>A few words on a row that is not read: its role and what it is (the log line).</summary>
+    public static string Describe(ChatMessage? m) => m == null
+        ? "no row after the message"
+        : $"{m.Role}{(string.IsNullOrEmpty(m.ToolName) ? "" : " " + m.ToolName)}"
+          + (m.IsStreaming ? " streaming" : "") + (m.HasError ? " error" : "") + (m.IsInterrupted ? " interrupted" : "")
+          + (m.IsTurnNote ? " turn-note" : "") + (m.IsPlan ? " plan" : "") + (m.IsAgentMap ? " agent-map" : "")
+          + (m.IsDiffContent ? " diff" : "") + (string.IsNullOrWhiteSpace(m.Content) ? " empty" : "");
 
     /// <summary>A finished answer in her own words: the bubble, not a tool row, a card or the app's note.</summary>
     public static bool IsReplyBubble(ChatMessage m) =>
