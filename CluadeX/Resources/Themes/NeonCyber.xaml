@@ -578,6 +578,15 @@
     <SolidColorBrush x:Key="Editor.Minimap.ViewportBorder" Color="#B300E5FF"/>
     <SolidColorBrush x:Key="Editor.Minimap.Hover" Color="#1400E5FF"/>
     <SolidColorBrush x:Key="Editor.Minimap.Caret" Color="#CCFFB000"/>
+    <!-- Change marks (CodeEditorView.AiChanges.cs): gutter bar + line tint for what the AI added / changed, its deleted-lines mark,
+         and the user's own hand edits in a second colour -->
+    <SolidColorBrush x:Key="Editor.Change.Added" Color="#7DFF3A"/>
+    <SolidColorBrush x:Key="Editor.Change.Added.Tint" Color="#2A7DFF3A"/>
+    <SolidColorBrush x:Key="Editor.Change.Modified" Color="#3DA5FF"/>
+    <SolidColorBrush x:Key="Editor.Change.Modified.Tint" Color="#2A3DA5FF"/>
+    <SolidColorBrush x:Key="Editor.Change.Removed" Color="#FF4D6A"/>
+    <SolidColorBrush x:Key="Editor.Change.User" Color="#FF9A1F"/>
+    <SolidColorBrush x:Key="Editor.Change.User.Tint" Color="#30FF9A1F"/>
     <SolidColorBrush x:Key="Editor.Minimap.Change" Color="#E0A6FF00"/>
     <SolidColorBrush x:Key="Editor.Breakpoint" Color="#FF3B6B"/>
     <SolidColorBrush x:Key="Editor.Breakpoint.Halo" Color="#59FF3B6B"/>

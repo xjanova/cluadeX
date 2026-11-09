@@ -188,6 +188,11 @@ public class AppSettings
     /// <summary>Code Editor view toggles (toolbar): long lines wrap, spaces/tabs/line ends shown, text zoom.</summary>
     public bool EditorWordWrap { get; set; }
     public bool EditorShowWhitespace { get; set; }
+
+    /// <summary>Code Editor: on save, put a "[user-edit yyyy-MM-dd]" comment at the end of each run of lines the user edited
+    /// by hand (in the file's comment syntax, only where it cannot change the code). Off = the lines are still remembered
+    /// and coloured, just not commented in the file.</summary>
+    public bool EditorUserEditMarkers { get; set; } = true;
     public double EditorZoom { get; set; } = 1.0;
     public string PreferredLanguage { get; set; } = "C#";
     /// <summary>Code Editor ▸ AI comments: how much the AI comments the code it writes ("none" | "key" | "detailed") and in

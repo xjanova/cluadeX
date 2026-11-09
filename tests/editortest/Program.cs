@@ -2308,6 +2308,7 @@ internal static partial class Program
             try { File.Delete(outFile); } catch { }
         });
 
+        await ChangeMarkChecks(provider);                      // CM*: ChangeMarkChecks.cs
         await GitPanelChecks(provider, fs, loc, RepoRoot());   // SC*: GitPanelChecks.cs
 
         Console.WriteLine($"\n═══ {Pass} pass · {Fail} FAIL ═══");

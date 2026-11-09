@@ -128,14 +128,26 @@ public sealed class CheckpointService
     /// <summary>What a file was just before the AI's latest turn that changed it.</summary>
     /// <param name="Turn">That turn (a restore point's id without its step).</param>
     /// <param name="Text">Its content then, or null when it did not exist yet.</param>
-    public sealed record Baseline(string Turn, DateTime TimeUtc, bool Existed, string? Text);
+    /// <param name="Session">The chat that made it ("" for a restore's own undo point).</param>
+    public sealed record Baseline(string Turn, DateTime TimeUtc, bool Existed, string? Text, string Session = "");
 
     /// <summary>
     /// <paramref name="fullPath"/> as it was before the latest agent turn that changed it — the earliest capture of that
     /// turn (each step captures before it writes, so a file edited at steps 2 and 5 is compared with how it was before
     /// step 2). Null when no turn changed it, or its copy is gone (pruned, over the size cap).
     /// </summary>
-    public Baseline? BeforeLatestTurn(string project, string fullPath)
+    public Baseline? BeforeLatestTurn(string project, string fullPath) => Before(project, fullPath, wholeSession: false);
+
+    /// <summary>
+    /// <paramref name="fullPath"/> as it was before the chat that changed it last first touched it — the earliest capture
+    /// of that chat's session, over all its turns (owner 2026-11-09: the editor's change marks are per chat, and stay after
+    /// the file is saved or reopened: they come from these kept copies, never from the file). <see cref="Baseline.Turn"/>
+    /// is still the latest turn (the marks a user hid come back when the AI changes the file in another turn). Null when no
+    /// chat changed the file, or its copy is gone.
+    /// </summary>
+    public Baseline? BeforeSession(string project, string fullPath) => Before(project, fullPath, wholeSession: true);
+
+    private Baseline? Before(string project, string fullPath, bool wholeSession)
     {
         try
         {
@@ -145,16 +157,20 @@ public sealed class CheckpointService
             if (mine.Count == 0) return null;
             static string TurnOf(string id) { int dash = id.LastIndexOf('-'); return dash > 0 ? id[..dash] : id; }
             string turn = TurnOf(mine[^1].Id);
-            var first = mine.First(e => TurnOf(e.Id) == turn);
-            if (!first.Existed) return new Baseline(turn, first.TimeUtc, false, null);
+            // A restore's undo point has no chat: the session is the last chat's that changed the file.
+            string session = mine.LastOrDefault(e => !string.IsNullOrEmpty(e.Session))?.Session ?? "";
+            var first = wholeSession && session.Length > 0
+                ? mine.First(e => e.Session == session)
+                : mine.First(e => TurnOf(e.Id) == turn);
+            if (!first.Existed) return new Baseline(turn, first.TimeUtc, false, null, session);
             string blob = BlobPath(first.Blob ?? "");
             if (first.Blob == null || !File.Exists(blob)) return null;
             using var reader = new StreamReader(blob, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: true);
-            return new Baseline(turn, first.TimeUtc, true, reader.ReadToEnd());
+            return new Baseline(turn, first.TimeUtc, true, reader.ReadToEnd(), session);
         }
         catch (Exception ex)
         {
-            _log?.Warn("Checkpoint", $"could not read the last turn's copy of {fullPath}", ex);
+            _log?.Warn("Checkpoint", $"could not read the kept copy of {fullPath}", ex);
             return null;
         }
     }

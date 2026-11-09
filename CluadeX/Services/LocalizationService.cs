@@ -32,7 +32,7 @@ public class LocalizationService
                                       Localization.WatchKeys.Keys,
                                       Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
                                       Localization.AggregatorKeys.Keys,
-                                      Localization.LspKeys.Keys,
+                                      Localization.LspKeys.Keys, Localization.ChangeMarkKeys.Keys,
                                       Localization.PopOutKeys.Keys,
                                       Localization.ModelPickerKeys.Keys,
                                       Localization.MediaKeys.Keys, Localization.VibeKeys.Keys, Localization.PlanKeys.Keys, Localization.TierKeys.Keys,

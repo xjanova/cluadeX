@@ -139,6 +139,8 @@ public static class ThemeTokens
         "Terminal.Background", "Terminal.Foreground", "Terminal.Prompt", "Terminal.Input", "Terminal.Accent",
         "Editor.Gutter", "Editor.Minimap.Background", "Editor.Minimap.Bar", "Editor.Minimap.Comment",
         "Editor.Minimap.Viewport", "Editor.Minimap.ViewportBorder", "Editor.Minimap.Hover", "Editor.Minimap.Caret",
+        "Editor.Change.Added", "Editor.Change.Added.Tint", "Editor.Change.Modified", "Editor.Change.Modified.Tint",
+        "Editor.Change.Removed", "Editor.Change.User", "Editor.Change.User.Tint",
         "Editor.Minimap.Change", "Editor.Breakpoint", "Editor.Breakpoint.Halo", "Editor.ExecutionLine",
         "Editor.ExecutionLine.Fill", "Editor.ExecutionLine.Border", "Editor.AgentGlow", "Editor.Match",
         "Editor.Match.Foreground",

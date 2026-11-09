@@ -84,6 +84,8 @@ public class OpenFileTab : System.ComponentModel.INotifyPropertyChanged
     public void FlushPendingEdits() => PendingEdits?.Invoke();
 
     private string _originalContent = "";
+    /// <summary>The text as last opened, reloaded or saved — what the file on disk holds as far as this tab knows.</summary>
+    public string OriginalContent => _originalContent;
     public void MarkOpened(string content)
     {
         _originalContent = content;

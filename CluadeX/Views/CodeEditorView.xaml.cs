@@ -378,6 +378,7 @@ public partial class CodeEditorView : UserControl
             Editor.SyntaxHighlighting = definition;
         }
         ApplyToolTheme();
+        RepaintChangeMarks();   // the change marks read their Editor.Change.* colours when drawn
         Editor.TextArea.TextView.Redraw();
         _breakpointMargin.InvalidateVisual();
         Minimap.InvalidateVisual();
