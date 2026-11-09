@@ -85,6 +85,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
 
         EngineOptions =
         [
+            new(VoiceSettings.Edge, t("voice.engine.edge"), t("voice.engine.edgeNote")),
             new(VoiceSettings.Browser, t("voice.engine.browser"), t("voice.engine.browserNote")),
             new(VoiceSettings.Windows, t("voice.engine.windows"), t("voice.engine.windowsNote")),
             new(VoiceSettings.ElevenLabs, "ElevenLabs", t("voice.engine.elevenNote")),
@@ -125,7 +126,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
         try
         {
             var v = V;
-            _engine = Array.IndexOf(VoiceSettings.Engines, v.Engine) >= 0 ? v.Engine : VoiceSettings.Browser;
+            _engine = Array.IndexOf(VoiceSettings.Engines, v.Engine) >= 0 ? v.Engine : VoiceSettings.Edge;
             _personaVoices = v.PersonaVoices;
             _maxChars = Math.Clamp(v.MaxChars, 100, 10000);
             _elevenKey = v.ElevenLabsApiKey ?? "";
@@ -134,6 +135,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
             _openAiSpeed = v.OpenAiSpeed; _openAiInstructions = v.OpenAiInstructions ?? "";
             _browserVoice = v.BrowserVoice ?? ""; _browserRate = v.BrowserRate; _browserPitch = v.BrowserPitch;
             _windowsVoice = v.WindowsVoice ?? ""; _windowsRate = v.WindowsRate;
+            _edgeVoice = v.EdgeVoice ?? ""; _edgeRate = v.EdgeRate; _edgePitch = v.EdgePitch;
 
             FillModels(VoiceSpeaker.FetchedModels ?? ElevenLabsClient.KnownModels);
             _selectedModel = Models.FirstOrDefault(m => m.Model.Id == ElevenLabsClient.Successor(v.ElevenLabsModel)) ?? Models.FirstOrDefault();
@@ -186,6 +188,9 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
             v.BrowserPitch = Math.Round(Math.Clamp(_browserPitch, 0.5, 2), 2);
             v.WindowsVoice = _windowsVoice.Trim();
             v.WindowsRate = Math.Clamp(_windowsRate, -10, 10);
+            v.EdgeVoice = _edgeVoice.Trim();
+            v.EdgeRate = Math.Round(Math.Clamp(_edgeRate, 0.5, 2), 2);
+            v.EdgePitch = Math.Round(Math.Clamp(_edgePitch, 0.5, 2), 2);
             foreach (var k in v.Characters.Where(kv => kv.Value == null || kv.Value.IsEmpty).Select(kv => kv.Key).ToList()) v.Characters.Remove(k);
         });
         SaveText = ok ? "" : _t("voice.saveFailed") + " " + _settings.LastSaveError;
@@ -195,7 +200,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
 
     public IReadOnlyList<VoiceEngineOption> EngineOptions { get; }
 
-    private string _engine = VoiceSettings.Browser;
+    private string _engine = VoiceSettings.Edge;
     public string Engine
     {
         get => _engine;
@@ -203,6 +208,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
         {
             if (Array.IndexOf(VoiceSettings.Engines, value) < 0 || !SetProperty(ref _engine, value)) return;
             OnPropertyChanged(nameof(IsBrowser)); OnPropertyChanged(nameof(IsWindows));
+            OnPropertyChanged(nameof(IsEdge)); OnPropertyChanged(nameof(WindowsNoThai));
             OnPropertyChanged(nameof(IsEleven)); OnPropertyChanged(nameof(IsOpenAi)); OnPropertyChanged(nameof(IsFree));
             OnPropertyChanged(nameof(EngineNote)); OnPropertyChanged(nameof(GirlVoiceChoices));
             MascotChanged();
@@ -210,11 +216,12 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
             Changed();
         }
     }
+    public bool IsEdge => _engine == VoiceSettings.Edge;
     public bool IsBrowser => _engine == VoiceSettings.Browser;
     public bool IsWindows => _engine == VoiceSettings.Windows;
     public bool IsEleven => _engine == VoiceSettings.ElevenLabs;
     public bool IsOpenAi => _engine == VoiceSettings.OpenAI;
-    public bool IsFree => IsBrowser || IsWindows;
+    public bool IsFree => IsEdge || IsBrowser || IsWindows;
     public string EngineNote => EngineOptions.FirstOrDefault(e => e.Key == _engine)?.Note ?? "";
 
     // ─── the girl who presents the page: ElevenLabs' own, Codex for OpenAI, CluadeX for the free voices ───
@@ -229,7 +236,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
     public ImageSource? MascotImage => GirlArt.Image(ChatCharacter.ForGirl(MascotGirl).Girl);
     public string MascotName => ChatCharacter.ForGirl(MascotGirl).Name;
     public Brush MascotAccent => ChatCharacter.ForGirl(MascotGirl).AccentBrush;
-    public string MascotLine => _t("voice.mascot." + MascotGirl);
+    public string MascotLine => _t(IsEdge ? "voice.mascot.edge" : "voice.mascot." + MascotGirl);
     private void MascotChanged()
     {
         OnPropertyChanged(nameof(MascotImage)); OnPropertyChanged(nameof(MascotName));
@@ -599,6 +606,21 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
     public string WindowsVoice { get => _windowsVoice; set { if (SetProperty(ref _windowsVoice, value ?? "")) Changed(); } }
     public int WindowsRate { get => _windowsRate; set { if (SetProperty(ref _windowsRate, Math.Clamp(value, -10, 10))) Changed(); } }
 
+    /// <summary>Windows has no Thai voice (most PCs: David and Zira only) — the page says so; Thai replies are read
+    /// with Edge's free voices instead.</summary>
+    public bool WindowsNoThai => IsWindows && !WindowsTts.Speaks("th");
+
+    // ─── free: Edge's online voices ───
+
+    /// <summary>"" first = the voice for the reply's language (Premwadee for Thai).</summary>
+    public IReadOnlyList<VoiceChoice> EdgeVoices =>
+        [new("", _t("voice.edge.auto")), .. EdgeTts.Voices.Select(v => new VoiceChoice(v.Name, v.Label))];
+    private string _edgeVoice = "";
+    private double _edgeRate = 1, _edgePitch = 1;
+    public string EdgeVoice { get => _edgeVoice; set { if (SetProperty(ref _edgeVoice, value ?? "")) Changed(); } }
+    public double EdgeRate { get => _edgeRate; set { if (SetProperty(ref _edgeRate, Math.Round(value, 2))) Changed(); } }
+    public double EdgePitch { get => _edgePitch; set { if (SetProperty(ref _edgePitch, Math.Round(value, 2))) Changed(); } }
+
     // ─── each girl's own voice ───
 
     public ObservableCollection<GirlVoiceRow> GirlRows { get; }
@@ -614,6 +636,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
                 case VoiceSettings.ElevenLabs: list.AddRange(Voices.Select(v => new VoiceChoice(v.Id, v.Name))); break;
                 case VoiceSettings.OpenAI: list.AddRange(OpenAiVoices.Select(v => new VoiceChoice(v, v))); break;
                 case VoiceSettings.Windows: list.AddRange(WindowsVoices.Select(v => new VoiceChoice(v, v))); break;
+                case VoiceSettings.Edge: list.AddRange(EdgeTts.Voices.Select(v => new VoiceChoice(v.Name, v.Label))); break;
                 default: list.AddRange(BrowserVoices.Select(v => new VoiceChoice(v, v))); break;
             }
             // A saved voice no longer in the list still shows (by its saved name).
@@ -635,6 +658,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
             VoiceSettings.ElevenLabs => c?.ElevenLabsVoiceId,
             VoiceSettings.OpenAI => c?.OpenAiVoice,
             VoiceSettings.Windows => c?.WindowsVoice,
+            VoiceSettings.Edge => c?.EdgeVoice,
             _ => c?.BrowserVoice,
         }) ?? "";
     }
@@ -652,6 +676,7 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
                 break;
             case VoiceSettings.OpenAI: c.OpenAiVoice = value; break;
             case VoiceSettings.Windows: c.WindowsVoice = value; break;
+            case VoiceSettings.Edge: c.EdgeVoice = value; break;
             default: c.BrowserVoice = value; break;
         }
         Changed();
@@ -696,10 +721,24 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
         Say(string.Format(_t("voice.test.making"), ChatCharacter.ForGirl(girl).Name));
         try
         {
-            var audio = await new VoiceSpeaker(() => _settings.Settings).SynthesizeAsync(text, thai, girl, cts.Token);
+            var speaker = new VoiceSpeaker(() => _settings.Settings);
+            // Windows with no voice for this language reads it as silence: Edge's free voices read it, as in the chat.
+            bool edge = IsWindows && !WindowsTts.Speaks(thai ? "th-TH" : "en-US");
+            SpeechAudio audio;
+            try
+            {
+                audio = edge ? await speaker.SynthesizeEdgeAsync(text, thai, girl, cts.Token)
+                             : await speaker.SynthesizeAsync(text, thai, girl, cts.Token);
+            }
+            catch (WindowsVoiceMissingException)
+            {
+                edge = true;
+                audio = await speaker.SynthesizeEdgeAsync(text, thai, girl, cts.Token);
+            }
             if (cts.IsCancellationRequested) return;
             Player().Play(audio);
-            Say(string.Format(_t("voice.test.playing"), ChatCharacter.ForGirl(girl).Name, (audio.Bytes.Length / 1024.0).ToString("0")));
+            Say(string.Format(_t(edge ? "voice.test.playingEdge" : "voice.test.playing"), ChatCharacter.ForGirl(girl).Name,
+                (audio.Bytes.Length / 1024.0).ToString("0")));
         }
         catch (VoiceKeyMissingException ex) { Say(_t(ex.Engine == VoiceSettings.OpenAI ? "voice.openai.noKey" : "voice.eleven.noKey"), true); }
         catch (OperationCanceledException) { }

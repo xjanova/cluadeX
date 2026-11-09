@@ -1851,7 +1851,38 @@
                                         <TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Text.Secondary}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
-                                    <views:AiAvatar Grid.Column="2" Margin="4,5,0,0" VerticalAlignment="Top" Style="{StaticResource CxAiAvatar}"/>
+                                    <StackPanel Grid.Column="2" Margin="4,5,0,0" VerticalAlignment="Top">
+                                        <views:AiAvatar VerticalAlignment="Top" Style="{StaticResource CxAiAvatar}"/>
+                                        <!-- The speaker under her face (owner 2026-11-09): read replies aloud on / off, the same
+                                             switch as Settings › Voice. Lit while on; clicking it off stops her mid-sentence. -->
+                                        <Button HorizontalAlignment="Center" Margin="0,2,0,0"
+                                                Command="{Binding DataContext.ToggleSpeakRepliesCommand, RelativeSource={RelativeSource AncestorType=ListBox}}">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                                    <Setter Property="Width" Value="26"/>
+                                                    <Setter Property="Height" Value="26"/>
+                                                    <Setter Property="FontSize" Value="13"/>
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Setter Property="Content" Value="&#xE74F;"/>
+                                                    <Setter Property="Opacity" Value="0.55"/>
+                                                    <Setter Property="ToolTip" Value="{services:Loc voice.chat.toggleOff}"/>
+                                                    <Setter Property="AutomationProperties.Name" Value="{services:Loc voice.chat.toggleOff}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Assistant}">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding DataContext.SpeakReplies, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
+                                                            <Setter Property="Content" Value="&#xE767;"/>
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                            <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                            <Setter Property="ToolTip" Value="{services:Loc voice.chat.toggleOn}"/>
+                                                            <Setter Property="AutomationProperties.Name" Value="{services:Loc voice.chat.toggleOn}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                        </Button>
+                                    </StackPanel>
 
                                     <!-- The bubbles' tails: a small point from the bubble's top corner to the avatar beside it -->
                                     <Path Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,16,-7,0"

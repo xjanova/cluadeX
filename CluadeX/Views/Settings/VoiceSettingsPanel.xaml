@@ -268,6 +268,26 @@
                 </StackPanel>
             </StackPanel>
 
+            <!-- ═══ free: Edge's online voices ═══ -->
+            <StackPanel Visibility="{Binding IsEdge, Converter={StaticResource BoolVis}}">
+                <TextBlock Text="{services:Loc voice.engine.edge}" Style="{StaticResource Head}"/>
+                <local:FitRow Style="{StaticResource Line}">
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc voice.ui.voice}" Style="{StaticResource Label}"/>
+                        <TextBlock Text="{services:Loc voice.ui.edgeVoiceDesc}" Style="{StaticResource Desc}"/>
+                    </StackPanel>
+                    <ComboBox Style="{StaticResource Pick}" ItemsSource="{Binding EdgeVoices}" SelectedValuePath="Value" SelectedValue="{Binding EdgeVoice}"/>
+                </local:FitRow>
+                <local:FitRow Style="{StaticResource Line}">
+                    <TextBlock Style="{StaticResource Label}" VerticalAlignment="Center"><Run Text="{services:Loc voice.ui.speed}"/><Run Text="  "/><Run Text="{Binding EdgeRate, StringFormat='{}{0:F2}', Mode=OneWay}" Foreground="{DynamicResource Accent.1}"/></TextBlock>
+                    <Slider Style="{StaticResource Slide}" Value="{Binding EdgeRate}" Minimum="0.5" Maximum="2" TickFrequency="0.05"/>
+                </local:FitRow>
+                <local:FitRow Style="{StaticResource Line}">
+                    <TextBlock Style="{StaticResource Label}" VerticalAlignment="Center"><Run Text="{services:Loc voice.ui.pitch}"/><Run Text="  "/><Run Text="{Binding EdgePitch, StringFormat='{}{0:F2}', Mode=OneWay}" Foreground="{DynamicResource Accent.1}"/></TextBlock>
+                    <Slider Style="{StaticResource Slide}" Value="{Binding EdgePitch}" Minimum="0.5" Maximum="2" TickFrequency="0.05"/>
+                </local:FitRow>
+            </StackPanel>
+
             <!-- ═══ free: the browser's voices ═══ -->
             <StackPanel Visibility="{Binding IsBrowser, Converter={StaticResource BoolVis}}">
                 <TextBlock Text="{services:Loc voice.engine.browser}" Style="{StaticResource Head}"/>
@@ -295,6 +315,8 @@
             <!-- ═══ free: Windows' offline voices ═══ -->
             <StackPanel Visibility="{Binding IsWindows, Converter={StaticResource BoolVis}}">
                 <TextBlock Text="{services:Loc voice.engine.windows}" Style="{StaticResource Head}"/>
+                <TextBlock Text="{services:Loc voice.ui.windowsNoThai}" Style="{StaticResource Desc}" Foreground="#FF6B6B" Margin="0,0,0,10"
+                           Visibility="{Binding WindowsNoThai, Converter={StaticResource BoolVis}}"/>
                 <local:FitRow Style="{StaticResource Line}">
                     <StackPanel>
                         <TextBlock Text="{services:Loc voice.ui.voice}" Style="{StaticResource Label}"/>

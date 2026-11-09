@@ -1,8 +1,11 @@
 namespace CluadeX.Models;
 
 /// <summary>
-/// Settings › Voice: who reads the replies aloud and how (2026-11-09). Four engines:
+/// Settings › Voice: who reads the replies aloud and how (2026-11-09). Five engines:
 /// <list type="bullet">
+/// <item><c>edge</c> — Microsoft Edge's online read-aloud voices (free, no key, natural Thai: Premwadee / Niwat). Plays
+/// in the app; no window needed. The default, and what the free engines fall back to when they cannot speak the
+/// reply's language.</item>
 /// <item><c>browser</c> — the mic window's own speech synthesis (free; Edge has natural Thai voices). Needs the mic window.</item>
 /// <item><c>windows</c> — Windows' own offline voices (free; System.Speech). Plays in the app.</item>
 /// <item><c>elevenlabs</c> — ElevenLabs text-to-speech with its own key: every model, the account's voices, cloning.</item>
@@ -13,10 +16,10 @@ namespace CluadeX.Models;
 /// </summary>
 public sealed class VoiceSettings
 {
-    public const string Browser = "browser", Windows = "windows", ElevenLabs = "elevenlabs", OpenAI = "openai";
-    public static readonly string[] Engines = [Browser, Windows, ElevenLabs, OpenAI];
+    public const string Edge = "edge", Browser = "browser", Windows = "windows", ElevenLabs = "elevenlabs", OpenAI = "openai";
+    public static readonly string[] Engines = [Edge, Browser, Windows, ElevenLabs, OpenAI];
 
-    public string Engine { get; set; } = Browser;
+    public string Engine { get; set; } = Edge;
     /// <summary>Each girl speaks in her own personality (speed, warmth, ElevenLabs audio tags, OpenAI instructions).</summary>
     public bool PersonaVoices { get; set; } = true;
     /// <summary>The longest reply read aloud, in characters (ElevenLabs and OpenAI bill per character). 100-10000.</summary>
@@ -52,6 +55,14 @@ public sealed class VoiceSettings
     /// <summary>Extra tone instructions (gpt-4o-mini-tts only), added after the girl's own.</summary>
     public string OpenAiInstructions { get; set; } = "";
 
+    // ─── Free: Edge's online voices ───
+    /// <summary>An Edge voice ("th-TH-PremwadeeNeural"); empty = the one for the reply's language.</summary>
+    public string EdgeVoice { get; set; } = "";
+    /// <summary>0.5-2 (sent as a percentage).</summary>
+    public double EdgeRate { get; set; } = 1.0;
+    /// <summary>0.5-2 (sent in Hz around the voice's own pitch).</summary>
+    public double EdgePitch { get; set; } = 1.0;
+
     // ─── Free: the browser's voices (mic window) ───
     /// <summary>A voice name the mic window reported; empty = the best one for the language.</summary>
     public string BrowserVoice { get; set; } = "";
@@ -82,7 +93,8 @@ public sealed class CharacterVoice
     public string? OpenAiVoice { get; set; }
     public string? BrowserVoice { get; set; }
     public string? WindowsVoice { get; set; }
+    public string? EdgeVoice { get; set; }
 
     public bool IsEmpty => string.IsNullOrWhiteSpace(ElevenLabsVoiceId) && string.IsNullOrWhiteSpace(OpenAiVoice)
-        && string.IsNullOrWhiteSpace(BrowserVoice) && string.IsNullOrWhiteSpace(WindowsVoice);
+        && string.IsNullOrWhiteSpace(BrowserVoice) && string.IsNullOrWhiteSpace(WindowsVoice) && string.IsNullOrWhiteSpace(EdgeVoice);
 }
