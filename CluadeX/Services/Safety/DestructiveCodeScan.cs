@@ -190,6 +190,46 @@ public static class DestructiveCodeScan
 
     private static readonly Regex BatchComment = new(@"^(@?rem(\s|$)|::)", Opt);
 
+    /// <summary>A quoted string on a script line, by the script's own rules: PowerShell escapes with ` (a \ is just a
+    /// character: "C:\" closes), sh with \, batch not at all. '…' is literal everywhere.</summary>
+    private static readonly Regex QuotedPs = new(@"'[^'\r\n]*'|""(?:[^""`\r\n]|`.)*""", Opt);
+    private static readonly Regex QuotedSh = new(@"'[^'\r\n]*'|""(?:[^""\\\r\n]|\\.)*""", Opt);
+    private static readonly Regex QuotedBat = new(@"""[^""\r\n]*""", Opt);
+
+    /// <summary>A line that calls what follows it by name: PowerShell's call / dot-source operator on a quoted or
+    /// variable command (&amp; 'rm' -rf …, . $script).</summary>
+    private static readonly Regex CallOperator = new(@"^\s*[&.]\s*[""'$(]", Opt);
+
+    /// <summary>The quoted command name after a call operator — &amp; 'rm' -rf ~ runs rm -rf ~.</summary>
+    private static readonly Regex QuotedCallee = new(@"^(\s*[&.]\s*)[""']([^""'\s]+)[""']", Opt);
+
+    /// <summary>
+    /// Somewhere in the script, text held in a variable or a string is run as a command: Invoke-Expression / iex, eval,
+    /// a script block made from text, Start-Process / Start-Job, a call operator on a variable, a batch %var% or !var!
+    /// used as the command, a bare $var as a sh statement, or a shell started with a variable in its arguments. Such a
+    /// script is read strictly — every quoted delete counts (<see cref="ScanText"/>).
+    /// </summary>
+    private static readonly Regex EvalSink = new(
+        @"\b(iex|Invoke-Expression|Invoke-Command|eval|exec|Start-Process|Start-Job|saps)\b|ScriptBlock\]::Create|\[scriptblock\]" +
+        @"|(^|[\s;|&(])&\s*[$(]|^\s*\.\s+\$|^\s*(call\s+)?[%!]\w+[%!]|^\s*\$\{?\w+\}?(\s*$|\s*[;&]|\s+(?![-+*/]?=)[\w""'$-])" +
+        @"|(?<![$\w.-])(sh|bash|zsh|cmd(\.exe)?|powershell(\.exe)?|pwsh)\b[^\r\n]*[$%!]\{?\w",
+        Opt | RegexOptions.Multiline);
+
+    /// <summary>
+    /// A script line whose delete text sits only inside quotes — a table of patterns, a message, a hashtable entry
+    /// (<c>@{ Name = 'rm -rf /'; Re = '…' }</c>) — and that starts nothing itself: data, not a command (owner 2026-11-09,
+    /// "ทำให้มันฉลาดหน่อย"). With the quotes taken out no delete is left, the line hands nothing to a shell
+    /// (<see cref="LaunchSink"/>) or a call operator, and the caller has already checked the file runs no text
+    /// (<see cref="EvalSink"/>).
+    /// </summary>
+    private static bool DeleteOnlyQuoted(string line, Regex quoted)
+    {
+        if (LaunchSink.IsMatch(line) || CallOperator.IsMatch(line)) return false;
+        string bare = quoted.Replace(line, "''");
+        if (bare.Length == line.Length) return false;   // nothing was quoted
+        return DeleteVerb.Match(bare) is not { Success: true } && !DriveWipe.IsMatch(bare) && !DatabaseWipe.IsMatch(bare) && !BackupOrBootWipe.IsMatch(bare);
+    }
+
     /// <summary>Code that only holds the text as data: a regex being built, text printed or logged, text handed to a check
     /// or an assertion (a test of what a guard decides).</summary>
     private static readonly Regex DataOnly = new(
@@ -234,6 +274,8 @@ public static class DestructiveCodeScan
         bool batch = ext.Equals(".bat", StringComparison.OrdinalIgnoreCase) || ext.Equals(".cmd", StringComparison.OrdinalIgnoreCase);
         bool ps = ext.Equals(".ps1", StringComparison.OrdinalIgnoreCase) || ext.Equals(".psm1", StringComparison.OrdinalIgnoreCase);
         string? closer = null;   // the end of the block comment the scan is inside
+        bool quotesAreData = script && !EvalSink.IsMatch(text);
+        Regex quoted = ps ? QuotedPs : batch ? QuotedBat : QuotedSh;
         int n = 0;
         foreach (var raw in text.Split('\n'))
         {
@@ -256,7 +298,9 @@ public static class DestructiveCodeScan
             if (t.Length == 0 || (slash && t.StartsWith("//")) || (hash && t.StartsWith('#')) || (batch && BatchComment.IsMatch(t))) continue;
 
             string? why;
-            if (script || !code) why = JudgeCommand(t);
+            if (script) t = QuotedCallee.Replace(t, "$1$2");   // & 'rm' -rf ~ is rm -rf ~
+            if (script && quotesAreData && DeleteOnlyQuoted(t, quoted)) why = null;
+            else if (script || !code) why = JudgeCommand(t);
             else if (DataOnly.IsMatch(t) && !LaunchSink.IsMatch(t) && !DeleteApiCall.IsMatch(t)) why = null;
             else why = JudgeLine(t);
             if (why != null)
@@ -326,6 +370,7 @@ public static class DestructiveCodeScan
         foreach (var file in files.Take(2000))
         {
             if (!CodeExtensions.Contains(Path.GetExtension(file))) continue;
+            if (InScratchFolder(Path.GetRelativePath(fullRoot, file))) continue;
             try
             {
                 var info = new FileInfo(file);
@@ -337,6 +382,34 @@ public static class DestructiveCodeScan
             catch { /* unreadable: nothing to judge */ }
         }
         return findings;
+    }
+
+    /// <summary>Folders inside a project that hold scratch copies, sandboxes or build output — tmp, temp, scratch,
+    /// sandbox, bin, obj, node_modules, dist … A build or a test of the project does not run what sits there (owner
+    /// 2026-11-09: the red prompt came up on <c>dotnet build</c> for a hook script copied into BrainX's tmp/ — a warning
+    /// hook whose table of patterns reads like <c>rm -rf /</c>). A command that names such a script is still read
+    /// (<see cref="ScanScriptsNamed"/>).</summary>
+    private static readonly HashSet<string> ScratchFolders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "tmp", "temp", ".tmp", ".temp", "scratch", "scratchpad", "sandbox", ".sandbox", "bin", "obj", "node_modules",
+        "dist", "out", "target", "vendor", ".venv", "venv", "__pycache__", ".cache", "artifacts", "TestResults",
+    };
+
+    /// <summary>True when a project-relative path lies in a scratch / sandbox / build-output folder (any depth), or in a
+    /// folder whose name starts with tmp- / temp- (tmp-x, temp_2026 …).</summary>
+    public static bool InScratchFolder(string relativePath)
+    {
+        var parts = relativePath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < parts.Length - 1; i++)   // the folders, not the file name
+        {
+            string p = parts[i];
+            if (p == "..") return false;             // outside the project: not ours to wave through
+            if (ScratchFolders.Contains(p)) return true;
+            if (p.StartsWith("tmp-", StringComparison.OrdinalIgnoreCase) || p.StartsWith("tmp_", StringComparison.OrdinalIgnoreCase)
+                || p.StartsWith("temp-", StringComparison.OrdinalIgnoreCase) || p.StartsWith("temp_", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     private static List<string>? ChangedByGit(string root)
