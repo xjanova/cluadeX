@@ -348,10 +348,15 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             yield break;
         }
 
-        string cwd = _fileSystemService.HasWorkingDirectory
-            ? _fileSystemService.WorkingDirectory
-            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var grant = ClaudeDevProvider.Grant.Value;
+        // A workflow agent's own git worktree (the grant's folder) is where it runs, never the project: `codex exec -C`.
+        string? turnFolder = ClaudeDevProvider.TurnFolder(grant, _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null, Directory.Exists);
+        if (turnFolder == null)
+        {
+            OnError?.Invoke("The worker's folder is gone: " + grant?.Folder);
+            yield break;
+        }
+        string cwd = turnFolder;
         bool worker = grant is { Edit: true } || grant is { Run: true };
         var sink = worker ? ClaudeDevProvider.StreamSink.Value : null;
         var extras = ClaudeDevProvider.Extras.Value;
@@ -410,7 +415,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                     CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
                     chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
                     // Codex has no spawn hook: this line is the only thing that keeps its sub-agents to the step's policy.
-                    agentLine: Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.OpenAIDev),
+                    agentLine: Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.OpenAIDev,
+                        workflow: chatToolsJson != null && Agents.WorkflowGate.Allowed(Agents.WorkflowGate.CurrentChat)),
                     noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
                     splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.OpenAIDev)));
             }

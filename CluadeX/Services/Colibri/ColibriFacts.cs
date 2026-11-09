@@ -12,7 +12,10 @@ public sealed record ColibriModelOption(string Id, string Name, string Kind, dou
     bool FromRam, string Status, bool Fits, string Reason, bool Recommended, string Summary, string LicenseNote)
 {
     /// <summary>Chat models that call tools are what the agent can use; pictures and decision models are not.</summary>
-    public bool IsChat => Kind is "" or "text" or "vision";
+    public bool IsChat => ColibriFacts.IsChatKind(Kind);
+
+    /// <summary>Its size in billions of parameters, from the catalog's own fields (<see cref="ColibriFacts.CatalogBillions"/>).</summary>
+    public double? Billions => ColibriFacts.CatalogBillions(Name, Summary, DownloadGb);
 }
 
 /// <summary>`coli status --json`, the parts CluadeX shows and acts on.</summary>
@@ -192,6 +195,49 @@ public static class ColibriFacts
             };
         }
         return s;
+    }
+
+    /// <summary>A catalog kind the agent can talk to: text (or none given) and vision. "image" (qwen-image-2.1 draws
+    /// pictures) and decision models are left out on purpose — a sub-agent sent there gets no tool loop.</summary>
+    public static bool IsChatKind(string? kind) => (kind ?? "") is "" or "text" or "vision";
+
+    // "284B", "1.02T", "125B + 51B" (the first), "2.8T" — the size the catalog's summary states.
+    private static readonly System.Text.RegularExpressions.Regex StatedSize = new(
+        @"(?<![\w.])(?<n>\d{1,4}(?:\.\d+)?)\s?(?<u>[BT])(?![A-Za-z0-9])", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// A catalog model's size in billions of parameters (a MoE counts its whole size), from colibri's own fields: the name
+    /// when it carries the size ("Qwen3.6-35B-A3B" → 35, "DeepSeek V4 Flash REAP 150B" → 150), else the size the summary
+    /// states ("284B, …" → 284, "1.02T with vision" → 1020, "2.8T" → 2800), else a floor from the download: the experts
+    /// are stored at 4 to 16 bits, so a download of N GB holds at least N/2 billion parameters. The names alone said
+    /// nothing for DeepSeek V4 Flash, Qwen3.8-Flash-Next, MiMo, GLM-5.2/5.3, Inkling and Kimi K3, and every one of them
+    /// was refused as a model of unknown size. Null = nothing to go on.
+    /// </summary>
+    public static double? CatalogBillions(string? name, string? summary, double downloadGb)
+    {
+        if (CluadeX.Services.Agents.ModelCapability.ParseBillions(name) is { } fromName) return fromName;
+        var m = StatedSize.Match(summary ?? "");
+        if (m.Success && double.TryParse(m.Groups["n"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double n) && n > 0)
+            return m.Groups["u"].Value == "T" ? n * 1000 : n;
+        return downloadGb > 0 ? Math.Round(downloadGb / 2, 1) : null;
+    }
+
+    /// <summary>The most KV slots any colibri chat family takes (family_registry: max_kv_slots 16; the image family 1).</summary>
+    public const int MaxKvSlots = 16;
+
+    /// <summary>
+    /// How many requests the server answers at once (`--kv-slots`, given as COLI_KV_SLOTS): one per sub-agent that may run
+    /// at the same time (<paramref name="maxParallel"/>), bounded by the machine. Each slot keeps its own conversation
+    /// state, which colibri sizes from RAM (it shrinks the context to fit, never below the family's base), so RAM sets
+    /// the bound: 2 below 32 GB, 4 from 32 GB, 8 from 64 GB; a card under 6 GB keeps it at 2. A picture model takes 1.
+    /// With the default single slot, five parallel agents queued and got 429 queue_timeout after 300 s.
+    /// </summary>
+    public static int KvSlots(int maxParallel, double ramGb, double vramGb, bool chat = true)
+    {
+        if (!chat) return 1;
+        int cap = ramGb >= 64 ? 8 : ramGb >= 31 ? 4 : 2;   // "32 GB" machines report 31.9
+        if (vramGb is > 0 and < 6) cap = Math.Min(cap, 2);
+        return Math.Clamp(Math.Min(maxParallel, cap), 1, MaxKvSlots);
     }
 
     /// <summary>Is an archive entry safe to unpack under the engine folder (no "..", no rooted path, no drive).</summary>

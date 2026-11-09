@@ -36,6 +36,22 @@ internal static partial class Program
     static async Task TestDesignMode()
     {
         Log("\n## DM — Design mode, and the UI Studio locked while an AI run edits its project");
+        // Off for now (owner 2026-11-09): no switch, no design turn — not even from the words — so a turn follows Code.
+        string offChat = "dm-off-" + Guid.NewGuid().ToString("N")[..6];
+        DesignGate.NoteOwnerMessage(offChat, "ออกแบบหน้าแรกใหม่");
+        DesignGate.Set(offChat, true);
+        Check("DM0 design mode is off: no design turn from the words or a switch", !DesignGate.Enabled && DesignGate.Why(offChat) == null
+            && !DesignGate.IsOn(offChat) && !DesignGate.TakeOwnerTurn(offChat), DesignGate.Why(offChat) ?? "none");
+        DesignGate.Forget(offChat);
+        await FreshChat();
+        var designToggle = (CheckBox)View.FindName("DesignToggle");
+        await Render();
+        Check("DM0 …and the composer shows no Design switch (the Colibri switch's place beside Ultra)", designToggle is { IsVisible: false } && !Vm.DesignModeAvailable);
+        // The rules stay, for when it comes back: the checks below run with it on.
+        DesignGate.Enabled = true;
+        await Render();
+        Check("DM0 (control) turned on, the switch comes back without a restart", designToggle is { IsVisible: true } && Vm.DesignModeAvailable);
+        await TestLocalAgentsSwitch();
         TestDesignWords();
         await TestDesignSwitch();
         string root = Path.Combine(PipeRoot, "dm");
@@ -47,6 +63,43 @@ internal static partial class Program
         await TestDesignDecidedOnce(root);
         await TestDesignForget(root);
         await TestStudioLockMoves(root);   // (StudioLockMoveTests.cs)
+        DesignGate.Enabled = false;
+    }
+
+    // ── the composer's Colibri switch (owner 2026-11-09: "เราตั้งโหมดได้ว่าจะให้ใช้ โมเดลอ่อนหรือให้วิ่งไปใช้ colibri ในช่องแชท") ──
+
+    static async Task TestLocalAgentsSwitch()
+    {
+        var settings = Settings;
+        bool before = settings.Settings.SubAgentLocalCheap;
+        var toggle = (CheckBox)View.FindName("LocalAgentsToggle");
+        try
+        {
+            settings.Settings.SubAgentLocalCheap = false;
+            settings.Save();
+            await Render();
+            bool installed = CluadeX.Services.Colibri.ColibriService.IsPluginInstalled(settings.DataRoot);
+            Check("LA1 the Colibri switch shows only once a local engine is installed (here: " + (installed ? "installed" : "not installed") + ")",
+                toggle != null && toggle.IsVisible == installed && toggle.IsChecked == false);
+            Vm.SubAgentsOnLocal = true;
+            await Render();
+            Check("LA1 on: it is the same setting as Settings ▸ Agent (sub-agents on the local model), kept on disk, and the switch stays in view",
+                settings.Settings.SubAgentLocalCheap && toggle is { IsVisible: true, IsChecked: true }
+                && File.ReadAllText(Path.Combine(settings.DataRoot, "settings.json")).Contains("\"SubAgentLocalCheap\": true"));
+            settings.Settings.SubAgentLocalCheap = false;
+            settings.Save();
+            await Render();
+            Check("LA1 turned off elsewhere (Settings, the Colibri card): the switch follows", toggle.IsChecked == false && !Vm.SubAgentsOnLocal);
+            var th = new LocalizationService();
+            th.SetLanguage("th");
+            var en = new LocalizationService();
+            en.SetLanguage("en");
+            string tipTh = th.T("orch.localAgentsTip");
+            Check("LA1 its tooltip exists in Thai (not the English copied in) and in English",
+                System.Text.RegularExpressions.Regex.IsMatch(tipTh, "[฀-๿]") && tipTh != en.T("orch.localAgentsTip")
+                && en.T("orch.localAgentsTip") != "orch.localAgentsTip" && en.T("orch.localAgents") == "Colibri", tipTh);
+        }
+        finally { settings.Settings.SubAgentLocalCheap = before; settings.Save(); }
     }
 
     static string DmSite(string root, string name)

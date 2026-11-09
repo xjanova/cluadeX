@@ -314,9 +314,11 @@ public static class ModelCapability
     }
 
     /// <summary>The estimate for a model running on this machine. API models are never judged by name.</summary>
-    public static Estimate ForLocal(string? modelName)
+    public static Estimate ForLocal(string? modelName) => ForBillions(ParseBillions(modelName));
+
+    /// <summary>The estimate for a known size (a catalog's, when the name does not say it); null = unknown.</summary>
+    public static Estimate ForBillions(double? b)
     {
-        double? b = ParseBillions(modelName);
         string size = b is { } v ? v.ToString(v % 1 == 0 ? "0" : "0.#", System.Globalization.CultureInfo.InvariantCulture) + "B" : "";
         return b switch
         {

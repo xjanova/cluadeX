@@ -176,7 +176,21 @@ public partial class CodeAgentService
     /// behind a compatible preset (Colibri, LM Studio, vLLM). Cheap tier on a 7B+ model, mid tier on a 30B+ one
     /// (<see cref="Agents.DispatchPolicy.UseLocalFor"/>). <paramref name="tried"/> holds the local providers this
     /// sub-agent already ran on: a weak report climbs AWAY from them, never back. Null = none (it goes to the API).</summary>
-    private async Task<Providers.IAiProvider?> LocalSubAgentProviderAsync(SubAgentTier tier, bool canEdit, IReadOnlySet<string> tried, CancellationToken ct)
+    /// <summary>A local model a sub-agent may run on, and its place on that server (<see cref="Agents.LocalSlots"/>) —
+    /// dispose it when the attempt ends.</summary>
+    private sealed record LocalPick(Providers.IAiProvider Provider, IDisposable Lease);
+
+    /// <summary>What a local server says about its model, for the tier rule: its size in billions, whether it chats, and
+    /// how many requests it answers at once (0 = no limit known). Colibri: from the plugin's catalog — its server's id
+    /// rarely carries the size, and an image model (qwen-image-2.1) has no tool loop. Others: the model's name.</summary>
+    private (double? Billions, bool Chat, int Slots) LocalModelFacts(AiProviderType t, string name)
+    {
+        if (t == AiProviderType.Colibri && Colibri.ColibriService.ModelFacts(_settingsService.DataRoot) is { } f)
+            return (f.Billions ?? Agents.ModelCapability.ParseBillions(name), f.Chat, f.Slots);
+        return (Agents.ModelCapability.ParseBillions(name), true, 0);
+    }
+
+    private async Task<LocalPick?> LocalSubAgentProviderAsync(SubAgentTier tier, bool canEdit, IReadOnlySet<string> tried, CancellationToken ct)
     {
         var s = _settingsService.Settings;
         if (!s.SubAgentLocalCheap || tier == SubAgentTier.Deep || canEdit) return null;
@@ -204,12 +218,15 @@ public partial class CodeAgentService
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch { continue; }
-            string name = LocalModelNameFor(p);
-            if (t == AiProviderType.Colibri && Agents.ModelCapability.ParseBillions(name) == null)
-                name = Colibri.ColibriService.CatalogModelId(_settingsService.DataRoot) ?? name;   // the server's id may not carry the size
-            var size = Agents.ModelCapability.ForLocal(name).Tier;
-            if (Agents.DispatchPolicy.UseLocalFor(true, tier, canEdit, runIsLocal, ready, tools, size, Agents.ModelCapability.ParseBillions(name)))
-                return p;
+            var (billions, chat, slots) = LocalModelFacts(t, LocalModelNameFor(p));
+            if (!chat) continue;   // a picture model: no tool loop to run
+            var size = Agents.ModelCapability.ForBillions(billions).Tier;
+            if (!Agents.DispatchPolicy.UseLocalFor(true, tier, canEdit, runIsLocal, ready, tools, size, billions)) continue;
+            // Only while the server has a free slot: past it the request would queue (colibri: 429 after 300 s), and the
+            // API answers now — the local model is for work that can wait for a free place, never one that waits in line.
+            string key = LocalKeyOf(p);
+            if (Agents.LocalSlots.TryTake(key, slots) is { } lease) return new LocalPick(p, lease);
+            _debugLog?.Info("Dispatch", $"local {t}: all {slots} slot(s) busy — this sub-agent goes to the API");
         }
         return null;
     }
@@ -333,13 +350,15 @@ public partial class CodeAgentService
                 // ─── this attempt: its model, provider, effort ceiling, step budget ───
                 string? model;
                 Providers.IAiProvider? onProvider = null;
+                IDisposable? localLease = null;
                 if (earlier?.Provider is { } kept) { onProvider = kept; model = earlier.Model; }
                 else if (dispatch.Legacy) model = null;
                 else if (!auto) model = Agents.DispatchPolicy.ManualModelFor(kind, runModel, s.SubAgentModelOverrides);
                 else if (await LocalSubAgentProviderAsync(tier, canEdit, triedLocal, ct) is { } local)
                 {
-                    onProvider = local;
-                    model = LocalModelNameFor(local) is { Length: > 0 } ln ? System.IO.Path.GetFileName(ln) : null;
+                    onProvider = local.Provider;
+                    localLease = local.Lease;
+                    model = LocalModelNameFor(local.Provider) is { Length: > 0 } ln ? System.IO.Path.GetFileName(ln) : null;
                 }
                 else model = Agents.DispatchPolicy.ModelForTier(tier, kind, _providerManager.ActiveProviderType, runModel,
                     request.Model, s.SubAgentModelOverrides, dispatch.BudgetCapped);
@@ -372,9 +391,14 @@ public partial class CodeAgentService
                     ? () => (Agents.DispatchPolicy.ModelForTier(SubAgentTier.Deep, kind, _providerManager.ActiveProviderType, runModel,
                                  request.Model, s.SubAgentModelOverrides), _providerManager.ActiveProvider)
                     : null;
-                string? report = await RunSubAgentCoreAsync(request, control.Token,
-                    new SubAgentRunOptions(n, label, request.Type, model, child, warm, Thread: thread, Control: control,
-                        Tier: auto ? tier : null, Color: request.Color, Provider: onProvider, MaxSteps: maxSteps, Upgrade: upgrade));
+                string? report;
+                try
+                {
+                    report = await RunSubAgentCoreAsync(request, control.Token,
+                        new SubAgentRunOptions(n, label, request.Type, model, child, warm, Thread: thread, Control: control,
+                            Tier: auto ? tier : null, Color: request.Color, Provider: onProvider, MaxSteps: maxSteps, Upgrade: upgrade));
+                }
+                finally { localLease?.Dispose(); }
 
                 // ─── a weak report climbs one tier (cheap → mid → deep), in a fresh conversation ───
                 var now = CurrentDispatch();
@@ -576,6 +600,7 @@ public partial class CodeAgentService
                     : "[Step budget reached: no more tools. Write your report now.]" });
 
             NativeToolResponse response;
+            for (int retry = 0; ; retry++)
             using (var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
                 // Idle timeout, reset by every stream event (the same keep-alive the main loop uses).
@@ -585,6 +610,35 @@ public partial class CodeAgentService
                     response = await provider.ChatWithToolsAsync(messages, system, tools,
                         onTextDelta: _ => { if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); },
                         ct: callCts.Token, toolChoice: lastStep ? "none" : null);
+                    break;
+                }
+                // A full server (colibri's 429 queue_timeout, a busy llama-server) or a passing rate limit: ask this step
+                // again after 2 / 5 / 10 s (or the wait it asked for). A local server still full after that hands the
+                // agent to the run's own model, conversation and all, instead of failing it.
+                catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested
+                                           && Agents.ProviderErrors.Classify(ex) is Agents.ProviderErrorKind.RateLimited or Agents.ProviderErrorKind.Overloaded
+                                           && !IsQuotaExhausted(ex.Message))
+                {
+                    var next = SubAgentRetry(retry, opts?.Provider != null && ReferenceEquals(provider, opts.Provider),
+                        _providerManager.ActiveProvider is { SupportsNativeToolUse: true, IsReady: true } ap && !ReferenceEquals(ap, provider));
+                    if (next == SubAgentRetryAction.Fail) throw;
+                    if (next == SubAgentRetryAction.ToRunModel)
+                    {
+                        provider = _providerManager.ActiveProvider!;
+                        foreach (var m in messages) m.Content.RemoveAll(b => b.Type is "thinking" or "redacted_thinking");
+                        string? apiModel = Agents.DispatchPolicy.ModelForTier(SubAgentTier.Cheap, Agents.SubAgentKind.Explore,
+                            _providerManager.ActiveProviderType, RunModel() is { Length: > 0 } rm ? rm : null);
+                        Agents.SubAgentModel.Use(apiModel);
+                        if (opts?.Thread != null) { opts.Thread.Provider = null; opts.Thread.Model = apiModel; }
+                        _debugLog?.Warn("SubAgent", $"{label}: the local server stayed full — carrying on with {provider.ProviderId} {apiModel ?? "(run model)"}");
+                        RaiseSubAgent(ev with { Phase = "tool", Detail = thai ? "เครื่องไม่ว่าง → ใช้โมเดลหลักต่อ" : "local busy → the run's model", Steps = step, CostUsd = Cost() });
+                        retry = -1;
+                        continue;
+                    }
+                    var wait = Agents.FailoverPolicy.RetryDelay(retry, Agents.ProviderErrors.RetryAfter(ex.Message));
+                    _debugLog?.Info("SubAgent", $"{label}: {Agents.ProviderErrors.Classify(ex)} on {provider.ProviderId} — step {step} again in {wait.TotalSeconds:0}s");
+                    RaiseSubAgent(ev with { Phase = "tool", Detail = thai ? $"รอคิว {wait.TotalSeconds:0} วิ" : $"busy — retry in {wait.TotalSeconds:0}s", Steps = step, CostUsd = Cost() });
+                    await Task.Delay(wait, ct);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && IsQuotaExhausted(ex.Message)
                                            && _settingsService.Settings.AutoFailoverOnQuota)
@@ -667,6 +721,19 @@ public partial class CodeAgentService
         RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done",
             Detail = thai ? "ใช้ขั้นครบโดยไม่ได้สรุป" : "step budget used, no report", Steps = maxSteps, CostUsd = Cost() });
         return thai ? "(เอเจนต์ย่อยใช้ขั้นตอนครบโดยไม่ได้สรุป)" : "(the sub-agent used its step budget without a report)";
+    }
+
+    public enum SubAgentRetryAction { Retry, ToRunModel, Fail }
+
+    /// <summary>
+    /// A sub-agent's request was refused as busy or rate-limited (retries before this one: <paramref name="retry"/>):
+    /// ask again (up to <see cref="Agents.FailoverPolicy.MaxRetriesPerStep"/> times); then a local server still full hands
+    /// the agent to the run's own model when there is one that runs a tool loop; else it fails. Pure.
+    /// </summary>
+    public static SubAgentRetryAction SubAgentRetry(int retry, bool onLocal, bool runModelUsable)
+    {
+        if (retry < Agents.FailoverPolicy.MaxRetriesPerStep) return SubAgentRetryAction.Retry;
+        return onLocal && runModelUsable ? SubAgentRetryAction.ToRunModel : SubAgentRetryAction.Fail;
     }
 
     private int _subAgentCounter;
