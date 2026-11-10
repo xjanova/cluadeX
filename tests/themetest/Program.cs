@@ -119,7 +119,7 @@ internal static partial class Program
                 case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
                 case "--setup-wizard": SetupWizardOnly = true; break;   // the first-run setup wizard, every page and state (SetupWizardRenders.cs)
                 case "--titlebar": TitleBarOnly = true; break;
-                case "--voice-player": VoicePlayerOnly = true; break;   // reading replies aloud: the player box, the ▶ and a click on a bubble, every theme (VoicePlayerRenders.cs)
+                case "--voice-player": VoicePlayerOnly = true; break;   // reading replies aloud: the player box and the ▶ (a click on a bubble plays nothing), every theme (VoicePlayerRenders.cs)
                 case "--chat-ref": ChatRefOnly = true; break;   // the chat's reference chip at the top of the chat, every theme (ChatRefRenders.cs)   // the main title bar in every theme and width (TitleBarRenders.cs)
                 case "--uninstall": UninstallOnly = true; break;   // the uninstall page, every page and state (UninstallRenders.cs)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;

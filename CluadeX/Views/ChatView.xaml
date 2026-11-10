@@ -1989,17 +1989,15 @@
                                         </Path.Style>
                                     </Path>
 
-                                <!-- A click on a reply's bubble reads it aloud (owner 2026-11-10: "กดที่กล้องคำพูดนั้นก็ ฟังเสียงนั้นได้") when replies
-                                     are read aloud; a drag (selecting text), a double click, a link or a button inside does not
-                                     (ChatView.xaml.cs Bubble_PreviewMouse*). The bubble being read glows (no border change: no row height change). -->
+                                <!-- The bubble being read aloud glows (no border change: no row height change). A click on its
+                                     words reads nothing (owner 2026-11-11: it read a reply already heard again); ▶ on the hover
+                                     strip plays it. -->
                                 <Border Grid.Column="1"
                                         HorizontalAlignment="{Binding Role, Converter={StaticResource RoleAlign}}"
                                         Margin="{Binding Role, Converter={StaticResource RoleMargin}}"
                                         Background="{Binding Role, Converter={StaticResource RoleBg}}"
                                         CornerRadius="{Binding Role, Converter={StaticResource RoleCorner}}"
-                                        Padding="{Binding Role, Converter={StaticResource RolePadding}}"
-                                        PreviewMouseLeftButtonDown="Bubble_PreviewMouseDown"
-                                        PreviewMouseLeftButtonUp="Bubble_PreviewMouseUp">
+                                        Padding="{Binding Role, Converter={StaticResource RolePadding}}">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Style.Triggers>

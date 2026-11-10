@@ -41,14 +41,15 @@ internal static partial class Program
     ///   - the ▶ on a reply's hover strip plays it: the player box shows above the composer, clear of the card, with
     ///     her name, "reading", 1 / 1; the ▶ turns to pause and the bubble is the queue's current one;
     ///   - a second reply that comes while she reads waits ("1 waiting") — the first is not cut;
-    ///   - a click on the second bubble's words plays it (after the double-click time); a double click does not.
+    ///   - the box shows the girl the chat shows answering (her face where the theme shows the girls, the logo otherwise);
+    ///   - a click or a double click on a bubble's words plays nothing (owner 2026-11-11): only ▶ does.
     /// Saved to renders\voice-player\&lt;theme&gt;.png (the bottom of the chat page) for the eye.
     ///
     ///   dotnet run -- --voice-player --out D:\...\themes
     /// </summary>
     static async Task VoicePlayerShots(object themes)
     {
-        Log("\n## Reading replies aloud — the player box, the ▶ and a click on the bubble, every theme");
+        Log("\n## Reading replies aloud — the player box, the ▶, and a click on the bubble that plays nothing, every theme");
         string dir = Path.Combine(OutRoot, "renders", "voice-player");
         Directory.CreateDirectory(dir);
         var chat = MainVm.ChatVM;
@@ -90,6 +91,14 @@ internal static partial class Program
             Check($"voice {id}: ▶ plays that reply", q.IsPlaying && ReferenceEquals(q.Current?.Message, first) && ReferenceEquals(silent.Playing?.Message, first) && first.IsVoicePlaying,
                 $"{q.State} · current {(q.Current?.Message == first ? "first" : "?")}");
             Check($"voice {id}: the ▶ turns to pause", (string)listen.Content == "\uE769", "");
+            // The box shows who the chat shows answering (the AI avatar beside the bubble), not the reply's default girl.
+            var active = chat.ActiveCharacter;
+            Check($"voice {id}: the box's girl is the one the chat shows", q.Current?.Character?.Own == active.Own && q.Current?.Girl == active.Own,
+                $"box {q.Current?.Character?.Own} · voice {q.Current?.Girl} · chat {active.Own}");
+            var faceDisc = (FrameworkElement)bar.FindName("FaceDisc");
+            bool girlsShown = CluadeX.Views.CharacterLook.GetShow(bar) == Visibility.Visible;
+            Check($"voice {id}: her face where the theme shows the girls, the logo otherwise", faceDisc != null && faceDisc.IsVisible == (girlsShown && active.FaceBrush != null),
+                $"face {faceDisc?.IsVisible} · girls shown {girlsShown}");
             var card = Find<Border>(root).FirstOrDefault(b => b.Name == "ComposerCard");
             Check($"voice {id}: the box shows above the composer, clear of it", bar.IsVisible && card != null && Bottom(bar, root) <= Top(card, root) + 1,
                 $"box bottom {Bottom(bar, root):0} · card top {(card == null ? -1 : Top(card, root)):0}");
@@ -103,7 +112,7 @@ internal static partial class Program
             var full = await Stable(() => (root, W, H), $"voice-player/{id}");
             SavePng(new CroppedBitmap(full, new Int32Rect(0, H - 320, W, 320)), Path.Combine(dir, id.ToLowerInvariant() + ".png"));
 
-            // 3. A click on the second bubble's words plays it — after the double-click time; a double click does not.
+            // 3. A click or a double click on the second bubble's words plays nothing.
             silent.Finish();   // first done → second plays by itself
             await Idle(100);
             Check($"voice {id}: when the first ends, the waiting one plays", ReferenceEquals(silent.Playing?.Message, second), "");
@@ -116,9 +125,10 @@ internal static partial class Program
             Press(words, 2); Release(words);   // a double click (selects a word): nothing plays
             await Task.Delay(800); await Idle();
             Check($"voice {id}: a double click on the words plays nothing", silent.Playing == null, $"{q.State}");
+            // A click on a reply's words reads nothing (owner 2026-11-11: it read a reply already heard again): only ▶.
             Press(words, 1); Release(words);
             await Task.Delay(800); await Idle();
-            Check($"voice {id}: a click on the bubble's words plays it", ReferenceEquals(silent.Playing?.Message, second) && second.IsVoicePlaying, $"{q.State}");
+            Check($"voice {id}: a click on the bubble's words plays nothing", silent.Playing == null && !second.IsVoicePlaying, $"{q.State}");
             q.Clear();
             await Idle(60);
             Check($"voice {id}: ✕ empties and hides the box", !bar.IsVisible && !second.IsVoiceCurrent, "");

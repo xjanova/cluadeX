@@ -13,13 +13,14 @@ public sealed class SpokenItem : INotifyPropertyChanged
     private bool _heard;
     private string? _error;
 
-    public SpokenItem(string text, bool thai, string? girl, ChatMessage? message = null, string? preview = null)
+    public SpokenItem(string text, bool thai, string? girl, ChatMessage? message = null, string? preview = null, ChatCharacter? character = null)
     {
         Id = Interlocked.Increment(ref _ids);
         Text = text;
         Thai = thai;
         Girl = girl ?? "";
         Message = message;
+        _character = character;
         string p = (preview ?? text).Replace('\n', ' ').Replace('\r', ' ').Trim();
         while (p.Contains("  ", StringComparison.Ordinal)) p = p.Replace("  ", " ", StringComparison.Ordinal);
         Preview = p.Length > 90 ? p[..90].TrimEnd() + "…" : p;
@@ -37,8 +38,12 @@ public sealed class SpokenItem : INotifyPropertyChanged
     public ChatMessage? Message { get; }
     /// <summary>The first words, for the player box.</summary>
     public string Preview { get; }
-    /// <summary>The face shown in the player box.</summary>
-    public ChatCharacter? Character => Message?.Character;
+    private readonly ChatCharacter? _character;
+
+    /// <summary>Who wrote it — the face and name in the player box. The chat passes the girl its bubbles show (the
+    /// answering provider's, or the room member who spoke): a reply's own <see cref="ChatMessage.Character"/> is only set
+    /// on the boxes a run opens, so for a reply it is the default girl (owner 2026-11-11: "ไอค่อนเอไอไม่ตรง").</summary>
+    public ChatCharacter? Character => _character ?? Message?.Character;
 
     /// <summary>The synthesized audio, kept so going back to it plays at once (and a paid voice is not paid twice).
     /// Null for the browser voice, which the mic window speaks from the text.</summary>

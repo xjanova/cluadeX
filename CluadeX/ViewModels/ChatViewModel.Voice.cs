@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Windows;
 using System.Windows.Input;
 using CluadeX.Models;
+using CluadeX.Services;
 using CluadeX.Services.Voice;
 using CluadeX.Services.Voice.Tts;
 
@@ -281,8 +282,16 @@ public partial class ChatViewModel
         bool thai = reply.Content.Any(c => c >= '฀' && c <= '๿');
         int max = Math.Clamp(_settingsService.Settings.Voice?.MaxChars ?? 1200, 100, 10000);
         string text = SpeechText.ForSpeech(reply.Content, thai, max);
-        return text.Length == 0 ? null : new SpokenItem(text, thai, reply.Character.Own, reply);
+        if (text.Length == 0) return null;
+        var who = ReplyCharacter(reply);
+        return new SpokenItem(text, thai, who.Own, reply, character: who);
     }
+
+    /// <summary>The girl a reply bubble is shown with — the face and the voice it is read in: the room member who
+    /// spoke it, else the girl of the provider answering this chat (what the AI avatar beside the bubble shows). The
+    /// reply's own Character is the default girl: it is only set on the boxes a run opens.</summary>
+    private ChatCharacter ReplyCharacter(ChatMessage reply) =>
+        reply.RoomSpeaker is { Length: > 0 } speaker ? ChatCharacter.ForRoomAgent(speaker) : ActiveCharacter;
 
     /// <summary>The ▶ on a reply's hover strip, or a click on the bubble: read this one now (it is the user's ask, so it
     /// may cut the one playing); whatever was waiting plays after it. On the one playing it pauses.</summary>
