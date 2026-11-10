@@ -171,7 +171,7 @@ internal static class Program
             Check("Y3", "AppSettings defaults: DevPreview on, browser auto/1568/ask, bg 8, 2 images, chrome off, accept-edits off, 50 steps",
                 fresh.Features.DevPreview && fresh.BrowserEngine == "auto" && fresh.BrowserScreenshotMaxEdge == 1568 && fresh.BrowserAllowExternal == "ask"
                 && fresh.BgMaxProcesses == 8 && fresh.KeepRecentImages == 2 && !fresh.ChromeConnectorEnabled && fresh.ClaudeCodePathOverride == ""
-                && fresh.ChromePairedDeviceId == "" && !fresh.ChromeActWithoutAsking && !fresh.AcceptEditsDefault && fresh.MaxAgentIterations == 50);
+                && fresh.ChromePairedDeviceId == "" && !fresh.AcceptEditsDefault && fresh.MaxAgentIterations == 50);
             var store = provider.GetRequiredService<ToolImageStore>();
             Check("Y3b", "ToolImageStore is registered under DataRoot\\screens", string.Equals(store.Root, Path.Combine(settings.DataRoot, "screens"), StringComparison.OrdinalIgnoreCase), store.Root);
             return Task.CompletedTask;

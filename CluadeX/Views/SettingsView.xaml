@@ -240,6 +240,13 @@
                     </StackPanel>
                 </RadioButton>
                 <RadioButton Style="{StaticResource SettingsNavItem}"
+                             IsChecked="{Binding SelectedCategory, Converter={StaticResource NavConverter}, ConverterParameter=voice}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE767;" FontFamily="Segoe MDL2 Assets" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="{services:Loc settings.cat.voice}"/>
+                    </StackPanel>
+                </RadioButton>
+                <RadioButton Style="{StaticResource SettingsNavItem}"
                              IsChecked="{Binding SelectedCategory, Converter={StaticResource NavConverter}, ConverterParameter=local}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE7F4;" FontFamily="Segoe MDL2 Assets" Margin="0,0,10,0" VerticalAlignment="Center"/>
@@ -271,15 +278,27 @@
                                     <TextBlock Text="{services:Loc settings.card.connection}" Style="{StaticResource CardTitle}" Margin="0"/>
                                     <Border HorizontalAlignment="Right" CornerRadius="10" Padding="10,3" Background="{DynamicResource Status.Success.Tint.Faint}">
                                         <TextBlock FontSize="11" Foreground="{DynamicResource Status.Success}">
-                                            <Run Text="●"/><Run Text=" "/><Run Text="{Binding ActiveProviderName, Mode=OneWay}"/>
+                                            <Run Text="●"/><Run Text=" "/><Run Text="{services:Loc settings.inUse}"/><Run Text=" "/><Run Text="{Binding ActiveProviderName, Mode=OneWay}"/>
                                         </TextBlock>
                                     </Border>
                                 </Grid>
 
+                                <!-- This card only CONFIGURES a provider; the chat's model box is what switches the one that answers. -->
                                 <TextBlock Text="{services:Loc settings.activeProvider}" Style="{StaticResource SettingLabel}"/>
                                 <TextBlock Text="{services:Loc settings.providerChoose}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
-                                <ComboBox ItemsSource="{Binding ProviderChoices}" SelectedValuePath="Type" SelectedValue="{Binding SelectedProvider}"
-                                          Width="300" HorizontalAlignment="Left" Margin="0,0,0,16">
+                                <ComboBox x:Name="ProviderPicker" ItemsSource="{Binding ProviderChoicesView}" SelectedValuePath="Type" SelectedValue="{Binding SelectedProvider}"
+                                          Width="320" HorizontalAlignment="Left" Margin="0,0,0,16" MaxDropDownHeight="420">
+                                    <!-- grouped: cloud APIs · installed CLIs · OpenAI-compatible services · on this PC · other -->
+                                    <ComboBox.GroupStyle>
+                                        <GroupStyle>
+                                            <GroupStyle.HeaderTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Name.Title}" FontSize="11" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource Text.Muted}" Margin="6,8,6,2" TextWrapping="Wrap"/>
+                                                </DataTemplate>
+                                            </GroupStyle.HeaderTemplate>
+                                        </GroupStyle>
+                                    </ComboBox.GroupStyle>
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate>
                                             <StackPanel Orientation="Horizontal">
@@ -331,21 +350,33 @@
                                     </StackPanel>
                                 </Border>
 
-                                <TextBlock Text="{services:Loc settings.localGgufNotice}" Foreground="{DynamicResource Accent.1}"
-                                           FontSize="12" TextWrapping="Wrap" Margin="0,0,0,16"
-                                           Visibility="{Binding IsLocalSelected, Converter={StaticResource BoolVis}}"/>
+                                <!-- Little or nothing to set (CLIs, BrainX, Colibri, GGUF): one line, and the page that has the rest -->
+                                <Border Visibility="{Binding ProviderNote, Converter={StaticResource BoolVis}}" Margin="0,0,0,16"
+                                        Padding="12,10" CornerRadius="8" Background="{DynamicResource Accent.1.Tint.Faint}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding ProviderNote}" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Text.Body}"/>
+                                        <Button Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Padding="10,5" Margin="0,8,0,0"
+                                                Content="{services:Loc settings.openModelsPage}" CommandParameter="Models"
+                                                Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                Visibility="{Binding ShowModelsPageButton, Converter={StaticResource BoolVis}}"/>
+                                        <Button Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Padding="10,5" Margin="0,8,0,0"
+                                                Content="{services:Loc settings.openPluginsPage}" CommandParameter="Plugins"
+                                                Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                Visibility="{Binding ShowPluginsPageButton, Converter={StaticResource BoolVis}}"/>
+                                    </StackPanel>
+                                </Border>
 
-                                <!-- API key -->
+                                <!-- API key: required for the cloud services, optional for a server on this PC or a custom endpoint -->
                                 <StackPanel Visibility="{Binding NeedsApiKey, Converter={StaticResource BoolVis}}" Margin="0,0,0,16">
-                                    <TextBlock Text="{services:Loc settings.apiKey}" Style="{StaticResource SettingLabel}"/>
-                                    <TextBlock Style="{StaticResource SettingDesc}" Text="{services:Loc settings.apiKeyDesc}"/>
-                                    <TextBlock Margin="0,2,0,8" FontSize="11">
+                                    <TextBlock Text="{Binding ApiKeyLabel}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBlock Style="{StaticResource SettingDesc}" Text="{Binding ApiKeyHelp}"/>
+                                    <TextBlock Margin="0,2,0,2" FontSize="11" Visibility="{Binding HasApiKeyLink, Converter={StaticResource BoolVis}}">
                                         <Hyperlink NavigateUri="{Binding ApiKeyLink}" RequestNavigate="Hyperlink_RequestNavigate"
                                                    Foreground="{DynamicResource Accent.1}">
                                             <Run Text="{Binding ApiKeyLinkText, Mode=OneWay}"/>
                                         </Hyperlink>
                                     </TextBlock>
-                                    <Grid>
+                                    <Grid Margin="0,6,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
@@ -390,17 +421,32 @@
                                     <TextBox Text="{Binding ProviderWorkspaceId, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"/>
                                 </StackPanel>
 
-                                <!-- Base URL — only providers that read it -->
-                                <StackPanel Visibility="{Binding SupportsBaseUrl, Converter={StaticResource BoolVis}}" Margin="0,0,0,16">
-                                    <TextBlock Text="{services:Loc settings.baseUrl}" Style="{StaticResource SettingLabel}"/>
-                                    <TextBlock Text="{services:Loc settings.baseUrlDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
+                                <!-- Prompt caching (Anthropic only: the cache marks are Claude API's) — a page-wide setting, shown here
+                                     beside the rest of the Claude API's details instead of a card of its own on Model & output -->
+                                <Grid Style="{StaticResource Row}" Visibility="{Binding IsAnthropicSelected, Converter={StaticResource BoolVis}}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.promptCaching}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.cachingDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding PromptCachingEnabled}" Style="{StaticResource ModernCheckBox}"
+                                              VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+
+                                <!-- Base URL: typed where it has to be (Azure, a custom endpoint, Ollama, LM Studio / vLLM);
+                                     behind a switch for a fixed-address service that still takes a proxy; never for the others -->
+                                <CheckBox Content="{services:Loc settings.baseUrlOverride}" IsChecked="{Binding ShowBaseUrlOverride}" Margin="0,0,0,12"
+                                          Visibility="{Binding BaseUrlIsAdvanced, Converter={StaticResource BoolVis}}"/>
+                                <StackPanel Visibility="{Binding ShowBaseUrlBox, Converter={StaticResource BoolVis}}" Margin="0,0,0,16">
+                                    <TextBlock Text="{Binding BaseUrlLabel}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBlock Text="{Binding BaseUrlHelp}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
                                     <TextBox Text="{Binding ProviderBaseUrl, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"/>
                                     <TextBlock Text="{Binding BaseUrlHint}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,4,0,0"
-                                               TextWrapping="Wrap" Visibility="{Binding ShowProviderGuide, Converter={StaticResource BoolVis}}"/>
+                                               TextWrapping="Wrap" Visibility="{Binding HasBaseUrlHint, Converter={StaticResource BoolVis}}"/>
                                 </StackPanel>
 
-                                <!-- Model -->
-                                <StackPanel Visibility="{Binding IsLocalSelected, Converter={StaticResource BoolVis}, ConverterParameter=Invert}" Margin="0,0,0,8">
+                                <!-- Model: not for llama.cpp / the GGUF runner (Models page), BrainX (the room) or Colibri (its plugin) -->
+                                <StackPanel Visibility="{Binding ShowModelFields, Converter={StaticResource BoolVis}}" Margin="0,0,0,8">
                                     <TextBlock Text="{services:Loc settings.model}" Style="{StaticResource SettingLabel}" Margin="0,0,0,8"/>
                                     <Grid Margin="0,0,0,8">
                                         <Grid.ColumnDefinitions>
@@ -463,7 +509,12 @@
                                              Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
                                 </Grid>
 
-                                <Grid Style="{StaticResource Row}">
+                                <!-- Temperature / Top P only while the provider answering the chat reads them (the CLIs and BrainX
+                                     read neither; Top P only Gemini, Ollama and the GGUF runners) — a line says so otherwise -->
+                                <TextBlock Text="{Binding SamplingNote}" Style="{StaticResource SettingDesc}" Margin="0,0,0,16"
+                                           Foreground="{DynamicResource Text.Secondary}"
+                                           Visibility="{Binding SamplingNote, Converter={StaticResource BoolVis}}"/>
+                                <Grid Style="{StaticResource Row}" Visibility="{Binding ShowTemperature, Converter={StaticResource BoolVis}}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
                                         <TextBlock Style="{StaticResource SettingLabel}">
@@ -475,7 +526,7 @@
                                             IsSnapToTickEnabled="True" Width="220" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
 
-                                <Grid Style="{StaticResource Row}" Margin="0">
+                                <Grid Style="{StaticResource Row}" Margin="0" Visibility="{Binding ShowTopP, Converter={StaticResource BoolVis}}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
                                         <TextBlock Style="{StaticResource SettingLabel}">
@@ -489,20 +540,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Style="{StaticResource Card}">
-                            <StackPanel>
-                                <TextBlock Text="{services:Loc settings.card.claude}" Style="{StaticResource CardTitle}"/>
-                                <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="{services:Loc settings.promptCaching}" Style="{StaticResource SettingLabel}"/>
-                                        <TextBlock Text="{services:Loc settings.cachingDesc}" Style="{StaticResource SettingDesc}"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding PromptCachingEnabled}" Style="{StaticResource ModernCheckBox}"
-                                              VerticalAlignment="Center" Margin="16,0,0,0"/>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
+                        <!-- Prompt caching moved to AI connections › Anthropic (it only acts on Claude API requests). -->
                                             </views:MasonryPanel>
                     </StackPanel>
 
@@ -642,28 +680,6 @@
                                     <TextBox Grid.Column="1" Text="{Binding SpeculativeFixMinutes, UpdateSourceTrigger=PropertyChanged}"
                                              Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
                                 </Grid>
-                                <TextBlock Text="{services:Loc settings.modelOverrides}" Style="{StaticResource SettingLabel}" Margin="0,4,0,0"/>
-                                <TextBlock Text="{services:Loc settings.modelOverridesDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
-                                <StackPanel Margin="0,0,0,10">
-                                    <TextBlock Text="{services:Loc settings.modelExplore}" Style="{StaticResource SettingLabel}"/>
-                                    <TextBox Text="{Binding ExploreModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
-                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
-                                </StackPanel>
-                                <StackPanel Margin="0,0,0,10">
-                                    <TextBlock Text="{services:Loc settings.modelCode}" Style="{StaticResource SettingLabel}"/>
-                                    <TextBox Text="{Binding CodeModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
-                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
-                                </StackPanel>
-                                <StackPanel Margin="0,0,0,10">
-                                    <TextBlock Text="{services:Loc settings.modelReview}" Style="{StaticResource SettingLabel}"/>
-                                    <TextBox Text="{Binding ReviewModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
-                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
-                                </StackPanel>
-                                <StackPanel Margin="0,0,0,10">
-                                    <TextBlock Text="{services:Loc settings.modelHardFix}" Style="{StaticResource SettingLabel}"/>
-                                    <TextBox Text="{Binding HardFixModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
-                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
-                                </StackPanel>
                                 <!-- sub-agent tiers: auto model picks cheap / mid / deep per sub-agent -->
                                 <TextBlock Text="{services:Loc settings.tiers}" Style="{StaticResource SettingLabel}" Margin="0,8,0,0"/>
                                 <TextBlock Text="{services:Loc settings.tiersDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,4"/>
@@ -705,6 +721,33 @@
                                     <TextBlock Text="{services:Loc settings.modelDeep}" Style="{StaticResource SettingLabel}"/>
                                     <TextBox Text="{Binding DeepModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
                                              FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <!-- Advanced: the per-kind models. Not dead with auto model on (DispatchPolicy.ModelForTier: a blank tier
+                                     box falls back to "explore" for read-only work and to code / review / hard fix on the deep tier), but
+                                     rarely needed — folded away, opened by itself when one is filled in. -->
+                                <CheckBox Content="{services:Loc settings.dispatchAdvanced}" IsChecked="{Binding ShowDispatchAdvanced}" Margin="0,6,0,10"/>
+                                <StackPanel Visibility="{Binding ShowDispatchAdvanced, Converter={StaticResource BoolVis}}" Margin="18,0,0,0">
+                                    <TextBlock Text="{services:Loc settings.dispatchAdvancedDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock Text="{services:Loc settings.modelExplore}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBox Text="{Binding ExploreModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                                 FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock Text="{services:Loc settings.modelCode}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBox Text="{Binding CodeModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                                 FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock Text="{services:Loc settings.modelReview}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBox Text="{Binding ReviewModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                                 FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock Text="{services:Loc settings.modelHardFix}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBox Text="{Binding HardFixModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                                 FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                    </StackPanel>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -780,42 +823,67 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Style="{StaticResource Card}">
+
+                        <!-- Batch jobs: half-price batch API work (Anthropic / OpenAI) and where its answers are. -->
+                        <Border Style="{StaticResource Card}" Visibility="{Binding HasBatchService, Converter={StaticResource BoolVis}}">
                             <StackPanel>
-                                <TextBlock Text="{services:Loc settings.card.knowledge}" Style="{StaticResource CardTitle}"/>
+                                <TextBlock Text="{services:Loc settings.card.batch}" Style="{StaticResource CardTitle}"/>
+                                <TextBlock Text="{services:Loc settings.batchDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
-                                        <TextBlock Text="{services:Loc settings.brainRecall}" Style="{StaticResource SettingLabel}"/>
-                                        <TextBlock Text="{services:Loc settings.brainRecallDesc}" Style="{StaticResource SettingDesc}"/>
+                                        <TextBlock Text="{services:Loc settings.batchBackground}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.batchBackgroundDesc}" Style="{StaticResource SettingDesc}"/>
                                     </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding BrainAutoRecallEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding BatchBackgroundWork}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
-                                <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="{services:Loc settings.semanticSearch}" Style="{StaticResource SettingLabel}"/>
-                                        <TextBlock Text="{services:Loc settings.semanticSearchDesc}" Style="{StaticResource SettingDesc}"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding SemanticSearchEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
-                                </Grid>
-                                <Grid Style="{StaticResource Row}" Visibility="{Binding IsOllamaSelected, Converter={StaticResource BoolVis}}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel Margin="18,0,0,0">
-                                        <TextBlock Text="{services:Loc settings.embeddingModel}" Style="{StaticResource SettingLabel}"/>
-                                        <TextBlock Text="{services:Loc settings.embeddingModelTip}" Style="{StaticResource SettingDesc}"/>
-                                    </StackPanel>
-                                    <TextBox Grid.Column="1" Text="{Binding EmbeddingModel, UpdateSourceTrigger=PropertyChanged}"
-                                             Style="{StaticResource NumBox}" Width="200" Margin="16,0,0,0"/>
-                                </Grid>
-                                <Grid Style="{StaticResource Row}" Margin="0">
-                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="{services:Loc settings.learnInstincts}" Style="{StaticResource SettingLabel}"/>
-                                        <TextBlock Text="{services:Loc settings.learnInstinctsDesc}" Style="{StaticResource SettingDesc}"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding InstinctLearningEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
-                                </Grid>
+                                <ListBox ItemsSource="{Binding BatchJobs}" SelectedItem="{Binding SelectedBatchJob}"
+                                         Background="Transparent" BorderThickness="0" MaxHeight="220" Margin="0,8,0,8">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="2">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Border Background="{StaticResource Surface0Brush}" CornerRadius="3" Padding="4,1" Margin="0,0,6,0">
+                                                        <TextBlock Text="{Binding StateText}" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource MauveBrush}"/>
+                                                    </Border>
+                                                    <TextBlock Text="{Binding Title}" FontSize="12" Foreground="{StaticResource TextBrush}"
+                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="420"/>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Summary}" FontSize="10" Foreground="{StaticResource Overlay0Brush}" Margin="0,2,0,0"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Text="{Binding ErrorText}" FontSize="10" Foreground="{StaticResource RedBrush}" Margin="0,2,0,0"
+                                                           TextWrapping="Wrap" MaxWidth="560"
+                                                           Visibility="{Binding ErrorText, Converter={StaticResource NullToCollapsed}}"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBox Text="{Binding SelectedBatchAnswer, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource WideBox}"
+                                         TextWrapping="Wrap" MaxHeight="160" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8" FontSize="11"
+                                         Visibility="{Binding SelectedBatchJob, Converter={StaticResource NullToCollapsed}}"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding CheckBatchesCommand}" Padding="10,5" Margin="0,0,8,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBlock Text="{services:Loc batch.checkNow}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding CancelBatchCommand}" Padding="10,5" Margin="0,0,8,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBlock Text="{services:Loc batch.cancel}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding RemoveBatchCommand}" Padding="10,5"
+                                            Foreground="{StaticResource RedBrush}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBlock Text="{services:Loc batch.remove}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <TextBlock Text="{Binding BatchStatusText}" Foreground="{StaticResource Subtext0Brush}"
+                                               FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                                             </views:MasonryPanel>
@@ -901,7 +969,7 @@
                                     <TextBlock Text="{services:Loc settings.compactionToast}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center"/>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding EnableStrategicCompactionToast}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
-                                <Grid Style="{StaticResource Row}">
+                                <Grid Style="{StaticResource Row}" Margin="0">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
                                         <TextBlock Text="{services:Loc settings.autoCompact}" Style="{StaticResource SettingLabel}"/>
@@ -909,7 +977,16 @@
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding AutoCompactWhenSuggested}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
-                                <Grid Style="{StaticResource Row}" Margin="0">
+                            </StackPanel>
+                        </Border>
+
+
+                        <!-- Memory (2026-11-10): everything the agent remembers or looks up between sessions in one card — session
+                             memory, instincts, BrainX recall, semantic search, then the saved memories themselves. -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc settings.card.memory}" Style="{StaticResource CardTitle}"/>
+                                <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
                                         <TextBlock Text="{services:Loc settings.sessionMemory}" Style="{StaticResource SettingLabel}"/>
@@ -917,8 +994,98 @@
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding SessionMemoryEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.learnInstincts}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.learnInstinctsDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding InstinctLearningEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.brainRecall}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.brainRecallDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding BrainAutoRecallEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <!-- Semantic search always runs on the local Ollama (EmbeddingService), whatever AI answers — so its model
+                                     box shows whenever the search is on, not only while the connection card is on Ollama. -->
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.semanticSearch}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.semanticSearchDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SemanticSearchEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" Visibility="{Binding SemanticSearchEnabled, Converter={StaticResource BoolVis}}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="18,0,0,0">
+                                        <TextBlock Text="{services:Loc settings.embeddingModel}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.embeddingModelTip}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding EmbeddingModel, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Width="200" Margin="16,0,0,0"/>
+                                </Grid>
+
+                                <Border BorderBrush="{DynamicResource Card.Border}" BorderThickness="0,1,0,0" Padding="0,12,0,0" Margin="0,0,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.card.memories}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.memoriesDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
+                                        <ListBox ItemsSource="{Binding Memories}" SelectedItem="{Binding SelectedMemory}"
+                                                 Background="Transparent" BorderThickness="0" MaxHeight="220" Margin="0,0,0,8"
+                                                 ItemContainerStyle="{StaticResource PlainListRow}">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" Margin="2">
+                                                        <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="3" Padding="4,1" Margin="0,0,6,0">
+                                                            <TextBlock Text="{Binding Type}" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource Accent.2}"/>
+                                                        </Border>
+                                                        <TextBlock Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource Text.Primary}"
+                                                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                        <TextBlock Text="{Binding Description}" FontSize="11" Foreground="{DynamicResource Text.Muted}"
+                                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="320"/>
+                                                        <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="3" Padding="4,1" Margin="8,0,0,0">
+                                                            <TextBlock Text="{Binding Scope}" FontSize="9" Foreground="{DynamicResource Text.Secondary}"/>
+                                                        </Border>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                        <TextBox Text="{Binding SelectedMemoryContent, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource WideBox}"
+                                                 TextWrapping="Wrap" MaxHeight="140" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8" FontSize="11"
+                                                 Visibility="{Binding SelectedMemory, Converter={StaticResource NullToCollapsed}}"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Style="{StaticResource SecondaryButton}" Command="{Binding RefreshMemoriesCommand}" Padding="10,5" Margin="0,0,8,0">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock Text="{services:Loc settings.refresh}" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Style="{StaticResource SecondaryButton}" Command="{Binding DeleteMemoryCommand}" Padding="10,5"
+                                                    Foreground="{DynamicResource Status.Danger}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock Text="{services:Loc settings.deleteSelected}" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <TextBlock Text="{Binding MemoryStatusText}" Foreground="{DynamicResource Text.Secondary}"
+                                                       FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
+                                            </views:MasonryPanel>
+                    </StackPanel>
+
+                    <!-- ─────────────── VOICE ─────────────── -->
+                    <StackPanel Visibility="{Binding SelectedCategory, Converter={StaticResource EqVis}, ConverterParameter=voice}">
+                        <TextBlock Text="{services:Loc settings.cat.voice}" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="{services:Loc settings.catDesc.voice}" Style="{StaticResource SectionDesc}"/>
+<views:MasonryPanel MinColumnWidth="460" Gap="14">
 
                         <!-- Voice (2026-10-19): read replies aloud (free) and the GPT-Live call (paid) — both off by default -->
                         <Border Style="{StaticResource Card}">
@@ -963,116 +1130,6 @@
                                     <ComboBox Grid.Column="1" ItemsSource="{Binding VoiceLiveVoiceOptions}" SelectedItem="{Binding VoiceLiveVoice}"
                                               Width="140" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
-                            </StackPanel>
-                        </Border>
-
-                        <Border Style="{StaticResource Card}">
-                            <StackPanel>
-                                <TextBlock Text="{services:Loc settings.card.memories}" Style="{StaticResource CardTitle}"/>
-                                <TextBlock Text="{services:Loc settings.memoriesDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
-                                <ListBox ItemsSource="{Binding Memories}" SelectedItem="{Binding SelectedMemory}"
-                                         Background="Transparent" BorderThickness="0" MaxHeight="220" Margin="0,0,0,8"
-                                         ItemContainerStyle="{StaticResource PlainListRow}">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <StackPanel Orientation="Horizontal" Margin="2">
-                                                <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="3" Padding="4,1" Margin="0,0,6,0">
-                                                    <TextBlock Text="{Binding Type}" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource Accent.2}"/>
-                                                </Border>
-                                                <TextBlock Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource Text.Primary}"
-                                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                <TextBlock Text="{Binding Description}" FontSize="11" Foreground="{DynamicResource Text.Muted}"
-                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="320"/>
-                                                <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="3" Padding="4,1" Margin="8,0,0,0">
-                                                    <TextBlock Text="{Binding Scope}" FontSize="9" Foreground="{DynamicResource Text.Secondary}"/>
-                                                </Border>
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                                <TextBox Text="{Binding SelectedMemoryContent, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource WideBox}"
-                                         TextWrapping="Wrap" MaxHeight="140" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8" FontSize="11"
-                                         Visibility="{Binding SelectedMemory, Converter={StaticResource NullToCollapsed}}"/>
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding RefreshMemoriesCommand}" Padding="10,5" Margin="0,0,8,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                            <TextBlock Text="{services:Loc settings.refresh}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding DeleteMemoryCommand}" Padding="10,5"
-                                            Foreground="{DynamicResource Status.Danger}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                            <TextBlock Text="{services:Loc settings.deleteSelected}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <TextBlock Text="{Binding MemoryStatusText}" Foreground="{DynamicResource Text.Secondary}"
-                                               FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- Batch jobs: half-price batch API work (Anthropic / OpenAI) and where its answers are. -->
-                        <Border Style="{StaticResource Card}" Visibility="{Binding HasBatchService, Converter={StaticResource BoolVis}}">
-                            <StackPanel>
-                                <TextBlock Text="{services:Loc settings.card.batch}" Style="{StaticResource CardTitle}"/>
-                                <TextBlock Text="{services:Loc settings.batchDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
-                                <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="{services:Loc settings.batchBackground}" Style="{StaticResource SettingLabel}"/>
-                                        <TextBlock Text="{services:Loc settings.batchBackgroundDesc}" Style="{StaticResource SettingDesc}"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding BatchBackgroundWork}" VerticalAlignment="Center" Margin="16,0,0,0"/>
-                                </Grid>
-                                <ListBox ItemsSource="{Binding BatchJobs}" SelectedItem="{Binding SelectedBatchJob}"
-                                         Background="Transparent" BorderThickness="0" MaxHeight="220" Margin="0,8,0,8">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <StackPanel Margin="2">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <Border Background="{StaticResource Surface0Brush}" CornerRadius="3" Padding="4,1" Margin="0,0,6,0">
-                                                        <TextBlock Text="{Binding StateText}" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource MauveBrush}"/>
-                                                    </Border>
-                                                    <TextBlock Text="{Binding Title}" FontSize="12" Foreground="{StaticResource TextBrush}"
-                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="420"/>
-                                                </StackPanel>
-                                                <TextBlock Text="{Binding Summary}" FontSize="10" Foreground="{StaticResource Overlay0Brush}" Margin="0,2,0,0"
-                                                           TextTrimming="CharacterEllipsis"/>
-                                                <TextBlock Text="{Binding ErrorText}" FontSize="10" Foreground="{StaticResource RedBrush}" Margin="0,2,0,0"
-                                                           TextWrapping="Wrap" MaxWidth="560"
-                                                           Visibility="{Binding ErrorText, Converter={StaticResource NullToCollapsed}}"/>
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                                <TextBox Text="{Binding SelectedBatchAnswer, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource WideBox}"
-                                         TextWrapping="Wrap" MaxHeight="160" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8" FontSize="11"
-                                         Visibility="{Binding SelectedBatchJob, Converter={StaticResource NullToCollapsed}}"/>
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding CheckBatchesCommand}" Padding="10,5" Margin="0,0,8,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                            <TextBlock Text="{services:Loc batch.checkNow}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding CancelBatchCommand}" Padding="10,5" Margin="0,0,8,0">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                            <TextBlock Text="{services:Loc batch.cancel}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding RemoveBatchCommand}" Padding="10,5"
-                                            Foreground="{StaticResource RedBrush}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                            <TextBlock Text="{services:Loc batch.remove}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <TextBlock Text="{Binding BatchStatusText}" Foreground="{StaticResource Subtext0Brush}"
-                                               FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
-                                </StackPanel>
                             </StackPanel>
                         </Border>
                                             </views:MasonryPanel>
@@ -1231,25 +1288,44 @@
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="{services:Loc settings.card.sampling}" Style="{StaticResource CardTitle}"/>
-                                <Grid>
+                                <!-- Each row names who reads it: Top-K / Min-P / tool-call temperature go out from llama-server and Ollama
+                                     only (LlamaServerProvider / OllamaProvider), the repeat window from Ollama only (repeat_last_n) —
+                                     shown whatever the connection card is on, which says nothing about the model in use. -->
+                                <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                                    <TextBlock Text="Top-K" Style="{StaticResource SettingLabel}" VerticalAlignment="Center" ToolTip="{services:Loc settings.zeroDisabled}"/>
-                                    <TextBox Grid.Column="1" Text="{Binding TopK, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource NumBox}"
-                                             Margin="16,0,0,10" ToolTip="{services:Loc settings.zeroDisabled}"/>
-                                    <TextBlock Grid.Row="1" Text="Min-P" Style="{StaticResource SettingLabel}" VerticalAlignment="Center" ToolTip="{services:Loc settings.zeroDisabled}"/>
-                                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding MinP, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource NumBox}"
-                                             Margin="16,0,0,10" ToolTip="{services:Loc settings.zeroDisabled}"/>
-                                    <TextBlock Grid.Row="2" Text="{services:Loc settings.repeatWindow}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center"
-                                               Visibility="{Binding IsOllamaSelected, Converter={StaticResource BoolVis}}"
-                                               ToolTip="{services:Loc settings.repeatWindowTip}"/>
-                                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding RepeatPenaltyTokens, UpdateSourceTrigger=PropertyChanged}"
-                                             Visibility="{Binding IsOllamaSelected, Converter={StaticResource BoolVis}}"
-                                             Style="{StaticResource NumBox}" Margin="16,0,0,10" ToolTip="{services:Loc settings.repeatWindowTip}"/>
-                                    <TextBlock Grid.Row="3" Text="{services:Loc settings.toolCallTemp}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center"
-                                               ToolTip="{services:Loc settings.toolCallTempTip}"/>
-                                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding ToolCallTemperature, UpdateSourceTrigger=PropertyChanged}"
-                                             Style="{StaticResource NumBox}" Margin="16,0,0,0" ToolTip="{services:Loc settings.toolCallTempTip}"/>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.topK}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.zeroDisabled}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding TopK, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.minP}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.zeroDisabled}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding MinP, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.repeatWindow}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.repeatWindowTip}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding RepeatPenaltyTokens, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" Margin="0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.toolCallTemp}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.toolCallTempTip}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding ToolCallTemperature, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
                                 </Grid>
                             </StackPanel>
                         </Border>

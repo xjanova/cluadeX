@@ -25,7 +25,7 @@ public partial class SettingsViewModel : ViewModelBase
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     private string _selectedCategory = "provider";
-    /// <summary>provider · model · agent · autonomous · memory · local · general</summary>
+    /// <summary>provider · model · agent · autonomous · memory · voice · local · general</summary>
     public string SelectedCategory { get => _selectedCategory; set => SetProperty(ref _selectedCategory, value); }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -85,10 +85,10 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(EmbeddingModel)] = (vm, s) => s.EmbeddingModel = vm.EmbeddingModel?.Trim() ?? "",
         [nameof(InstinctLearningEnabled)] = (vm, s) => s.InstinctLearningEnabled = vm.InstinctLearningEnabled,
         // Autonomous loop
-        [nameof(AutoFixMaxIterations)] = (vm, s) => s.AutoFixMaxIterations = Math.Clamp(vm.AutoFixMaxIterations, 1, 50),
+        [nameof(AutoFixMaxIterations)] = (vm, s) => s.AutoFixMaxIterations = Math.Clamp(vm.AutoFixMaxIterations, 1, Services.AutonomousCodingService.MaxLoopCap),
         [nameof(AutoReviewEnabled)] = (vm, s) => s.AutoReviewEnabled = vm.AutoReviewEnabled,
         [nameof(AutoReviewMode)] = (vm, s) => s.AutoReviewMode = vm.AutoReviewMode is "fixed_rounds" ? "fixed_rounds" : "until_clean",
-        [nameof(AutoReviewMaxRounds)] = (vm, s) => s.AutoReviewMaxRounds = Math.Clamp(vm.AutoReviewMaxRounds, 1, 20),
+        [nameof(AutoReviewMaxRounds)] = (vm, s) => s.AutoReviewMaxRounds = Math.Clamp(vm.AutoReviewMaxRounds, 1, Services.AutonomousCodingService.MaxLoopCap),
         // Context & memory
         [nameof(MicrocompactEnabled)] = (vm, s) => s.MicrocompactEnabled = vm.MicrocompactEnabled,
         [nameof(MicrocompactKeepRecentTurns)] = (vm, s) => s.MicrocompactKeepRecentTurns = Math.Clamp(vm.MicrocompactKeepRecentTurns, 1, 100),
@@ -396,6 +396,7 @@ public partial class SettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ApiKeyLink));
                 OnPropertyChanged(nameof(ApiKeyLinkText));
                 RaiseGuideChanged();
+                RaiseCardLayoutChanged();   // which fields the card shows (SettingsViewModel.Layout.cs)
             }
         }
     }
@@ -459,10 +460,7 @@ public partial class SettingsViewModel : ViewModelBase
 
     public string ApiKeyLinkText => ApiKeyLink.Length == 0 ? "" : $"{T("settings.apiKey")} → {ApiKeyLink.Replace("https://", "")}";
 
-    public List<AiProviderType> ProviderOptions { get; } = Enum.GetValues<AiProviderType>().ToList();
-
-    /// <summary>The picker's rows: every provider with its logo (or badge) and name.</summary>
-    public List<ProviderOption> ProviderChoices { get; } = Enum.GetValues<AiProviderType>().Select(ProviderLogos.Option).ToList();
+    // The picker's rows (grouped, with the card's own names): ProviderChoices in SettingsViewModel.Layout.cs.
 
     // ── OpenAI-compatible services: logo, key guide, base URL hint ──
 
@@ -481,13 +479,15 @@ public partial class SettingsViewModel : ViewModelBase
     /// <summary>The address used while the Base URL box is empty, or the example to type when there is none.</summary>
     public string BaseUrlHint => SelectedPreset is { } p
         ? string.Format(T("settings.agg.baseUrlExample"), p.BaseUrl.Length > 0 ? p.BaseUrl : p.BaseUrlExample)
+        : SelectedProvider == AiProviderType.Ollama ? string.Format(T("settings.agg.baseUrlExample"), "http://localhost:11434")
         : "";
+    public bool HasBaseUrlHint => BaseUrlHint.Length > 0;
 
     private void RaiseGuideChanged()
     {
         foreach (var name in new[] { nameof(SelectedPreset), nameof(ShowProviderGuide), nameof(ProviderGuideSteps), nameof(ProviderGuideFree),
                      nameof(ProviderKeyPage), nameof(HasProviderKeyPage), nameof(ProviderLogo), nameof(HasProviderLogo), nameof(ProviderBadge),
-                     nameof(IsLocalServerSelected), nameof(BaseUrlHint) })
+                     nameof(IsLocalServerSelected), nameof(BaseUrlHint), nameof(HasBaseUrlHint) })
             OnPropertyChanged(name);
     }
 
@@ -496,7 +496,6 @@ public partial class SettingsViewModel : ViewModelBase
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
     public ICommand BrowseModelDirCommand { get; }
-    public ICommand BrowseTempDirCommand { get; }
     public ICommand BrowseBackendDirCommand { get; }
     public ICommand ResetDefaultsCommand { get; }
     public ICommand RefreshGpuCommand { get; }
@@ -529,7 +528,6 @@ public partial class SettingsViewModel : ViewModelBase
         _themes = themes;
 
         BrowseModelDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.modelStorageDir"), ModelDirectory); if (p != null) ModelDirectory = p; });
-        BrowseTempDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.tempDir"), TempDirectory); if (p != null) TempDirectory = p; });
         BrowseBackendDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.customBackend"), CustomLlamaCppBackendPath); if (p != null) CustomLlamaCppBackendPath = p; });
         ResetDefaultsCommand = new RelayCommand(ResetDefaults);
         RefreshGpuCommand = new RelayCommand(RefreshGpu);
@@ -592,6 +590,7 @@ public partial class SettingsViewModel : ViewModelBase
         _loading = true;
         try { SelectedProvider = _settingsService.Settings.ActiveProvider; }
         finally { _loading = false; }
+        InitLayout();   // grouped picker, per-provider fields, sampling notes (SettingsViewModel.Layout.cs)
         DetectGpuInfo();
         RefreshMemories();
         InitBatchJobs(batchService);
