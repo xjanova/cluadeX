@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>instincttest</AssemblyName>
+    <RootNamespace>InstinctTest</RootNamespace>
+    <NoWarn>MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <!-- The REAL shipping assembly — linked, NOT rebuilt: build CluadeX first or you test a stale binary.
+       While the app is running (its exe is locked), build CluadeX with -p:OutDir=<dir>\ and run
+       dotnet run -p:CluadeXBin=<dir>\ -->
+  <PropertyGroup>
+    <CluadeXBin Condition="'$(CluadeXBin)' == ''">$(MSBuildThisFileDirectory)..\..\CluadeX\bin\DebugBuild\net8.0-windows\</CluadeXBin>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="CluadeX">
+      <HintPath>$(CluadeXBin)CluadeX.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="portable.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -520,8 +520,8 @@ internal static partial class Program
         });
         await Case("H9h", () =>
         {
-            var stop = catalog.First(b => b.Id == "stop-pattern-extract");
-            string stopCmd = HookBundleService.BuildShellCommand(@"C:\x\stop-pattern-extract.ps1", stop);
+            var stop = catalog.First(b => b.Id == "stop-cost-summary-toast");
+            string stopCmd = HookBundleService.BuildShellCommand(@"C:\x\stop-cost-summary-toast.ps1", stop);
             string model = HookService.SubstituteToken(stopCmd, "{model}", "qwen2.5-coder (Q4_K_M)");
             string code = HookService.SubstituteToken("powershell -NoProfile -Command \"Get-Item '{path}'\"", "{path}", "a (b)'; c");
             string second = HookService.SubstituteToken("powershell -File x.ps1 & powershell -Command \"Test-Path '{path}'\"", "{path}", "a (b)'; c");
@@ -1227,7 +1227,7 @@ internal static partial class Program
             var oldBlock = pre.Where(f => System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(f),
                 @"(?mi)^\s*(exit\s+1\b|Write-Error\b)")).ToList();
             Check("H12", "every bundled .ps1 keeps its UTF-8 BOM; every PreToolUse script blocks with exit 2, none with exit 1 / Write-Error",
-                files.Length >= 16 && noBom.Count == 0 && pre.Count == 5 && oldBlock.Count == 0,
+                files.Length >= 15 && noBom.Count == 0 && pre.Count == 5 && oldBlock.Count == 0,
                 "noBOM: " + string.Join(", ", noBom.Select(Path.GetFileName)) + " · old-style: " + string.Join(", ", oldBlock.Select(Path.GetFileName)));
             return Task.CompletedTask;
         });

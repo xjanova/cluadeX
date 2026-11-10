@@ -319,7 +319,7 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
         Directory.CreateDirectory(promptDir);
         PruneStalePrompts(promptDir);
         string promptText = BuildPrompt(cwd, grant, addDirs, ClaudeDevProvider.BuildTranscript(history), userMessage,
-            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), ChatToolsHint(extras, chatTools),
+            LearnedHabits.Append(CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), cwd), ChatToolsHint(extras, chatTools),
             noSubAgents ? null : Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GrokDev),
             noProject: !_fileSystemService.HasWorkingDirectory,
             splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.GrokDev));

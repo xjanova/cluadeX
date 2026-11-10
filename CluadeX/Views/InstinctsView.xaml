@@ -65,6 +65,10 @@
                         </Border>
                     </Grid>
 
+                    <!-- Where it goes into the prompt: every project, or only its own -->
+                    <TextBlock Text="{Binding ScopeLabel}" FontSize="10.5" Margin="0,0,0,6"
+                               Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"/>
+
                     <!-- Brain sync chip -->
                     <Border Padding="5,1" CornerRadius="3" HorizontalAlignment="Left" Margin="0,0,0,6"
                             Background="{DynamicResource Accent.2.Tint}"

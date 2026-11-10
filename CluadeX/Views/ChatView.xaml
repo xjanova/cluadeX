@@ -1708,6 +1708,82 @@
                                     </ContentControl.ContentTemplate>
                                 </ContentControl>
 
+                                <!-- ═══ "Remember this next time?" — instincts the last chat taught, one ✓ / ✗ each ═══ -->
+                                <!-- Collapsed unless the row is one; its template only applies when it is. A vote is final on the card
+                                     (the Instincts page can change it). -->
+                                <ContentControl Grid.Row="1" Margin="20,8,0,4" Focusable="False" Content="{Binding InstinctCard}"
+                                                Visibility="{Binding ShowsInstinctCard, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                AutomationProperties.AutomationId="CxChat.InstinctCard">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="14,10" CornerRadius="10" BorderThickness="1"
+                                                    Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1.Border.Soft}">
+                                                <StackPanel>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Accent.1}"
+                                                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                        <TextBlock Text="{services:Loc instinct.card.title}" FontSize="12.5" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                    <TextBlock Text="{Binding FromText}" Margin="0,2,0,0" FontSize="11" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource Text.Muted}" Visibility="{Binding HasFrom, Converter={StaticResource BoolVis}}"/>
+                                                    <ItemsControl ItemsSource="{Binding Rows}" Margin="0,6,0,0" Focusable="False">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Grid Margin="0,4,0,0">
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                                    <StackPanel>
+                                                                        <TextBlock Text="{Binding Pattern}" FontSize="12.5" TextWrapping="Wrap"
+                                                                                   Foreground="{DynamicResource Text.Primary}"/>
+                                                                        <TextBlock Text="{Binding Detail}" FontSize="11.5" TextWrapping="Wrap" Margin="0,1,0,0"
+                                                                                   Foreground="{DynamicResource Text.Secondary}"
+                                                                                   Visibility="{Binding HasDetail, Converter={StaticResource BoolVis}}"/>
+                                                                        <TextBlock FontSize="11" Margin="0,1,0,0" Foreground="{DynamicResource Text.Muted}">
+                                                                            <Run Text="{Binding ScopeText, Mode=OneWay}"/><Run Text="{Binding StateText, Mode=OneWay}"/>
+                                                                        </TextBlock>
+                                                                    </StackPanel>
+                                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="10,0,0,0"
+                                                                                Visibility="{Binding IsOpen, Converter={StaticResource BoolVis}}">
+                                                                        <Button Command="{Binding AcceptCommand}" ToolTip="{services:Loc instinct.card.yesTip}" Cursor="Hand"
+                                                                                Padding="10,3" Margin="0,0,6,0" AutomationProperties.AutomationId="InstinctYes">
+                                                                            <Button.Template>
+                                                                                <ControlTemplate TargetType="Button">
+                                                                                    <Border x:Name="Bd" CornerRadius="7" Padding="{TemplateBinding Padding}" Background="{DynamicResource Accent.1}">
+                                                                                        <ContentPresenter/>
+                                                                                    </Border>
+                                                                                    <ControlTemplate.Triggers>
+                                                                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.85"/></Trigger>
+                                                                                    </ControlTemplate.Triggers>
+                                                                                </ControlTemplate>
+                                                                            </Button.Template>
+                                                                            <TextBlock Text="{services:Loc instinct.card.yes}" FontSize="12" Foreground="{DynamicResource Text.OnAccent}"/>
+                                                                        </Button>
+                                                                        <Button Command="{Binding RejectCommand}" ToolTip="{services:Loc instinct.card.noTip}" Cursor="Hand"
+                                                                                Padding="10,3" AutomationProperties.AutomationId="InstinctNo">
+                                                                            <Button.Template>
+                                                                                <ControlTemplate TargetType="Button">
+                                                                                    <Border x:Name="Bd" CornerRadius="7" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                                            Background="Transparent" BorderBrush="{DynamicResource Accent.1.Border.Soft}">
+                                                                                        <ContentPresenter/>
+                                                                                    </Border>
+                                                                                    <ControlTemplate.Triggers>
+                                                                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.85"/></Trigger>
+                                                                                    </ControlTemplate.Triggers>
+                                                                                </ControlTemplate>
+                                                                            </Button.Template>
+                                                                            <TextBlock Text="{services:Loc instinct.card.no}" FontSize="12" Foreground="{DynamicResource Text.Primary}"/>
+                                                                        </Button>
+                                                                    </StackPanel>
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
+
                                 <!-- ═══ Agent map: the sub-agents this command started, as a live tree (open by default, folds) ═══ -->
                                 <!-- Alive only while a sub-agent works (owner 2026-11-03: "อยากให้ปรับปรุงการแจงเอเจนให้สวย มีอนิเมชั่นกว่านี้"):
                                      the root breathes and its line flows while any runs; a running node's ring turns, its line

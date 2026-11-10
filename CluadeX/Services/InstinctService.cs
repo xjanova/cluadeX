@@ -17,31 +17,48 @@ namespace CluadeX.Services;
 ///     or by the AI itself via the upcoming `instinct_record` tool)
 ///   - Export / Import (a single JSON snapshot — for team sharing)
 ///
-/// Deferred to v2:
-///   - Automatic Stop-hook extraction from transcripts
-///   - /evolve clustering (semantic similarity grouping)
-///   - Brain MCP push for high-confidence instincts (cross-machine sync)
-///   - SQLite migration for performance at scale
+/// v2 (2026-11-10 — the loop actually closes):
+///   - SessionMemoryService extracts from finished chats (idle, switched away, new chat; split chats too) and shows
+///     the extractor the existing instincts, so a reworded sighting lands on the same one ("same_as"); a word match
+///     (<see cref="LooksSame"/>) catches the rest without an embedding model
+///   - a chat counts once per instinct; two chats, one verified user correction, or the owner's ✓ put it in the prompt
+///   - instincts belong to a project (<see cref="ProjectKey"/>) or are global; the prompt gets global + this project's
 /// </summary>
 public class InstinctService
 {
     private readonly string _storePath;
+    private readonly string _inboxPath;
     private readonly object _lock = new();
     private InstinctStore? _cache;
 
     /// <summary>Raised when the store mutates (UI re-binds).</summary>
     public event Action? Changed;
 
-    public InstinctService()
+    /// <summary>The app's own store (the one DI made) — for the CLI providers, which build their prompt themselves
+    /// (<see cref="LearnedHabits"/>). Null in a process that never made one.</summary>
+    public static InstinctService? Current { get; private set; }
+
+    /// <summary>The app's store, in the data root (<see cref="SettingsService.ResolveDataRoot"/>): ~/.cluadex, or
+    /// &lt;exe&gt;\Data in a portable copy. It used to be ~/.cluadex always, so a test harness built on the app's DI
+    /// graph read and wrote the owner's real instincts.</summary>
+    public InstinctService() : this(null) { }
+
+    /// <summary>A store in <paramref name="storeDir"/> (tests); null = the data root, and this becomes <see cref="Current"/>.</summary>
+    public InstinctService(string? storeDir)
     {
-        string dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex");
+        string dir = storeDir ?? SettingsService.ResolveDataRoot(out _);
         Directory.CreateDirectory(dir);
         _storePath = Path.Combine(dir, "instincts.json");
+        _inboxPath = Path.Combine(dir, InboxFileName);
+        if (storeDir == null) Current = this;
     }
 
     public string StorePath => _storePath;
+
+    /// <summary>JSONL a script may append observations to: one object per line with "pattern" (and optionally
+    /// "trigger", "action", "project", "session"). Read and emptied on load and before each extraction.</summary>
+    public const string InboxFileName = "instincts-inbox.jsonl";
+    public string InboxPath => _inboxPath;
 
     // ─── Persistence ─────────────────────────────────────────────────
 
@@ -58,7 +75,13 @@ public class InstinctService
                     _cache = JsonSerializer.Deserialize<InstinctStore>(json,
                         new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                         ?? new InstinctStore();
-                    if (RemoveUntouchedDemoSeeds(_cache) > 0) Save(_cache);
+                    bool dirty = RemoveUntouchedDemoSeeds(_cache) > 0;
+                    if (_cache.Version < InstinctStore.CurrentVersion)
+                    {
+                        Migrate(_cache, _storePath);
+                        dirty = true;
+                    }
+                    if (dirty) Save(_cache);
                 }
                 else
                 {
@@ -74,6 +97,7 @@ public class InstinctService
                 try { File.Move(_storePath, _storePath + ".bad-" + DateTime.Now.Ticks); } catch { }
                 _cache = new InstinctStore();
             }
+            if (DrainInboxLocked(_cache) > 0) Save(_cache);
             return _cache;
         }
     }
@@ -209,36 +233,439 @@ public class InstinctService
         }
     }
 
-    /// <summary>Called by the Stop hook (or by the AI) when the pattern fires again.</summary>
-    public void RecordObservation(string pattern, string? trigger = null, string? action = null)
+    /// <summary>A pattern seen again, with nothing known about where (a script, the old callers). Counted every call.</summary>
+    public void RecordObservation(string pattern, string? trigger = null, string? action = null) =>
+        RecordSighting(new Sighting(pattern, trigger, action));
+
+    /// <summary>One sighting of a pattern in a chat. <see cref="SameAsId"/>: the extractor said it is this existing
+    /// instinct reworded. <see cref="ProjectScoped"/>: it is a rule of this project, not of every project.
+    /// <see cref="Correction"/>: the user corrected the assistant into it, and their words were found in the chat.</summary>
+    public sealed record Sighting(string Pattern, string? Trigger = null, string? Action = null, string? SameAsId = null,
+        string? SessionId = null, string? ProjectKey = null, string? ProjectName = null, bool ProjectScoped = false,
+        bool Correction = false);
+
+    /// <summary>What a sighting did: the instinct it landed on, whether that is a new one, and whether it counted
+    /// (a chat already counted for this instinct does not count again).</summary>
+    public sealed record SightingResult(Instinct Instinct, bool IsNew, bool Counted);
+
+    /// <summary>Record one sighting: onto the instinct the extractor named, else onto one worded nearly the same
+    /// (<see cref="LooksSame"/>) in the same scope, else as a new instinct. Null for an empty pattern.</summary>
+    public SightingResult? RecordSighting(Sighting sighting)
     {
-        if (string.IsNullOrWhiteSpace(pattern)) return;
+        if (string.IsNullOrWhiteSpace(sighting.Pattern)) return null;
         lock (_lock)
         {
             var store = Load();
-            // Dedupe by exact Pattern text (case-insensitive). v2 will use semantic dedupe.
-            var existing = store.Instincts.FirstOrDefault(i =>
-                string.Equals(i.Pattern, pattern, StringComparison.OrdinalIgnoreCase));
-            if (existing != null)
-            {
-                existing.OccurrenceCount++;
-                existing.LastSeen = DateTime.UtcNow;
-                if (!string.IsNullOrEmpty(trigger) && string.IsNullOrEmpty(existing.Trigger))
-                    existing.Trigger = trigger;
-                if (!string.IsNullOrEmpty(action) && string.IsNullOrEmpty(existing.Action))
-                    existing.Action = action;
-            }
-            else
-            {
-                store.Instincts.Add(new Instinct
-                {
-                    Pattern = pattern.Trim(),
-                    Trigger = trigger?.Trim() ?? "",
-                    Action = action?.Trim() ?? "",
-                });
-            }
+            var result = ApplySighting(store, sighting, DateTime.UtcNow);
             Save(store);
+            return result;
         }
+    }
+
+    private const int MaxSessionsKept = 50, MaxAliasesKept = 8;
+
+    private static SightingResult ApplySighting(InstinctStore store, Sighting s, DateTime now)
+    {
+        string pattern = s.Pattern.Trim();
+        string? key = s.ProjectKey;
+        Instinct? hit = null;
+        if (!string.IsNullOrWhiteSpace(s.SameAsId))
+            hit = store.Instincts.FirstOrDefault(i => i.Id == s.SameAsId!.Trim() && VisibleIn(i, key));
+        hit ??= store.Instincts.FirstOrDefault(i => VisibleIn(i, key)
+            && (string.Equals(i.Pattern, pattern, StringComparison.OrdinalIgnoreCase)
+                || i.Aliases.Any(a => string.Equals(a, pattern, StringComparison.OrdinalIgnoreCase))));
+        hit ??= store.Instincts.Where(i => VisibleIn(i, key)).FirstOrDefault(i => LooksSame(i.Pattern, pattern)
+            || i.Aliases.Any(a => LooksSame(a, pattern)));
+
+        if (hit == null)
+        {
+            var fresh = new Instinct
+            {
+                Pattern = pattern,
+                Trigger = s.Trigger?.Trim() ?? "",
+                Action = s.Action?.Trim() ?? "",
+                ProjectKey = s.ProjectScoped ? key : null,
+                ProjectName = s.ProjectScoped && key != null ? s.ProjectName : null,
+                CorrectionCount = s.Correction ? 1 : 0,
+                FirstSeen = now,
+                LastSeen = now,
+            };
+            if (!string.IsNullOrEmpty(s.SessionId)) fresh.SeenInSessions.Add(s.SessionId);
+            store.Instincts.Add(fresh);
+            return new SightingResult(fresh, IsNew: true, Counted: true);
+        }
+
+        bool counted = string.IsNullOrEmpty(s.SessionId) || !hit.SeenInSessions.Contains(s.SessionId);
+        if (counted)
+        {
+            hit.OccurrenceCount++;
+            if (s.Correction) hit.CorrectionCount++;
+            if (!string.IsNullOrEmpty(s.SessionId))
+            {
+                hit.SeenInSessions.Add(s.SessionId);
+                if (hit.SeenInSessions.Count > MaxSessionsKept) hit.SeenInSessions.RemoveAt(0);
+            }
+        }
+        hit.LastSeen = now;
+        if (!string.IsNullOrWhiteSpace(s.Trigger) && string.IsNullOrWhiteSpace(hit.Trigger)) hit.Trigger = s.Trigger.Trim();
+        if (!string.IsNullOrWhiteSpace(s.Action) && string.IsNullOrWhiteSpace(hit.Action)) hit.Action = s.Action.Trim();
+        if (!string.Equals(hit.Pattern, pattern, StringComparison.OrdinalIgnoreCase)
+            && !hit.Aliases.Any(a => string.Equals(a, pattern, StringComparison.OrdinalIgnoreCase)))
+        {
+            hit.Aliases.Add(pattern);
+            if (hit.Aliases.Count > MaxAliasesKept) hit.Aliases.RemoveAt(0);
+        }
+
+        // Scope: an instinct from before projects existed takes the project of its first scoped sighting; one rule
+        // seen in a second project and called general there becomes global.
+        if (hit.LegacyUnscoped)
+        {
+            hit.LegacyUnscoped = false;
+            if (s.ProjectScoped && key != null) { hit.ProjectKey = key; hit.ProjectName = s.ProjectName; }
+        }
+        else if (hit.ProjectKey != null && key != null && !s.ProjectScoped
+                 && !string.Equals(hit.ProjectKey, key, StringComparison.OrdinalIgnoreCase))
+        {
+            hit.ProjectKey = null;
+            hit.ProjectName = null;
+        }
+        return new SightingResult(hit, IsNew: false, Counted: counted);
+    }
+
+    /// <summary>An instinct applies in a project: it is global, or it is that project's own.</summary>
+    public static bool VisibleIn(Instinct i, string? projectKey) =>
+        i.ProjectKey == null || (projectKey != null && string.Equals(i.ProjectKey, projectKey, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Of <paramref name="ids"/>, the ones to ask the owner about now — still there, un-voted, not asked in
+    /// the last <see cref="AskAgainAfter"/> — at most <paramref name="max"/>, marked as asked.</summary>
+    public List<string> TakeToAsk(IEnumerable<string> ids, int max)
+    {
+        lock (_lock)
+        {
+            var store = Load();
+            var now = DateTime.UtcNow;
+            var take = new List<string>();
+            foreach (var id in ids)
+            {
+                if (take.Count >= max) break;
+                var i = store.Instincts.FirstOrDefault(x => x.Id == id);
+                if (i == null || i.IsVoted || take.Contains(id)) continue;
+                if (i.LastAskedUtc is { } at && now - at < AskAgainAfter) continue;
+                i.LastAskedUtc = now;
+                take.Add(id);
+            }
+            if (take.Count > 0) Save(store);
+            return take;
+        }
+    }
+
+    public static readonly TimeSpan AskAgainAfter = TimeSpan.FromDays(7);
+
+    // ─── Read-back: what goes into the prompt ────────────────────────
+
+    /// <summary>The instincts strong enough for the prompt in <paramref name="projectFolder"/> (null = no project:
+    /// global ones only), best first: confidence ≥ <see cref="Instinct.InjectThreshold"/>, not rejected.</summary>
+    public List<Instinct> ForPrompt(string? projectFolder, int max = 5)
+    {
+        string? key = ProjectKey(projectFolder);
+        return GetAll()
+            .Where(i => VisibleIn(i, key) && !i.IsRejected && !string.IsNullOrWhiteSpace(i.Pattern)
+                        && i.Confidence >= Instinct.InjectThreshold)
+            .Take(Math.Max(0, max))
+            .ToList();
+    }
+
+    /// <summary>"- pattern → action" lines for the prompt, or null when none qualifies. Each one line, at most
+    /// <see cref="MaxPromptLineChars"/> characters.</summary>
+    public string? HabitsBlock(string? projectFolder, int max = 5)
+    {
+        var top = ForPrompt(projectFolder, max);
+        if (top.Count == 0) return null;
+        var sb = new StringBuilder();
+        foreach (var i in top)
+        {
+            string line = OneLine(i.Pattern);
+            if (!string.IsNullOrWhiteSpace(i.Action)) line += " → " + OneLine(i.Action);
+            if (line.Length > MaxPromptLineChars) line = line[..(MaxPromptLineChars - 1)] + "…";
+            sb.AppendLine("- " + line);
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    public const int MaxPromptLineChars = 220;
+
+    private static string OneLine(string s) =>
+        System.Text.RegularExpressions.Regex.Replace(s.Trim(), @"\s+", " ");
+
+    /// <summary>The instincts the extractor is shown so it can say "same as &lt;id&gt;" instead of rewording one:
+    /// those that apply in this project (rejected ones too, so a "no" is matched, not re-learned), newest first.</summary>
+    public List<Instinct> ForExtraction(string? projectKey, int max = 80) =>
+        GetAll().Where(i => VisibleIn(i, projectKey)).OrderByDescending(i => i.LastSeen).Take(max).ToList();
+
+    // ─── Project key ─────────────────────────────────────────────────
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> ProjectKeyCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The project a folder belongs to: the root of its git checkout — a linked worktree counts as its main checkout
+    /// (a split chat in D:\Code\X-worktrees\a learns for D:\Code\X) — else the folder itself. Lower-case full path
+    /// without a trailing separator; null for no folder.
+    /// </summary>
+    public static string? ProjectKey(string? folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder)) return null;
+        string full;
+        try { full = Path.GetFullPath(folder).TrimEnd('\\', '/'); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+        if (full.Length == 0) return null;
+        return ProjectKeyCache.GetOrAdd(full, ResolveProjectKey);
+    }
+
+    private static string ResolveProjectKey(string full)
+    {
+        try
+        {
+            for (var d = new DirectoryInfo(full); d != null; d = d.Parent)
+            {
+                string git = Path.Combine(d.FullName, ".git");
+                if (Directory.Exists(git)) return Norm(d.FullName);
+                if (!File.Exists(git)) continue;
+                // A linked worktree: ".git" is a file "gitdir: <main>/.git/worktrees/<name>".
+                string line = File.ReadLines(git).FirstOrDefault() ?? "";
+                if (line.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string gitdir = line[7..].Trim();
+                    if (!Path.IsPathRooted(gitdir)) gitdir = Path.Combine(d.FullName, gitdir);
+                    gitdir = Path.GetFullPath(gitdir).TrimEnd('\\', '/');
+                    var parent = Directory.GetParent(gitdir);   // .../.git/worktrees
+                    if (parent != null && parent.Name.Equals("worktrees", StringComparison.OrdinalIgnoreCase)
+                        && parent.Parent is { } dotGit && dotGit.Name.Equals(".git", StringComparison.OrdinalIgnoreCase)
+                        && dotGit.Parent is { } main)
+                        return Norm(main.FullName);
+                }
+                return Norm(d.FullName);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
+        return Norm(full);
+    }
+
+    private static string Norm(string path) => path.TrimEnd('\\', '/').ToLowerInvariant();
+
+    /// <summary>The folder name shown for a project key.</summary>
+    public static string? ProjectNameOf(string? key) =>
+        string.IsNullOrEmpty(key) ? null : Path.GetFileName(key.TrimEnd('\\', '/'));
+
+    // ─── Word match (the no-Ollama dedupe) ───────────────────────────
+
+    private static readonly HashSet<string> StopWords = new(StringComparer.Ordinal)
+    {
+        "a", "an", "the", "and", "or", "but", "on", "in", "of", "to", "for", "with", "at", "by", "from", "as", "into",
+        "is", "are", "be", "been", "was", "were", "it", "its", "this", "that", "these", "those", "all", "only", "then",
+        "than", "so", "do", "does", "when", "while", "any", "every", "each", "there", "here", "which", "who", "what",
+        "must", "should", "always", "just", "very", "also", "your", "you", "user", "users", "their", "them", "they",
+    };
+
+    /// <summary>
+    /// Two wordings of one rule, by words alone (no embedding model needed): the same content words — Jaccard ≥ 0.6,
+    /// or the shorter one's words ≥ 85 % inside the longer (at least 4 words). Short or unspaced text (Thai) compares
+    /// character pairs instead (Dice ≥ 0.8). "Never …" and "Always …" are never the same rule.
+    /// "Never use the E: drive; work only on D:" ≈ "Never use or reference the E: drive; all work happens on D:".
+    /// </summary>
+    public static bool LooksSame(string a, string b)
+    {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return false;
+        if (string.Equals(a.Trim(), b.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+        var ra = RawWords(a);
+        var rb = RawWords(b);
+        bool neverA = ra.Contains("never"), neverB = rb.Contains("never");
+        bool alwaysA = ra.Contains("always"), alwaysB = rb.Contains("always");
+        if ((neverA && alwaysB && !neverB) || (neverB && alwaysA && !neverA)) return false;
+        var ta = Stems(ra);
+        var tb = Stems(rb);
+        if (ta.Count < 3 || tb.Count < 3) return Dice(Compact(a), Compact(b)) >= 0.8;
+        int inter = ta.Count(tb.Contains);
+        int union = ta.Count + tb.Count - inter;
+        int min = Math.Min(ta.Count, tb.Count);
+        double jaccard = (double)inter / union;
+        double overlap = (double)inter / min;
+        return jaccard >= 0.6 || (overlap >= 0.85 && min >= 4);
+    }
+
+    private static List<string> RawWords(string s)
+    {
+        var words = new List<string>();
+        var cur = new StringBuilder();
+        foreach (char raw in s.ToLowerInvariant())
+        {
+            if (raw is '\'' or '\u2019') continue;   // don't → dont
+            var cat = char.GetUnicodeCategory(raw);
+            if (char.IsLetterOrDigit(raw) || cat is System.Globalization.UnicodeCategory.NonSpacingMark
+                    or System.Globalization.UnicodeCategory.SpacingCombiningMark)
+                cur.Append(raw);
+            else if (cur.Length > 0) { words.Add(cur.ToString()); cur.Clear(); }
+        }
+        if (cur.Length > 0) words.Add(cur.ToString());
+        return words;
+    }
+
+    private static HashSet<string> Stems(List<string> words)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var w0 in words)
+        {
+            if (StopWords.Contains(w0)) continue;
+            string w = w0;
+            if (w.Length > 5 && w.EndsWith("ing", StringComparison.Ordinal)) w = w[..^3];
+            else if (w.Length > 4 && w.EndsWith("ed", StringComparison.Ordinal)) w = w[..^2];
+            else if (w.Length > 3 && w.EndsWith('s') && !w.EndsWith("ss", StringComparison.Ordinal)) w = w[..^1];
+            if (w.Length > 4 && w.EndsWith('e')) w = w[..^1];
+            set.Add(w);
+        }
+        return set;
+    }
+
+    private static string Compact(string s) =>
+        new string(s.ToLowerInvariant().Where(c => !char.IsWhiteSpace(c) && !char.IsPunctuation(c)).ToArray());
+
+    private static double Dice(string a, string b)
+    {
+        if (a.Length < 2 || b.Length < 2) return a == b ? 1 : 0;
+        var pa = new Dictionary<string, int>();
+        for (int i = 0; i < a.Length - 1; i++) { string g = a.Substring(i, 2); pa[g] = pa.GetValueOrDefault(g) + 1; }
+        int inter = 0;
+        for (int i = 0; i < b.Length - 1; i++)
+        {
+            string g = b.Substring(i, 2);
+            if (pa.TryGetValue(g, out int n) && n > 0) { inter++; pa[g] = n - 1; }
+        }
+        return 2.0 * inter / (a.Length - 1 + b.Length - 1);
+    }
+
+    // ─── Merge / migrate / inbox ─────────────────────────────────────
+
+    /// <summary>Fold <paramref name="loser"/> into <paramref name="winner"/>, losing no learning: counts and votes add
+    /// up, chats/tags/aliases join, the earliest first-seen and latest last-seen win, and the loser's wording is kept
+    /// as an alias.</summary>
+    internal static void MergeInto(Instinct winner, Instinct loser)
+    {
+        winner.OccurrenceCount += loser.OccurrenceCount;
+        winner.AcceptCount += loser.AcceptCount;
+        winner.RejectCount += loser.RejectCount;
+        winner.CorrectionCount += loser.CorrectionCount;
+        if (loser.LastSeen > winner.LastSeen) winner.LastSeen = loser.LastSeen;
+        if (loser.FirstSeen < winner.FirstSeen) winner.FirstSeen = loser.FirstSeen;
+        foreach (var t in loser.Tags) if (!winner.Tags.Contains(t)) winner.Tags.Add(t);
+        foreach (var sid in loser.SeenInSessions) if (!winner.SeenInSessions.Contains(sid)) winner.SeenInSessions.Add(sid);
+        foreach (var alias in new[] { loser.Pattern }.Concat(loser.Aliases))
+            if (!string.IsNullOrWhiteSpace(alias) && !string.Equals(alias, winner.Pattern, StringComparison.OrdinalIgnoreCase)
+                && !winner.Aliases.Any(a => string.Equals(a, alias, StringComparison.OrdinalIgnoreCase)))
+                winner.Aliases.Add(alias);
+        if (string.IsNullOrWhiteSpace(winner.Trigger)) winner.Trigger = loser.Trigger;
+        if (string.IsNullOrWhiteSpace(winner.Action)) winner.Action = loser.Action;
+        if (string.IsNullOrEmpty(winner.BrainNoteId)) winner.BrainNoteId = loser.BrainNoteId;
+    }
+
+    /// <summary>Merge instincts the word match says are one rule, within one scope. Promoted ones stay as they are
+    /// (they have a skill file). Returns how many were folded away.</summary>
+    internal static int MergeNearDuplicates(List<Instinct> list)
+    {
+        int removed = 0;
+        for (int a = 0; a < list.Count; a++)
+        {
+            for (int b = a + 1; b < list.Count; b++)
+            {
+                var x = list[a];
+                var y = list[b];
+                if (x.Promoted || y.Promoted) continue;
+                if (!string.Equals(x.ProjectKey, y.ProjectKey, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!LooksSame(x.Pattern, y.Pattern)) continue;
+                bool yWins = y.OccurrenceCount > x.OccurrenceCount
+                             || (y.OccurrenceCount == x.OccurrenceCount && y.FirstSeen < x.FirstSeen);
+                var (winner, loser) = yWins ? (y, x) : (x, y);
+                MergeInto(winner, loser);
+                list.Remove(loser);
+                removed++;
+                if (ReferenceEquals(loser, x)) { a--; break; }   // x is gone: look again at what took its slot
+                b--;
+            }
+        }
+        return removed;
+    }
+
+    /// <summary>
+    /// Store v1 → v2: copy the file aside first (instincts.json.v1-backup, never overwritten), mark every instinct
+    /// "project unknown" (<see cref="Instinct.LegacyUnscoped"/>), and merge rewordings of one rule — the extractor
+    /// reworded every sighting, so "Never use the E: drive; work only on D:" and its twin each sat at one sighting
+    /// for ever. Nothing is deleted: a merged instinct keeps the other wording as an alias and both counts.
+    /// </summary>
+    internal static int Migrate(InstinctStore store, string storePath)
+    {
+        try
+        {
+            string backup = storePath + ".v1-backup";
+            if (File.Exists(storePath) && !File.Exists(backup)) File.Copy(storePath, backup);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        foreach (var i in store.Instincts)
+        {
+            i.SeenInSessions ??= new();
+            i.Aliases ??= new();
+            i.Tags ??= new();
+            if (i.ProjectKey == null) i.LegacyUnscoped = true;
+        }
+        int merged = MergeNearDuplicates(store.Instincts);
+        store.Version = InstinctStore.CurrentVersion;
+        return merged;
+    }
+
+    /// <summary>Read the inbox into the store now (lines with a "pattern"), then empty it. Returns how many were fed.</summary>
+    public int DrainInbox()
+    {
+        lock (_lock)
+        {
+            var store = Load();
+            int fed = DrainInboxLocked(store);
+            if (fed > 0) Save(store);
+            return fed;
+        }
+    }
+
+    /// <summary>
+    /// Every line with a "pattern" becomes a sighting; a line without one is dropped. The file is then deleted.
+    /// The bundled stop-pattern-extract hook wrote only {model, costUsd, tokens} rows here — over a thousand, never
+    /// read — so the first run of this build drops them, and the hook is gone from the Hook Library.
+    /// </summary>
+    private int DrainInboxLocked(InstinctStore store)
+    {
+        if (!File.Exists(_inboxPath)) return 0;
+        string[] lines;
+        try { lines = File.ReadAllLines(_inboxPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }
+        int fed = 0;
+        var now = DateTime.UtcNow;
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) continue;
+                string? Str(string name) => root.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String ? el.GetString() : null;
+                string? pattern = Str("pattern");
+                if (string.IsNullOrWhiteSpace(pattern)) continue;
+                string? project = ProjectKey(Str("project"));
+                ApplySighting(store, new Sighting(pattern, Str("trigger"), Str("action"), SessionId: Str("session"),
+                    ProjectKey: project, ProjectName: ProjectNameOf(project), ProjectScoped: project != null), now);
+                fed++;
+            }
+            catch (JsonException) { }
+        }
+        try { File.Delete(_inboxPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return fed;
     }
 
     // ─── Promote → Skill ─────────────────────────────────────────────
@@ -411,13 +838,7 @@ public class InstinctService
 
                 foreach (var loser in members.Where(m => m.Id != winner.Id))
                 {
-                    winner.OccurrenceCount += loser.OccurrenceCount;
-                    winner.AcceptCount += loser.AcceptCount;
-                    winner.RejectCount += loser.RejectCount;
-                    if (loser.LastSeen > winner.LastSeen) winner.LastSeen = loser.LastSeen;
-                    if (loser.FirstSeen < winner.FirstSeen) winner.FirstSeen = loser.FirstSeen;
-                    foreach (var t in loser.Tags)
-                        if (!winner.Tags.Contains(t)) winner.Tags.Add(t);
+                    MergeInto(winner, loser);
                     store.Instincts.Remove(loser);
                     removed++;
                 }

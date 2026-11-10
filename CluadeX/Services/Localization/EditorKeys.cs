@@ -64,8 +64,6 @@ internal static class EditorKeys
         ["hookb.posttool-pr-link-logger.desc"] = new() { ["en"] = "After every git push, logs the GitHub PR URL (if any) to ~/.cluadex/logs/pr-links.log.", ["th"] = "หลัง git push ทุกครั้ง บันทึกลิงก์ PR บน GitHub (ถ้ามี) ลง ~/.cluadex/logs/pr-links.log" },
         ["hookb.posttool-quality-gate.name"] = new() { ["en"] = "Quality Gate (build + test)", ["th"] = "ด่านคุณภาพ (build + test)" },
         ["hookb.posttool-quality-gate.desc"] = new() { ["en"] = "After any *.cs / *.csproj write or edit, runs dotnet build --no-restore -nologo and logs the result.", ["th"] = "หลังเขียนหรือแก้ไฟล์ *.cs / *.csproj จะรัน dotnet build --no-restore -nologo แล้วบันทึกผลลง log" },
-        ["hookb.stop-pattern-extract.name"] = new() { ["en"] = "Pattern Extract → Instincts", ["th"] = "สกัดรูปแบบ → สัญชาตญาณ" },
-        ["hookb.stop-pattern-extract.desc"] = new() { ["en"] = "When the agent loop ends, writes a record to ~/.cluadex/instincts-inbox.jsonl that the Instincts system can ingest as an observation.", ["th"] = "เมื่อเอเจนต์ทำงานจบรอบ จะเขียนบันทึกลง ~/.cluadex/instincts-inbox.jsonl ให้ระบบสัญชาตญาณนำไปใช้เป็นข้อสังเกต" },
         ["hookb.stop-cost-summary-toast.name"] = new() { ["en"] = "Cost Summary Toast", ["th"] = "สรุปค่าใช้จ่าย" },
         ["hookb.stop-cost-summary-toast.desc"] = new() { ["en"] = "At the end of a session, appends a one-line cost summary to ~/.cluadex/logs/session-costs.csv (model, cost USD, tokens, turns).", ["th"] = "เมื่อจบเซสชัน เพิ่มสรุปค่าใช้จ่ายหนึ่งบรรทัดลง ~/.cluadex/logs/session-costs.csv (โมเดล, ค่าใช้จ่าย USD, โทเคน, จำนวนรอบ)" },
         ["hookb.stop-desktop-notify.name"] = new() { ["en"] = "Desktop Notification on Done", ["th"] = "แจ้งเตือนบนเดสก์ท็อปเมื่อเสร็จ" },
