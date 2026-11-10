@@ -297,6 +297,29 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         return false;
     }
 
+    /// <summary>Task budgets: the beta header that lets output_config carry one.</summary>
+    public const string TaskBudgetBeta = "task-budgets-2026-03-13";
+
+    /// <summary>
+    /// A Fable flow with a task budget (a hard task sent to Fable: its new chat or its sub-agent,
+    /// <see cref="Agents.SubAgentModel.TaskBudget"/>) tells the model how much it may generate and read back this turn,
+    /// so it paces itself and finishes with its report instead of being cut off. Merged into output_config beside the
+    /// effort; <c>remaining</c> is left out — the server counts down itself. Returns true when the request carries one
+    /// (it then needs <see cref="TaskBudgetBeta"/>). Public for the contract harness.
+    /// </summary>
+    public static bool ApplyTaskBudget(Dictionary<string, object> requestObj, string model, int? budget)
+    {
+        if (budget is not > 0 || !Agents.DispatchPolicy.IsFable(model)) return false;
+        var oc = requestObj.TryGetValue("output_config", out var o) && o is Dictionary<string, object> d ? d : new Dictionary<string, object>();
+        oc["task_budget"] = new Dictionary<string, object>
+        {
+            ["type"] = "tokens",
+            ["total"] = Math.Max(Agents.DispatchPolicy.TaskBudgetMinimum, budget.Value),
+        };
+        requestObj["output_config"] = oc;
+        return true;
+    }
+
     private static string BaseUrlOf(ProviderConfig config) =>
         string.IsNullOrWhiteSpace(config.BaseUrl) ? "https://api.anthropic.com" : config.BaseUrl.TrimEnd('/');
 
@@ -578,6 +601,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         };
 
         bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
+        bool taskBudget = ApplyTaskBudget(requestObj, model, Agents.SubAgentModel.TaskBudget);
         ReportSent(requestObj, model);
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -588,6 +612,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/v1/messages");
         AddAuthHeaders(request, config);
         AddBetaHeader(request, model, thinking);
+        if (taskBudget) request.Headers.Add("anthropic-beta", TaskBudgetBeta);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -883,6 +908,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         };
 
         bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
+        bool taskBudget = ApplyTaskBudget(requestObj, model, Agents.SubAgentModel.TaskBudget);
         ReportSent(requestObj, model);
 
         if (!string.IsNullOrWhiteSpace(requestSystem))
@@ -911,6 +937,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         AddAuthHeaders(request, config);
         AddBetaHeader(request, model, thinking);
         if (perMessageEffort) request.Headers.Add("anthropic-beta", PerMessageEffortBeta);
+        if (taskBudget) request.Headers.Add("anthropic-beta", TaskBudgetBeta);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);

@@ -193,6 +193,7 @@ public partial class ChatViewModel
         if (CurrentSession is { } s)
         {
             WorkflowGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
+            FableGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
             DesignGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
         }
         if (IsGenerating)

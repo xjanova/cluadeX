@@ -1194,6 +1194,7 @@ public partial class ChatViewModel : ViewModelBase
             string? parentId = FlowRun?.Session.Id;
             return App.Current.Dispatcher.InvokeAsync(() => CloseChatsForAgent(parentId, target)).Task;
         };
+        InitFable();
         // Which chat split off which, and which finished split chats were put away (chat-links.json beside codex.db).
         ChatLinkStore.Current ??= new ChatLinkStore(settingsService.DataRoot);
         // Chats with a run going (live-runs.json beside codex.db): one CluadeX never saw end shows as stopped after a restart.
@@ -2711,7 +2712,16 @@ public partial class ChatViewModel : ViewModelBase
     /// with <paramref name="message"/>, its first turn started as the user's message. The asking chat keeps running
     /// beside it (each run has its own folder). Not awaited: the new chat's turn is its own. Returns the tool's report.
     /// </summary>
-    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null, bool fork = false)
+    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null, bool fork = false) =>
+        OpenModelChatForAgent(path, message, title, parentId, fork, model: null, openedNote: null);
+
+    /// <summary>
+    /// <see cref="OpenChatForAgent"/> for a chat with a model of its own (<paramref name="model"/>, kept in chat-links.json:
+    /// its runs go out on it — ChatViewModel.Fable). <paramref name="openedNote"/>: a row the new chat shows under the
+    /// "opened by" line (what it runs on and what it may cost).
+    /// </summary>
+    private string OpenModelChatForAgent(string? path, string? message, string? title, string? parentId, bool fork,
+        string? model, string? openedNote)
     {
         parentId ??= CurrentSession?.Id;
         // A ceiling on agent splits: each one starts a run that may split again (SplitLimits). Thrown = the tool fails
@@ -2754,7 +2764,7 @@ public partial class ChatViewModel : ViewModelBase
         // The split, for the sidebar's tree and for close_chat: what this chat was opened to do.
         if (parentId != null)
         {
-            ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "");
+            ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "", model);
             NoteSplitChip(parentId, chat);
         }
         string folder = string.IsNullOrWhiteSpace(chat.ProjectPath) ? "(no project)" : chat.ProjectPath;
@@ -2763,6 +2773,7 @@ public partial class ChatViewModel : ViewModelBase
             Role = MessageRole.System,
             Content = "💬 " + LocF("chat.newChat.byAgent", from ?? "?", folder),
         });
+        if (openedNote != null) Messages.Add(new ChatMessage { Role = MessageRole.System, Content = openedNote });
         RebuildVisibleSessions();
         if (message == null)
             return $"Opened a new empty chat (ref {chat.Ref}, id {chat.Id}) in {folder}. It is on screen now; the user types there.";
@@ -3594,6 +3605,8 @@ public partial class ChatViewModel : ViewModelBase
         if (CurrentSession is { } s && input.Length > 0)
         {
             Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+            // ...and for Fable: only the owner's own words (or a yes on the Fable card) may put work on it.
+            Services.Agents.FableGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
             // The UI Studio's own request ("[UI Studio] Change one element of the UI.") is not the owner asking for a
             // design: its words are none (the chat's Design switch still counts).
             Services.Agents.DesignGate.NoteOwnerMessage(s.Id, _sendingFromStudio ? "" : input, append: IsGenerating);

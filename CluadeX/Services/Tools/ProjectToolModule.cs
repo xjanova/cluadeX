@@ -40,6 +40,18 @@ public sealed class ProjectToolModule : IAgentToolModule
     /// </summary>
     public static Func<string?, string?, string?, bool, Task<string>>? NewChatHandler;
 
+    /// <summary>A new chat that runs on a model of its own (new_chat model "fable"): the problem and what the focused
+    /// brief is built from — never the asking chat's history.</summary>
+    public sealed record ModelChatRequest(string? Path, string Problem, string? Title, string Model, string? Files,
+        string? Tried, string? DoneWhen, string? AskingChat);
+
+    /// <summary>
+    /// Opens a chat on its own model for new_chat (UI thread work, set by the chat page): builds the focused brief, checks
+    /// the provider and the spend guards, and starts it. Returns what the tool reports, or throws to fail it. Null in
+    /// harnesses with no chat page.
+    /// </summary>
+    public static Func<ModelChatRequest, Task<string>>? ModelChatHandler;
+
     public const string CloseChatToolName = "close_chat";
 
     /// <summary>
@@ -131,7 +143,34 @@ public sealed class ProjectToolModule : IAgentToolModule
                 {
                     ["type"] = "boolean",
                     ["description"] = "true: the new chat starts with this chat's history (a fork), so the message may rely on "
-                        + "it, and every turn there carries that history's cost. Default: it starts clean. Same project only.",
+                        + "it, and every turn there carries that history's cost. Default: it starts clean. Same project only. "
+                        + "Never with model \"fable\".",
+                },
+                ["model"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "\"fable\" = the new chat runs on Claude Fable 5.2, the most capable model, at several "
+                        + "times the cost — ONLY when the user asked for Fable in their own words this turn (\"โยนไปแชทใหม่ใช้ "
+                        + "fable\", \"fable in a new chat\") or said yes on CluadeX's Fable card; otherwise the call is refused. "
+                        + "message is then the problem; CluadeX builds a focused brief from it and from tried / done_when / files "
+                        + "(never the whole chat), and Fable's short report comes back here when it is done. Leave it out otherwise.",
+                },
+                ["files"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "With model \"fable\": the files and repos that matter (paths, one per line).",
+                },
+                ["tried"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "With model \"fable\": what was tried and did not work, and why (omit = CluadeX lists "
+                        + "this chat's failed steps).",
+                },
+                ["done_when"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "With model \"fable\": what done looks like (the test or build that must pass, the "
+                        + "behaviour to see).",
                 },
             },
         };
@@ -250,6 +289,10 @@ public sealed class ProjectToolModule : IAgentToolModule
         string? message = call.GetArg("message").Trim() is { Length: > 0 } m ? m : null;
         string? title = call.GetArg("title").Trim() is { Length: > 0 } t ? t : null;
         bool fork = bool.TryParse(call.GetArg("fork"), out bool f) && f;
+        string modelArg = call.GetArg("model").Trim().Trim('"', '\'');
+        if (modelArg.Length > 0 && !modelArg.Equals("default", StringComparison.OrdinalIgnoreCase)
+            && !modelArg.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return await ExecuteModelChatAsync(call, full, message, title, fork, modelArg, Fail);
         if (fork && full != null) return Fail("fork stays in this chat's project: leave path out, or start clean with a complete message.");
         try
         {
@@ -262,6 +305,38 @@ public sealed class ProjectToolModule : IAgentToolModule
             };
         }
         catch (Exception ex) { return Fail("The new chat could not be opened: " + ex.Message); }
+    }
+
+    /// <summary>new_chat with a model of its own: Claude Fable 5.2 only, from a focused brief (never a fork), and only
+    /// when the owner asked for Fable or said yes on the Fable card (<see cref="Agents.FableGate"/>).</summary>
+    private async Task<ToolResult> ExecuteModelChatAsync(ToolCall call, string? full, string? message, string? title, bool fork,
+        string modelArg, Func<string, ToolResult> Fail)
+    {
+        string? fable = Agents.DispatchPolicy.FableIdOf(modelArg);
+        if (fable == null)
+            return Fail($"new_chat takes model \"fable\" (Claude Fable 5.2) only; '{modelArg}' is the user's pick in the chat's "
+                + "model button. Leave model out.");
+        if (fork)
+            return Fail("A Fable chat starts from a focused brief, never a fork: forking writes this chat's whole history to "
+                + "Fable's cache (about $10 per million tokens) and every step re-reads it. Leave fork out and pass the problem "
+                + "as message, with files / tried / done_when.");
+        if (message == null) return Fail("A Fable chat needs message: the problem to solve (CluadeX builds the brief around it).");
+        if (ModelChatHandler == null) return Fail("No chat page is running here, so a new chat cannot be opened.");
+        string? asking = Agents.WorkflowGate.CurrentChat;
+        if (!Agents.FableGate.Allowed(asking)) return Fail(Agents.FableGate.NotAskedText);
+        string? Arg(string name) => call.GetArg(name).Trim() is { Length: > 0 } v ? v : null;
+        try
+        {
+            string said = await ModelChatHandler(new ModelChatRequest(full, message, title, fable, Arg("files"), Arg("tried"),
+                Arg("done_when"), asking));
+            if (full != null) _registry?.Record(full);
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true, Output = said,
+                Summary = "💬+ Fable · " + (title ?? full ?? "new chat"), FilePath = full,
+            };
+        }
+        catch (Exception ex) { return Fail("The Fable chat could not be opened: " + ex.Message); }
     }
 
     /// <summary>close_chat: list this chat's split chats, or put finished ones away.</summary>

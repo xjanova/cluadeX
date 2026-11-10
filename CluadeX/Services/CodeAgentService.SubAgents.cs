@@ -293,8 +293,86 @@ public partial class CodeAgentService
                 return $"Sub-agent {carryOn} is already working on a message.";
             request = earlier.Request with { Task = request.Task, Context = request.Context, ContinueId = carryOn };
         }
-        try { return await RunRoutedSubAgentAsync(request, parent, earlier, ct); }
+        try
+        {
+            // "ส่วนนี้ให้ fable คิด": one part on Claude Fable 5.2 — its own brief, its report back, nothing else.
+            if (Agents.DispatchPolicy.FableIdOf(request.Model) != null || Agents.DispatchPolicy.IsFable(earlier?.Model))
+                return await RunFableSubAgentAsync(request, parent, earlier, ct);
+            return await RunRoutedSubAgentAsync(request, parent, earlier, ct);
+        }
         finally { if (earlier != null) Volatile.Write(ref earlier.Busy, 0); }
+    }
+
+    /// <summary>
+    /// A sub-agent on Claude Fable 5.2 (agent_spawn model "fable"): only when the owner asked for Fable in words this turn
+    /// or said yes on the Fable card (<see cref="Agents.FableGate"/>), and only within the spend guards. It gets the
+    /// part's brief alone (no transcript), runs at effort high under a task budget, and its brief caps the report it
+    /// sends back. Not tier-routed: the model is the point.
+    /// </summary>
+    private async Task<string?> RunFableSubAgentAsync(SubAgentRequest request, AgentRunScope? parent, SubAgentThread? earlier, CancellationToken ct)
+    {
+        if (!Agents.FableGate.Allowed(Agents.WorkflowGate.CurrentChat)) return Agents.FableGate.NotAskedText;
+        if (_providerManager.ActiveProviderType != AiProviderType.Anthropic)
+            return "A Fable sub-agent runs on the Anthropic API, and this chat is on " + _providerManager.ActiveProviderType
+                 + ". Send the part to a new chat instead (new_chat with model \"fable\"), or do it here.";
+        var dispatch = CurrentDispatch();
+        bool canEdit = SubAgentCanEdit(request);
+        if (Agents.DispatchPolicy.Gate(dispatch, request.Type, canEdit) is { } refusal) return refusal;
+        string briefText = request.Task + "\n" + request.Context;
+        var est = Agents.DispatchPolicy.EstimateFable(CluadeX.Helpers.TokenBudget.EstimateTokens(briefText),
+            FableBaseTokens(subAgent: true), Agents.DispatchPolicy.FableSubAgentTaskBudget);
+        var (no, warn) = FableBudgetCheck(est, freshRun: false);
+        if (no != null)
+        {
+            _debugLog?.Info("Dispatch", "Fable sub-agent refused · " + no);
+            return no;
+        }
+        bool thai = _localizationService.CurrentLanguage == "th";
+        OnAgentStatus?.Invoke(thai ? $"⤴ ส่วนนี้ให้ Fable 5.2 คิด — ประมาณ ${est.LowUsd:0.00}–${est.HighUsd:0.00}"
+                                   : $"⤴ Fable 5.2 thinks through this part — about ${est.LowUsd:0.00}–${est.HighUsd:0.00}");
+        var gate = GateFor(parent, dispatch.MaxConcurrency);
+        await gate.WaitAsync(ct);
+        try
+        {
+            string runModel = RunModel();
+            var child = parent?.CreateChild();
+            if (child != null)
+            {
+                child.EffortCap = Agents.DispatchPolicy.FableEffort;
+                child.SubAgentTier = "deep";
+                child.TierRunModel = runModel;
+            }
+            AgentRunScope.Enter(child ?? parent);
+            Agents.SubAgentModel.Use(Agents.DispatchPolicy.FableModel);
+            Agents.SubAgentModel.UseTaskBudget(Agents.DispatchPolicy.FableSubAgentTaskBudget);
+            int n = earlier?.Id ?? Interlocked.Increment(ref _subAgentCounter);
+            string label = (thai ? $"เอเจนต์ย่อย #{n}" : $"Sub-agent #{n}") + " (Fable 5.2)";
+            var thread = earlier ?? new SubAgentThread { Request = request, Id = n };
+            thread.Tier = SubAgentTier.Deep; thread.Model = Agents.DispatchPolicy.FableModel; thread.Provider = null;
+            if (parent != null) _subAgentThreads.GetOrCreateValue(parent)[n] = thread;
+            _debugLog?.Info("Dispatch", $"sub-agent #{n} · Fable · effort cap {Agents.DispatchPolicy.FableEffort} · task budget "
+                + $"{Agents.DispatchPolicy.FableSubAgentTaskBudget} · estimate ${est.LowUsd:0.00}–${est.HighUsd:0.00}");
+            using var control = new Agents.SubAgentControl(ct, canEdit);
+            var asked = earlier != null ? request
+                : request with { Task = request.Task.TrimEnd() + "\n\n" + Agents.DispatchPolicy.FableReportInstruction(newChat: false) };
+            string? report = await RunSubAgentCoreAsync(asked, control.Token,
+                new SubAgentRunOptions(n, label, request.Type, Agents.DispatchPolicy.FableModel, child, "", Thread: thread,
+                    Control: control, Tier: SubAgentTier.Deep, Color: request.Color, MaxSteps: SubAgentMaxSteps));
+            if (report == null) return null;
+            return report + (warn != null ? "\n\n(" + warn + ")" : "")
+                 + (thread.Finished ? $"\n\n(Sub-agent {n} on Fable: agent_spawn with continue_agent {n} carries on with it.)" : "");
+        }
+        catch (OperationCanceledException)
+        {
+            if (_subAgentLast.Value is { } e) RaiseSubAgent(e with { Phase = "stopped", Detail = "" });
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (_subAgentLast.Value is { } e) RaiseSubAgent(e with { Phase = "failed", Detail = Shorten(ex.Message, 120) });
+            throw;
+        }
+        finally { gate.Release(); }
     }
 
     private async Task<string?> RunRoutedSubAgentAsync(SubAgentRequest request, AgentRunScope? parent, SubAgentThread? earlier, CancellationToken ct)

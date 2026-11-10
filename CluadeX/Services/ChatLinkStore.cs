@@ -4,8 +4,10 @@ using System.Text.Json;
 
 namespace CluadeX.Services;
 
-/// <summary>One chat that another chat split off (new_chat): who opened it, for what, and whether it was put away.</summary>
-public sealed record ChatLink(string ParentId, string Task, DateTime CreatedAt, DateTime? ArchivedAt);
+/// <summary>One chat that another chat split off (new_chat): who opened it, for what, and whether it was put away.
+/// <paramref name="Model"/>: the model it runs on when it has one of its own (new_chat model "fable"); null = the app's
+/// pick, like every other chat. Kept here, not in codex.db (which takes no schema changes).</summary>
+public sealed record ChatLink(string ParentId, string Task, DateTime CreatedAt, DateTime? ArchivedAt, string? Model = null);
 
 /// <summary>
 /// Which chat split off which (the agent's new_chat), and which finished side chats were put away — so the sidebar can
@@ -77,15 +79,31 @@ public sealed class ChatLinkStore
     }
 
     /// <summary>Record that <paramref name="childId"/> was split off <paramref name="parentId"/> to do <paramref name="task"/>.</summary>
-    public void Link(string childId, string parentId, string task)
+    public void Link(string childId, string parentId, string task, string? model = null)
     {
         if (string.IsNullOrEmpty(childId) || string.IsNullOrEmpty(parentId) || childId == parentId) return;
         // A chat never becomes its own ancestor (a loop would hang the tree).
         for (string? up = parentId; up != null; up = Get(up)?.ParentId)
             if (up == childId) return;
-        lock (_gate) _links[childId] = new ChatLink(parentId, (task ?? "").Trim(), DateTime.Now, null);
+        lock (_gate) _links[childId] = new ChatLink(parentId, (task ?? "").Trim(), DateTime.Now, null,
+            string.IsNullOrWhiteSpace(model) ? null : model.Trim());
         Save();
         Changed?.Invoke(childId);
+    }
+
+    /// <summary>The model a split chat runs on (null = the app's pick). Only split chats have a record; others: false.</summary>
+    public bool SetModel(string chatId, string? model)
+    {
+        string? m = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+        lock (_gate)
+        {
+            if (!_links.TryGetValue(chatId, out var l)) return false;
+            if (l.Model == m) return true;
+            _links[chatId] = l with { Model = m };
+        }
+        Save();
+        Changed?.Invoke(chatId);
+        return true;
     }
 
     /// <summary>Put a split chat away (true) or bring it back (false). Only split chats have a record; others: false.</summary>

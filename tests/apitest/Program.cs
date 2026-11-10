@@ -589,6 +589,7 @@ internal static class Program
         await EffortWire.Run(Check, Section);
         await Gpt6Wire.Run(Check, Section);
         await HandoffWire.Run(Check, Section);
+        await FableWire.Run(Check, Section);
         await ClaudeDevStreamWire.Run(Check, Section);
         await GeminiDevWire.Run(Check, Section);
         await AntigravityDevWire.Run(Check, Section);
