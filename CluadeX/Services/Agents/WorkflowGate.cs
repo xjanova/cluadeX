@@ -143,7 +143,8 @@ public static class WorkflowGate
         + "into the project. Read-only agents of a workflow may run on the model on this PC when the user turned that on. "
         + "Afterwards run the command again and fix what is left yourself. "
         + "(4) new_chat (MCP server cluadex) — a separate deliverable the user may want to steer or review on its own; put it "
-        + "away with close_chat once its result is in. "
+        + "away with close_chat once its result is in. A new_chat in THIS project that edits files while you are still working "
+        + "here gets isolation \"worktree\" (its own branch; you merge it or open a PR when it is told done). "
         + "Never split pieces that edit the same files, or hand off a piece whose result you need for your very next step. "
         + "Every brief is complete on its own: the agent cannot see this conversation. Say in one line how you split the work "
         + "and why, and put the pieces in your plan.";
@@ -164,7 +165,9 @@ public static class WorkflowGate
              + "multi-part build): phases of agents with JSON schemas, and refuters on what they find. "
              + $"(4) {chat} — a separate deliverable the user may want to steer or review on its own (another app or repository, a "
              + "design or asset track beside the code), or a new standalone request typed while you work; it runs in parallel and "
-             + $"shows under this chat — put it away with {close} once its result is in. "
+             + $"shows under this chat — put it away with {close} once its result is in. A {chat} in THIS project that edits files "
+             + "while you (or another split chat) still work here gets isolation \"worktree\": its own branch in its own git "
+             + "worktree, which you merge or open a PR from when it is done. "
              + "Never split pieces that edit the same files, or hand off a piece whose result you need for your very next step. "
              + "Every brief is complete on its own: the agent or chat cannot see this conversation. Say in one line how you split "
              + "the work and why, and put the pieces in your plan.";

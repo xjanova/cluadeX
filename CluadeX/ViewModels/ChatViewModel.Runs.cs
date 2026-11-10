@@ -473,7 +473,8 @@ public partial class ChatViewModel
         }
         string? taskFolder = TaskFolderFor(session);
         string? folder = taskFolder ?? _fileSystemService.AppWorkingDirectory;
-        if (taskFolder != null)
+        // A split chat in its own worktree said where it works when it opened (its 🌿 notice): no row every turn.
+        if (taskFolder != null && WorktreeFolderOf(session) == null)
         {
             Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "📁 " + LocF("chat.resume.inTaskFolder", taskFolder) });
             _debugLog?.Info("Chat", $"turn runs in the chat's own folder {taskFolder} (window: {_fileSystemService.AppWorkingDirectory})");
@@ -565,9 +566,11 @@ public partial class ChatViewModel
         if (Sessions.Any(s => s.Id == pid))
         {
             string gist = GistOf(childMessages);
+            // In its own worktree: the notice names the branch, so the parent can merge it or open a PR from it.
+            var (treeShown, treeForModel) = WorktreeNoticeOf(child);
             AddNotice(pid,
-                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)),
-                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : ""));
+                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)) + treeShown,
+                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : "") + treeForModel);
         }
         RebuildVisibleSessions();
     }

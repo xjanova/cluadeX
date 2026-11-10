@@ -24,6 +24,7 @@ public sealed class ChatLinkStore
     private readonly string? _path;
     private readonly object _gate = new();
     private Dictionary<string, ChatLink> _links = new(StringComparer.Ordinal);
+    private Dictionary<string, Agents.ChatWorktree> _worktrees = new(StringComparer.Ordinal);
 
     /// <summary>Raised (any thread) with the chat id whose link or archive state changed.</summary>
     public event Action<string>? Changed;
@@ -38,6 +39,8 @@ public sealed class ChatLinkStore
     private sealed class FileShape
     {
         public Dictionary<string, ChatLink> Links { get; set; } = new();
+        /// <summary>Split chats that work in a git worktree of their own (new_chat isolation "worktree"), by chat id.</summary>
+        public Dictionary<string, Agents.ChatWorktree> Worktrees { get; set; } = new();
     }
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
@@ -50,6 +53,8 @@ public sealed class ChatLinkStore
             var shape = JsonSerializer.Deserialize<FileShape>(File.ReadAllText(_path), Json);
             if (shape?.Links != null)
                 lock (_gate) _links = new Dictionary<string, ChatLink>(shape.Links, StringComparer.Ordinal);
+            if (shape?.Worktrees != null)
+                lock (_gate) _worktrees = new Dictionary<string, Agents.ChatWorktree>(shape.Worktrees, StringComparer.Ordinal);
         }
         catch { /* unreadable: start empty — the chats themselves are untouched */ }
     }
@@ -60,7 +65,7 @@ public sealed class ChatLinkStore
         try
         {
             string json;
-            lock (_gate) json = JsonSerializer.Serialize(new FileShape { Links = new(_links) }, Json);
+            lock (_gate) json = JsonSerializer.Serialize(new FileShape { Links = new(_links), Worktrees = new(_worktrees) }, Json);
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             string tmp = _path + ".tmp";
             File.WriteAllText(tmp, json, new UTF8Encoding(false));
@@ -100,6 +105,41 @@ public sealed class ChatLinkStore
         Save();
         Changed?.Invoke(chatId);
         return true;
+    }
+
+    /// <summary>The git worktree a split chat works in (new_chat isolation "worktree"), or null: it shares its parent's
+    /// checkout. Kept until close_chat removes the worktree, so a restart still runs the chat there.</summary>
+    public Agents.ChatWorktree? WorktreeOf(string? chatId)
+    {
+        if (string.IsNullOrEmpty(chatId)) return null;
+        lock (_gate) return _worktrees.TryGetValue(chatId, out var w) ? w : null;
+    }
+
+    /// <summary>Record (or, null, forget) the worktree <paramref name="chatId"/> works in.</summary>
+    public void SetWorktree(string chatId, Agents.ChatWorktree? worktree)
+    {
+        if (string.IsNullOrEmpty(chatId)) return;
+        lock (_gate)
+        {
+            if (worktree == null) { if (!_worktrees.Remove(chatId)) return; }
+            else _worktrees[chatId] = worktree;
+        }
+        Save();
+        Changed?.Invoke(chatId);
+    }
+
+    /// <summary>Every chat split off <paramref name="parentId"/>, and theirs in turn (a put-away chat takes its own
+    /// splits with it), nearest first.</summary>
+    public List<(string Id, ChatLink Link)> DescendantsOf(string parentId)
+    {
+        var found = new List<(string, ChatLink)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal) { parentId };
+        var queue = new Queue<string>();
+        queue.Enqueue(parentId);
+        while (queue.Count > 0)
+            foreach (var kid in ChildrenOf(queue.Dequeue()))
+                if (seen.Add(kid.Id)) { found.Add(kid); queue.Enqueue(kid.Id); }
+        return found;
     }
 
     /// <summary>How many splits up <paramref name="chatId"/> is from a chat nobody split off (0 = a top chat).</summary>
