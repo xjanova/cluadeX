@@ -184,6 +184,8 @@ public sealed class ConnectionService
     /// throws with an error key. Removes CluadeX's entry from the other side, so it is never in both.</summary>
     public async Task<ConnectorPlace> RegisterAsync(ConnectorDef c, CancellationToken ct = default)
     {
+        // BrainX's bridges are shared with the installed CluadeX: a trial copy writing its own exe there would take them over.
+        if (SettingsService.IsTrialCopy) throw new InvalidOperationException("connect.err.trial");
         string exe = LauncherExe;
         string? file = BrainBridgesFile();
         var root = file != null ? BrainXBridges.Load(file) : null;
@@ -254,6 +256,7 @@ public sealed class ConnectionService
     /// first, never both).</summary>
     public async Task ReconcileAsync(CancellationToken ct = default)
     {
+        if (SettingsService.IsTrialCopy) { _log?.Info("Connections", "trial copy: BrainX bridges left pointing at the installed CluadeX"); return; }
         if (_mcp == null || BrainBridgesFile() is not { } file) return;
         // CluadeX moved (a portable copy, another install folder): point CluadeX's own bridges at this exe again.
         if (BrainXBridges.Load(file) is { } root)

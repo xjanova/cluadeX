@@ -31,6 +31,7 @@ public static class DesktopShortcut
     /// <summary>Create (or repair) the shortcut pointing at <paramref name="target"/>. Throws on a COM / IO failure.</summary>
     public static void Create(string target)
     {
+        if (SettingsService.IsTrialCopy) return;   // CluadeX.lnk belongs to the installed app
         var type = Type.GetTypeFromProgID("WScript.Shell") ?? throw new InvalidOperationException("WScript.Shell is not available");
         dynamic shell = Activator.CreateInstance(type)!;
         try
@@ -49,6 +50,7 @@ public static class DesktopShortcut
     /// <summary>Remove the shortcut; true when one was there.</summary>
     public static bool Remove()
     {
+        if (SettingsService.IsTrialCopy) return false;
         try { if (!File.Exists(LinkPath)) return false; File.Delete(LinkPath); return true; }
         catch { return false; }
     }
