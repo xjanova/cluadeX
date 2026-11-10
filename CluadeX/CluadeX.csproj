@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.302</Version>
+    <Version>3.0.305</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -37,6 +37,12 @@
     <OutputPath>bin\DebugBuild\$(TargetFramework)\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
+
+  <!-- tests/instincttest checks the learning loop's internals (migration, merge, the extractor's prompt and parser)
+       without reflection. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="instincttest" />
+  </ItemGroup>
 
   <ItemGroup>
     <Resource Include="Assets\logo.png" />

@@ -14,7 +14,8 @@ namespace CluadeX.Models;
 ///   1. Observation lands (manual add, or Stop-hook extracts from transcript)
 ///   2. OccurrenceCount++, LastSeen=now
 ///   3. User reviews → AcceptCount++ or RejectCount++ → Confidence recomputed
-///   4. When Confidence ≥ 0.70 → eligible for /evolve clustering + promotion
+///   4. Confidence ≥ 0.45 → injected into the prompt (global, or only in its own project)
+///   5. Confidence ≥ 0.70 (needs an Accept) → synced to the brain, promotable to a skill
 /// </summary>
 public class Instinct
 {
@@ -62,27 +63,85 @@ public class Instinct
     public bool SyncedToBrain => !string.IsNullOrEmpty(BrainNoteId);
 
     /// <summary>
+    /// The project this instinct belongs to — <see cref="Services.InstinctService.ProjectKey"/> of the folder the chat
+    /// worked in (a git worktree counts as its main checkout). Null = global: it goes into every project's prompt.
+    /// An Android project's "never install the APK" must not reach a web project.
+    /// </summary>
+    public string? ProjectKey { get; set; }
+
+    /// <summary>The project's folder name, for the Instincts page (null when global).</summary>
+    public string? ProjectName { get; set; }
+
+    /// <summary>Stored before instincts had a project (store v1): nobody knows where it came from. Treated as global
+    /// until a new sighting says which project it belongs to.</summary>
+    public bool LegacyUnscoped { get; set; }
+
+    /// <summary>The chats it was seen in (capped). A chat counts once: extracting the same chat again after more
+    /// messages must not look like a second sighting.</summary>
+    public List<string> SeenInSessions { get; set; } = new();
+
+    /// <summary>Other wordings of the same rule, merged into this one (shown on the page, used by the word match).</summary>
+    public List<string> Aliases { get; set; } = new();
+
+    /// <summary>Sightings where the user explicitly corrected the assistant into this behaviour, with their own
+    /// words quoted from the transcript (checked, not taken on the model's word).</summary>
+    public int CorrectionCount { get; set; }
+
+    /// <summary>When the chat last asked the owner about it ("remember this next time?"); null = never. A card is
+    /// not shown again for the same instinct within a week.</summary>
+    public DateTime? LastAskedUtc { get; set; }
+
+    /// <summary>The value an un-voted instinct's success rate starts at. Below 0.70 on purpose: what was only
+    /// observed tops out at EMERGING (in the prompt), and STRONG (synced to the brain, promotable) needs the
+    /// owner's own "yes".</summary>
+    public const double UnvotedSuccess = 0.68;
+
+    /// <summary>Confidence an instinct needs to go into the prompt.</summary>
+    public const double InjectThreshold = 0.45;
+
+    /// <summary>
     /// Confidence score 0..1.
     ///
-    ///   confidence = success_rate × frequency_curve × recency_decay
+    ///   confidence = success_rate × evidence_curve × recency_decay
     ///
-    /// success_rate    : Accept / (Accept + Reject), defaulting to 0.5 if no votes yet
-    /// frequency_curve : log(1 + Occurrences) / log(11) → caps at 1.0 around 10 occurrences
-    /// recency_decay   : 1 - min(days_since_last_seen / 60, 0.5) — old patterns fade
+    /// success_rate   : Accept / (Accept + Reject); <see cref="UnvotedSuccess"/> with no votes. One reject with no
+    ///                  accept → 0: a "no" keeps it out of the prompt for good.
+    /// evidence_curve : ln(1 + e) / ln(4), capped at 1, where e = sightings in distinct chats + 2 per accept
+    ///                  + 1 per verified user correction. One sighting → 0.50, two (or one correction) → 0.79, three → 1.
+    /// recency_decay  : 1 − min(days since last seen / 60, 0.5) — old patterns fade.
+    ///
+    /// So: seen once → 0.34 (not injected); seen in two chats, or once as an explicit correction → 0.54 (injected);
+    /// accepted once → 1.0 (STRONG). The old curve (ln(1+n)/ln(11) × 0.5) needed eight exact repeats to reach 0.45,
+    /// and since the extractor rewords every time, nothing ever did.
     /// </summary>
     public double Confidence
     {
         get
         {
             int votes = AcceptCount + RejectCount;
-            double successRate = votes == 0 ? 0.5 : (double)AcceptCount / votes;
-            // frequency: ln(1+n) / ln(11). 0 occurrences → 0, 10 → ~1.0, asymptote past that.
-            double freq = Math.Min(1.0, Math.Log(1 + OccurrenceCount) / Math.Log(11));
+            double successRate = votes == 0 ? UnvotedSuccess : (double)AcceptCount / votes;
+            double evidence = Math.Max(0, OccurrenceCount) + 2.0 * AcceptCount + Math.Max(0, CorrectionCount);
+            double freq = Math.Min(1.0, Math.Log(1 + evidence) / Math.Log(4));
             double daysOld = Math.Max(0, (DateTime.UtcNow - LastSeen).TotalDays);
             double recency = 1.0 - Math.Min(daysOld / 60.0, 0.5);
             return Math.Round(successRate * freq * recency, 3);
         }
     }
+
+    /// <summary>"every project" / "only in X" for the Instincts page.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string ScopeLabel => ProjectKey == null
+        ? LocalizedResources.Instance["instinct.card.scopeGlobal"]
+        : string.Format(LocalizedResources.Instance["instinct.card.scopeProject"],
+            ProjectName ?? InstinctService.ProjectNameOf(ProjectKey) ?? "");
+
+    /// <summary>True when the owner has said yes or no to it (on the chat card or the Instincts page).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsVoted => AcceptCount + RejectCount > 0;
+
+    /// <summary>True when the owner said no more often than yes.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsRejected => RejectCount > AcceptCount;
 
     /// <summary>Bucket the confidence into a visible tier for the UI.</summary>
     public string ConfidenceTier
@@ -116,7 +175,7 @@ public class Instinct
     /// FIX (audit MEDIUM #10): require at least one explicit Accept so a
     /// purely-observed pattern (no human feedback) can't auto-eligible
     /// itself off the back of the 0.5 default success-rate floor.</summary>
-    public bool CanPromote => !Promoted && AcceptCount >= 1 && Confidence >= 0.45;
+    public bool CanPromote => !Promoted && AcceptCount >= 1 && Confidence >= InjectThreshold;
 
     /// <summary>Friendly stamp for the UI.</summary>
     public string RelativeLastSeen
@@ -139,7 +198,9 @@ public class Instinct
 /// </summary>
 public class InstinctStore
 {
-    public int Version { get; set; } = 1;
+    /// <summary>2 = instincts carry a project, the chats they were seen in and their aliases (see InstinctService.Migrate).</summary>
+    public const int CurrentVersion = 2;
+    public int Version { get; set; } = CurrentVersion;
     public List<Instinct> Instincts { get; set; } = new();
     public DateTime LastModified { get; set; } = DateTime.UtcNow;
 }

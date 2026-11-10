@@ -82,7 +82,13 @@ internal static partial class Program
             // ── PC3: a plan ticked to the end says done ──
             provider.Steps.Enqueue((_, _) => Task.FromResult(Plan("p2", ("Rename the file", "in_progress"), ("Update the imports", "pending"))));
             provider.Steps.Enqueue((_, _) => Task.FromResult(Plan("p3", ("Rename the file", "completed"), ("Update the imports", "completed"))));
-            provider.Steps.Enqueue((_, _) => Task.FromResult(new NativeToolResponse { StopReason = "end_turn", TextContent = "Renamed." }));
+            // The run lasts over a second on its own (the clock shows nothing under one). It used to get there only because
+            // the owner's real ~/.cluadex Stop hooks ran on every chattest turn (~3 s); the harness no longer runs them.
+            provider.Steps.Enqueue(async (_, ct) =>
+            {
+                await Task.Delay(1200, ct);
+                return new NativeToolResponse { StopReason = "end_turn", TextContent = "Renamed." };
+            });
             await Send("[PC3] rename the file");
             await WaitIdle();
             var done = Card();

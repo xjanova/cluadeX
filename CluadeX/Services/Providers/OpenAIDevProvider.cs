@@ -443,7 +443,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             using (var stdin = new StreamWriter(proc.StandardInput.BaseStream, new UTF8Encoding(false)))
             {
                 await stdin.WriteAsync(BuildPrompt(cwd, grant, addDirs, ClaudeDevProvider.BuildTranscript(history), userMessage,
-                    CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
+                    LearnedHabits.Append(CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), cwd),
                     chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
                     // Codex has no spawn hook: this line is the only thing that keeps its sub-agents to the step's policy.
                     agentLine: Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.OpenAIDev,

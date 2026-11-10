@@ -101,6 +101,7 @@ public partial class ChatViewModel
         _dictation?.EndSession();
         _dictInterim = "";   // an unfinished guess still in the box stays there as typed text
         IsDictating = false;
+        OnVoicePageGone();   // after IsDictating: what plays next goes to the app's player
         if (status != null) StatusText = status;
     }
 
@@ -140,6 +141,7 @@ public partial class ChatViewModel
             return;
         }
         if (!IsDictating || _dictation == null || session != _dictation.Session) return;
+        if (type == "spoke") { OnPageSpoke(detail); return; }
         StatusText = type switch
         {
             "listening" => LocF("chat.mic.listening", detail.StartsWith("th", StringComparison.OrdinalIgnoreCase) ? "ไทย" : "English"),

@@ -1928,7 +1928,7 @@ public partial class CodeAgentService
             if (!string.IsNullOrWhiteSpace(instincts))
             {
                 sb.AppendLine();
-                sb.AppendLine("# Learned habits (apply when relevant)");
+                sb.AppendLine(LearnedHabits.Heading);
                 sb.AppendLine(instincts);
             }
         }

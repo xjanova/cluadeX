@@ -41,8 +41,8 @@ internal static class TierKeys
         ["settings.autoModel"] = new() { ["en"] = "Auto model for sub-agents", ["th"] = "เลือกโมเดลเอเจนต์ย่อยอัตโนมัติ" },
         ["settings.autoModelDesc"] = new()
         {
-            ["en"] = "Off: every sub-agent runs on the run's model (your per-kind overrides above still apply).",
-            ["th"] = "ปิด: เอเจนต์ย่อยทุกตัวใช้โมเดลหลักแบบเดิม (ค่าที่ตั้งแยกตามชนิดด้านบนยังใช้อยู่)",
+            ["en"] = "Off: every sub-agent runs on the run's model (your per-kind models under Advanced below still apply).",
+            ["th"] = "ปิด: เอเจนต์ย่อยทุกตัวใช้โมเดลหลักแบบเดิม (โมเดลแยกตามประเภทงานในส่วน ขั้นสูง ด้านล่างยังใช้อยู่)",
         },
         ["settings.tierEscalate"] = new() { ["en"] = "Redo a weak result one tier up", ["th"] = "ผลงานอ่อน ให้ขึ้นไปทำใหม่ระดับบน" },
         ["settings.tierEscalateDesc"] = new()

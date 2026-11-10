@@ -143,8 +143,19 @@ public partial class SettingsViewModel
         OnPropertyChanged(nameof(ChromeConnectorOn));
     }
 
+    /// <summary>A switch of Claude in Chrome is in flight — its "starting…" line must not be replaced by a re-read.</summary>
+    private bool _chromeApplying;
+
+    /// <summary>The two status lines again, in the language just picked (they are built once, as text).</summary>
+    private void RelocalizeChromeStatus()
+    {
+        RefreshChromeBridgeStatus();
+        if (!_chromeApplying) RefreshChromeStatus();
+    }
+
     private async Task ApplyChromeAsync(bool on)
     {
+        _chromeApplying = true;
         try
         {
             ChromeStatus = T(on ? "chrome.status.starting" : "chrome.status.stopping");
@@ -158,5 +169,6 @@ public partial class SettingsViewModel
             ChromeStatus = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
             OnPropertyChanged(nameof(ChromeConnectorOn));
         }
+        finally { _chromeApplying = false; }
     }
 }

@@ -1,0 +1,143 @@
+<!-- The voice player box above the composer (owner 2026-11-10: "ทำเป็นกล่อง เพลย์เสียงไว้ ว่าจะเดินหน้าถอยหลัง ฟังเสียงได้").
+     DataContext = ChatViewModel.VoiceQueue (ReplyVoiceQueue). Shows while it has replies:
+       face      the girl who wrote the reply being read (her accent ring)
+       text      her name · what it is doing · 2 / 5 · how many wait — and the reply's first words (a click goes to its bubble)
+       buttons   back · play / pause · forward · stop (drops what waits) · ✕ (closes the box)
+     One fixed height whatever it shows, so the chat above it does not move while it plays. -->
+<UserControl x:Class="CluadeX.Views.VoicePlayerBar"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
+             x:Name="Root"
+             AutomationProperties.AutomationId="CxChat.VoicePlayer"
+             AutomationProperties.Name="{services:Loc voice.player.title}">
+    <UserControl.Resources>
+        <Style x:Key="PlayerButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.35"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <Border x:Name="Card" Height="48" CornerRadius="24" BorderThickness="1" Padding="6,0,8,0"
+            Background="{DynamicResource Popup.Background}" BorderBrush="{DynamicResource Popup.Border}">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*" MinWidth="80"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- her face; a speaker when the reply has no girl (or her picture is missing) -->
+            <Grid Width="36" Height="36" VerticalAlignment="Center">
+                <Ellipse Fill="{DynamicResource Surface.Sunken}"/>
+                <TextBlock Text="&#xE767;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="{DynamicResource Accent.1}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Ellipse Fill="{Binding Current.Character.FaceBrush}" Stroke="{Binding Current.Character.AccentBrush}" StrokeThickness="2"
+                         Visibility="{Binding Current.Character.FaceBrush, Converter={StaticResource NullToCollapsed}, FallbackValue=Collapsed}"/>
+            </Grid>
+
+            <!-- who · state · position · waiting; then her first words -->
+            <Button x:Name="PreviewButton" Grid.Column="1" Margin="10,0,8,0" Cursor="Hand" VerticalAlignment="Center"
+                    HorizontalContentAlignment="Stretch" Click="Preview_Click"
+                    ToolTip="{services:Loc voice.player.goTo}" AutomationProperties.AutomationId="CxChat.VoicePlayer.Preview">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="Transparent"><ContentPresenter/></Border>
+                    </ControlTemplate>
+                </Button.Template>
+                <StackPanel>
+                    <TextBlock FontSize="11" FontFamily="{DynamicResource Font.Ui}" TextTrimming="CharacterEllipsis">
+                        <Run Text="{Binding Current.Character.Name, Mode=OneWay, FallbackValue=''}" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                        <Run x:Name="StateRun" Foreground="{DynamicResource Accent.1}">
+                            <Run.Style>
+                                <Style TargetType="Run">
+                                    <Setter Property="Text" Value="{services:Loc voice.player.idle}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding State}" Value="Playing"><Setter Property="Text" Value="{services:Loc voice.player.playing}"/></DataTrigger>
+                                        <DataTrigger Binding="{Binding State}" Value="Preparing"><Setter Property="Text" Value="{services:Loc voice.player.preparing}"/></DataTrigger>
+                                        <DataTrigger Binding="{Binding State}" Value="Paused"><Setter Property="Text" Value="{services:Loc voice.player.paused}"/></DataTrigger>
+                                        <DataTrigger Binding="{Binding Hold}" Value="True"><Setter Property="Text" Value="{services:Loc voice.player.held}"/></DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Run.Style>
+                        </Run>
+                        <Run Text="·" Foreground="{DynamicResource Text.Muted}"/>
+                        <Run Text="{Binding Position, Mode=OneWay}" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"/>
+                        <Run x:Name="WaitingRun" Foreground="{DynamicResource Text.Secondary}"/>
+                    </TextBlock>
+                    <TextBlock x:Name="PreviewText" Text="{Binding Current.Preview, FallbackValue=''}" FontSize="12.5" FontFamily="{DynamicResource Font.Ui}"
+                               Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
+                </StackPanel>
+            </Button>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="PrevButton" Content="&#xE892;" Style="{StaticResource PlayerButton}" Command="{Binding PreviousCommand}"
+                        IsEnabled="{Binding HasItems}"
+                        ToolTip="{services:Loc voice.player.prev}" AutomationProperties.Name="{services:Loc voice.player.prev}"
+                        AutomationProperties.AutomationId="CxChat.VoicePlayer.Prev"/>
+                <!-- play / pause: the accent disc -->
+                <Button x:Name="PlayButton" Command="{Binding PlayPauseCommand}" AutomationProperties.AutomationId="CxChat.VoicePlayer.PlayPause">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource PlayerButton}">
+                            <Setter Property="Width" Value="34"/>
+                            <Setter Property="Height" Value="34"/>
+                            <Setter Property="Margin" Value="3,0"/>
+                            <Setter Property="FontSize" Value="14"/>
+                            <Setter Property="Content" Value="&#xE768;"/>
+                            <Setter Property="ToolTip" Value="{services:Loc voice.player.play}"/>
+                            <Setter Property="AutomationProperties.Name" Value="{services:Loc voice.player.play}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource Button.Primary.Foreground}"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="Button">
+                                        <!-- solid shapes, not the icon font: its thin bars blurred to 2.8:1 on Classic's glossy disc.
+                                             Content stays the glyph (E768 play / E769 pause) for the triggers and the tests. -->
+                                        <Grid>
+                                            <Ellipse x:Name="disc" Fill="{DynamicResource Button.Primary.Background}"/>
+                                            <Path x:Name="icon" Fill="{TemplateBinding Foreground}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  Margin="3,0,0,0" Data="M0,0 L10,6.5 L0,13 Z"/>
+                                        </Grid>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="Content" Value="&#xE769;">
+                                                <Setter TargetName="icon" Property="Data" Value="M0,0 H3.6 V12 H0 Z M6.4,0 H10 V12 H6.4 Z"/>
+                                                <Setter TargetName="icon" Property="Margin" Value="0"/>
+                                            </Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="disc" Property="Fill" Value="{DynamicResource Button.Primary.Hover.Background}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                    <Setter Property="Content" Value="&#xE769;"/>
+                                    <Setter Property="ToolTip" Value="{services:Loc voice.player.pause}"/>
+                                    <Setter Property="AutomationProperties.Name" Value="{services:Loc voice.player.pause}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button x:Name="NextButton" Content="&#xE893;" Style="{StaticResource PlayerButton}" Command="{Binding NextCommand}"
+                        IsEnabled="{Binding HasItems}"
+                        ToolTip="{services:Loc voice.player.next}" AutomationProperties.Name="{services:Loc voice.player.next}"
+                        AutomationProperties.AutomationId="CxChat.VoicePlayer.Next"/>
+                <Button x:Name="StopButton" Content="&#xE71A;" Style="{StaticResource PlayerButton}" Command="{Binding StopCommand}"
+                        ToolTip="{services:Loc voice.player.stop}" AutomationProperties.Name="{services:Loc voice.player.stop}"
+                        AutomationProperties.AutomationId="CxChat.VoicePlayer.Stop"/>
+                <Button x:Name="CloseButton" Content="&#xE711;" Style="{StaticResource PlayerButton}" Command="{Binding CloseCommand}" FontSize="10"
+                        ToolTip="{services:Loc voice.player.close}" AutomationProperties.Name="{services:Loc voice.player.close}"
+                        AutomationProperties.AutomationId="CxChat.VoicePlayer.Close"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>

@@ -84,6 +84,9 @@ public sealed class ChromeDictationService : IDisposable
     public string Token { get; }
     public string Origin => $"http://127.0.0.1:{Port}";
     public int Session { get { lock (_gate) return _session; } }
+    /// <summary>The id of the reply last handed to <see cref="Speak"/> / <see cref="SpeakAudio"/>. The page's "spoke"
+    /// event names it, so CluadeX's voice queue moves on only when the reply it is playing ends.</summary>
+    public long SayId { get { lock (_gate) return _sayId; } }
     public bool Active { get { lock (_gate) return _active; } }
 
     /// <summary>Words heard: (session, newly final text, the current unfinished guess). Raised on a pool thread, in

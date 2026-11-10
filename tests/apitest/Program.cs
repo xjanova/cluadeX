@@ -608,6 +608,7 @@ internal static class Program
         await UpdateProgressWire.Run(Check, Section);
         await CommentPolicyWire.Run(Check, Section);
         await SettingsSalvageWire.Run(Check, Section);
+        await SettingsLayoutWire.Run(Check, Section);
         await GitMultiRepoWire.Run(Check, Section);
         await AggregatorWire.Run(Check, Section);
         await VibeWire.Run(Check, Section);

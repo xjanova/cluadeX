@@ -38,9 +38,8 @@ public class HookBundleService
     {
         _hookService = hookService;
         _log = debugLog;
-        string root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex");
+        // The data root (~/.cluadex, or <exe>\Data in a portable copy — HookService reads the projection from there too).
+        string root = SettingsService.ResolveDataRoot(out _);
         Directory.CreateDirectory(root);
         _bundleDir = Path.Combine(root, "hooks-bundled");
         _stateFile = Path.Combine(root, "hooks-bundle-state.json");
@@ -452,18 +451,10 @@ public class HookBundleService
             Category = "quality", Risk = "low", TimeoutMs = 60000,
         },
 
-        // ── Stop (3) ──────────────────────────────────────────────────
-        new HookBundle
-        {
-            Id = "stop-pattern-extract",
-            Name = "Pattern Extract → Instincts",
-            Description = "When the agentic loop ends, writes a record to ~/.cluadex/instincts-inbox.jsonl that InstinctService can ingest as observations.",
-            Phase = "Stop", Matcher = "*",
-            ScriptFile = "stop-pattern-extract.ps1",
-            SubstitutionTokens = new() { "{model}", "{cost}", "{tokens}", "{turn_count}" },
-            Category = "telemetry", Risk = "low", TimeoutMs = 5000,
-            DefaultEnabled = true,
-        },
+        // ── Stop (2) ──────────────────────────────────────────────────
+        // "stop-pattern-extract" was removed (2026-11-10): it appended {model, cost, tokens} with no pattern to
+        // instincts-inbox.jsonl on every turn — over a thousand rows nothing could learn from. The instincts are now
+        // extracted in the app (SessionMemoryService); the inbox stays for scripts that do write a "pattern".
         new HookBundle
         {
             Id = "stop-cost-summary-toast",

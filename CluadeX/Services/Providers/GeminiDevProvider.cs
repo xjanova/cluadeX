@@ -461,7 +461,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         };
         psi.ArgumentList.Add(cli.Script);
         foreach (var a in BuildArgs(cwd, grant, model, ClaudeDevProvider.TurnAddDirs(extras),
-                     CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
+                     LearnedHabits.Append(CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), cwd),
                      chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
                      Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GeminiDev),
                      noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,

@@ -1708,6 +1708,82 @@
                                     </ContentControl.ContentTemplate>
                                 </ContentControl>
 
+                                <!-- ═══ "Remember this next time?" — instincts the last chat taught, one ✓ / ✗ each ═══ -->
+                                <!-- Collapsed unless the row is one; its template only applies when it is. A vote is final on the card
+                                     (the Instincts page can change it). -->
+                                <ContentControl Grid.Row="1" Margin="20,8,0,4" Focusable="False" Content="{Binding InstinctCard}"
+                                                Visibility="{Binding ShowsInstinctCard, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                AutomationProperties.AutomationId="CxChat.InstinctCard">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="14,10" CornerRadius="10" BorderThickness="1"
+                                                    Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1.Border.Soft}">
+                                                <StackPanel>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Accent.1}"
+                                                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                        <TextBlock Text="{services:Loc instinct.card.title}" FontSize="12.5" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                    <TextBlock Text="{Binding FromText}" Margin="0,2,0,0" FontSize="11" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource Text.Muted}" Visibility="{Binding HasFrom, Converter={StaticResource BoolVis}}"/>
+                                                    <ItemsControl ItemsSource="{Binding Rows}" Margin="0,6,0,0" Focusable="False">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Grid Margin="0,4,0,0">
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                                    <StackPanel>
+                                                                        <TextBlock Text="{Binding Pattern}" FontSize="12.5" TextWrapping="Wrap"
+                                                                                   Foreground="{DynamicResource Text.Primary}"/>
+                                                                        <TextBlock Text="{Binding Detail}" FontSize="11.5" TextWrapping="Wrap" Margin="0,1,0,0"
+                                                                                   Foreground="{DynamicResource Text.Secondary}"
+                                                                                   Visibility="{Binding HasDetail, Converter={StaticResource BoolVis}}"/>
+                                                                        <TextBlock FontSize="11" Margin="0,1,0,0" Foreground="{DynamicResource Text.Muted}">
+                                                                            <Run Text="{Binding ScopeText, Mode=OneWay}"/><Run Text="{Binding StateText, Mode=OneWay}"/>
+                                                                        </TextBlock>
+                                                                    </StackPanel>
+                                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="10,0,0,0"
+                                                                                Visibility="{Binding IsOpen, Converter={StaticResource BoolVis}}">
+                                                                        <Button Command="{Binding AcceptCommand}" ToolTip="{services:Loc instinct.card.yesTip}" Cursor="Hand"
+                                                                                Padding="10,3" Margin="0,0,6,0" AutomationProperties.AutomationId="InstinctYes">
+                                                                            <Button.Template>
+                                                                                <ControlTemplate TargetType="Button">
+                                                                                    <Border x:Name="Bd" CornerRadius="7" Padding="{TemplateBinding Padding}" Background="{DynamicResource Accent.1}">
+                                                                                        <ContentPresenter/>
+                                                                                    </Border>
+                                                                                    <ControlTemplate.Triggers>
+                                                                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.85"/></Trigger>
+                                                                                    </ControlTemplate.Triggers>
+                                                                                </ControlTemplate>
+                                                                            </Button.Template>
+                                                                            <TextBlock Text="{services:Loc instinct.card.yes}" FontSize="12" Foreground="{DynamicResource Text.OnAccent}"/>
+                                                                        </Button>
+                                                                        <Button Command="{Binding RejectCommand}" ToolTip="{services:Loc instinct.card.noTip}" Cursor="Hand"
+                                                                                Padding="10,3" AutomationProperties.AutomationId="InstinctNo">
+                                                                            <Button.Template>
+                                                                                <ControlTemplate TargetType="Button">
+                                                                                    <Border x:Name="Bd" CornerRadius="7" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                                            Background="Transparent" BorderBrush="{DynamicResource Accent.1.Border.Soft}">
+                                                                                        <ContentPresenter/>
+                                                                                    </Border>
+                                                                                    <ControlTemplate.Triggers>
+                                                                                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.85"/></Trigger>
+                                                                                    </ControlTemplate.Triggers>
+                                                                                </ControlTemplate>
+                                                                            </Button.Template>
+                                                                            <TextBlock Text="{services:Loc instinct.card.no}" FontSize="12" Foreground="{DynamicResource Text.Primary}"/>
+                                                                        </Button>
+                                                                    </StackPanel>
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
+
                                 <!-- ═══ Agent map: the sub-agents this command started, as a live tree (open by default, folds) ═══ -->
                                 <!-- Alive only while a sub-agent works (owner 2026-11-03: "อยากให้ปรับปรุงการแจงเอเจนให้สวย มีอนิเมชั่นกว่านี้"):
                                      the root breathes and its line flows while any runs; a running node's ring turns, its line
@@ -1913,15 +1989,23 @@
                                         </Path.Style>
                                     </Path>
 
+                                <!-- A click on a reply's bubble reads it aloud (owner 2026-11-10: "กดที่กล้องคำพูดนั้นก็ ฟังเสียงนั้นได้") when replies
+                                     are read aloud; a drag (selecting text), a double click, a link or a button inside does not
+                                     (ChatView.xaml.cs Bubble_PreviewMouse*). The bubble being read glows (no border change: no row height change). -->
                                 <Border Grid.Column="1"
                                         HorizontalAlignment="{Binding Role, Converter={StaticResource RoleAlign}}"
                                         Margin="{Binding Role, Converter={StaticResource RoleMargin}}"
                                         Background="{Binding Role, Converter={StaticResource RoleBg}}"
                                         CornerRadius="{Binding Role, Converter={StaticResource RoleCorner}}"
-                                        Padding="{Binding Role, Converter={StaticResource RolePadding}}">
+                                        Padding="{Binding Role, Converter={StaticResource RolePadding}}"
+                                        PreviewMouseLeftButtonDown="Bubble_PreviewMouseDown"
+                                        PreviewMouseLeftButtonUp="Bubble_PreviewMouseUp">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsVoiceCurrent}" Value="True">
+                                                    <Setter Property="Effect" Value="{DynamicResource Fx.Card.Glow}"/>
+                                                </DataTrigger>
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
                                                     <Setter Property="BorderThickness" Value="1"/>
                                                     <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
@@ -2238,6 +2322,26 @@
                                                     </Style>
                                                 </Border.Style>
                                                 <StackPanel Orientation="Horizontal">
+                                                    <!-- Listen: read this reply aloud now (pause on the one playing) — ReplyVoiceQueue.Play -->
+                                                    <Button FontFamily="Segoe MDL2 Assets" Width="24" Height="18" FontSize="10" Padding="0" Margin="1,0"
+                                                            Click="ListenMessage_Click" AutomationProperties.AutomationId="CxChat.ListenReply"
+                                                            Visibility="{Binding CanReadAloud, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                                                <Setter Property="Content" Value="&#xE768;"/>
+                                                                <Setter Property="ToolTip" Value="{services:Loc voice.player.listen}"/>
+                                                                <Setter Property="AutomationProperties.Name" Value="{services:Loc voice.player.listen}"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsVoicePlaying}" Value="True">
+                                                                        <Setter Property="Content" Value="&#xE769;"/>
+                                                                        <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                                        <Setter Property="ToolTip" Value="{services:Loc voice.player.listenPause}"/>
+                                                                        <Setter Property="AutomationProperties.Name" Value="{services:Loc voice.player.listenPause}"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                    </Button>
                                                     <!-- Copy message -->
                                                     <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
                                                             Style="{StaticResource IconButton}"
@@ -3236,6 +3340,12 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
+
+                <!-- The voice player box: the replies read aloud, one after another — back, play / pause, forward, stop (VoicePlayerBar).
+                     Shows while it holds replies; clear of her tag on the card's top-right edge. -->
+                <views:VoicePlayerBar x:Name="VoicePlayer" Grid.Row="0" Margin="0,0,150,10" HorizontalAlignment="Left" MaxWidth="640" MinWidth="360"
+                                      DataContext="{Binding VoiceQueue}" ShowMessage="VoicePlayer_ShowMessage"
+                                      Visibility="{Binding HasItems, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
 
                 <!-- Who answers this chat: her tag on the card's top edge (not in Classic) -->
                 <ContentControl x:Name="ComposerWho" Grid.Row="1" Panel.ZIndex="3" HorizontalAlignment="Right" VerticalAlignment="Top"
