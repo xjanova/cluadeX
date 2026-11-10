@@ -83,8 +83,12 @@ public partial class ChatViewModel
             if (run.Session.RunStatus == RunBadge.Waiting) waiting++;
         }
         var now = DateTime.UtcNow;
-        BuddyMoodState = BuddyMood.Decide(working, waiting, _lastEndBadge, now - _lastEndUtc, now - _lastActivityUtc);
+        BuddyMoodState = BuddyMood.Decide(working, waiting, _lastEndBadge, now - _lastEndUtc, now - _lastActivityUtc, InputIdle());
     }
+
+    /// <summary>Time since the last mouse or keyboard input on the PC (tests put in their own clock): while the owner is at
+    /// the computer — reading a reply, scrolling, in another app — she stays awake.</summary>
+    public static Func<TimeSpan> InputIdle { get; set; } = UserInputClock.Idle;
 
     /// <summary>The owner is back (typing or sending): she wakes up.</summary>
     public void NudgeBuddy()

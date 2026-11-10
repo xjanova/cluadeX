@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Threading;
 using CluadeX.Services;
@@ -36,7 +35,7 @@ public partial class CluadexBuddy
         SoundsChanged += OnSoundsChanged;
         if (_awayTimer != null) return;
         _awayTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(30) };
-        _awayTimer.Tick += (_, _) => AwayTick(UserIdle());
+        _awayTimer.Tick += (_, _) => AwayTick(UserInputClock.Idle());
         _awayTimer.Start();
     }
 
@@ -104,20 +103,5 @@ public partial class CluadexBuddy
         });
         if (!ok) { _forcePlay = false; SyncPause(); }
         return ok;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
-
-    [DllImport("user32.dll")]
-    private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
-
-    /// <summary>How long since the last mouse or keyboard input anywhere on the computer (zero when Windows cannot say).</summary>
-    private static TimeSpan UserIdle()
-    {
-        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
-        if (!GetLastInputInfo(ref info)) return TimeSpan.Zero;
-        uint ms = unchecked((uint)Environment.TickCount - info.dwTime);
-        return TimeSpan.FromMilliseconds(ms);
     }
 }

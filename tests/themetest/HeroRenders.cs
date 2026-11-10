@@ -211,6 +211,27 @@ internal static partial class Program
         await Mood(BuddyMood.Working);
         await Mood(BuddyMood.Idle);
         Check("clips [idle]: the idle scene", buddy.SceneShown == BuddyMood.Idle, buddy.SceneShown);
+        // owner 2026-11-10: "idle อวาต้า น้อยไป เธอหลับบ่อยเกินไป" — many things to do, often, never the same twice running
+        var idleScene = CluadexBuddy.Scenes[BuddyMood.Idle];
+        Check("idle: 40+ different gestures", idleScene.Extras.Distinct().Count() >= 40, $"{idleScene.Extras.Distinct().Count()}");
+        Check("idle: an extra at least every 20 s", idleScene.ExtraEvery + TimeSpan.FromSeconds(idleScene.JitterSeconds) <= TimeSpan.FromSeconds(20),
+              $"{idleScene.ExtraEvery} + {idleScene.JitterSeconds} s");
+        Check("idle: none of them spoken or asleep",
+              !CluadexBuddy.ExtrasAt(BuddyMood.Idle, TimeSpan.FromHours(23.5)).Any(e => CluadexBuddy.Spoken.Contains(e)
+                  || CluadexBuddy.Scenes[BuddyMood.Sleep].Loop.Contains(e) || e.StartsWith("pillow") || e.StartsWith("asleep")));
+        var continueScene = typeof(CluadexBuddy).GetMethod("ContinueScene", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var nextExtraAt = typeof(CluadexBuddy).GetField("_nextExtraAt", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var idleNow = CluadexBuddy.ExtrasAt(BuddyMood.Idle, DateTime.Now.TimeOfDay);
+        var did = new List<string>();
+        for (int i = 0; i < 12; i++)
+        {
+            nextExtraAt.SetValue(buddy, DateTime.MinValue);
+            continueScene.Invoke(buddy, null);
+            did.Add(buddy.ClipShown);
+        }
+        await Idle(150);
+        Check("idle: 12 extras in a row, all different, all idle ones", did.Distinct().Count() == 12 && did.All(idleNow.Contains), string.Join(",", did));
+        Check("idle: still the idle scene after them", buddy.SceneShown == BuddyMood.Idle, buddy.SceneShown);
         buddy.SetListening(true);
         await Idle(80);
         Check("clips [typing]: she listens while the owner types", buddy.SceneShown == CluadexBuddy.ListeningScene, buddy.SceneShown);

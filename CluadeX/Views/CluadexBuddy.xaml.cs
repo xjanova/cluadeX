@@ -54,6 +54,16 @@ public partial class CluadexBuddy : UserControl
         w.Activated += (_, _) => { SyncPause(); OnFocusChanged(); };
         w.Deactivated += (_, _) => { SyncPause(); OnFocusChanged(); };
         w.StateChanged += (_, _) => SyncPause();
+        // asleep, she wakes the moment the owner moves the mouse over CluadeX or presses a key in it — not only on the
+        // next 5 s tick. Awake, these do nothing but one string compare.
+        w.PreviewMouseMove += (_, _) => WakeOnInput();
+        w.PreviewMouseDown += (_, _) => WakeOnInput();
+        w.PreviewKeyDown += (_, _) => WakeOnInput();
+    }
+
+    private void WakeOnInput()
+    {
+        if (Shown == BuddyMood.Sleep && DataContext is ViewModels.ChatViewModel vm) vm.NudgeBuddy();
     }
 
     private void Stop()
@@ -151,7 +161,7 @@ public partial class CluadexBuddy : UserControl
                 {
                     Forever(sb, Breathe, ScaleTransform.ScaleXProperty, 1, 1.015, 1.6);
                     Forever(sb, Breathe, ScaleTransform.ScaleYProperty, 1, 1.015, 1.6);
-                    Blink(sb, 4.2);
+                    IdleFidgets(sb);
                 }
                 Forever(sb, GlowScale, ScaleTransform.ScaleXProperty, 0.96, 1.04, 2.4);
                 Forever(sb, GlowScale, ScaleTransform.ScaleYProperty, 0.96, 1.04, 2.4);
@@ -198,19 +208,47 @@ public partial class CluadexBuddy : UserControl
         Add(sb, a, target, prop);
     }
 
+    /// <summary>Like <see cref="Once"/>, but the keys loop every <paramref name="cycle"/> seconds for as long as the mood lasts.</summary>
+    private static void Cycle(Storyboard sb, DependencyObject target, DependencyProperty prop, double cycle, params (double At, double Value)[] keys)
+    {
+        var a = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromSeconds(cycle), RepeatBehavior = RepeatBehavior.Forever };
+        foreach (var (at, v) in keys)
+            a.KeyFrames.Add(new EasingDoubleKeyFrame(v, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(at)), new SineEase()));
+        Add(sb, a, target, prop);
+    }
+
     /// <summary>Eyes shut for a moment at the end of every <paramref name="period"/> seconds. The two stills are not drawn in
     /// quite the same pose, so the open-eyed one goes out while the closed-eyed one shows: stacked, her open-eyed outline
     /// peeked out around the other as a grey rim (owner 2026-11-08: "ทำให้เนียนกว่านี้").</summary>
-    private void Blink(Storyboard sb, double period)
+    private void Blink(Storyboard sb, double period) => Blinks(sb, period, period - 0.2);
+
+    /// <summary>Eyes shut for 0.14 s at each of <paramref name="at"/> seconds of a <paramref name="cycle"/>-second loop.</summary>
+    private void Blinks(Storyboard sb, double cycle, params double[] at)
     {
         foreach (var (face, shut) in new[] { (FaceAsleep, 1.0), (FaceAwake, 0.0) })
         {
-            var a = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromSeconds(period), RepeatBehavior = RepeatBehavior.Forever };
+            var a = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromSeconds(cycle), RepeatBehavior = RepeatBehavior.Forever };
             a.KeyFrames.Add(new DiscreteDoubleKeyFrame(1 - shut, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-            a.KeyFrames.Add(new DiscreteDoubleKeyFrame(shut, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(period - 0.2))));
-            a.KeyFrames.Add(new DiscreteDoubleKeyFrame(1 - shut, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(period - 0.06))));
+            foreach (double t in at)
+            {
+                a.KeyFrames.Add(new DiscreteDoubleKeyFrame(shut, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(t))));
+                a.KeyFrames.Add(new DiscreteDoubleKeyFrame(1 - shut, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(t + 0.14))));
+            }
             Add(sb, a, face, OpacityProperty);
         }
+    }
+
+    /// <summary>Idle on her still pictures (no clip): blinks at uneven times (one a double blink), and within a 23 s loop a
+    /// slow glance one way, a little nod, a glance the other way — so the stills never look like a metronome (owner
+    /// 2026-11-10: "idle อวาต้า น้อยไป"). All of it is keyframes in her one storyboard: no timer, nothing made per frame,
+    /// paused with it. The slideshow keeps only the breathing (a tilting slide would look odd).</summary>
+    private void IdleFidgets(Storyboard sb)
+    {
+        Blinks(sb, 17.3, 3.1, 7.6, 7.95, 12.4, 16.2);
+        if (Display == DisplaySlides) return;
+        Cycle(sb, Tilt, RotateTransform.AngleProperty, 23, (0, 0), (4.6, 0), (5.4, -4), (7.2, -4), (8.1, 0),
+             (15.0, 0), (15.9, 3.5), (17.4, 3.5), (18.3, 0), (23, 0));
+        Cycle(sb, Bob, TranslateTransform.YProperty, 23, (0, 0), (10.6, 0), (11.0, 1.8), (11.4, 0), (11.8, 1.2), (12.2, 0), (23, 0));
     }
 
     /// <summary>A "z" that fades in, drifts up and fades out, every 2.8 s, starting <paramref name="delay"/> s in.</summary>
