@@ -341,7 +341,13 @@ public static class WrittenFileCheck
 
     /// <summary>Runs a program directly (no shell, so nothing in a path is a command), both pipes read at once, stopped
     /// after <see cref="ToolTimeout"/>.</summary>
-    public static async Task<(int Exit, string Output, bool TimedOut)> RunProcessAsync(string exe, IReadOnlyList<string> args, CancellationToken ct)
+    public static Task<(int Exit, string Output, bool TimedOut)> RunProcessAsync(string exe, IReadOnlyList<string> args, CancellationToken ct)
+        => RunProcessAsync(exe, args, ct, ToolTimeout);
+
+    /// <summary>The same with its own time limit. <paramref name="stderrFirst"/>: stderr before stdout in the output, so
+    /// the 20,000-character cut keeps a browser's console log and drops the end of the DOM it printed.</summary>
+    public static async Task<(int Exit, string Output, bool TimedOut)> RunProcessAsync(string exe, IReadOnlyList<string> args, CancellationToken ct,
+        TimeSpan timeLimit, bool stderrFirst = false)
     {
         var psi = new ProcessStartInfo(exe)
         {
@@ -364,7 +370,7 @@ public static class WrittenFileCheck
         var outTask = p.StandardOutput.ReadToEndAsync(ct);
         var errTask = p.StandardError.ReadToEndAsync(ct);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(ToolTimeout);
+        timeout.CancelAfter(timeLimit);
         try
         {
             await p.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
@@ -376,7 +382,11 @@ public static class WrittenFileCheck
             return (-1, "", true);
         }
         string output;
-        try { output = (await outTask.ConfigureAwait(false)) + "\n" + (await errTask.ConfigureAwait(false)); }
+        try
+        {
+            string stdout = await outTask.ConfigureAwait(false), stderr = await errTask.ConfigureAwait(false);
+            output = stderrFirst ? stderr + "\n" + stdout : stdout + "\n" + stderr;
+        }
         catch (OperationCanceledException) { ct.ThrowIfCancellationRequested(); output = ""; }
         if (output.Length > 20000) output = output[..20000];
         return (p.ExitCode, output, false);

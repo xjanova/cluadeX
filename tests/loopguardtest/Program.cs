@@ -429,6 +429,93 @@ Call Write(string path) => new("write_file", $"{{\"path\":\"{path}\",\"content\"
     finally { try { Directory.Delete(dir, true); } catch { } }
 }
 
+// ─── P: PageLoadCheck — a page that parses must also open (headless browser) ───
+{
+    string dir = Path.Combine(Path.GetTempPath(), "cx-pagecheck-" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(dir);
+    string F(string name, string text) { string p = Path.Combine(dir, name); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, text); return p; }
+    string Url(string p) => new Uri(p).AbsoluteUri;
+    try
+    {
+        // Which pages: the ones written, and a page that loads a script that was written (same folder or one up).
+        string index = F("site\\index.html", "<html><body><script src=\"js/game.js\"></script></body></html>");
+        string about = F("site\\about.html", "<html><body>no scripts</body></html>");
+        string game = F("site\\js\\game.js", "let a = 1;");
+        string solo = F("solo\\page.html", "<html></html>");
+        var pp = PageLoadCheck.PagesFor([game]);
+        Check("P1.1 a written script opens the page that loads it (one folder up), not the page that does not",
+            pp.Count == 1 && pp[0].Equals(index, StringComparison.OrdinalIgnoreCase), string.Join(" | ", pp));
+        Check("P1.2 a written page is opened itself", PageLoadCheck.PagesFor([solo]).SequenceEqual([solo]));
+        var many = Enumerable.Range(0, 6).Select(i => F($"m\\p{i}.html", "<html></html>")).ToArray();
+        Check("P1.3 at most 3 pages", PageLoadCheck.PagesFor(many).Count == PageLoadCheck.MaxPages);
+        Check("P1.4 a missing file and a stylesheet open nothing", PageLoadCheck.PagesFor([Path.Combine(dir, "gone.html"), F("site\\s.css", "a{}")]).Count == 0
+            && !pp.Contains(about));
+
+        // The browser's answer, scripted: what Chrome 1xx really printed for these cases (2026-11-11).
+        string? seenExe = null; IReadOnlyList<string>? seenArgs = null;
+        string Log(string msg, string src, int line) => $"[50028:1124:1111/014434.493:INFO:CONSOLE:{line}] \"{msg}\", source: {src} ({line})";
+        WrittenFileCheck.Runner Fake(string stderr, bool timedOut = false, bool dom = true) => (exe, args, ct) =>
+        {
+            seenExe = exe; seenArgs = args;
+            return Task.FromResult((timedOut ? -1 : 0, stderr + "\n" + (dom ? "<html><head></head><body></body></html>" : ""), timedOut));
+        };
+        Func<string?> chrome = () => "chrome.exe";
+        string jsFile = Path.Combine(dir, "site", "js", "game.js");
+        string out1 = string.Join("\n",
+            Log("Uncaught ReferenceError: undefinedThing is not defined", Url(index), 2),
+            Log("Uncaught ReferenceError: undefinedThing is not defined", Url(index), 2),
+            Log("custom error log", Url(index), 4),
+            Log("Access to fetch at 'file:///D:/x/data.json' from origin 'null' has been blocked by CORS policy: Cross origin requests are only supported", Url(index), 0),
+            Log("Uncaught (in promise) TypeError: Failed to fetch", Url(index), 3),
+            Log("Uncaught TypeError: Cannot read properties of null (reading 'x')", Url(jsFile), 7),
+            Log("Uncaught Error: thrown inside the library", "https://cdn.example/lib.js", 1));
+        var p2 = await PageLoadCheck.CheckAsync([index], chrome, Fake(out1), CancellationToken.None);
+        Check("P2.1 the page's own uncaught errors, once each, at their file and line",
+            p2.Count == 2 && p2.Any(i => i.Path.Equals(index, StringComparison.OrdinalIgnoreCase) && i.Line == 2 && i.Message == "page load: Uncaught ReferenceError: undefinedThing is not defined")
+            && p2.Any(i => i.Path.Equals(jsFile, StringComparison.OrdinalIgnoreCase) && i.Line == 7),
+            string.Join(" | ", p2.Select(i => $"{Path.GetFileName(i.Path)}:{i.Line}:{i.Message}")));
+        Check("P2.2 console.error, a file:// CORS block, 'Failed to fetch' and an error inside a CDN script are not the page's fault",
+            !p2.Any(i => i.Message.Contains("custom") || i.Message.Contains("CORS") || i.Message.Contains("fetch") || i.Message.Contains("library")));
+        Check("P2.3 the browser runs headless on its own throwaway profile, the page as a file URL",
+            seenExe == "chrome.exe" && seenArgs!.Contains("--headless=new") && seenArgs.Contains("--disable-extensions")
+            && seenArgs.Any(a => a.StartsWith("--user-data-dir=" + Path.Combine(Path.GetTempPath(), "cluadex-pagecheck-"), StringComparison.OrdinalIgnoreCase))
+            && seenArgs[^1] == Url(index), string.Join(" ", seenArgs ?? []));
+        Check("P2.4 the profile folder is gone afterwards", !Directory.EnumerateDirectories(Path.GetTempPath(), "cluadex-pagecheck-*").Any());
+        var p3 = await PageLoadCheck.CheckAsync([index], chrome, Fake("", timedOut: true), CancellationToken.None);
+        Check("P3.1 a page that never finishes loading is reported as a hang", p3.Count == 1 && p3[0].Message == PageLoadCheck.HangMessage);
+        Check("P3.2 a browser that gives no page back says nothing (never blames the page)",
+            (await PageLoadCheck.CheckAsync([index], chrome, Fake(out1, dom: false), CancellationToken.None)).Count == 0);
+        Check("P3.3 no browser on the PC: nothing said", (await PageLoadCheck.CheckAsync([index], () => null, Fake(out1), CancellationToken.None)).Count == 0);
+        string note = PageLoadCheck.Note(p2, Path.Combine(dir, "site"));
+        Check("P3.4 the note names the files relative to the project and stays short",
+            note.StartsWith("[page-check] ✗") && note.Contains("- index.html:2:") && note.Contains("- js/game.js:7:") && note.Length < 700, note);
+
+        // The real browser, when this PC has one.
+        if (CluadeX.Services.Voice.ChromeDictationService.FindBrowser()?.Path is { } real)
+        {
+            Func<string?> realFind = () => real;
+            string ok = F("real\\ok.html", "<!doctype html><html><body><canvas id=c></canvas><script>\nlet n = 0;\nfunction f(){ n++; requestAnimationFrame(f); }\nrequestAnimationFrame(f);\nsetInterval(() => {}, 16);\n</script></body></html>");
+            var r1 = await PageLoadCheck.CheckAsync([ok], realFind, null, CancellationToken.None);
+            Check("P4.1 real browser: a game loop (requestAnimationFrame + setInterval) is not a hang", r1.Count == 0,
+                string.Join(" | ", r1.Select(i => $"{i.Line}:{i.Message}")));
+            string err = F("real\\err.html", "<!doctype html><html><body><script>\nfunction start() {\n  undefinedThing.go();\n}\nsetTimeout(start, 500);\nfetch('data.json').then(r => r.json());\n</script></body></html>");
+            var r2 = await PageLoadCheck.CheckAsync([err], realFind, null, CancellationToken.None);
+            Check("P4.2 real browser: an error thrown later (setTimeout) is caught at its line; the file:// fetch is not",
+                r2.Count == 1 && r2[0].Line == 3 && r2[0].Message.Contains("undefinedThing"), string.Join(" | ", r2.Select(i => $"{i.Line}:{i.Message}")));
+            string hang = F("real\\hang.html", "<!doctype html><html><body><script>\nfunction solve(i) { while (true) { i++; } }\nsolve(0);\n</script></body></html>");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var r3 = await PageLoadCheck.CheckAsync([hang], realFind, null, CancellationToken.None);
+            Check("P4.3 real browser: the Sudoku freeze (a script that never returns) is reported as a hang, in about 15 s",
+                r3.Count == 1 && r3[0].Message == PageLoadCheck.HangMessage && sw.Elapsed < TimeSpan.FromSeconds(25), $"{sw.Elapsed.TotalSeconds:N1} s · " + string.Join(" | ", r3.Select(i => i.Message)));
+            // A profile folder can only be deleted once every browser process on it has exited (the hang was killed as a tree).
+            Check("P4.4 real browser: no profile is left behind (so no browser still runs on one)",
+                !Directory.EnumerateDirectories(Path.GetTempPath(), "cluadex-pagecheck-*").Any());
+        }
+        else Console.WriteLine("SKIP P4 (no Chrome or Edge on this PC)");
+    }
+    finally { try { Directory.Delete(dir, true); } catch { } }
+}
+
 // ─── T: ToolTrackRecord — the next run of a model hears what it keeps getting wrong here ───
 {
     string file = Path.Combine(Path.GetTempPath(), "cx-track-" + Guid.NewGuid().ToString("N")[..8] + ".json");
