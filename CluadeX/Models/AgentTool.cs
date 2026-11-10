@@ -192,6 +192,8 @@ public enum ToolType
     WatchProcess,        // Watch a background process until it exits; the chat is told (and woken)
     WatchList,           // This chat's watches
     WatchCancel,         // Stop one of this chat's watches (or all)
+    // Media transcripts (Services/Tools/MediaTranscriptToolModule) — appended last: a ToolType is stored by number
+    MediaTranscript,     // What a video / audio says: its subtitles (yt-dlp, free) or speech-to-text (Whisper, paid, asks)
 }
 
 /// <summary>

@@ -1347,6 +1347,9 @@ public partial class App : Application
             sp.GetService<SettingsService>(), sp.GetService<AiProviderManager>(), sp.GetService<GitService>(),
             () => sp.GetService<CodeEditorViewModel>()?.OpenFilesForTools()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.OrchestrationToolModule());
+        // media_transcript: a video's subtitles (yt-dlp) or speech to text (ffmpeg + OpenAI Whisper, asks with the price).
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.MediaTranscriptToolModule(
+            sp.GetService<SettingsService>(), sp.GetService<ActivationService>()));
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 

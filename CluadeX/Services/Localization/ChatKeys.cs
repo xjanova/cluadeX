@@ -221,6 +221,7 @@ internal static class ChatKeys
         ["chat.web.timedOut"] = new() { ["en"] = "Fetching {0} timed out ({1} s) — the site was too slow to send the page.", ["th"] = "ดึงข้อมูลจาก {0} หมดเวลา ({1} วินาที) — เว็บไซต์ส่งหน้าเว็บช้าเกินไป" },
         ["chat.web.failed"] = new() { ["en"] = "Couldn't fetch {0} — the site couldn't be reached (details are in the Debug Log).", ["th"] = "ดึงข้อมูลจาก {0} ไม่สำเร็จ — ติดต่อเว็บไซต์ไม่ได้ (ดูรายละเอียดที่หน้า Debug Log)" },
         ["chat.web.cancelled"] = new() { ["en"] = "The fetch was stopped.", ["th"] = "หยุดการดึงข้อมูลแล้ว" },
+        ["chat.web.offsetPastEnd"] = new() { ["en"] = "Offset {0} is past the end of {1} — the page has {2:N0} characters of text. Use a smaller offset (0 = from the start).", ["th"] = "ตำแหน่ง {0} เลยท้ายหน้า {1} ไปแล้ว — หน้านี้มีข้อความ {2:N0} ตัวอักษร ให้ใช้ offset ที่น้อยกว่านี้ (0 = เริ่มจากต้นหน้า)" },
         ["chat.repl.unsupported"] = new() { ["en"] = "Unsupported REPL language '{0}' — use python or node. For shell commands use run_command.", ["th"] = "ไม่รองรับภาษา REPL '{0}' — ใช้ python หรือ node · สำหรับคำสั่ง shell ให้ใช้ run_command" },
 
         // ─── Toggles (project bar / bottom bar) ───

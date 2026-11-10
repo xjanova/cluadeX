@@ -407,6 +407,25 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   chat page + native loop). **Not yet with a live brain**: the card writing and ranking were only checked against the brain's
   answer shape, not run by the app against BrainX.
 
+## Reading long pages and media transcripts (2026-11-10)
+- `web_fetch` reads a page in parts: `offset` + `max_chars` (clamped to [500, most]; `AgentToolService.WebFetchReadBudget()`:
+  cloud 20k default / 30k most, local = half of `ReadCharBudget`, 4k–20k). The answer says "characters a–b of N" and ends with
+  the offset to read on. Parts after the first come from `WebFetchService.FetchForReadingAsync` (8 pages, 10 min, Ok outcomes
+  only) so part 2 never downloads again; a first read (offset 0) always fetches fresh. `WebFetchService.Slice` never splits a
+  surrogate pair and backs up to a space within the last tenth. Offset past the end = `chat.web.offsetPastEnd`.
+- `media_transcript` (`Services/Tools/MediaTranscriptToolModule.cs`, ToolType `MediaTranscript` appended last; helpers in
+  `Services/Media/`: `YtDlp.cs`, `Subtitles.cs`, `SpeechToText.cs`): a link (YouTube or anything yt-dlp knows), an 11-char
+  YouTube id, or a local audio/video file. A link → yt-dlp subtitles (human first, then the original-language auto track;
+  free, card `browse` once per host). `speech=true` (or a file) → ffmpeg 10-min mono 16 kHz pieces → OpenAI `whisper-1`
+  with the key of AI Provider › OpenAI — **paid ($0.006/min)**, so its card shows the length and price and is asked even with
+  permissions off; refused above 4 h. yt-dlp always runs `--ignore-config --no-playlist` with the URL after `--`.
+  Transcripts are saved in `DataRoot\transcripts` (30 days) and read again in parts for free. Neither yt-dlp nor the key is
+  bundled: missing ones answer with the install line / where to set the key. Web gate = Features.WebFetch + `feature.webFetch`.
+- Proven by `tests/tooltest` WR1–WR3 (slicer, parts through `ExecuteWebFetchAsync` against RedirectMock `/long`, cache life)
+  and MT1–MT6 (parsers, track choice, a stand-in yt-dlp, a real ffmpeg tone → a localhost stand-in Whisper).
+  **Not yet:** a real yt-dlp run (not installed here), a real Whisper call, the tool driven in the running app, and whether
+  CLI agents (Claude Dev / Codex) see it over ChatToolBridge.
+
 ## Watches: the AI waits for CI / a background process and is woken with the result (2026-11-07)
 - Tools `watch_ci` (pr / commit / branch / repo; none = the current branch's PR, else HEAD), `watch_process` (bg id),
   `watch_list`, `watch_cancel` live in `EngineeringToolModule.Watch.cs`, so every CLI agent gets them over ChatToolBridge
