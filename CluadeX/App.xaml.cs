@@ -19,7 +19,7 @@ public partial class App : Application
     private System.Threading.Mutex? _singleInstanceMutex;
 
     /// <summary>Directory crash logs are written to. Kept lightweight (no directory-exists check on each access).</summary>
-    private static string CrashLogDir => Path.Combine(
+    internal static string CrashLogDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".cluadex", "crash-logs");
 
@@ -133,6 +133,9 @@ public partial class App : Application
         // fails to load (or a damaged setting) leaves the default Midnight in place — never a startup failure.
         try { _serviceProvider.GetRequiredService<ThemeService>().ApplySaved(); }
         catch (Exception ex) { WriteCrashLog("theme", ex); }
+        // The text size and font (Settings › General): the font goes on top of the theme's, so it comes after it.
+        try { _serviceProvider.GetRequiredService<TypographyService>().ApplySaved(); }
+        catch (Exception ex) { WriteCrashLog("typography", ex); }
 
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         // Shown after the splash (end of this method), once the startup checks have run.
@@ -150,9 +153,72 @@ public partial class App : Application
         // their progress / failures. If DI itself failed, this is null and
         // each helper TryLogToDebugService call no-ops silently.
         var dbg = _serviceProvider.GetService<DebugLogService>();
+        if (dbg != null)
+        {
+            // The owner's log settings (the Debug Log page): how long files stay, the size cap, detailed logging.
+            var logSettings = _serviceProvider.GetRequiredService<SettingsService>().Settings;
+            dbg.RetentionDays = Math.Max(0, logSettings.DebugLogRetentionDays);
+            dbg.MaxTotalBytes = Math.Max(0, logSettings.DebugLogMaxMegabytes) * 1024L * 1024;
+            dbg.Verbose = logSettings.DebugLogVerbose;
+            // The head of this session in the log — version, Windows, CPU, memory, GPU, locale — off the UI thread
+            // (the GPU probe can run nvidia-smi), then the old files over the retention or the cap go.
+            var sessionSettings = _serviceProvider.GetService<SettingsService>();
+            var sessionGpu = _serviceProvider.GetService<GpuDetectionService>();
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    dbg.LogSessionStart(new (string, IReadOnlyDictionary<string, object?>)[]
+                    {
+                        ("app", Services.BugReports.DiagnosticsCollector.App(sessionSettings)),
+                        ("system", Services.BugReports.DiagnosticsCollector.System(sessionGpu)),
+                        ("process", Services.BugReports.DiagnosticsCollector.ProcessInfo()),
+                    });
+                    dbg.PruneFiles();
+                }
+                catch (Exception ex) { dbg.Warn("App", "session header failed", ex); }
+            });
+        }
         dbg?.Info("App", "MainWindow shown, starting background services");
+        // Problem reports that could not go last time (offline, the server busy) go two minutes after start.
+        var bugReports = _serviceProvider.GetService<BugReportService>();
+        if (bugReports != null && bugReports.QueuedCount > 0)
+            _ = Task.Run(async () => { await Task.Delay(TimeSpan.FromMinutes(2)); await bugReports.RetryQueuedAsync(); });
+        // The title-bar DGX Spark chip shows the remembered Spark's live status: checked now and every 30 s
+        // (nothing goes on the network until a Spark has been used once).
+        try { _serviceProvider.GetService<DgxSparkService>()?.StartLinkMonitor(); }
+        catch (Exception ex) { dbg?.Warn("App", "DGX Spark link monitor did not start", ex); }
         CluadeX.Helpers.UiStallWatchdog.Start(Dispatcher, dbg);
         if (dbg != null) CluadeX.Services.Safety.SafeDelete.Log = m => dbg.Warn("Safety", m);   // every refused delete is visible
+
+        // ─── First-run setup wizard (installer contract 2.x) ───
+        // Shown on a fresh install only — no settings file before this launch, or Velopack's first-run hook (also when an
+        // uninstall kept the settings: the reinstall still opens the wizard, pre-filled from them) — or when started with
+        // --setup. An update never fires the first-run hook, so it never shows it (SetupWizardGate). The startup license
+        // work waits for the wizard (its sign-in / quick path decides the license, and the automatic trial must not race it).
+        var setupSettings = _serviceProvider.GetRequiredService<SettingsService>();
+        bool forceSetup = Environment.GetCommandLineArgs().Skip(1).Any(a => string.Equals(a, "--setup", StringComparison.OrdinalIgnoreCase));
+        bool freshInstall = Services.Setup.SetupWizardGate.FreshInstall(setupSettings.Settings.SetupWizardCompleted, setupSettings.NoSettingsBeforeLaunch, Program.VelopackFirstRun);
+        bool showSetup = forceSetup || freshInstall;
+        if (!showSetup && !setupSettings.Settings.SetupWizardCompleted)
+            setupSettings.UpdateSettings(s => s.SetupWizardCompleted = true);
+        if (freshInstall && setupSettings.NoSettingsBeforeLaunch)
+        {
+            // A brand-new install speaks the PC's language from the first screen (the default setting is English).
+            string lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "th" ? "th" : "en";
+            setupSettings.UpdateSettings(s => s.Language = lang);
+            _serviceProvider.GetRequiredService<LocalizationService>().SetLanguage(lang);
+        }
+        var setupGate = showSetup ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+        dbg?.Info("Setup", $"setup wizard: {(showSetup ? "shown" : "not shown")} · forced={forceSetup} · noSettingsBefore={setupSettings.NoSettingsBeforeLaunch} · velopackFirstRun={Program.VelopackFirstRun}");
+
+        // Windows' "Uninstall" for this install opens CluadeX's own uninstall page (tick what to keep) instead of
+        // Velopack's silent remover — checked every start, since only a fresh Setup.exe rewrites that row.
+        _ = Task.Run(() =>
+        {
+            try { if (Services.Uninstall.UninstallEntry.Detect() is { } inst) dbg?.Info("Uninstall", Services.Uninstall.UninstallEntry.EnsurePointsAtPage(inst)); }
+            catch (Exception ex) { dbg?.Warn("Uninstall", "the Installed-apps row could not be checked", ex); }
+        });
 
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
@@ -163,6 +229,7 @@ public partial class App : Application
             {
                 try
                 {
+                    if (setupGate != null) await setupGate.Task;
                     var activation = _serviceProvider!.GetRequiredService<ActivationService>();
                     // Validate license key against online API
                     await activation.ValidateOnlineAsync();
@@ -319,6 +386,22 @@ public partial class App : Application
             }
         });
 
+        // ─── The setup wizard, before the splash. Closing it at any point starts the app; only Done › "ปิด" with
+        // "open CluadeX when setup finishes" cleared quits instead. ───
+        if (showSetup)
+        {
+            bool openApp = true;
+            try
+            {
+                var wizard = new Views.Setup.SetupWizardWindow(_serviceProvider, ViewModels.Setup.WizardMode.FirstRun);
+                wizard.ShowDialog();
+                openApp = wizard.ViewModel.OpenAppAfter;
+            }
+            catch (Exception ex) { WriteCrashLog("setup-wizard", ex); }
+            finally { setupGate!.TrySetResult(); }
+            if (!openApp) { Shutdown(); return; }
+        }
+
         // ─── Splash: the startup checks, shown — then the app ───
         // Modal, so OnStartup waits here while the background services above (license, MCP, hooks) run; the splash
         // reports them as they resolve. A splash that fails to show never blocks the app.
@@ -333,6 +416,72 @@ public partial class App : Application
 
     /// <summary>The startup license check (validate + auto-provision), awaited by the splash instead of repeated.</summary>
     public static Task? LicenseStartup { get; private set; }
+
+    /// <summary>Settings › "เปิดตัวช่วยติดตั้งอีกครั้ง" (Reopen) and the update banner's "เชื่อมบัญชี" (LinkAccount): the
+    /// setup wizard over the running app. It never closes the app.</summary>
+    public static void ShowSetupWizard(ViewModels.Setup.WizardMode mode)
+    {
+        if (Current is not App app || app._serviceProvider == null) return;
+        try
+        {
+            var w = new Views.Setup.SetupWizardWindow(app._serviceProvider, mode);
+            if (app.MainWindow is { IsVisible: true } owner) w.Owner = owner;
+            w.ShowDialog();
+        }
+        catch (Exception ex) { WriteCrashLog("setup-wizard", ex); }
+    }
+
+    /// <summary>"A new version is ready" over the main window; Later when it cannot be shown.</summary>
+    public static Views.Setup.UpdateReadyChoice ShowUpdateReady(string from, string to, string? notes, long size, bool allowed, SettingsService settings)
+    {
+        try
+        {
+            var updater = (Current as App)?._serviceProvider?.GetService<AutoUpdateService>();
+            var w = new Views.Setup.UpdateReadyWindow(from, to, notes, size, allowed, settings,
+                updater == null ? null : ct => updater.FetchReleaseNotesAsync(AutoUpdateService.CurrentVersion, to, ct));
+            if (Current?.MainWindow is { IsVisible: true } owner) w.Owner = owner;
+            else w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            w.ShowDialog();
+            return w.Choice;
+        }
+        catch (Exception ex) { WriteCrashLog("update-ready", ex); return Views.Setup.UpdateReadyChoice.Later; }
+    }
+
+    /// <summary>
+    /// "แจ้งปัญหา" over the main window (the Debug Log page, the connection doctor…). The screenshot is taken first, so
+    /// it shows the app as the user saw it, not this window. <paramref name="category"/>: one of
+    /// <see cref="BugReportService.Categories"/>.
+    /// </summary>
+    public static void ShowReportProblem(string category = "bug", string? message = null)
+    {
+        try
+        {
+            if (Current is not App app || app._serviceProvider is not { } sp) return;
+            var owner = Current.MainWindow is { IsVisible: true } m ? m : null;
+            byte[]? shot = Views.Setup.ReportProblemWindow.Capture(owner);
+            var chat = sp.GetService<ViewModels.ChatViewModel>();
+            Func<string?>? chatText = chat == null || chat.Messages.Count == 0 ? null : () => ChatAsText(chat);
+            var w = new Views.Setup.ReportProblemWindow(sp.GetRequiredService<BugReportService>(), sp.GetService<DebugLogService>(),
+                sp.GetService<SettingsService>(), sp.GetService<GpuDetectionService>(), shot, chatText, owner, category, message);
+            if (owner != null) w.Owner = owner;
+            else w.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            w.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            WriteCrashLog("report-problem", ex);
+            (Current as App)?.TryLogToDebugService(CluadeX.Models.LogLevel.Error, "BugReport", "the report window could not open", ex);
+        }
+    }
+
+    /// <summary>The open chat's last 60 user / assistant turns as plain text (read only when the user ticks the chat).</summary>
+    private static string ChatAsText(ViewModels.ChatViewModel chat)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var m in chat.Messages.Where(m => m.Role is CluadeX.Models.MessageRole.User or CluadeX.Models.MessageRole.Assistant).TakeLast(60))
+            sb.Append('[').Append(m.Role).Append("] ").AppendLine(m.Content).AppendLine();
+        return sb.ToString();
+    }
 
     // ════════════════════════════════════════════════════════════════════
     //  MCP tool dispatcher
@@ -1072,10 +1221,16 @@ public partial class App : Application
         services.AddSingleton<LocalizationService>();
         // ThemeService — swaps Resources/Themes/<id>.xaml in Application.Resources at runtime (Settings › General).
         services.AddSingleton<ThemeService>();
+        // TypographyService — the owner's text size (a zoom of the main window) and UI font (Settings › General).
+        services.AddSingleton<TypographyService>();
         services.AddSingleton<ActivationService>();
         services.AddSingleton<XmanLicenseService>();
+        // The Xman Studio account sign-in (app-auth/*) and "ตรวจการเชื่อมต่อ" — the setup wizard and the update screens.
+        services.AddSingleton<Services.Account.XmanAccountService>();
+        services.AddSingleton<Services.Account.ConnectionDoctor>();
         // DgxSparkService — CluadeX driving the model an NVIDIA DGX Spark serves on the LAN (Ollama).
         services.AddSingleton<DgxSparkService>();
+        services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<DgxSparkService>());   // stops the link monitor
         services.AddSingleton<BugReportService>();
         services.AddSingleton<AutoUpdateService>();
         // On exit: a downloaded update installs once the process is gone; a download stops and resumes next launch.
@@ -1142,6 +1297,8 @@ public partial class App : Application
         // brain via MCP. Pushes STRONG instincts as `coding-lesson` notes so
         // the knowledge survives across machines / Claude Code sessions.
         services.AddSingleton<BrainSyncService>();
+        services.AddSingleton<Services.Skills.SkillBrainIndex>(sp => new Services.Skills.SkillBrainIndex(
+            sp.GetRequiredService<SettingsService>(), sp.GetService<BrainSyncService>(), sp.GetService<DebugLogService>()));
         // SecurityShieldService — Sprint 3 #1: static-analysis scanner with
         // 25 ship-1 OWASP-style rules. Drives the SecurityShield page.
         services.AddSingleton<SecurityShieldService>();
@@ -1177,15 +1334,22 @@ public partial class App : Application
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AttachmentToolModule(sp.GetService<SettingsService>()));
         // verify_change, find_references / rename_symbol / impact_of, checkpoint_*, gh_* / git_blame / git_show, debug.
         // AgentToolService is resolved at call time: it takes the modules, so it cannot be a constructor argument.
-        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.EngineeringToolModule(
+        // watch_ci / watch_process: the waits a chat hands off (Services/Watch). Made with the tools, so it exists — and picks
+        // up the CI watches the last app run left — before the first chat runs; RunWatchService.Current is how the tools reach it.
+        services.AddSingleton(sp => Services.Watch.RunWatchService.Current = new Services.Watch.RunWatchService(
+            sp.GetRequiredService<SettingsService>().DataRoot, sp.GetService<BackgroundProcessService>(), sp.GetService<DebugLogService>()));
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => { _ = sp.GetService<Services.Watch.RunWatchService>(); return new Services.Tools.EngineeringToolModule(
             () => sp.GetService<AgentToolService>(), sp.GetService<CodeIntelligenceService>(), sp.GetService<CheckpointService>(),
             sp.GetService<DebugAdapterService>(), sp.GetService<SettingsService>(), sp.GetService<ActivationService>(),
-            sp.GetService<RepoMapService>()));
+            sp.GetService<RepoMapService>()); });
         // add_code_comments: the open editor tabs are read at call time (the editor view model is built after the tools).
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.AutoComment.AutoCommentToolModule(
             sp.GetService<SettingsService>(), sp.GetService<AiProviderManager>(), sp.GetService<GitService>(),
             () => sp.GetService<CodeEditorViewModel>()?.OpenFilesForTools()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.OrchestrationToolModule());
+        // media_transcript: a video's subtitles (yt-dlp) or speech to text (ffmpeg + OpenAI Whisper, asks with the price).
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.MediaTranscriptToolModule(
+            sp.GetService<SettingsService>(), sp.GetService<ActivationService>()));
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 
@@ -1194,6 +1358,8 @@ public partial class App : Application
         services.AddSingleton<ChatViewModel>();
         services.AddSingleton<ModelManagerViewModel>();
         services.AddSingleton<SettingsViewModel>();
+        services.AddSingleton<Services.Colibri.ColibriService>();
+        services.AddSingleton<ColibriPluginViewModel>();
         services.AddSingleton<PluginManagerViewModel>();
         services.AddSingleton<PermissionsViewModel>();
         services.AddSingleton<TaskManagerViewModel>();
@@ -1371,7 +1537,7 @@ public partial class App : Application
         catch { /* logging must never crash crash handling */ }
     }
 
-    private static void WriteCrashLog(string source, Exception ex)
+    internal static void WriteCrashLog(string source, Exception ex)
     {
         try
         {

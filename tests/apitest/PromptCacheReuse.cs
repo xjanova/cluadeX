@@ -122,5 +122,162 @@ internal static class PromptCacheReuse
             local.Add(new NativeMessage { Role = "user", Content = { Result("l" + s, "x") } });
         }
         check("cache", "local models: the cut follows the conversation every step, as before", moves == 3, $"moves={moves}");
+
+        await CompactMarks(check);
+        StablePrompt(check);
+    }
+
+    // ── 2026-11-07 token audit: the system prompt no longer moves with the working tree or the project list ──
+    static void StablePrompt(Action<string, string, bool, string> check)
+    {
+        string note = CodeAgentService.FormatGitStatusNote("main", " M src/a.cs\r\n?? b.txt\n");
+        check("prompt-stable", "[git status] note: branch + one line per file, CR stripped",
+            note == "[git status — branch main, when this message was sent]\n M src/a.cs\n?? b.txt", note.Replace("\n", "⏎"));
+        check("prompt-stable", "clean tree says so",
+            CodeAgentService.FormatGitStatusNote("dev", "") == "[git status — branch dev, when this message was sent]\nclean (no changes)", "");
+        string many = CodeAgentService.FormatGitStatusNote("x", string.Join("\n", Enumerable.Range(0, 25).Select(i => $" M f{i}.cs")));
+        check("prompt-stable", "≤ 20 file lines, then the count of the rest",
+            many.Split('\n').Length == 22 && many.EndsWith("... (5 more files)") && !many.Contains("f20.cs"), many[^40..]);
+        check("prompt-stable", "the note goes after the turn's words; no note = the words unchanged",
+            CodeAgentService.WithGitStatus("fix it", "[git status]") == "fix it\n\n[git status]"
+            && CodeAgentService.WithGitStatus("fix it", null) == "fix it" && CodeAgentService.WithGitStatus(null, null) == "", "");
+
+        var a = new ProjectRegistryService.Entry { Name = "beta", Path = @"D:\b", LastOpened = DateTime.Now };
+        var b = new ProjectRegistryService.Entry { Name = "Alpha", Path = @"D:\a", LastOpened = DateTime.Now.AddDays(-3) };
+        var c = new ProjectRegistryService.Entry { Name = "alpha", Path = @"C:\a", LastOpened = DateTime.Now.AddDays(-1) };
+        var order1 = ProjectRegistryService.ByName(new[] { a, b, c }).Select(e => e.Path);
+        var order2 = ProjectRegistryService.ByName(new[] { c, a, b }).Select(e => e.Path);
+        check("prompt-stable", "Related projects: by name (then path), the same order whichever was opened last",
+            order1.SequenceEqual(new[] { @"C:\a", @"D:\a", @"D:\b" }) && order1.SequenceEqual(order2), string.Join(",", order1));
+    }
+
+    // ── 2026-11-07 token audit: a breakpoint at microcompact's cut, images cut only with the compaction ──
+    // In 19 days of logs every move of the cut wrote 105–167k tokens again (23 times, ≈ $17.65), and the batched image
+    // cut rewrote the conversation after the oldest image 17 times (≈ $11.49). Checked against a model of the API's
+    // cache: a request reads back the longest prefix that ends at a breakpoint an earlier request wrote, when that point
+    // lies at or up to 20 blocks before one of this request's breakpoints.
+    static List<Dictionary<string, object>> WireOf(List<NativeMessage> ms) => ms.Where(m => m.Role != "system").Select(m => new Dictionary<string, object>
+    {
+        ["role"] = m.Role,
+        ["content"] = m.Content.Select(b => (object)new Dictionary<string, object>
+        {
+            ["type"] = b.Type, ["text"] = b.Text ?? b.Content ?? "",
+            // An image weighs ~1.6k tokens on the wire: its path plus 6,000 characters stands in for it.
+            ["images"] = string.Join(",", b.Images?.Select(i => (i.FilePath ?? "") + new string('i', 6_000)) ?? Array.Empty<string>()),
+        }).ToList(),
+    }).ToList();
+
+    static bool HasMark(Dictionary<string, object> m) =>
+        ((List<object>)m["content"]).Any(b => ((Dictionary<string, object>)b).ContainsKey("cache_control"));
+
+    static async Task CompactMarks(Action<string, string, bool, string> check)
+    {
+        // 5a. The marker with the loop's marks
+        var conv = Conversation(6, 50);
+        var wire = WireOf(conv);
+        AnthropicProvider.MarkConversationCache(wire, new[] { 4 });
+        var at = Enumerable.Range(0, wire.Count).Where(i => HasMark(wire[i])).ToList();
+        check("cache-mark", "one loop mark: the last message, the mark and the previous user turn (3 + system = the API's 4)",
+            at.SequenceEqual(new[] { 4, wire.Count - 3, wire.Count - 1 }), string.Join(",", at));
+        wire = WireOf(conv);
+        AnthropicProvider.MarkConversationCache(wire, new[] { 6, 2, 4 });
+        at = Enumerable.Range(0, wire.Count).Where(i => HasMark(wire[i])).ToList();
+        check("cache-mark", "the cut moved (old cut + new cut): those two + the last message, never more than 3",
+            at.SequenceEqual(new[] { 2, 4, wire.Count - 1 }), string.Join(",", at));
+        wire = WireOf(conv);
+        AnthropicProvider.MarkConversationCache(wire, new[] { wire.Count - 1, -3, 99 });
+        at = Enumerable.Range(0, wire.Count).Where(i => HasMark(wire[i])).ToList();
+        check("cache-mark", "control: marks on the last message or out of range change nothing (the old 2 breakpoints)",
+            at.SequenceEqual(new[] { wire.Count - 3, wire.Count - 1 }), string.Join(",", at));
+
+        // 5b. SetCompactCacheMarks marks the step's own copies, never the loop's conversation
+        var loopConv = Conversation(10, 50);
+        var outbound = CodeAgentService.MicrocompactUpTo(loopConv, 9, 800);
+        CodeAgentService.SetCompactCacheMarks(outbound, 9, 5);
+        var marked = Enumerable.Range(0, outbound.Count).Where(i => outbound[i].CacheMark).ToList();
+        check("cache-mark", "marks go on the last message before the new cut and before the old one (the shortened copies)",
+            marked.SequenceEqual(new[] { 4, 8 }) && !loopConv.Any(m => m.CacheMark), string.Join(",", marked));
+        var noCut = Conversation(3, 50);
+        CodeAgentService.SetCompactCacheMarks(noCut, 0, 0);
+        check("cache-mark", "control: no cut (a short conversation) = no mark", !noCut.Any(m => m.CacheMark), "");
+
+        // 5c. The request really sent: system 1 + conversation 3
+        var svc = new SettingsService();
+        using (var mock = new GoldenMock())
+        {
+            check("cache-mark", "Anthropic mock proves its marker before any request", await mock.ProveAsync(), mock.Root);
+            mock.Responder = _ => (200, "text/event-stream", ToolSse);
+            ImageWireGolden.Pin(svc.Settings, "claude-opus-5-5", mock.Root);
+            svc.Settings.PromptCachingEnabled = true;
+            var p = new AnthropicProvider(svc);
+            var sent = CodeAgentService.MicrocompactUpTo(Conversation(8, 200), 9, 800);
+            CodeAgentService.SetCompactCacheMarks(sent, 9, 5);
+            await p.ChatWithToolsAsync(sent, "system prompt", ImageWireGolden.Tools());
+            using var doc = JsonDocument.Parse(mock.BodyAt(mock.Count - 1) ?? "{}");
+            var msgs = doc.RootElement.GetProperty("messages").EnumerateArray().ToList();
+            int inSystem = doc.RootElement.GetProperty("system").EnumerateArray().Count(b => b.TryGetProperty("cache_control", out _));
+            var where = Enumerable.Range(0, msgs.Count).Where(i => msgs[i].GetProperty("content").EnumerateArray().Any(b => b.TryGetProperty("cache_control", out _))).ToList();
+            check("cache-mark", "sent request: system 1 + messages 3 = 4 breakpoints (the API's limit), on the marked copies and the last message",
+                inSystem == 1 && where.SequenceEqual(new[] { 4, 8, msgs.Count - 1 }), $"system={inSystem} messages={string.Join(",", where)}");
+        }
+
+        // 5d. A long screenshot run over the threshold: what the cache writes, old way vs new way
+        var (oldWrite, oldTotal, oldHits) = SimulateRun(newWay: false);
+        var (newWrite, newTotal, advanceHits) = SimulateRun(newWay: true);
+        check("cache-mark", "screenshot run past 90k tokens: the new way writes less to the cache (same requests)",
+            newWrite < oldWrite * 0.75, $"written old={oldWrite:N0} new={newWrite:N0} of sent old={oldTotal:N0} new={newTotal:N0}");
+        check("cache-mark", "every step the cut moves still reads the prefix shortened at the previous move",
+            advanceHits.Count >= 2 && advanceHits.All(h => h), string.Join(",", advanceHits.Select(h => h ? "hit" : "MISS")));
+        check("cache-mark", "control: the old way missed that prefix when the cut moved (what the logs showed)",
+            oldHits.Count >= 2 && oldHits.Any(h => !h), string.Join(",", oldHits.Select(h => h ? "hit" : "MISS")));
+    }
+
+    /// <summary>The loop's per-step cache work, written in the order CodeAgentService runs it, with the API's cache
+    /// modelled on wire prefixes. Returns the characters written to the cache, the characters sent, and for every step
+    /// after the first cut move whether the prefix up to the previous cut was read back.</summary>
+    static (long Written, long Sent, List<bool> AdvanceHits) SimulateRun(bool newWay)
+    {
+        var msgs = Conversation(10, 30_000);
+        NativeMessage? mark = null;
+        var cached = new HashSet<string>();     // wire prefixes (JSON of messages 0..i) the cache holds
+        long written = 0, sent = 0;
+        var hits = new List<bool>();
+        bool movedBefore = false;
+        for (int step = 0; step < 40; step++)
+        {
+            int prev = CodeAgentService.CompactBoundaryOf(msgs, mark);
+            if (!newWay) CodeAgentService.PruneToolImagesBatched(msgs, 2, 3);
+            int boundary = CodeAgentService.NextCompactBoundary(msgs, mark, true, false, 3, 800, out bool moved);
+            mark = boundary > 0 && boundary < msgs.Count ? msgs[boundary] : null;
+            if (newWay) CodeAgentService.StepImagePrune(msgs, 2, 3, moved, prev);
+            var outbound = boundary > 0 ? CodeAgentService.MicrocompactUpTo(msgs, boundary, 800) : msgs;
+            if (newWay) CodeAgentService.SetCompactCacheMarks(outbound, boundary, moved ? prev : 0);
+            var wire = WireOf(outbound);
+            // The cache keys on content: prefixes are taken before cache_control goes on (it is not part of the prefix).
+            var prefixes = new string[wire.Count];
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < wire.Count; i++) { sb.Append(JsonSerializer.Serialize(wire[i])); prefixes[i] = sb.ToString(); }
+            var marks = Enumerable.Range(0, outbound.Count).Where(i => outbound[i].CacheMark).ToList();
+            AnthropicProvider.MarkConversationCache(wire, marks);
+            foreach (var m in outbound) m.CacheMark = false;   // the copies' marks; the loop's own messages carry none
+            var bps = Enumerable.Range(0, wire.Count).Where(i => HasMark(wire[i])).ToList();
+            // Read back: the longest cached prefix ending at, or up to 20 messages before, a breakpoint of this request.
+            int readEnd = -1;
+            foreach (int bp in bps)
+                for (int i = bp; i >= Math.Max(0, bp - 20); i--)
+                    if (cached.Contains(prefixes[i])) { readEnd = Math.Max(readEnd, i); break; }
+            long total = prefixes[^1].Length, read = readEnd >= 0 ? prefixes[readEnd].Length : 0;
+            sent += total; written += total - read;
+            if (moved && movedBefore && prev > 0)
+                hits.Add(readEnd >= 0 && readEnd >= Math.Min(prev, boundary) - 1);
+            if (moved) movedBefore = true;
+            foreach (int bp in bps) cached.Add(prefixes[bp]);
+
+            msgs.Add(new NativeMessage { Role = "assistant", Content = { Think(), Use("s" + step) } });
+            msgs.Add(new NativeMessage { Role = "user", Content = { new ContentBlock { Type = "tool_result", ToolUseId = "s" + step,
+                Content = $"shot {step} " + new string('z', 30_000),
+                Images = [new CluadeX.Models.ToolImage("image/jpeg", "QUFB", 10, 10, $@"C:\s\{step}.jpg")] } } });
+        }
+        return (written, sent, hits);
     }
 }

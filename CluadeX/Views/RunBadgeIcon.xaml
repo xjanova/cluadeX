@@ -1,0 +1,197 @@
+<!-- The sidebar row's icon: how the chat's run stands (owner 2026-11-08: "เปลี่ยนให้ไอค่อนบับเบิ้ลหน้าแชท เป็นไอค่อนที่แสดง
+     การทำงานแบบอนิเมชั่น ถ้าอันไหนผ่านหมดแล้วก็สีเทา"). DataContext = the row's ChatSession; reads RunStatus only.
+       ""        idle: a grey node, still
+       working   a neon arc turning round a breathing core
+       waiting   an amber core with a ripple going out (it asks the owner something)
+       done      a green check that pops in, with a pink dot: a result not opened yet
+       failed    a red ring with a cross
+       stopped   a soft red ring with a stop square (stopped, paused, or CluadeX closed while it ran)
+     Every loop is a Motion.Loop: begun once while its state holds AND the row is on screen, removed when either ends, so
+     a long list of idle chats asks for no frames at all. -->
+<UserControl x:Class="CluadeX.Views.RunBadgeIcon"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:CluadeX.Views"
+             xmlns:services="clr-namespace:CluadeX.Services"
+             Width="14" Height="14" Focusable="False">
+    <Grid Background="Transparent">
+        <Grid.Style>
+            <Style TargetType="Grid">
+                <Setter Property="ToolTip" Value="{services:Loc sidebar.run.idle}"/>
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding RunStatus}" Value="working"><Setter Property="ToolTip" Value="{services:Loc sidebar.run.working}"/></DataTrigger>
+                    <DataTrigger Binding="{Binding RunStatus}" Value="waiting"><Setter Property="ToolTip" Value="{services:Loc sidebar.run.waiting}"/></DataTrigger>
+                    <DataTrigger Binding="{Binding RunStatus}" Value="done"><Setter Property="ToolTip" Value="{services:Loc sidebar.run.done}"/></DataTrigger>
+                    <DataTrigger Binding="{Binding RunStatus}" Value="failed"><Setter Property="ToolTip" Value="{services:Loc sidebar.run.failed}"/></DataTrigger>
+                    <DataTrigger Binding="{Binding RunStatus}" Value="stopped"><Setter Property="ToolTip" Value="{services:Loc sidebar.run.stopped}"/></DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Grid.Style>
+
+        <!-- ═══ idle: a calm grey node ═══ -->
+        <Grid>
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RunStatus}" Value=""><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Ellipse Width="11" Height="11" StrokeThickness="1.3" Stroke="{DynamicResource Text.Faint}"/>
+            <Ellipse Width="3.5" Height="3.5" Fill="{DynamicResource Text.Muted}"/>
+        </Grid>
+
+        <!-- ═══ working: a neon arc turning round a breathing core ═══ -->
+        <Grid>
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RunStatus}" Value="working"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Ellipse Width="13" Height="13" StrokeThickness="2" Stroke="{DynamicResource Accent.1.Tint.Strong}"/>
+            <Ellipse x:Name="WorkArc" Width="13" Height="13" StrokeThickness="2" StrokeDashArray="8 100" StrokeDashCap="Round"
+                     Stroke="{DynamicResource Accent.1}" RenderTransformOrigin="0.5,0.5">
+                <Ellipse.Style>
+                    <Style TargetType="Ellipse">
+                        <!-- WorkSpin: begun once by Motion while LoopOn and on screen, removed when either ends -->
+                        <Setter Property="views:Motion.Loop">
+                            <Setter.Value>
+                                <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
+                                    <DoubleAnimation Storyboard.TargetProperty="(views:Motion.Spin)" From="0" To="360" Duration="0:0:1.1"/>
+                                </Storyboard>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding RunStatus}" Value="working"><Setter Property="views:Motion.LoopOn" Value="True"/></DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Ellipse.Style>
+            </Ellipse>
+            <Ellipse x:Name="WorkCore" Width="5" Height="5" Fill="{DynamicResource Accent.1}" RenderTransformOrigin="0.5,0.5">
+                <Ellipse.Style>
+                    <Style TargetType="Ellipse">
+                        <!-- WorkBreathe -->
+                        <Setter Property="views:Motion.Loop">
+                            <Setter.Value>
+                                <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="20">
+                                    <DoubleAnimation Storyboard.TargetProperty="(views:Motion.Scale)" From="0.7" To="1.2" Duration="0:0:0.9" AutoReverse="True">
+                                        <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                    </DoubleAnimation>
+                                </Storyboard>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding RunStatus}" Value="working"><Setter Property="views:Motion.LoopOn" Value="True"/></DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Ellipse.Style>
+            </Ellipse>
+        </Grid>
+
+        <!-- ═══ waiting: an amber core with a ripple going out ═══ -->
+        <Grid>
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RunStatus}" Value="waiting"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Ellipse x:Name="WaitRipple" Width="14" Height="14" StrokeThickness="1.5" Stroke="{DynamicResource Status.Warning}"
+                     RenderTransformOrigin="0.5,0.5" Opacity="0">
+                <Ellipse.Style>
+                    <Style TargetType="Ellipse">
+                        <!-- WaitRipple -->
+                        <Setter Property="views:Motion.Loop">
+                            <Setter.Value>
+                                <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="24">
+                                    <DoubleAnimation Storyboard.TargetProperty="(views:Motion.Scale)" From="0.4" To="1.05" Duration="0:0:1.3">
+                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                    </DoubleAnimation>
+                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0" Duration="0:0:1.3"/>
+                                </Storyboard>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding RunStatus}" Value="waiting"><Setter Property="views:Motion.LoopOn" Value="True"/></DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Ellipse.Style>
+            </Ellipse>
+            <Ellipse Width="7" Height="7" Fill="{DynamicResource Status.Warning}"/>
+        </Grid>
+
+        <!-- ═══ done, not opened yet: a green check that pops in, and a pink "new" dot ═══ -->
+        <!-- The pop animates FontSize, not a RenderTransform: a chat that is already "done" when its row is built (a Stop, a
+             reload) starts this trigger while the template still holds a frozen transform, and WPF threw "Cannot animate
+             'RenderTransform.(0)' on an immutable object instance" (owner 2026-10-18). -->
+        <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Status.Success}"
+                   HorizontalAlignment="Center" VerticalAlignment="Center">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RunStatus}" Value="done">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <DataTrigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetProperty="FontSize" From="3" To="12" Duration="0:0:0.45">
+                                            <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.25"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </DataTrigger.EnterActions>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+        <Ellipse Width="5" Height="5" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-1,-2,0"
+                 Fill="{DynamicResource Accent.3}" Stroke="{DynamicResource Sidebar.Background}" StrokeThickness="1">
+            <Ellipse.Style>
+                <Style TargetType="Ellipse">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RunStatus}" Value="done"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Ellipse.Style>
+        </Ellipse>
+
+        <!-- ═══ failed: a red ring with a cross ═══ -->
+        <Grid>
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RunStatus}" Value="failed"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Ellipse Width="12" Height="12" StrokeThickness="1.3" Stroke="{DynamicResource Status.Danger}" Fill="{DynamicResource Status.Danger.Tint}"/>
+            <Path Data="M4.6,4.6 L9.4,9.4 M9.4,4.6 L4.6,9.4" Stroke="{DynamicResource Status.Danger}" StrokeThickness="1.5"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+        </Grid>
+
+        <!-- ═══ stopped: a soft red ring with a stop square ═══ -->
+        <Grid>
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding RunStatus}" Value="stopped"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Ellipse Width="12" Height="12" StrokeThickness="1.3" Stroke="{DynamicResource Status.Danger.Soft}"/>
+            <Rectangle Width="4.5" Height="4.5" RadiusX="1" RadiusY="1" Fill="{DynamicResource Status.Danger.Soft}"/>
+        </Grid>
+    </Grid>
+</UserControl>

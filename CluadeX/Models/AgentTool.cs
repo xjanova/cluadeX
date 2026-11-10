@@ -187,6 +187,13 @@ public enum ToolType
     // Orchestration (Services/Tools/OrchestrationToolModule) — appended last: a ToolType is stored by number
     Workflow,            // A declarative multi-agent workflow (opt-in: the chat's Ultra switch or the owner's words)
     WrapUp,              // The next-step box at the end of a turn: recap, one question, one or two answer buttons
+    // Watches (Services/Watch, tools in EngineeringToolModule.Watch) — appended last: a ToolType is stored by number
+    WatchCi,             // Watch a PR's / commit's / branch's CI; the chat is told (and woken) when it ends
+    WatchProcess,        // Watch a background process until it exits; the chat is told (and woken)
+    WatchList,           // This chat's watches
+    WatchCancel,         // Stop one of this chat's watches (or all)
+    // Media transcripts (Services/Tools/MediaTranscriptToolModule) — appended last: a ToolType is stored by number
+    MediaTranscript,     // What a video / audio says: its subtitles (yt-dlp, free) or speech-to-text (Whisper, paid, asks)
 }
 
 /// <summary>
@@ -227,7 +234,9 @@ public class ToolCall
         or ToolType.BrowserRead or ToolType.BrowserFind
         or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead
         or ToolType.FindReferences or ToolType.ImpactOf or ToolType.CheckpointList or ToolType.CheckpointDiff
-        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow => true,
+        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow
+        // a watch only reads CI / a process list on a timer: nothing in the project or on the PC changes
+        or ToolType.WatchCi or ToolType.WatchProcess or ToolType.WatchList or ToolType.WatchCancel => true,
         _ => false,
     };
 
@@ -248,7 +257,9 @@ public class ToolCall
         or ToolType.BrowserRead or ToolType.BrowserFind
         or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead
         or ToolType.FindReferences or ToolType.ImpactOf or ToolType.CheckpointList or ToolType.CheckpointDiff
-        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow => true,
+        or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow
+        // a watch only reads CI / a process list on a timer: nothing in the project or on the PC changes
+        or ToolType.WatchCi or ToolType.WatchProcess or ToolType.WatchList or ToolType.WatchCancel => true,
         _ => false,
     };
 }
@@ -343,6 +354,10 @@ public class TodoItem
 }
 
 /// <summary>One sub-agent to run: agent_spawn (Type explore | general) or subagent_invoke (Type = the specialist's
-/// name, with its Persona and AllowedTools). <paramref name="ContinueId"/>: a sub-agent of this run to carry on with.</summary>
+/// name, with its Persona and AllowedTools). <paramref name="ContinueId"/>: a sub-agent of this run to carry on with.
+/// <paramref name="Tier"/>: cheap / mid / deep — what model and effort it runs on (agent_spawn's tier, a specialist's
+/// file; null = by its kind). <paramref name="Model"/>: a specialist file's own model. <paramref name="Color"/>: its
+/// accent on the agent map.</summary>
 public sealed record SubAgentRequest(string Task, string Context, string Type, string? Persona = null,
-    IReadOnlyCollection<string>? AllowedTools = null, string? Pieces = null, int? ContinueId = null);
+    IReadOnlyCollection<string>? AllowedTools = null, string? Pieces = null, int? ContinueId = null,
+    string? Tier = null, string? Model = null, string? Color = null);

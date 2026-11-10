@@ -20,6 +20,7 @@ public partial class CodeAgentService
     private readonly SettingsService _settingsService;
     private readonly SmartEditingService _smartEditingService;
     private readonly ContextMemoryService _contextMemoryService;
+    private readonly Skills.SkillBrainIndex? _skillBrainIndex;
     private readonly LocalizationService _localizationService;
     private readonly ActivationService _activationService;
     private readonly MemoryService _memoryService;
@@ -510,7 +511,7 @@ public partial class CodeAgentService
     /// </summary>
     public async Task<string> GetSystemPromptAsync()
     {
-        string? brainNow = _brainSync?.LiveStatusLine;
+        string? brainNow = _brainSync?.PromptStatusLine;   // what the prompt says, not the tool count that moves under it
         bool nativeNow = ActiveProviderHasNativeTools();
         // The vision line is a fact about the active model AND loop: switching to a blind one inside the 30 s window
         // must not leave a prompt that says "you can see images".
@@ -987,18 +988,30 @@ public partial class CodeAgentService
         try
         {
             var allSkills = _agentToolService?.GetAdvertisedSkills();
-            if (allSkills is { Count: > 0 })
+            if (allSkills is { Count: > 0 } && AgentRunScope.Current?.SkillPick != null)
+            {
+                // Smart picking (Skills/SkillPicker): the turn's message carries the skills that fit it. This text never
+                // changes between turns, so the prompt cache of the turns before stays valid whatever each one picks.
+                sb.AppendLine();
+                sb.AppendLine(isThai ? "# Skill" : "# Skills");
+                sb.AppendLine(isThai
+                    ? "CluadeX เลือก skill ที่เข้ากับแต่ละงานแนบมากับข้อความของผู้ใช้ (บล็อก [Skill ที่เข้ากับงานนี้ …]) เรียกด้วย `skill_invoke` "
+                      + "เมื่อตัวไหนเหมาะ หรือเมื่อผู้ใช้พิมพ์ /command — `skill_invoke` แบบไม่ใส่ชื่อจะแสดง skill ที่เปิดไว้ทั้งหมด"
+                    : "CluadeX attaches the skills that fit each task to the user's message (a [Skills that fit this task …] block). Run one "
+                      + "with `skill_invoke` when it fits or the user types /command — `skill_invoke` with no name lists every switched-on skill.");
+                sb.AppendLine();
+            }
+            else if (allSkills is { Count: > 0 })
             {
                 sb.AppendLine();
                 sb.AppendLine(isThai ? "# Skill ที่ใช้ได้" : "# Available Skills");
                 sb.AppendLine(isThai
                     ? "คุณสามารถเรียกใช้ skill ผ่านเครื่องมือ `skill_invoke` เมื่อผู้ใช้พิมพ์ /command หรือเมื่อ skill เหมาะกับงาน:"
                     : "You can invoke skills via the `skill_invoke` tool when the user types /command or when a skill fits the task:");
-                // whenToUse is what lets the model pick a skill by itself, not only on /command.
+                // whenToUse is what lets the model pick a skill by itself, not only on /command. The line is
+                // SkillBudget's, so the Skills page's gauge measures exactly this text.
                 foreach (var s in allSkills)
-                    sb.AppendLine(string.IsNullOrWhiteSpace(s.WhenToUse)
-                        ? $"- `{s.Name}`: {s.Description}"
-                        : $"- `{s.Name}`: {s.Description} ({(isThai ? "ใช้เมื่อ" : "use when")}: {s.WhenToUse})");
+                    sb.AppendLine(Skills.SkillBudget.ListingLine(s, isThai));
                 sb.AppendLine();
             }
         }
@@ -1189,8 +1202,10 @@ public partial class CodeAgentService
         DebugLogService? debugLog = null,
         IEnumerable<Tools.IPromptSectionProvider>? promptSections = null,
         Mcp.McpServerManager? mcpManager = null,
-        PermissionService? permissionService = null)
+        PermissionService? permissionService = null,
+        Skills.SkillBrainIndex? skillBrainIndex = null)
     {
+        _skillBrainIndex = skillBrainIndex;
         _mcpManager = mcpManager;
         _permissionService = permissionService;
         _promptSections = promptSections?.Where(p => p != null).ToArray() ?? Array.Empty<Tools.IPromptSectionProvider>();
@@ -1253,7 +1268,8 @@ public partial class CodeAgentService
     }
 
     private static bool IsLocalProvider(Services.Providers.IAiProvider? p)
-        => p?.ProviderId is "Local" or "Ollama" or "LlamaServer";
+        => p?.ProviderId is "Local" or "Ollama" or "LlamaServer"
+           || (Enum.TryParse<AiProviderType>(p?.ProviderId, out var t) && IsLocalType(t));
 
     /// <summary>The name of the model a local provider runs — its configured id, else the loaded GGUF — so its size can
     /// be read from it ("llama3.2:3b", "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"). "" when nothing names it.</summary>
@@ -1470,6 +1486,8 @@ public partial class CodeAgentService
         // Empty unless the user picked a level; the text changes only when the setting does, so the prompt cache holds.
         string commentPolicy = CodeCommentPolicy.InstructionFor(_settingsService.Settings, _fileSystemService.WorkingDirectory);
         if (commentPolicy.Length > 0) sb.Append("\n\n").Append(commentPolicy);
+        // Lines the user edited by hand carry a [user-edit …] comment: keep them (CodeCommentPolicy.UserEditNote).
+        sb.Append("\n\n").Append(CodeCommentPolicy.UserEditNote);
 
         // ─── BRAIN-FIRST ───
         // Same standing rule Claude Code and Codex already run under: consult the
@@ -1493,7 +1511,7 @@ public partial class CodeAgentService
             // it skipped the call and asserted the opposite of the truth. State that
             // it is not allowed to overrule this, because a fact it can contradict is
             // no better than no fact.
-            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
+            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.PromptStatusLine}");
             sb.AppendLine("  That line is ground truth. NEVER claim you cannot reach the brain while it");
             sb.AppendLine("  says CONNECTED — if asked about the connection, quote it and stop.");
             sb.AppendLine("- The brain is where you LOOK THINGS UP first — where a project lives, how something was");
@@ -1529,7 +1547,7 @@ public partial class CodeAgentService
             // act on, and it costs three lines.
             sb.AppendLine();
             sb.AppendLine("# BrainX — not available this turn");
-            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
+            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.PromptStatusLine}");
             sb.AppendLine("  You have NO brain tools right now. Do not claim to have searched the brain, and");
             sb.AppendLine("  do not promise to. If asked about the connection, quote the line above verbatim");
             sb.AppendLine("  and tell the user to click the 🧠 chip in the status bar, or open MCP Servers (Ctrl+K → MCP Servers).");
@@ -1605,37 +1623,22 @@ public partial class CodeAgentService
             sb.AppendLine($"- Working Directory: {_fileSystemService.WorkingDirectory}");
 
             // ═══════════════════════════════════════════
-            // Dynamic Section: Git Status (injected at session start)
+            // Git: the branch only. The status (which files changed) changes with every edit, so it rides on each
+            // turn's message (GitStatusTurnNote) — here, 13.8k characters into the prompt, it rewrote everything after
+            // it on the next turn: ≤ 52 system-prompt rewrites, ≤ $23 in 19 days of logs (docs/token-audit-2026-11-07.md).
             // ═══════════════════════════════════════════
-            if (_settingsService.Settings.Features.GitIntegration
-                && _activationService.IsFeatureUnlocked("feature.git"))
+            if (GitPromptOn())
             {
                 try
                 {
-                    // Run both git commands in parallel (saves ~1-3s).
-                    // Hard timeout (6s) so we never stall system-prompt construction on a hung git.
                     var branchTask = Task.Run(GetGitBranchSync);
-                    var statusTask = Task.Run(GetGitStatusSync);
-                    Task.WaitAll(new[] { branchTask, statusTask }, 6000);
-
+                    // Hard timeout so we never stall system-prompt construction on a hung git.
+                    branchTask.Wait(6000);
                     string gitBranch = branchTask.IsCompletedSuccessfully ? branchTask.Result : "";
                     if (!string.IsNullOrEmpty(gitBranch))
                     {
                         sb.AppendLine($"- Git Branch: {gitBranch.Trim()}");
-                        string gitStatus = statusTask.IsCompletedSuccessfully ? statusTask.Result : "";
-                        if (!string.IsNullOrWhiteSpace(gitStatus))
-                        {
-                            sb.AppendLine("- Git Status:");
-                            var lines = gitStatus.Split('\n');
-                            foreach (var line in lines.Take(20))
-                                sb.AppendLine($"  {line}");
-                            if (lines.Length > 20)
-                                sb.AppendLine($"  ... ({lines.Length - 20} more files)");
-                        }
-                        else
-                        {
-                            sb.AppendLine("- Git Status: clean (no changes)");
-                        }
+                        sb.AppendLine("- Git Status: the changed files come with each of the owner's messages ([git status] at its end).");
                     }
                 }
                 catch { /* not a git repo or git not available */ }
@@ -1933,6 +1936,55 @@ public partial class CodeAgentService
         return sb.ToString();
     }
 
+    private bool GitPromptOn() => _fileSystemService.HasWorkingDirectory
+        && _settingsService.Settings.Features.GitIntegration
+        && _activationService.IsFeatureUnlocked("feature.git");
+
+    /// <summary>The working tree's state when this turn starts, for the end of the turn's message (null = no project, git
+    /// off, not a repository). It used to sit in the system prompt, where any edit changed it and the prompt cache
+    /// wrote the whole prompt again on the next turn; on the message it costs only its own few lines.</summary>
+    internal string? GitStatusTurnNote()
+    {
+        if (!GitPromptOn()) return null;
+        try
+        {
+            var branchTask = Task.Run(GetGitBranchSync);
+            var statusTask = Task.Run(GetGitStatusSync);
+            Task.WaitAll(new Task[] { branchTask, statusTask }, 6000);
+            string branch = branchTask.IsCompletedSuccessfully ? branchTask.Result.Trim() : "";
+            if (branch.Length == 0) return null;   // not a repository (or a detached/hung git): say nothing
+            string status = statusTask.IsCompletedSuccessfully ? statusTask.Result : "";
+            return FormatGitStatusNote(branch, status);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The turn's message with the plan the chat's last turn left open at its end (PlanRecord.CarryNote), so the
+    /// model carries it on — or replaces it for a new request — instead of starting a second plan beside it. Only on the
+    /// run's own first message (the run's plan came over and this run has not touched it); never in the system prompt.</summary>
+    public static string WithCarriedPlan(string message)
+    {
+        var run = AgentRunScope.Current;
+        if (run == null || run.Parent != null || !run.PlanCarried || run.PlanTouched || run.Todos.Count == 0) return message;
+        return message + "\n\n" + Agents.PlanRecord.CarryNote(run.Todos.ToList());
+    }
+
+    /// <summary>The turn's message with the [git status] block at its end (unchanged when there is none).</summary>
+    public static string WithGitStatus(string? message, string? note) =>
+        string.IsNullOrEmpty(note) ? message ?? "" : $"{message}\n\n{note}";
+
+    /// <summary>The [git status] block of <see cref="GitStatusTurnNote"/>: ≤ 20 file lines. Public for the harness.</summary>
+    public static string FormatGitStatusNote(string branch, string? status)
+    {
+        var sb = new StringBuilder();
+        sb.Append("[git status — branch ").Append(branch).Append(", when this message was sent]");
+        var lines = (status ?? "").Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length == 0) { sb.Append("\nclean (no changes)"); return sb.ToString(); }
+        foreach (var line in lines.Take(20)) sb.Append('\n').Append(line);
+        if (lines.Length > 20) sb.Append($"\n... ({lines.Length - 20} more files)");
+        return sb.ToString();
+    }
+
     /// <summary>Get current git branch synchronously (for prompt injection). Safe process pattern.</summary>
     private string GetGitBranchSync() => RunGitSync("branch --show-current");
 
@@ -2043,6 +2095,8 @@ public partial class CodeAgentService
     {
         // Build system prompt on background thread (avoids blocking UI with git/file I/O)
         string systemPrompt = await GetSystemPromptAsync();
+        // The chat's reference (CX-…) rides on the turn too: the owner may quote it, the model may use it (ChatRef).
+        userMessage = ChatRef.WithTurnNote(WithGitStatus(userMessage, await Task.Run(GitStatusTurnNote, ct)));
 
         await foreach (var token in _providerManager.ActiveProvider.ChatAsync(history, userMessage, systemPrompt, ct))
         {
@@ -2103,18 +2157,46 @@ public partial class CodeAgentService
         // it and re-prompt it with CluadeX's tool catalogue — two agents fighting
         // over one task. One call, its answer is the turn.
         // The BrainX cowork room is the same shape: complete agents answer there — one delegated call per turn.
+        // ─── The pick ran out a short while ago: this turn starts on the next provider (back to the pick once it recovers) ───
+        await RouteAroundCoolingProviderAsync(ct);
+
         if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.GrokDev or AiProviderType.BrainX)
-            return await RunDelegatedTurnAsync(_providerManager.ActiveProvider, _providerManager.ActiveProviderType,
-                history, userMessage ?? "", ct, progress);
+        {
+            var cliType = _providerManager.ActiveProviderType;
+            var cliResult = await RunDelegatedTurnAsync(_providerManager.ActiveProvider, cliType, history, userMessage ?? "", ct, progress);
+            // A CLI login out of its usage limit ("Claude AI usage limit reached", "You've hit your usage limit"): the
+            // same turn goes on with the next provider the owner has, told what the CLI already did.
+            return await MaybeFailOverFromCliAsync(cliResult, cliType, history, userMessage ?? "", progress, ct);
+        }
+
+        // ─── Smart skill picking, part 1: ask the brain which skill cards fit, beside the recall below ───
+        // The owner's own words: the chat page sets them (without the folders line, notices or attachments it adds);
+        // any other caller's message is taken as it is.
+        var pickScope = AgentRunScope.Current;
+        string ownerText = pickScope?.TurnText is { Length: > 0 } typed ? typed : userMessage ?? "";
+        if (pickScope != null) pickScope.TurnText = ownerText;
+        bool pickOn = pickScope != null
+            && Skills.SkillPickGate.IsOn(pickScope.SessionKey, _settingsService.Settings.SkillAutoPickEnabled);
+        bool pickSkills = pickOn && !pickScope!.NoSkillPick;
+        // Picking is on but this turn takes none (a /command runs its own skill): an empty pick, so the system prompt keeps
+        // its one fixed line instead of the full list — the same text as every other turn of the chat, the cache holds.
+        if (pickOn && !pickSkills) pickScope!.SkillPick = new Skills.SkillPick(Array.Empty<Skills.SkillPickEntry>(), 0, 0, 0);
+        Task<IReadOnlyList<string>>? brainRank = pickSkills && _skillBrainIndex != null && WorthBrainRank(ownerText)
+            ? _skillBrainIndex.RankAsync(ownerText, ct) : null;
 
         // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
         userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
+
+        // ─── Smart skill picking, part 2: the skills that fit this turn ride on its message ───
+        if (pickSkills) userMessage = await PickSkillsForTurnAsync(pickScope!, ownerText, userMessage, brainRank, ct);
         RememberRecallForSubAgents(userMessage);   // sub-agents start warm with it (CodeAgentService.Dispatch.cs)
 
         // ─── Dual-mode dispatch: Native tool_use vs legacy [ACTION:] ───
         if (_providerManager.ActiveProvider.SupportsNativeToolUse)
         {
             AgentLoopResult nativeResult;
+            // A model/provider picked while this runs is taken between two steps, the conversation carried over.
+            Agents.ProviderSwitchBoard.Register(AgentRunScope.Current);
             try { nativeResult = await ExecuteNativeToolLoopAsync(history, userMessage, progress, ct); }
             catch (OperationCanceledException)
             {
@@ -2131,6 +2213,7 @@ public partial class CodeAgentService
             {
                 // A fail-over that runs next may be a CLI agent, which cannot stop one reply: Send now stops the run.
                 if (AgentRunScope.Current is { } loopScope) loopScope.AcceptsInterrupts = false;
+                Agents.ProviderSwitchBoard.Unregister(AgentRunScope.Current);
             }
             var finalResult = await MaybeFailOverAsync(nativeResult, history, userMessage, ct);
             RecordRunStrategy(finalResult);
@@ -2396,7 +2479,8 @@ public partial class CodeAgentService
                 AgentRunScope.Current?.TaskRequest);
         }
         var sendHistory = brief != null ? new List<ChatMessage>() : history;
-        string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage, brief) : userMessage;
+        // A CLI agent gets no CluadeX system prompt: the chat's reference (CX-…) rides on its message, as on every other path.
+        string sendMessage = ChatRef.WithTurnNote(brief != null ? AgentHandoff.WithBrief(userMessage, brief) : userMessage);
         // A CLI agent on this machine (Claude Dev, Gemini Dev): the edit/run grant, the guard, the chat tools, the rows.
         bool cliAgent = delegated is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.GrokDev;
         var grant = cliAgent ? WorkerGrantFor(folder) : null;
@@ -2450,6 +2534,12 @@ public partial class CodeAgentService
             Providers.ClaudeDevProvider.Extras.Value = new Providers.ClaudeDevProvider.TurnExtras(chatTools?.ConfigFile, dirs, browserRefusal,
                 provider.RunsOwnSubAgents ? CurrentDispatch : null, spawnGate != null ? chatTools?.Token : null, CliBudgetLeft(),
                 desktopRefusal);
+            // Every CLI turn says what Ultra and the policy decided (none did: the 2026-11-09 Codex chat had Ultra on, and
+            // its log showed no [Dispatch] line at all — nothing to tell why it never split).
+            string? ultraChat = Agents.WorkflowGate.CurrentChat;
+            _debugLog?.Info("Dispatch", $"{delegated} turn · " + (provider.RunsOwnSubAgents
+                ? DescribeDispatch(CurrentDispatch(), ultraChat, Agents.WorkflowGate.Why(ultraChat))
+                : $"ultra={Agents.WorkflowGate.Why(ultraChat) ?? "off"} · this CLI spawns no sub-agents of its own"));
             _debugLog?.Info("Agent", $"{delegated} extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}"
                 + (chatTools != null ? $" · browser={(browserRefusal == null ? "on" : "off")} · desktop={(desktopRefusal == null ? "on" : "off")}" : ""));
         }
@@ -2615,49 +2705,18 @@ public partial class CodeAgentService
     /// <summary>
     /// Does this provider error mean the account cannot pay for more requests (credit, quota, a usage or spend limit)
     /// — as opposed to a passing rate limit, a bad request or an outage, which a fallback model would not fix?
+    /// <see cref="Agents.ProviderErrors.Classify(int?, string?)"/> decides (a per-minute limit is a rate limit).
     /// </summary>
-    public static bool IsQuotaExhausted(string? error)
-    {
-        if (string.IsNullOrWhiteSpace(error)) return false;
-        string e = error.ToLowerInvariant();
-        return e.Contains("credit balance") || e.Contains("insufficient_quota") || e.Contains("exceeded your current quota")
-            || e.Contains("quota exceeded") || e.Contains("resource_exhausted") || e.Contains("usage limit")
-            || e.Contains("spend limit") || e.Contains("spending limit") || e.Contains("billing")
-            || e.Contains("เครดิต") || e.Contains("โควต้า");
-    }
+    public static bool IsQuotaExhausted(string? error) =>
+        !string.IsNullOrWhiteSpace(error) && Agents.ProviderErrors.Classify(null, error) == Agents.ProviderErrorKind.QuotaExhausted;
 
-    /// <summary>
-    /// The API ran out mid-task (owner 2026-10-17: "โควต้า api ใกล้จะหมด … เปลี่ยนโมเดลให้ทำงานต่อ"): instead of ending the
-    /// turn on a billing error, the same turn carries on with Claude Dev — the user's own Claude login, no API key —
-    /// with a handoff brief that includes the steps this turn already took. The active model is left as it was: the
-    /// user switches for good if they want to. Off with Settings.AutoFailoverOnQuota.
-    /// </summary>
-    private async Task<AgentLoopResult> MaybeFailOverAsync(AgentLoopResult result, List<ChatMessage> history,
-        string? userMessage, CancellationToken ct)
+    /// <summary>The chat history plus what this turn already did (its request, each tool call, the model's notes), for
+    /// an agent that takes the turn over without the native conversation.</summary>
+    private static List<ChatMessage> HistoryWithSteps(List<ChatMessage> history, string? userMessage, IEnumerable<AgentStep> steps)
     {
-        if (result.StopReason != "error" || !IsQuotaExhausted(result.FinalResponse)) return result;
-        NoteQuotaExhausted();   // sub-agents started from here on go to Claude Dev too
-        if (!_settingsService.Settings.AutoFailoverOnQuota) return result;
-        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.GrokDev or AiProviderType.BrainX) return result;
-        var fallback = _providerManager.GetProvider(AiProviderType.ClaudeDev);
-        try { await fallback.InitializeAsync(ct); } catch { }
-        if (!fallback.IsReady)
-        {
-            _debugLog?.Warn("Agent", "quota exhausted — no Claude Code CLI to fail over to");
-            return result;
-        }
-        bool isThai = _localizationService.CurrentLanguage == "th";
-        string reason = (result.FinalResponse ?? "").Split('\n')[0].Trim();
-        _debugLog?.Warn("Agent", $"quota exhausted on {_providerManager.ActiveProviderType} after {result.Steps.Count} step(s) — failing over to Claude Dev · {reason}");
-        string note = isThai
-            ? $"\n\n> ⚠ โควต้า/เครดิตของ API หมด ({reason}) — ส่งงานต่อให้ **Claude Dev** (ล็อกอิน Claude ของคุณ) ทำต่อจากขั้นที่ {result.Steps.Count} อัตโนมัติ\n\n"
-            : $"\n\n> ⚠ The API's quota/credit ran out ({reason}) — handing the task to **Claude Dev** (your Claude login) to carry on from step {result.Steps.Count}\n\n";
-        OnAgenticStreamingToken?.Invoke(note, result.Steps.Count + 1);
-
-        // What this turn already did goes into the brief as if it were chat history.
         var withTurn = new List<ChatMessage>(history);
         if (!string.IsNullOrWhiteSpace(userMessage)) withTurn.Add(new ChatMessage { Role = MessageRole.User, Content = userMessage });
-        foreach (var st in result.Steps)
+        foreach (var st in steps)
         {
             foreach (var call in st.ToolCalls)
             {
@@ -2668,12 +2727,122 @@ public partial class CodeAgentService
             if (!string.IsNullOrWhiteSpace(st.ResponseText))
                 withTurn.Add(new ChatMessage { Role = MessageRole.Assistant, Content = st.ResponseText });
         }
-        string carryOn = isThai ? "ทำงานนี้ต่อจากที่ค้างไว้" : "Carry on with this task from where it stopped";
-        var delegatedResult = await RunDelegatedTurnAsync(fallback, AiProviderType.ClaudeDev, withTurn, carryOn, ct);
-        delegatedResult.FinalResponse = note.Trim() + "\n\n" + delegatedResult.FinalResponse;
-        delegatedResult.TurnCount = result.TurnCount + 1;
-        delegatedResult.Steps.InsertRange(0, result.Steps);
-        return delegatedResult;
+        return withTurn;
+    }
+
+    /// <summary>
+    /// The native loop could not carry on in place (owner 2026-10-17: "โควต้า api ใกล้จะหมด … เปลี่ยนโมเดลให้ทำงานต่อ";
+    /// 2026-11-08: "หมดโควต้ากันก็เปลี่ยนกันได้ทันที โดยที่เราไม่ต้องมาสั่ง"): its provider ran out with no other API or
+    /// local model to go to, or the owner picked a CLI agent mid-run. The same turn goes on with a CLI login (Claude Dev,
+    /// Codex, Gemini CLI, Grok Build — whichever answers, in FailoverPolicy's order), told every step already done and
+    /// what came back (<see cref="Agents.HandoffBrief"/>). The owner's pick is left as it was. Quota failover is off with
+    /// Settings.AutoFailoverOnQuota; a switch the owner asked for always happens.
+    /// </summary>
+    private async Task<AgentLoopResult> MaybeFailOverAsync(AgentLoopResult result, List<ChatMessage> history,
+        string? userMessage, CancellationToken ct)
+    {
+        bool ownerSwitch = result.StopReason == "switched" && result.HandoffTo != null;
+        var kind = result.FailKind ?? Agents.ProviderErrors.Classify(null, result.FinalResponse);
+        if (!ownerSwitch)
+        {
+            if (result.StopReason != "error") return result;
+            if (kind == Agents.ProviderErrorKind.QuotaExhausted) NoteQuotaExhausted();   // sub-agents started from here on go to Claude Dev too
+            if (result.HandoffTo == null && kind != Agents.ProviderErrorKind.QuotaExhausted) return result;
+            if (!_settingsService.Settings.AutoFailoverOnQuota) return result;
+        }
+        var failedType = result.FailedOn ?? _providerManager.ActiveProviderType;
+        if (!ownerSwitch && (Agents.FailoverPolicy.IsCli(failedType) || failedType == AiProviderType.BrainX)) return result;
+
+        var order = new List<AiProviderType>();
+        if (result.HandoffTo is { } asked) order.Add(asked);
+        if (!ownerSwitch)
+            order.AddRange(Agents.FailoverPolicy.Chain(failedType,
+                    FailoverCandidates().Where(c => c.Kind == Agents.CandidateKind.Cli).Select(c => c with { Ready = true }),
+                    _settingsService.Settings.FailoverOrder, t => Agents.QuotaBook.Shared.IsCooling(t, DateTime.UtcNow))
+                .Select(c => c.Type));
+
+        bool isThai = _localizationService.CurrentLanguage == "th";
+        string fromLabel = ModelLabelFor(_providerManager.GetProvider(failedType));
+        foreach (var t in order.Distinct())
+        {
+            var fallback = _providerManager.GetProvider(t);
+            try { await fallback.InitializeAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { }
+            if (!fallback.IsReady) { _debugLog?.Info("Failover", $"{t} is not signed in — next"); continue; }
+
+            string reason = (result.FinalResponse ?? "").Split('\n')[0].Trim();
+            string toLabel = fallback.DisplayName ?? t.ToString();
+            _debugLog?.Warn("Agent", $"{(ownerSwitch ? "owner switch" : kind.ToString())} on {failedType} after {result.Steps.Count} step(s) — handing over to {t}"
+                + (ownerSwitch ? "" : $" · {reason}"));
+            string line = FailoverLine(isThai, ownerSwitch ? Agents.ProviderErrorKind.None : kind, fromLabel, toLabel, handoff: true);
+            string note = $"\n\n> {line}{(isThai ? $" (ต่อจากขั้นที่ {result.Steps.Count})" : $" (from step {result.Steps.Count})")}\n\n";
+            OnAgentStatus?.Invoke(line);
+            OnAgenticStreamingToken?.Invoke(note, result.Steps.Count + 1);
+
+            AgentLoopResult delegatedResult;
+            if (result.NativeTranscript is { Count: > 0 } transcript)
+            {
+                // Every step with what it returned — the CLI starts where the loop stopped, not from the chat's summary.
+                string brief = Agents.HandoffBrief.FromNative(transcript, fromLabel);
+                delegatedResult = await RunDelegatedTurnAsync(fallback, t, history, brief, ct);
+            }
+            else
+            {
+                string carryOn = isThai ? "ทำงานนี้ต่อจากที่ค้างไว้" : "Carry on with this task from where it stopped";
+                delegatedResult = await RunDelegatedTurnAsync(fallback, t, HistoryWithSteps(history, userMessage, result.Steps), carryOn, ct);
+            }
+            delegatedResult.FinalResponse = note.Trim() + "\n\n" + delegatedResult.FinalResponse;
+            delegatedResult.TurnCount = result.TurnCount + 1;
+            delegatedResult.Steps.InsertRange(0, result.Steps);
+            return delegatedResult;
+        }
+        _debugLog?.Warn("Agent", $"{kind} on {failedType} — no CLI login to hand the task to");
+        return result;
+    }
+
+    private static readonly AsyncLocal<int> _cliFailoverDepth = new();
+
+    /// <summary>
+    /// A CLI login ran out of its usage limit mid-turn ("Claude AI usage limit reached", Codex "You've hit your usage
+    /// limit"): the same turn goes on with the next provider the owner has set up — a cloud API or a model on this PC
+    /// runs the native loop, another CLI takes it as one more delegated turn — told what the CLI already did.
+    /// </summary>
+    private async Task<AgentLoopResult> MaybeFailOverFromCliAsync(AgentLoopResult cliResult, AiProviderType cliType,
+        List<ChatMessage> history, string userMessage, IProgress<string>? progress, CancellationToken ct)
+    {
+        if (cliResult.StopReason != "error" || !_settingsService.Settings.AutoFailoverOnQuota) return cliResult;
+        if (cliType == AiProviderType.BrainX || AgentRunScope.Current is not { } scope || _cliFailoverDepth.Value >= 3) return cliResult;
+        string err = cliResult.RefusalText ?? cliResult.FinalResponse ?? "";
+        var kind = Agents.ProviderErrors.Classify(null, err);
+        if (kind != Agents.ProviderErrorKind.QuotaExhausted) return cliResult;
+        Agents.QuotaBook.Shared.Note(cliType, kind, DateTime.UtcNow, Agents.ProviderErrors.RetryAfter(err));
+        string fromLabel = ModelLabelFor(_providerManager.ActiveProvider);
+        bool isThai = _localizationService.CurrentLanguage == "th";
+        foreach (var c in FailoverChain(cliType))
+        {
+            var p = await ReadyProviderAsync(c, ct);
+            if (p == null) continue;
+            scope.Provider = p;
+            scope.ProviderType = c.Type;
+            string line = FailoverLine(isThai, kind, fromLabel, ModelLabelFor(p), handoff: true);
+            OnAgentStatus?.Invoke(line);
+            OnAgenticStreamingToken?.Invoke($"\n\n> {line}\n\n", cliResult.Steps.Count + 1);
+            _debugLog?.Warn("Failover", $"{cliType} out of its usage limit after {cliResult.Steps.Count} step(s) — the turn goes on with {c.Type}");
+            string carry = userMessage + "\n\n[" + (isThai
+                ? $"เอเจนต์ก่อนหน้า ({fromLabel}) หมดโควต้ากลางงาน ขั้นที่มันทำไปแล้วอยู่ในประวัติด้านบน — ตรวจสถานะไฟล์ตอนนี้แล้วทำต่อจากจุดที่ค้าง อย่าทำงานที่เสร็จแล้วซ้ำ"
+                : $"The previous agent ({fromLabel}) ran out of its usage limit mid-task; its steps are in the history above. Check the current state of the files and carry on from where it stopped — do not redo finished work.") + "]";
+            _cliFailoverDepth.Value++;
+            try
+            {
+                var r = await ExecuteAgenticAsync(HistoryWithSteps(history, null, cliResult.Steps), carry, progress, ct, _iterationOverride.Value);
+                r.FinalResponse = $"> {line}\n\n" + r.FinalResponse;
+                r.Steps.InsertRange(0, cliResult.Steps);
+                return r;
+            }
+            finally { _cliFailoverDepth.Value--; }
+        }
+        return cliResult;
     }
 
     /// <summary>
@@ -2707,6 +2876,66 @@ public partial class CodeAgentService
     /// user message is untouched). Best-effort: gated by setting, 3s timeout, silent on any failure so
     /// the task never stalls on the brain.
     /// </summary>
+    /// <summary>A message worth asking the brain about skills: two task words, or a sentence (not "hi" / "ok").</summary>
+    private static bool WorthBrainRank(string text) =>
+        text.Trim().Length >= 25 || Skills.SkillPicker.Terms(text).Count >= 2;
+
+    /// <summary>
+    /// Pick the switched-on skills that fit this turn (owner 2026-11-07) and add them after the turn's message. Uses the
+    /// owner's words, the brain's recall already fetched for the turn, words learned from earlier turns, pins, and — when a
+    /// brain is connected — its semantic ranking of the skill cards (started before the recall, so it costs no extra wait).
+    /// Never throws: a failure here leaves the message as it was and the run goes on.
+    /// </summary>
+    private async Task<string> PickSkillsForTurnAsync(AgentRunScope scope, string ownerText, string userMessage,
+        Task<IReadOnlyList<string>>? brainRank, CancellationToken ct)
+    {
+        try
+        {
+            var offered = _agentToolService.GetAdvertisedSkills();
+            IReadOnlyList<string> ranked = Array.Empty<string>();
+            if (brainRank != null)
+            {
+                try { ranked = await brainRank; }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+                catch (Exception ex) when (ex is not OperationCanceledException) { _debugLog?.Warn("Skills", "brain ranking failed: " + ex.Message); }
+            }
+            // Cards that are missing or changed go to the brain in the background, for the next turns.
+            if (_skillBrainIndex is { Enabled: true, BrainReady: true } index && offered.Count > 0)
+                _ = Task.Run(() => index.EnsureIndexedAsync(offered));
+
+            bool isThai = _localizationService.CurrentLanguage == "th";
+            int window = _contextMemoryService.MaxContextTokens;
+            bool smallLocal = (_providerManager.ActiveProviderType
+                    is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
+                && _settingsService.Settings.ContextSize < 32000;
+            var set = _settingsService.Settings;
+            // What the brain's recall added around the owner's words (it may go before or after them).
+            string recall = "";
+            int at = userMessage.IndexOf(ownerText, StringComparison.Ordinal);
+            if (ownerText.Length > 0 && at >= 0) recall = userMessage[..at] + userMessage[(at + ownerText.Length)..];
+            var store = _agentToolService.Skills;
+            int cap = Skills.SkillBudget.CapFor(window);
+            var pick = Skills.SkillPicker.Pick(new Skills.SkillPicker.Input(
+                ownerText, recall, offered, set.PinnedSkills, name => store.LearnedTerms(name),
+                BudgetTokens: smallLocal ? Math.Min(200, cap) : cap,
+                Max: smallLocal ? 2 : Math.Clamp(set.SkillPickMax, 1, 20),
+                IsThai: isThai, BrainRanked: ranked));
+            scope.SkillPick = pick;
+            _debugLog?.Info("Skills", $"picked {pick.Picked.Count}/{pick.Offered} for the turn · ~{pick.TokensPicked} tok instead of ~{pick.TokensAll}"
+                + (ranked.Count > 0 ? $" · brain ranked {string.Join(",", ranked.Take(3))}" : "")
+                + (pick.Picked.Count > 0 ? " · " + string.Join(", ", pick.Picked.Select(p => $"{p.Skill.Name}({p.Reason})")) : ""));
+            try { scope.SkillsPicked?.Invoke(pick); } catch { /* the chat's row must never stop the run */ }
+            string block = pick.BlockFor(isThai);
+            return block.Length == 0 ? userMessage : userMessage + "\n\n" + block;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _debugLog?.Warn("Skills", "skill picking failed — every switched-on skill stays listed: " + ex.Message);
+            scope.SkillPick = null;
+            return userMessage;
+        }
+    }
+
     private async Task<string> MaybePrependBrainContextAsync(string userMessage, IProgress<string>? progress, CancellationToken ct)
     {
         if (_brainSync == null || !_settingsService.Settings.BrainAutoRecallEnabled) return userMessage;
@@ -2962,7 +3191,9 @@ public partial class CodeAgentService
             })
             .ToList();
 
-        string currentMessage = enrichedMessage;
+        // The working tree's state rides on the turn, not in the system prompt (GitStatusTurnNote) — after the mentioned-file
+        // scan above, which would otherwise load every file a status line names.
+        string currentMessage = WithCarriedPlan(ChatRef.WithTurnNote(WithGitStatus(enrichedMessage, await Task.Run(GitStatusTurnNote, ct))));
         int maxTokenRecoveryCount = 0;
         bool hasAttemptedReactiveCompact = false;
         const int MaxOutputTokenRecoveries = 3;
@@ -3144,6 +3375,7 @@ public partial class CodeAgentService
                     IsLocalProvider(p) ? Agents.ModelCapability.ForLocal(LocalModelNameFor(p)) : null, false,
                     result.Steps.Count, isThai);
                 _debugLog?.Warn("Agent", $"text loop stopped by the loop guard at step {iteration + 1} · {textVerdict.Kind} · {textVerdict.Tool} ×{textVerdict.Repeats}");
+                if (RootOf(AgentRunScope.Current) is { } stuckRoot) stuckRoot.LoopGuardStopped = true;
                 break;
             }
 
@@ -3329,12 +3561,16 @@ public partial class CodeAgentService
     }
 
     /// <summary>
-    /// <summary>
-    /// File names the model's answer talks about that really exist in the project. Used to catch
+    /// File names the model's answer shows code FOR that really exist in the project. Used to catch
     /// "here is the updated Program.cs: ```…```" when Program.cs was never written. Only names that
     /// resolve to an actual file are returned, so prose mentioning a made-up path is ignored.
+    /// <para>A file counts only when it is named just before a code block (the 160 characters ahead of the
+    /// opening fence) or on the fence line itself ("```python cart.py"). Any file named anywhere in an answer
+    /// that held a code block used to count: a summary that showed the new cart.py and said "the bug was the
+    /// call into pricing.py" was sent back to write pricing.py, and the model's reply ("I did not change
+    /// pricing.py") replaced the summary (small-model bench T11, 2026-11-08).</para>
     /// </summary>
-    internal static HashSet<string> ExtractMentionedProjectFiles(string text, string workingDir)
+    public static HashSet<string> ExtractMentionedProjectFiles(string text, string workingDir)
     {
         var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrEmpty(workingDir) || !System.IO.Directory.Exists(workingDir)) return found;
@@ -3343,8 +3579,9 @@ public partial class CodeAgentService
         // discussion, not a claim to have edited it.
         if (!text.Contains("```")) return found;
 
+        foreach (string window in TextLeadingIntoCodeBlocks(text))
         foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
-                     text, @"[\w\-.]+\.(cs|csx|ts|tsx|js|jsx|py|java|kt|go|rb|php|cpp|c|h|hpp|xaml|json|md|html|css|sql)\b"))
+                     window, @"[\w\-.]+\.(cs|csx|ts|tsx|js|jsx|py|java|kt|go|rb|php|cpp|c|h|hpp|xaml|json|md|html|css|sql)\b"))
         {
             string name = m.Value;
             try
@@ -3355,6 +3592,27 @@ public partial class CodeAgentService
             catch { /* unreadable tree — skip */ }
         }
         return found;
+    }
+
+    /// <summary>For each OPENING code fence: the 160 characters before it plus the fence line itself (where
+    /// "here is the new X.cs:" and "```python X.py" live). Closing fences are skipped.</summary>
+    public static IEnumerable<string> TextLeadingIntoCodeBlocks(string text)
+    {
+        bool open = false;
+        int pos = 0, lastClose = 0;
+        while ((pos = text.IndexOf("```", pos, StringComparison.Ordinal)) >= 0)
+        {
+            int lineEnd = text.IndexOf('\n', pos);
+            if (lineEnd < 0) lineEnd = text.Length;
+            if (!open)
+            {
+                int from = Math.Max(lastClose, pos - 160);   // never reach back into the previous block's code
+                yield return text[from..lineEnd];
+            }
+            else lastClose = lineEnd;
+            open = !open;
+            pos = lineEnd;
+        }
     }
 
     /// <summary>
@@ -3486,6 +3744,12 @@ public partial class CodeAgentService
         // ─── Escalation ladder ───
         // When the local model stalls, hand the task (with full accumulated context) to a stronger API model.
         var loopProvider = _providerManager.ActiveProvider;
+        // What the conversation below is valid for (provider + model): when the run's provider or model changes — the
+        // owner's pick mid-run, a quota failover, an escalation, a model changed in Settings — it is translated
+        // (Agents.ProviderHistory) before the next request, so no request carries another model's signed blocks.
+        var convType = TypeOf(loopProvider);
+        string convModel = ModelIdFor(loopProvider);
+        int stepRetries = 0;                     // this step asked again after a passing rate limit / busy server
         int iterationBudget = MaxAgentIterations;
         bool hasEscalated = false;
         const int EscalationBonusIterations = 8;
@@ -3529,7 +3793,7 @@ public partial class CodeAgentService
             if (AgentRunScope.Current is { } s) s.EffortWhy = _localizationService.T("auto.why." + key);
         }
         if (smartEffortOn) SetEffortWhy(effortWhyKey);
-        // Per-message effort (Anthropic, Opus 5+ / Sonnet 5.5+ / Haiku 5.5+ / Fable 5.1): effort moves BOTH ways step by
+        // Per-message effort (Anthropic, Opus 5+ / Sonnet 5.5+ / Haiku 5.5+ / Fable 5.1+): effort moves BOTH ways step by
         // step — effort-only system messages change it without resetting the cache, so the top-level value stays fixed for
         // the whole turn. Elsewhere the old rule stands: climb only, each climb re-writes the cache once.
         bool perMessageEffort = smartEffortOn
@@ -3673,6 +3937,10 @@ public partial class CodeAgentService
             currentUserBlock.Text += "\n\n" + EmptyProjectNote(_fileSystemService.WorkingDirectory);
             _debugLog?.Info("Agent", "project folder is empty — told the model to create files with write_file");
         }
+        // The working tree's state rides on the turn, not in the system prompt (GitStatusTurnNote). Added to the block
+        // only — userMessage is still read for mentioned files and task size above and below, and a status line names files.
+        // …and the chat's reference (CX-…), which the owner may quote (ChatRef).
+        currentUserBlock.Text = WithCarriedPlan(ChatRef.WithTurnNote(WithGitStatus(currentUserBlock.Text, await Task.Run(GitStatusTurnNote, ct))));
         nativeMessages.Add(new Services.Providers.NativeMessage
         {
             Role = "user",
@@ -3700,6 +3968,58 @@ public partial class CodeAgentService
         // The first message microcompact leaves verbatim (null = none shortened yet). Kept by reference, so a list the
         // loop rebuilds (413 recovery, role repair) simply starts over instead of pointing at the wrong message.
         Services.Providers.NativeMessage? compactMark = null;
+
+        // ─── Another provider or model, same step (Agents/ProviderFailover.cs) ───
+        // The conversation made valid for what answers next; the run's scope follows, so sub-agents, the system prompt's
+        // provider reads and the spend tracking go with it.
+        void RetargetConversation(Services.Providers.IAiProvider to, AiProviderType toType)
+        {
+            int reserve = CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt) + toolSchemas.Sum(EstimateSchemaTokens)
+                + Math.Min(Math.Max(1024, _settingsService.Settings.MaxTokens), 8192);
+            var target = TargetFor(convType, convModel, to, toType, reserve);
+            nativeMessages = Agents.ProviderHistory.ForTarget(nativeMessages, target, out var report);
+            _debugLog?.Info("Failover", $"conversation {convType}/{convModel} → {toType}/{target.ToModel}: {report}");
+            convType = toType;
+            convModel = target.ToModel ?? "";
+            compactMark = null;   // the list was rebuilt: microcompact starts over
+            if (AgentRunScope.Current is { } sc) { sc.Provider = to; sc.ProviderType = toType; }
+        }
+
+        async Task AdoptProviderAsync(Services.Providers.IAiProvider next, AiProviderType nextType, string line, int stepNo)
+        {
+            bool providerChanged = !ReferenceEquals(next, loopProvider);
+            bool wasPerMessage = perMessageEffort;
+            RetargetConversation(next, nextType);
+            loopProvider = next;
+            loopIsLocal = isLocal = IsLocalType(nextType);
+            if (providerChanged)
+            {
+                // The same tool catalogue, fitted to what the new provider takes (OpenAI/Gemini: 128; a local window).
+                toolSchemas = _agentToolService.BuildNativeToolSchemas();
+                if (loopIsLocal)
+                {
+                    int reserved = CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)
+                        + Math.Max(512, Math.Min(_settingsService.Settings.MaxTokens, localCtxTokens / 6));
+                    toolSchemas = FitLocalToolSchemas(toolSchemas, localCtxTokens, reserved, out _, out _, ModuleCoreToolNames());
+                }
+                else if (next.ProviderId is "OpenAI" or "Gemini" && toolSchemas.Count > MaxApiToolSchemas)
+                    toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out _, ManagedMcpServers());
+                offeredToolNames.UnionWith(toolSchemas.Select(t => t.Name));
+                blindHint = Vision.ToolImageWire.BlindHint(toolSchemas.Select(t => t.Name));
+                escalationProvider = loopIsLocal && !hasEscalated ? ResolveEscalationProvider(next) : null;
+                loopGuard.Reset();
+            }
+            loopSeesImages = await ProviderSeesImagesAsync(next, ct);
+            systemPrompt = WithVisionLine(systemPrompt, loopSeesImages && next.SupportsNativeToolUse);
+            perMessageEffort = smartEffortOn && !loopIsLocal && nextType == AiProviderType.Anthropic
+                && Services.Providers.AnthropicProvider.PerMessageEffortOk(convModel.Length > 0 ? convModel : Services.Providers.AnthropicProvider.DefaultModel,
+                       _settingsService.Settings);
+            topLevelBothWays = smartEffortOn && !loopIsLocal && !perMessageEffort && nextType is AiProviderType.OpenAI or AiProviderType.Gemini;
+            if (perMessageEffort && !wasPerMessage) appliedEffort = stepEffort;   // no effort marks yet: the top-level value is in force
+            OnAgentStatus?.Invoke(line);
+            OnAgenticStreamingToken?.Invoke($"\n\n> {line}\n\n", stepNo);
+            _debugLog?.Warn("Failover", $"step {stepNo}: the run goes on with {nextType}/{convModel}");
+        }
 
         for (int iteration = 0; iteration < iterationBudget; iteration++)
         {
@@ -3729,6 +4049,43 @@ public partial class CodeAgentService
                     ? $"หยุดตามงบแล้ว — รอบนี้ใช้ไป ${AgentRunScope.Current?.CostUsd ?? 0:0.00} พิมพ์ \"ทำต่อ\" ถ้าต้องการให้ทำต่อจากจุดเดิม"
                     : $"Stopped at the budget — this run spent ${AgentRunScope.Current?.CostUsd ?? 0:0.00}. Say \"continue\" to pick up where it left off.";
                 break;
+            }
+
+            // ─── The owner picked another model/provider while this runs: same step, the new model, nothing redone ───
+            if (Agents.ProviderSwitchBoard.Take(AgentRunScope.Current) is { } wanted
+                && _providerManager.GetProvider(wanted.Type) is { } swapTo)
+            {
+                string fromLabel = ModelLabelFor(loopProvider);
+                if (Agents.FailoverPolicy.IsCli(wanted.Type) || wanted.Type == AiProviderType.BrainX || !swapTo.SupportsNativeToolUse)
+                {
+                    // A CLI agent takes no native tool turns: the turn goes to it with every step so far (MaybeFailOverAsync).
+                    _debugLog?.Info("Failover", $"step {iteration + 1}: the owner picked {wanted.Type} — handing the run over");
+                    result.StopReason = "switched";
+                    result.HandoffTo = wanted.Type;
+                    result.FailedOn = convType;
+                    result.NativeTranscript = nativeMessages;
+                    result.FinalResponse = FailoverLine(isThai, Agents.ProviderErrorKind.None, fromLabel, swapTo.DisplayName ?? wanted.Type.ToString(), true);
+                    break;
+                }
+                if (!swapTo.IsReady)
+                {
+                    try { await swapTo.InitializeAsync(ct); }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception ex) { _debugLog?.Warn("Failover", $"{wanted.Type} did not start: {ex.Message}"); }
+                }
+                if (swapTo.IsReady)
+                    await AdoptProviderAsync(swapTo, wanted.Type,
+                        FailoverLine(isThai, Agents.ProviderErrorKind.None, fromLabel, ModelLabelFor(swapTo), false), iteration + 1);
+                else
+                    OnAgentStatus?.Invoke(isThai ? $"{ModelLabelFor(swapTo)} ยังไม่พร้อม — ทำต่อด้วย {fromLabel}" : $"{ModelLabelFor(swapTo)} is not ready — carrying on with {fromLabel}");
+            }
+            // The provider or model under the run changed some other way (an escalation, the model set in Settings): the
+            // conversation follows before it is sent — a signed thinking block or an OpenAI reasoning item from another
+            // model is refused with a 400.
+            else if (TypeOf(loopProvider) is var nowType && (nowType != convType
+                     || !string.Equals(ModelIdFor(loopProvider), convModel, StringComparison.OrdinalIgnoreCase)))
+            {
+                RetargetConversation(loopProvider, nowType);
             }
 
             // Last step of the budget: no more tools. The model reports what it found, what it changed and
@@ -3769,9 +4126,16 @@ public partial class CodeAgentService
             // In batches, like microcompact: replacing an old screenshot rewrites an earlier turn, which restarts the
             // prompt cache and (on models that bind thinking to the history) drops every later thinking block. So the
             // older ones are let pile up to keepImages + ImagePruneSlack (a setting) and then cut back to keepImages in one go.
-            int imagesDropped = PruneToolImagesBatched(nativeMessages, keepImages, _settingsService.Settings.ImagePruneSlack);
-            if (imagesDropped > 0)
-                _debugLog?.Info("Agent", $"step {iteration + 1}: {imagesDropped} older tool image(s) replaced by their file path (keep {keepImages})");
+            // API models: only when microcompact moves its cut this step (one rewrite instead of two), or past a hard cap,
+            // and never before the previous cut — that shortened prefix is what the prompt cache reads back (see
+            // StepImagePrune). Decided below, once the cut is known.
+            int prevCompactBoundary = CompactBoundaryOf(nativeMessages, compactMark);
+            if (loopIsLocal)
+            {
+                int localDropped = PruneToolImagesBatched(nativeMessages, keepImages, _settingsService.Settings.ImagePruneSlack);
+                if (localDropped > 0)
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: {localDropped} older tool image(s) replaced by their file path (keep {keepImages})");
+            }
 
             // Microcompact — shrink old tool results (keep recent turns verbatim).
             // Local models: from the 7th message on, their window is small. API models: only under real
@@ -3789,6 +4153,15 @@ public partial class CodeAgentService
                 _settingsService.Settings.MicrocompactKeepRecentTurns,
                 _settingsService.Settings.MicrocompactMaxOldResultChars, out bool willCompact);
             compactMark = compactBoundary > 0 && compactBoundary < nativeMessages.Count ? nativeMessages[compactBoundary] : null;
+
+            if (!loopIsLocal)
+            {
+                int apiDropped = StepImagePrune(nativeMessages, keepImages, _settingsService.Settings.ImagePruneSlack,
+                    willCompact, prevCompactBoundary);
+                if (apiDropped > 0)
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: {apiDropped} older tool image(s) replaced by their file path "
+                        + $"(keep {keepImages}; {(willCompact ? "with the compaction" : "hard cap")})");
+            }
 
             // PreCompact hook fires once per loop iteration where compaction would run,
             // BEFORE the trimming so a snapshot hook can capture the full history.
@@ -3811,6 +4184,9 @@ public partial class CodeAgentService
             var outboundMessages = compactBoundary > 0
                 ? MicrocompactUpTo(nativeMessages, compactBoundary, _settingsService.Settings.MicrocompactMaxOldResultChars)
                 : nativeMessages;
+            // Cache breakpoints on the shortened prefix (Anthropic): the copies before the cut are this step's own.
+            if (!loopIsLocal && _settingsService.Settings.PromptCachingEnabled)
+                SetCompactCacheMarks(outboundMessages, compactBoundary, willCompact ? prevCompactBoundary : 0);
 
             // Call API with native tools. Two fixes for the "feels frozen / no response" problems live here:
             //   1. onTextDelta streams the model's reply to the UI live (agentic mode used to stay silent
@@ -3826,6 +4202,7 @@ public partial class CodeAgentService
             // is compute-bound, not network-flaky, so give it a much larger absolute budget instead.
             if (timeoutSec > 0 && loopIsLocal) timeoutSec = Math.Max(timeoutSec, 600);
             Services.Providers.NativeToolResponse response = null!;
+            Exception? stepFailure = null;           // the request failed: retry this step, fail over, or give up (below)
             using (var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
                 if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
@@ -3906,6 +4283,7 @@ public partial class CodeAgentService
                 try
                 {
                     callScope?.BeginCall(callCts);
+                    Agents.ProviderSwitchBoard.BeginCall(callScope, callCts);
                     response = await loopProvider.ChatWithToolsAsync(
                         outboundMessages, systemPrompt, toolSchemas,
                         onTextDelta: token =>
@@ -3941,11 +4319,19 @@ public partial class CodeAgentService
                     }
                     continue;
                 }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested && Agents.ProviderSwitchBoard.WasSwitch(callScope, callCts))
+                {
+                    // ─── A model switch stopped this reply ─── its tool calls never ran, nothing is half done: the
+                    // same step is asked again of the new model (taken at the top of the loop).
+                    _debugLog?.Info("Failover", $"step {iteration + 1}: reply stopped for a model switch");
+                    iteration--;
+                    continue;
+                }
                 catch (OperationCanceledException) when (callCts.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
-                    // Per-call timeout fired (NOT a user cancel) — surface as retryable so the outer
-                    // auto-retry re-issues the request instead of leaving a dead spinner.
-                    throw new TimeoutException(
+                    // Per-call timeout fired (NOT a user cancel): this step is asked again (below) instead of the whole
+                    // turn being re-run from the start by the chat's auto-retry.
+                    stepFailure = new TimeoutException(
                         $"Request timed out after {timeoutSec}s — the model did not respond (timeout).");
                 }
                 catch (HttpRequestException ex) when (
@@ -3993,15 +4379,85 @@ public partial class CodeAgentService
                         : "Context too long even after compaction. Please start a new session.";
                     break;
                 }
+                catch (Exception ex) when (ex is HttpRequestException or System.IO.IOException && !ct.IsCancellationRequested)
+                {
+                    // Quota, a rate limit, a busy server, a dropped connection: decided below, at this step.
+                    stepFailure = ex;
+                }
                 finally
                 {
                     callScope?.EndCall(callCts);
+                    Agents.ProviderSwitchBoard.EndCall(callScope, callCts);
                 }
                 // A model on this machine reports its tokens to no one: the Billing page shows them, and the time it took.
                 if (loopProvider.ProviderId is "Ollama" or "LlamaServer" or "Local" && response != null)
                     _costTrackingService?.RecordLocalUsage(loopProvider.ProviderId, LocalModelName(loopProvider),
                         response.InputTokens, response.OutputTokens, callWatch.Elapsed.TotalSeconds);
             }
+
+            // ─── The request failed: ask this step again, carry on with the next provider, or stop ───
+            // (owner 2026-11-08: "หมดโควต้ากันก็เปลี่ยนกันได้ทันที โดยที่เราไม่ต้องมาสั่ง"). A provider that reports its error
+            // as a response (StopReason "error") is treated the same when the error is a quota, a limit or an outage.
+            if (stepFailure == null && response is { StopReason: "error" } errReply
+                && Agents.ProviderErrors.Classify(null, errReply.TextContent) is Agents.ProviderErrorKind.QuotaExhausted
+                    or Agents.ProviderErrorKind.RateLimited or Agents.ProviderErrorKind.Overloaded or Agents.ProviderErrorKind.Auth)
+                stepFailure = new HttpRequestException(errReply.TextContent);
+            if (stepFailure != null)
+            {
+                var failKind = Agents.ProviderErrors.Classify(stepFailure);
+                var waitAsked = Agents.ProviderErrors.RetryAfter(stepFailure.Message);
+                bool autoFailover = _settingsService.Settings.AutoFailoverOnQuota;
+                var chain = autoFailover ? FailoverChain(convType) : new List<Agents.FailoverCandidate>();
+                var decision = Agents.FailoverPolicy.Decide(failKind, stepRetries, autoFailover, chain.Count > 0, waitAsked);
+                string failLabel = ModelLabelFor(loopProvider);
+                _debugLog?.Warn("Failover", $"step {iteration + 1}: {failKind} on {convType} → {decision.Action}"
+                    + $" (retries {stepRetries}, next: {string.Join(",", chain.Select(c => c.Type))}) · "
+                    + stepFailure.Message.Split('\n')[0]);
+                if (decision.Action == Agents.StepAction.Retry)
+                {
+                    stepRetries++;
+                    int sec = (int)Math.Ceiling(decision.Delay.TotalSeconds);
+                    OnAgentStatus?.Invoke(isThai
+                        ? $"⏳ {failLabel} ไม่ว่าง/ติด rate limit — ถามขั้นนี้ใหม่ใน {sec} วินาที ({stepRetries}/{Agents.FailoverPolicy.MaxRetriesPerStep}) งานที่ทำไปแล้วอยู่ครบ"
+                        : $"⏳ {failLabel} is busy or rate-limited — asking this step again in {sec}s ({stepRetries}/{Agents.FailoverPolicy.MaxRetriesPerStep}); the work so far is kept");
+                    await Task.Delay(decision.Delay, ct);
+                    iteration--;
+                    continue;
+                }
+                if (decision.Action == Agents.StepAction.FailOver)
+                {
+                    Agents.QuotaBook.Shared.Note(convType, failKind, DateTime.UtcNow, waitAsked);
+                    // Not NoteQuotaExhausted() here: that sends every later sub-agent to Claude Dev, while a run that goes
+                    // on in place takes its sub-agents along to the new provider (they read the run's scope). A hand-over
+                    // to a CLI still notes it (MaybeFailOverAsync).
+                    bool moved = false, handOff = false;
+                    foreach (var c in chain)
+                    {
+                        if (c.Kind == Agents.CandidateKind.Cli)
+                        {
+                            // Only CLI logins left: the turn goes to one with every step so far (MaybeFailOverAsync).
+                            result.StopReason = "error";
+                            result.HandoffTo = c.Type;
+                            result.FailKind = failKind;
+                            result.FailedOn = convType;
+                            result.NativeTranscript = nativeMessages;
+                            result.FinalResponse = stepFailure.Message;
+                            handOff = true;
+                            break;
+                        }
+                        if (await ReadyProviderAsync(c, ct) is not { } nextProvider) continue;
+                        await AdoptProviderAsync(nextProvider, c.Type, FailoverLine(isThai, failKind, failLabel, ModelLabelFor(nextProvider), false), iteration + 1);
+                        moved = true;
+                        break;
+                    }
+                    if (moved) { stepRetries = 0; iteration--; continue; }
+                    if (handOff) break;
+                }
+                // Nowhere to go (or failover is off): the error ends the turn as it always did.
+                if (response is not { StopReason: "error" })
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(stepFailure).Throw();
+            }
+            stepRetries = 0;
 
             // ─── The API refused the tool images and the provider answered from a text-only retry ───
             // Drop them from the loop's own conversation (with the same note the retry carried), or every later
@@ -4097,6 +4553,8 @@ public partial class CodeAgentService
                 }
 
                 _debugLog?.Error("Agent", $"provider error at step {iteration + 1}: {errText.Replace("\n", " ")}");
+                result.NativeTranscript ??= nativeMessages;   // a CLI that takes over is told every step (MaybeFailOverAsync)
+                result.FailedOn ??= convType;
                 result.Steps.Add(step);
                 result.StopReason = "error";
                 result.FinalResponse = string.IsNullOrWhiteSpace(response.TextContent)
@@ -4614,7 +5072,7 @@ public partial class CodeAgentService
 
                     // Per-tool and aggregate budget enforcement — on TEXT only. Images never enter resultContent,
                     // so these cuts can't split a base64 string; they ride on the block's Images below.
-                    resultContent = (toolResult.Success ? toolResult.Output : toolResult.Error) ?? string.Empty;
+                    resultContent = AgentToolService.ModelText(toolResult);
                     // A failure with no error text: its output, else a line saying so — never an empty failure.
                     if (!toolResult.Success && string.IsNullOrWhiteSpace(resultContent))
                         resultContent = !string.IsNullOrWhiteSpace(toolResult.Output) ? toolResult.Output
@@ -4844,13 +5302,21 @@ public partial class CodeAgentService
             // turn cannot end while it is red, and so re-running the build without editing anything
             // gets called out. (Observed: the model watched run_build fail four times in a row, never
             // touched the file, and the wandering breaker then let it finish claiming success.)
-            var buildResults = toolResults.Where(r => r.Type is ToolType.RunBuild or ToolType.RunTests).ToList();
+            // A build that found nothing to run is not red — it says nothing about the change (AgentToolService.FoundNothingToRun).
+            var buildResults = toolResults.Where(r => r.Type is ToolType.RunBuild or ToolType.RunTests
+                && !AgentToolService.FoundNothingToRun(r)).ToList();
             if (buildResults.Count > 0)
             {
                 var last = buildResults[^1];
                 bool nowFailing = !last.Success;
                 if (nowFailing && redSeen && (editedSinceRed || mutatedThisStep)) mainFixFailures++;
                 else if (!nowFailing) mainFixFailures = 0;
+                // The hard-task verdict reads it at the turn's end (a build that went green again is no longer stuck).
+                if (RootOf(AgentRunScope.Current) is { } hardRoot)
+                {
+                    hardRoot.FailedOwnFixes = mainFixFailures;
+                    if (!nowFailing) hardRoot.SpeculativeFixFailed = false;
+                }
                 redSeen = nowFailing;
                 editedSinceRed = false;
                 if (nowFailing && lastBuildFailed && !mutatedThisStep) repeatedBuildNoEdit++;
@@ -5080,17 +5546,15 @@ public partial class CodeAgentService
             // Plan-first, like brain-first: a task still going at step 3 with no plan is told once to write one, so the
             // plan card and the plan window show where it is (owner 2026-10-16: a Reverse X run went on with no plan at all).
             // A quick task that is done in two steps never sees this.
-            if (iteration == 2 && _agentToolService.TodoItems.Count == 0 && LooksNonTrivialTask(userMessage ?? "")
+            // A plan carried over from the last turn that this turn has not touched by step 3 is asked about the same way:
+            // carry it on or replace it, so the card does not sit on the last turn's step while the new work goes unseen.
+            if (iteration == 2
+                && Agents.PlanOps.Reminder(AgentRunScope.Current, _agentToolService.TodoItems.Count, isThai) is { } planNudge
+                && LooksNonTrivialTask(userMessage ?? "")
                 && toolSchemas.Any(t => _agentToolService.ResolveToolTypePublic(t.Name) == ToolType.TodoWrite))
             {
-                userResultMsg.Content.Add(new Services.Providers.ContentBlock
-                {
-                    Type = "text",
-                    Text = isThai
-                        ? "[เตือน: งานนี้ยังไม่มีแผน — เรียก todo_write ครั้งเดียวในขั้นถัดไป โดยส่ง todos เป็นแผนทั้งชุด 3-7 ข้อ ข้อที่กำลังทำเป็น in_progress แล้วส่งใหม่ทั้งชุดเมื่อแต่ละข้อเสร็จ ผู้ใช้ดูความคืบหน้าจากแผนนี้]"
-                        : "[Reminder: this task has no plan yet — in your next step call todo_write ONCE with `todos` = the whole plan (3-7 items, the current one in_progress), and send the whole list again as items finish. The user follows your progress through this plan.]",
-                });
-                _debugLog?.Info("Agent", "plan-first: no plan by step 3 — reminder sent with the tool results");
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = planNudge });
+                _debugLog?.Info("Agent", "plan-first: no plan worked on by step 3 — reminder sent with the tool results");
             }
             nativeMessages.Add(userResultMsg);
 
@@ -5098,6 +5562,7 @@ public partial class CodeAgentService
             // spinning until the user notices (no step limit and a free local model = nothing else ever ends it).
             if (loopGuardStop is { } looped)
             {
+                if (RootOf(AgentRunScope.Current) is { } stuckRoot) stuckRoot.LoopGuardStopped = true;
                 result.StopReason = "loop";
                 result.Success = false;
                 result.FinalResponse = Agents.AgentLoopGuard.StopMessage(looped, ModelLabelFor(loopProvider),
@@ -5308,6 +5773,48 @@ public partial class CodeAgentService
             ? Vision.ToolImageWire.KeepNewestImages(messages, keep)
             : 0;
 
+    /// <summary>Older images an API model's conversation may carry past keep before they are cut back without a
+    /// compaction. Each image is ~1.6k tokens read back at a tenth of the input price, while cutting one rewrites the
+    /// whole conversation after it: in 19 days of logs the batched cut (slack 3) did that 17 times, ≈ $11.49 on Opus 5.5.</summary>
+    public const int ApiImageHardSlack = 12;
+
+    /// <summary>The image cut of an API model's step (Anthropic caches the prompt prefix): with the compaction when
+    /// microcompact moves its cut this step (<paramref name="compacting"/> — the conversation is rewritten from the old
+    /// cut on anyway), otherwise only once more than keep + max(slack, <see cref="ApiImageHardSlack"/>) pile up (slack 0 =
+    /// every step, as the setting says). Either way
+    /// messages before <paramref name="stableFrom"/> (the previous cut) are not touched: that shortened prefix is the part
+    /// the cache reads back. Images are counted from there on too: those before it were cut back at that compaction.
+    /// Returns how many images were replaced. Public for the contract harness.</summary>
+    public static int StepImagePrune(List<Services.Providers.NativeMessage> messages, int keep, int slack, bool compacting, int stableFrom)
+    {
+        stableFrom = Math.Clamp(stableFrom, 0, messages.Count);
+        int count = Vision.ToolImageWire.CountImages(messages.Skip(stableFrom));
+        if (count <= keep) return 0;
+        // Slack 0 is the owner's own "cut every step" (Settings): honoured as it is. Any other slack is at least the hard one.
+        int allowed = slack <= 0 ? 0 : Math.Max(Math.Min(slack, 20), ApiImageHardSlack);
+        bool overCap = count > keep + allowed;
+        if (!compacting && !overCap) return 0;
+        return Vision.ToolImageWire.KeepNewestImages(messages, keep, stableFrom);
+    }
+
+    /// <summary>Cache marks on the outbound copy (Anthropic, <see cref="Services.Providers.NativeMessage.CacheMark"/>): on
+    /// the last message before the cut (<paramref name="boundary"/>), whose prefix stays byte-identical until the cut moves,
+    /// and — on the step the cut moves — also on the last message before the old cut (<paramref name="previousBoundary"/>),
+    /// so the part shortened at the previous compaction is read back instead of written again. Only messages before
+    /// <paramref name="boundary"/> are marked: those are this step's own copies (MicrocompactUpTo), never the loop's
+    /// conversation. Public for the contract harness.</summary>
+    public static void SetCompactCacheMarks(List<Services.Providers.NativeMessage> outbound, int boundary, int previousBoundary)
+    {
+        if (boundary <= 0 || boundary > outbound.Count) return;
+        void MarkBefore(int cut)
+        {
+            for (int i = Math.Min(cut, boundary) - 1; i >= 0; i--)
+                if (outbound[i].Role != "system") { outbound[i].CacheMark = true; return; }
+        }
+        MarkBefore(boundary);
+        if (previousBoundary > 0 && previousBoundary < boundary) MarkBefore(previousBoundary);
+    }
+
 
     /// <summary>Rough token count of a native conversation: characters / 4 over every block's text payload, plus
     /// ceil(w×h/750) per tool image — never its base64 length (a 1568-px screenshot is ~1,600 tokens, not the
@@ -5486,7 +5993,9 @@ public partial class CodeAgentService
                 continue;
             }
 
-            var compacted = new Services.Providers.NativeMessage { Role = msg.Role };
+            // Effort too: a per-message effort change (role "system", no content) that lost it was dropped from the wire,
+            // so the turns after it fell back to the request's top-level effort once the cut passed it.
+            var compacted = new Services.Providers.NativeMessage { Role = msg.Role, Effort = msg.Effort };
             foreach (var block in msg.Content)
             {
                 compacted.Content.Add(CompactBlock(block, maxOldResultChars));
@@ -5943,6 +6452,17 @@ public class AgentLoopResult
     /// <summary>Background sub-agents that ended after the CLI's last reply: their results never reached the model
     /// (StopReason "sub_agent_reports_unread"). Empty otherwise.</summary>
     public List<Providers.ClaudeDevStreamTurn.LateAgentReport> LateAgentReports { get; set; } = new();
+
+    // ─── a run that has to go on elsewhere (CodeAgentService.MaybeFailOverAsync) ───
+    /// <summary>The CLI agent the native loop hands the turn to: the next in the failover chain (StopReason "error"), or
+    /// the one the owner picked mid-run (StopReason "switched").</summary>
+    public AiProviderType? HandoffTo { get; set; }
+    /// <summary>Why the provider failed (null = read it from <see cref="FinalResponse"/>).</summary>
+    public Agents.ProviderErrorKind? FailKind { get; set; }
+    /// <summary>The provider the loop was on when it stopped (it may have failed over before).</summary>
+    public AiProviderType? FailedOn { get; set; }
+    /// <summary>The loop's conversation when it stopped — the handoff brief is written from it.</summary>
+    public List<Providers.NativeMessage>? NativeTranscript { get; set; }
 }
 
 public class AgentResult

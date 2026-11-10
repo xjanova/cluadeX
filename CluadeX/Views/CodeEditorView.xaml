@@ -184,10 +184,13 @@
 
                     <!-- Folder icon OR extension monogram -->
                     <Border Grid.Column="1" Width="22" Height="14" Margin="4,0,6,0"
-                            VerticalAlignment="Center" CornerRadius="3" BorderThickness="1"
-                            BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Surface.Sunken}">
+                            VerticalAlignment="Center" CornerRadius="3" BorderThickness="1">
+                        <!-- the colours in the style, not on the Border: a local value there beat the directory trigger, so the
+                             folder sat in the file monogram's box -->
                         <Border.Style>
                             <Style TargetType="Border">
+                                <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
+                                <Setter Property="Background" Value="{DynamicResource Surface.Sunken}"/>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsDirectory}" Value="True">
                                         <Setter Property="Background" Value="Transparent"/>
@@ -197,21 +200,22 @@
                             </Style>
                         </Border.Style>
                         <Grid>
-                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{DynamicResource Status.Warning}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
+                            <!-- a directory: the app's drawn folder (Resources/Theme.xaml FolderIcon), open while expanded -->
+                            <ContentControl Width="15" Height="12" HorizontalAlignment="Center">
+                                <ContentControl.Style>
+                                    <Style TargetType="ContentControl" BasedOn="{StaticResource FolderIcon}">
                                         <Setter Property="Visibility" Value="Collapsed"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsDirectory}" Value="True">
                                                 <Setter Property="Visibility" Value="Visible"/>
-                                                <Setter Property="Text" Value="&#xE8B7;"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource Icon.FolderOpen}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
+                                </ContentControl.Style>
+                            </ContentControl>
                             <TextBlock Text="{Binding ExtensionLabel}" FontSize="8" FontWeight="Bold"
                                        FontFamily="{DynamicResource Font.Mono.Display}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -376,19 +380,18 @@
                                 </ControlTemplate>
                             </Button.Template>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                           Margin="0,0,6,0" VerticalAlignment="Center">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
+                                <ContentControl Width="13" Height="10.6" Margin="0,0,6,0">
+                                    <ContentControl.Style>
+                                        <Style TargetType="ContentControl" BasedOn="{StaticResource FolderIcon}">
+                                            <Setter Property="Opacity" Value="0.55"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsExplorerPanelActive}" Value="True">
-                                                    <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                    <Setter Property="Opacity" Value="1"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
+                                    </ContentControl.Style>
+                                </ContentControl>
                                 <TextBlock Text="{services:Loc editor.explorer}" FontSize="10" FontWeight="Bold"
                                            FontFamily="{DynamicResource Font.Mono.Display}" VerticalAlignment="Center">
                                     <TextBlock.Style>
@@ -555,9 +558,7 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="4">
-                                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                   Foreground="{DynamicResource Status.Warning}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <ContentControl Style="{StaticResource FolderIconOpen}" Width="13" Height="10.6" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
@@ -599,8 +600,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="13"
-                                   Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ContentControl Style="{StaticResource FolderIcon}" Width="16" Height="13" VerticalAlignment="Center" Margin="0,0,8,0" HorizontalAlignment="Left"/>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <TextBlock Text="{Binding ProjectName}" FontSize="12" FontWeight="SemiBold"
                                        Foreground="{DynamicResource Text.Primary}"
@@ -633,7 +633,7 @@
                             </ControlTemplate>
                         </Button.Template>
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0"/>
+                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="14" Height="11.4" Margin="0,0,6,0" HorizontalAlignment="Left"/>
                             <TextBlock Text="{services:Loc editor.openFolder}"/>
                         </StackPanel>
                     </Button>
@@ -1585,6 +1585,12 @@
                                 <Separator/>
                                 <MenuItem Header="{services:Loc edt.selectAll}" InputGestureText="Ctrl+A" Click="OnSelectAll"/>
                                 <MenuItem Header="{services:Loc edt.columnTip}" IsEnabled="False"/>
+                                <Separator/>
+                                <!-- Change marks (CodeEditorView.AiChanges.cs) -->
+                                <MenuItem Header="{services:Loc cm.compare}" Click="OnCompareChanges"/>
+                                <MenuItem Header="{services:Loc cm.menuList}" Click="OnShowUserEdits"/>
+                                <MenuItem x:Name="MiUserEditMarkers" Header="{services:Loc cm.menuMarkers}" IsCheckable="True"
+                                          Click="OnToggleUserEditMarkers" ToolTip="{services:Loc cm.menuMarkersNote}"/>
                             </ContextMenu>
                         </Button.ContextMenu>
                     </Button>
@@ -2166,9 +2172,18 @@
                                        FontFamily="{DynamicResource Font.Mono.Display}"
                                        Foreground="{DynamicResource Text.Primary}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                            <TextBlock Grid.Column="2" Text="{Binding DiffSummary}" FontSize="10" Margin="12,0,10,0"
-                                       FontFamily="{DynamicResource Font.Mono.Display}"
-                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding DiffSummary}" FontSize="10" Margin="12,0,10,0"
+                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                                <!-- Step through the changes (CodeEditorView.AiChanges.cs): F7 / Shift+F7 too -->
+                                <TextBlock x:Name="DiffPos" FontSize="10" Margin="0,0,6,0" VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Muted}"/>
+                                <Button x:Name="DiffPrevBtn" Style="{StaticResource EdToolBtn}" FontFamily="Segoe MDL2 Assets" Content="&#xE70E;"
+                                        Click="OnDiffPrev" ToolTip="{services:Loc cm.diffPrev}" Margin="0,0,2,0"/>
+                                <Button x:Name="DiffNextBtn" Style="{StaticResource EdToolBtn}" FontFamily="Segoe MDL2 Assets" Content="&#xE70D;"
+                                        Click="OnDiffNext" ToolTip="{services:Loc cm.diffNext}" Margin="0,0,8,0"/>
+                            </StackPanel>
                             <Button Grid.Column="3" Width="22" Height="22" Cursor="Hand"
                                     Background="Transparent" BorderThickness="0"
                                     Command="{Binding CloseDiffCommand}"
@@ -2259,9 +2274,11 @@
                     </Grid>
 
                     <!-- Rows -->
-                    <ListBox Grid.Row="3" ItemsSource="{Binding DiffRows}"
+                    <!-- No horizontal scroll: with it every row measures at infinite width and the two * columns size per row,
+                         so a long line pushed its own row out of line with the rest. Long lines trim instead. -->
+                    <ListBox x:Name="DiffList" Grid.Row="3" ItemsSource="{Binding DiffRows}" PreviewKeyDown="OnDiffKeys"
                              Background="Transparent" BorderThickness="0"
-                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              VirtualizingStackPanel.IsVirtualizing="True"
                              VirtualizingStackPanel.VirtualizationMode="Recycling"
@@ -2299,7 +2316,7 @@
                                         <TextBlock Text="{Binding LeftText}" FontSize="11" Padding="6,1"
                                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                                    Foreground="{DynamicResource Text.Secondary}"
-                                                   TextWrapping="NoWrap"/>
+                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                     </Border>
 
                                     <TextBlock Grid.Column="2" Text="{Binding RightLine}" FontSize="10"
@@ -2310,7 +2327,7 @@
                                         <TextBlock Text="{Binding RightText}" FontSize="11" Padding="6,1"
                                                    FontFamily="{DynamicResource Font.Mono.Display}"
                                                    Foreground="{DynamicResource Text.Secondary}"
-                                                   TextWrapping="NoWrap"/>
+                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                                     </Border>
                                 </Grid>
                                 <DataTemplate.Triggers>
@@ -2348,6 +2365,13 @@
                     <!-- How many places the AI's last turn changed in this file — click = the next one (CodeEditorView.AiChanges.cs) -->
                     <Button x:Name="StAiChanges" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="8,0,0,0"
                             Click="OnAiChangesNext" ToolTip="{services:Loc ai.changesTip}" Visibility="Collapsed"/>
+                    <!-- The user's own hand edits in this file — click = a menu: next one, every one in the project, the marker comment -->
+                    <Button x:Name="StUserEdits" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="4,0,0,0"
+                            Click="OnUserEditsMenu" ToolTip="{services:Loc cm.userTip}" Visibility="Collapsed"/>
+                    <!-- Before / after of the whole file against how it was before this chat touched it -->
+                    <Button x:Name="StCompare" DockPanel.Dock="Left" Style="{StaticResource EdStatusBtn}" Margin="4,0,0,0"
+                            Click="OnCompareChanges" ToolTip="{services:Loc cm.compareTip}" Visibility="Collapsed"
+                            Content="{services:Loc cm.compare}"/>
                     <Button x:Name="StZoom" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnZoomReset"
                             ToolTip="{services:Loc edt.zoomReset}" Margin="0,0,6,0"/>
                     <TextBlock x:Name="StOverwrite" DockPanel.Dock="Right" Style="{StaticResource EdStatusText}" Margin="8,0"
@@ -2380,13 +2404,49 @@
                             </ControlTemplate>
                         </Button.Template>
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE756;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock Text="{services:Loc editor.terminal}" FontSize="11" Foreground="{DynamicResource Text.Muted}"
-                                       VerticalAlignment="Center"/>
-                            <TextBlock Text="·" Margin="8,0" FontSize="11" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
-                            <TextBlock Text="pwsh" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
-                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center"/>
+                            <!-- Reads as a terminal at a glance (owner 2026-11-08: "ให้เด่น มันไม่รู้ว่าเป็นเทอร์มินัล"):
+                                 a console tile, the name in full colour, the shell it really runs, and whether it is alive. -->
+                            <Border Background="{DynamicResource Terminal.Background}" CornerRadius="4" Width="24" Height="18"
+                                    BorderBrush="{DynamicResource Terminal.Accent}" BorderThickness="1" Margin="0,0,8,0">
+                                <TextBlock Text="&gt;_" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10" FontWeight="Bold"
+                                           Foreground="{DynamicResource Terminal.Prompt}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Text="{services:Loc editor.terminal}" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                            <Border Background="{DynamicResource Terminal.Background}" CornerRadius="3" Padding="6,1" Margin="8,0,0,0"
+                                    VerticalAlignment="Center">
+                                <TextBlock Text="{services:Loc ide.termShell}" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                           Foreground="{DynamicResource Terminal.Prompt}"/>
+                            </Border>
+                            <Ellipse Width="7" Height="7" Margin="10,0,5,0" VerticalAlignment="Center">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Fill" Value="{DynamicResource Text.Faint}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsTerminalRunning}" Value="True">
+                                                <Setter Property="Fill" Value="{DynamicResource Status.Success}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <TextBlock FontSize="11" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="{services:Loc ide.termIdle}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsTerminalRunning}" Value="True">
+                                                <Setter Property="Text" Value="{services:Loc ide.termReady}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{services:Loc ide.termOpenHint}" FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Text.Muted}"
+                                       Visibility="{Binding IsTerminalOpen, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                             <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="9" Margin="10,0,0,0"
                                        VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}">
                                 <TextBlock.Style>
@@ -2407,7 +2467,10 @@
                     </Button>
 
                     <!-- Expanded terminal: output + input line -->
-                    <Grid Visibility="{Binding IsTerminalOpen, Converter={StaticResource BoolVis}}">
+                    <Border Background="{DynamicResource Terminal.Background}" BorderThickness="0,2,0,0"
+                            BorderBrush="{DynamicResource Terminal.Accent}"
+                            Visibility="{Binding IsTerminalOpen, Converter={StaticResource BoolVis}}">
+                    <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="170"/>
                             <RowDefinition Height="Auto"/>
@@ -2415,9 +2478,9 @@
                         <!-- No Text binding: the code-behind feeds this box chunk by chunk (OnTerminalText). -->
                         <TextBox x:Name="TerminalOut" Grid.Row="0"
                                  IsReadOnly="True" TextWrapping="NoWrap"
-                                 Background="{DynamicResource Editor.Background}" BorderThickness="0"
-                                 Foreground="{DynamicResource Text.Secondary}"
-                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
+                                 Background="Transparent" BorderThickness="0"
+                                 Foreground="{DynamicResource Terminal.Foreground}"
+                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
                                  Padding="12,6"
                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                  TextChanged="OnTerminalOutputChanged"/>
@@ -2427,17 +2490,34 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="&gt;" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
-                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="4,0,6,0"/>
-                            <Border Grid.Column="1" Background="{DynamicResource Surface.Input}" CornerRadius="4"
-                                    BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
+                            <TextBlock Text="PS&gt;" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12" FontWeight="Bold"
+                                       Foreground="{DynamicResource Terminal.Prompt}" VerticalAlignment="Center" Margin="4,0,8,0"/>
+                            <Border Grid.Column="1" Background="{DynamicResource Terminal.Input}" CornerRadius="4"
+                                    BorderBrush="{DynamicResource Terminal.Accent}" BorderThickness="1">
+                                <Grid>
+                                <!-- Placeholder: says what the box is for until something is typed -->
+                                <TextBlock Text="{services:Loc ide.termPlaceholder}" Margin="10,0" VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12" IsHitTestVisible="False"
+                                           Foreground="{DynamicResource Terminal.Foreground}" Opacity="0.4">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding TerminalInput}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                                 <TextBox Text="{Binding TerminalInput, UpdateSourceTrigger=PropertyChanged}"
                                          Background="Transparent" BorderThickness="0" Padding="8,4"
-                                         Foreground="{DynamicResource Text.Primary}"
-                                         CaretBrush="{DynamicResource Status.Warning}"
+                                         Foreground="{DynamicResource Terminal.Foreground}"
+                                         CaretBrush="{DynamicResource Terminal.Prompt}"
                                          FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
                                          KeyDown="OnTerminalInputKeyDown"
                                          PreviewKeyDown="OnTerminalInputPreviewKeyDown"/>
+                                </Grid>
                             </Border>
                             <Button Grid.Column="2" Command="{Binding InterruptTerminalCommand}" Cursor="Hand"
                                     Margin="6,0,0,0" Padding="8,3" Background="Transparent" BorderThickness="1"
@@ -2463,6 +2543,7 @@
                             </Button>
                         </Grid>
                     </Grid>
+                    </Border>
                 </StackPanel>
             </Border>
         </Grid>

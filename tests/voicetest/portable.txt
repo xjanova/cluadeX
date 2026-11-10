@@ -1,0 +1,1 @@
+Isolation marker: makes CluadeX's SettingsService keep all data next to this exe.

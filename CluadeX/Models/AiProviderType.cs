@@ -37,4 +37,7 @@ public enum AiProviderType
     LMStudio,
     Vllm,
     OpenAICompatible, // any other OpenAI-compatible endpoint (base URL typed by the user)
+
+    // Kept last: settings store the name, but a new member at the end can never shift an old one.
+    Colibri,      // colibri (github.com/JustVugg/colibri): big MoE models from VRAM + RAM + NVMe, installed from the Plugins page
 }

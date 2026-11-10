@@ -49,6 +49,7 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(InteractiveRequestTimeoutSeconds)] = (vm, s) => s.InteractiveRequestTimeoutSeconds = Math.Clamp(vm.InteractiveRequestTimeoutSeconds, 0, 3600),
         [nameof(EnforceReadBeforeEdit)] = (vm, s) => s.EnforceReadBeforeEdit = vm.EnforceReadBeforeEdit,
         [nameof(AutoVerifyAfterEditEnabled)] = (vm, s) => s.AutoVerifyAfterEditEnabled = vm.AutoVerifyAfterEditEnabled,
+        [nameof(WatchAutoContinue)] = (vm, s) => s.WatchAutoContinue = vm.WatchAutoContinue,
         [nameof(AutoVerifyCommand)] = (vm, s) => s.AutoVerifyCommand = vm.AutoVerifyCommand?.Trim() ?? "",
         [nameof(MaxAutoFixAttempts)] = (vm, s) => s.MaxAutoFixAttempts = Math.Clamp(vm.MaxAutoFixAttempts, 0, 20),
         [nameof(EscalationEnabled)] = (vm, s) =>
@@ -73,6 +74,13 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(CodeModelOverride)] = (vm, s) => SetOverride(s, "code", vm.CodeModelOverride),
         [nameof(ReviewModelOverride)] = (vm, s) => SetOverride(s, "review", vm.ReviewModelOverride),
         [nameof(HardFixModelOverride)] = (vm, s) => SetOverride(s, "hardfix", vm.HardFixModelOverride),
+        // Sub-agent tiers (auto model: cheap / mid / deep)
+        [nameof(SubAgentAutoModel)] = (vm, s) => s.SubAgentAutoModel = vm.SubAgentAutoModel,
+        [nameof(SubAgentEscalate)] = (vm, s) => s.SubAgentEscalate = vm.SubAgentEscalate,
+        [nameof(SubAgentLocalCheap)] = (vm, s) => s.SubAgentLocalCheap = vm.SubAgentLocalCheap,
+        [nameof(CheapModelOverride)] = (vm, s) => SetOverride(s, "cheap", vm.CheapModelOverride),
+        [nameof(MidModelOverride)] = (vm, s) => SetOverride(s, "mid", vm.MidModelOverride),
+        [nameof(DeepModelOverride)] = (vm, s) => SetOverride(s, "deep", vm.DeepModelOverride),
         [nameof(SemanticSearchEnabled)] = (vm, s) => s.SemanticSearchEnabled = vm.SemanticSearchEnabled,
         [nameof(EmbeddingModel)] = (vm, s) => s.EmbeddingModel = vm.EmbeddingModel?.Trim() ?? "",
         [nameof(InstinctLearningEnabled)] = (vm, s) => s.InstinctLearningEnabled = vm.InstinctLearningEnabled,
@@ -99,6 +107,7 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(GpuLayerCount)] = (vm, s) => s.GpuLayerCount = Math.Clamp(vm.GpuLayerCount, -1, 1000),
         [nameof(BatchSize)] = (vm, s) => s.BatchSize = vm.BatchSize,
         [nameof(ThreadCount)] = (vm, s) => s.ThreadCount = Math.Clamp(vm.ThreadCount, 0, 512),
+        [nameof(LocalKvCacheType)] = (vm, s) => s.LocalKvCacheType = KvCacheChoices.Contains(vm.LocalKvCacheType) ? vm.LocalKvCacheType : "auto",
         [nameof(ContextSize)] = (vm, s) => s.ContextSize = vm.ContextSize,
         [nameof(RepeatPenalty)] = (vm, s) => s.RepeatPenalty = Math.Clamp(vm.RepeatPenalty, 1f, 2f),
         [nameof(LocalNativeToolUseEnabled)] = (vm, s) => s.LocalNativeToolUseEnabled = vm.LocalNativeToolUseEnabled,
@@ -156,6 +165,8 @@ public partial class SettingsViewModel : ViewModelBase
     public int InteractiveRequestTimeoutSeconds { get => _interactiveTimeoutSeconds; set => SetProperty(ref _interactiveTimeoutSeconds, value); }
     public bool EnforceReadBeforeEdit { get => _enforceReadBeforeEdit; set => SetProperty(ref _enforceReadBeforeEdit, value); }
     public bool AutoVerifyAfterEditEnabled { get => _autoVerifyAfterEdit; set => SetProperty(ref _autoVerifyAfterEdit, value); }
+    private bool _watchAutoContinue = true;
+    public bool WatchAutoContinue { get => _watchAutoContinue; set => SetProperty(ref _watchAutoContinue, value); }
     public string AutoVerifyCommand { get => _autoVerifyCommand; set => SetProperty(ref _autoVerifyCommand, value); }
     public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
     public bool EscalationEnabled { get => _escalationEnabled; set => SetProperty(ref _escalationEnabled, value); }
@@ -184,6 +195,20 @@ public partial class SettingsViewModel : ViewModelBase
     public string CodeModelOverride { get => _codeModel; set => SetProperty(ref _codeModel, value); }
     public string ReviewModelOverride { get => _reviewModel; set => SetProperty(ref _reviewModel, value); }
     public string HardFixModelOverride { get => _hardFixModel; set => SetProperty(ref _hardFixModel, value); }
+
+    // ── Agent ▸ sub-agent tiers (owner 2026-11-08: "ทำให้เลือกได้ว่า จะเปิดโหมด auto model นี้ด้วยไหม") ──
+    private bool _subAgentAutoModel = true, _subAgentEscalate = true, _subAgentLocalCheap;
+    private string _cheapModel = "", _midModel = "", _deepModel = "";
+    /// <summary>Each sub-agent runs on the cheapest tier that fits its work (off = every one on the run's model, as before).</summary>
+    public bool SubAgentAutoModel { get => _subAgentAutoModel; set => SetProperty(ref _subAgentAutoModel, value); }
+    /// <summary>A weak report from a cheap/mid agent is redone one tier up.</summary>
+    public bool SubAgentEscalate { get => _subAgentEscalate; set => SetProperty(ref _subAgentEscalate, value); }
+    /// <summary>A local model that is already loaded (tool-capable, 7B+) takes read-only cheap work.</summary>
+    public bool SubAgentLocalCheap { get => _subAgentLocalCheap; set => SetProperty(ref _subAgentLocalCheap, value); }
+    /// <summary>Model per tier; empty = the policy's choice (cheapest / one class down / the run's own).</summary>
+    public string CheapModelOverride { get => _cheapModel; set => SetProperty(ref _cheapModel, value); }
+    public string MidModelOverride { get => _midModel; set => SetProperty(ref _midModel, value); }
+    public string DeepModelOverride { get => _deepModel; set => SetProperty(ref _deepModel, value); }
 
     private static void SetOverride(AppSettings s, string kind, string? model)
     {
@@ -243,6 +268,8 @@ public partial class SettingsViewModel : ViewModelBase
     public int GpuLayerCount { get => _gpuLayerCount; set => SetProperty(ref _gpuLayerCount, value); }
     public int BatchSize { get => _batchSize; set => SetProperty(ref _batchSize, value); }
     public int ThreadCount { get => _threadCount; set => SetProperty(ref _threadCount, value); }
+    private string _localKvCacheType = "auto";
+    public string LocalKvCacheType { get => _localKvCacheType; set => SetProperty(ref _localKvCacheType, value); }
     public uint ContextSize { get => _contextSize; set => SetProperty(ref _contextSize, value); }
     public float RepeatPenalty { get => _repeatPenalty; set => SetProperty(ref _repeatPenalty, value); }
     public bool LocalNativeToolUseEnabled { get => _localNativeToolUse; set => SetProperty(ref _localNativeToolUse, value); }
@@ -319,6 +346,9 @@ public partial class SettingsViewModel : ViewModelBase
 
     public List<string> BackendOptions { get; } = ["Auto", "CUDA12", "CPU"];
     public List<int> BatchSizeOptions { get; } = [128, 256, 512, 1024, 2048];
+    /// <summary>llama-server's KV cache type (LlamaServerArgs.ResolveKvType); "f16" = off.</summary>
+    public static readonly List<string> KvCacheChoices = ["auto", "f16", "q8_0", "q4_0"];
+    public List<string> KvCacheOptions => KvCacheChoices;
     /// <summary>12K is the floor: the agent's prompt + tool schemas alone are ~8.2K tokens.</summary>
     public ObservableCollection<uint> ContextSizeOptions { get; } = [12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072];
 
@@ -553,7 +583,9 @@ public partial class SettingsViewModel : ViewModelBase
             MarkCurrentTheme();
             _themes.ThemeChanged += _ => MarkCurrentTheme();
             _localizationService.LanguageChanged += RefreshThemeTexts;
+            _themes.ThemeChanged += _ => OnTypographyChanged();   // "the theme's font" changes with the theme
         }
+        InitTypography();   // Text size and font (SettingsViewModel.Typography.cs)
 
         LoadPageValues(_settingsService.Settings);
         _uiLanguage = _settingsService.Settings.Language == "th" ? "ไทย" : "English";
@@ -694,6 +726,7 @@ public partial class SettingsViewModel : ViewModelBase
         InteractiveRequestTimeoutSeconds = src.InteractiveRequestTimeoutSeconds;
         EnforceReadBeforeEdit = src.EnforceReadBeforeEdit;
         AutoVerifyAfterEditEnabled = src.AutoVerifyAfterEditEnabled;
+        WatchAutoContinue = src.WatchAutoContinue;
         AutoVerifyCommand = src.AutoVerifyCommand ?? "";
         MaxAutoFixAttempts = src.MaxAutoFixAttempts;
         EscalationEnabled = src.EscalationEnabled;
@@ -712,6 +745,12 @@ public partial class SettingsViewModel : ViewModelBase
         CodeModelOverride = ov.GetValueOrDefault("code") ?? "";
         ReviewModelOverride = ov.GetValueOrDefault("review") ?? "";
         HardFixModelOverride = ov.GetValueOrDefault("hardfix") ?? "";
+        CheapModelOverride = ov.GetValueOrDefault("cheap") ?? "";
+        MidModelOverride = ov.GetValueOrDefault("mid") ?? "";
+        DeepModelOverride = ov.GetValueOrDefault("deep") ?? "";
+        SubAgentAutoModel = src.SubAgentAutoModel;
+        SubAgentEscalate = src.SubAgentEscalate;
+        SubAgentLocalCheap = src.SubAgentLocalCheap;
         SemanticSearchEnabled = src.SemanticSearchEnabled;
         EmbeddingModel = src.EmbeddingModel ?? "";
         InstinctLearningEnabled = src.InstinctLearningEnabled;
@@ -737,6 +776,7 @@ public partial class SettingsViewModel : ViewModelBase
         GpuLayerCount = src.GpuLayerCount;
         BatchSize = src.BatchSize;
         ThreadCount = src.ThreadCount;
+        LocalKvCacheType = KvCacheChoices.Contains(src.LocalKvCacheType) ? src.LocalKvCacheType : "auto";
         if (!ContextSizeOptions.Contains(src.ContextSize))   // a hand-picked size still shows in the box
         {
             int at = 0;

@@ -28,14 +28,21 @@ public static class CliAgentPolicy
         // CluadeX's own read-only type in the turn's Grok home (its model cannot pick the built-in explore / plan by name),
         // and those two should a build list them.
         AiProviderType.GrokDev => type is Providers.GrokTurnHome.ExploreAgent or "explore" or "plan",
+        // Codex's spawn_agent role for read-only work. Codex has no spawn hook, so this is only what the prompt names.
+        AiProviderType.OpenAIDev => type is CodexExplorer,
         _ => false,
     };
+
+    /// <summary>Codex's built-in read-only agent role (spawn_agent's agent_type). Not Gemini's codebase_investigator,
+    /// which the Codex prompt named until 2026-11-09.</summary>
+    public const string CodexExplorer = "explorer";
 
     /// <summary>The type this CLI's read-only search goes by, for a refusal to name.</summary>
     public static string ReadOnlyType(AiProviderType cli) => cli switch
     {
         AiProviderType.ClaudeDev => "Explore",
         AiProviderType.GrokDev => Providers.GrokTurnHome.ExploreAgent,
+        AiProviderType.OpenAIDev => CodexExplorer,
         _ => "codebase_investigator",
     };
 
@@ -69,7 +76,9 @@ public static class CliAgentPolicy
 
     /// <summary>The wrapper's sentence on sub-agents for this step, in the words of each CLI. It explains what the hook
     /// enforces, so the model plans for it instead of finding out from refusals. Null = this CLI's old wording stands.</summary>
-    public static string? PromptLine(DispatchDecision? d, AiProviderType cli)
+    /// <paramref name="workflow"/>: the cluadex workflow tool is open in this chat (Ultra, or the owner asked) — a CLI
+    /// whose own spawns cannot write (Codex) is sent there to split edits, each agent in its own worktree.
+    public static string? PromptLine(DispatchDecision? d, AiProviderType cli, bool workflow = false)
     {
         if (d == null || d.Legacy) return null;
         string tool = cli switch
@@ -81,6 +90,12 @@ public static class CliAgentPolicy
         };
         if (!d.SubAgents) return $"Sub-agents are off for this step ({d.Reason}): do the work yourself in this conversation.";
         string most = $"At most {d.MaxConcurrency} at once; a start over that is refused until one finishes. ";
+        if (!d.ReadOnlyOnly && d.Workers && !CanIsolate(cli) && workflow && cli == AiProviderType.OpenAIDev)
+            return $"Use {tool} (agent_type \"{ReadOnlyType(cli)}\") for independent read-only investigation only: its agents share "
+                 + "your folder and cannot get a worktree. To split EDITS across agents, call the workflow tool (MCP server "
+                 + "cluadex) with an agents phase that has isolation \"worktree\", a gate (the build command) and merge: each "
+                 + "of its agents runs as its own codex exec in its own git worktree on the user's ChatGPT plan, and only green "
+                 + "diffs are merged into the project. " + most;
         if (d.ReadOnlyOnly || !d.Workers || !CanIsolate(cli))
             return $"Use {tool} for independent read-only investigation only ({ReadOnlyType(cli)}); every edit stays with you. " + most;
         return $"When the task has two or more independent parts, hand them to {tool} — several in one response run in parallel, and the " +

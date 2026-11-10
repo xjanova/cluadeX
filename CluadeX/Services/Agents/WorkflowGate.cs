@@ -116,12 +116,38 @@ public static class WorkflowGate
     public static string SplitGuide(AiProviderType cli) => cli switch
     {
         AiProviderType.ClaudeDev => SplitGuide(true),
-        AiProviderType.OpenAIDev => SplitGuide("spawn_agent (read-only work only: every edit stays with you)", "", " (MCP server cluadex)"),
+        AiProviderType.OpenAIDev => CodexSplitGuide(),
         AiProviderType.GeminiDev => SplitGuide($"your sub-agents ({CliAgentPolicy.ReadOnlyType(cli)})", "", " (MCP server cluadex)"),
         AiProviderType.GrokDev => SplitGuide($"spawn_subagent ({CliAgentPolicy.ReadOnlyType(cli)} for read-only work)", "cluadex__", " (through use_tool)"),
         AiProviderType.AntigravityDev => SplitGuide(null, "", " (MCP server cluadex)"),
         _ => SplitGuide(false),
     };
+
+    /// <summary>
+    /// Codex's guide. Its own spawn_agent agents share its folder (no worktree, no spawn hook), so they only read; edits
+    /// are split through the cluadex workflow with worktree isolation, each agent its own `codex exec -C &lt;worktree&gt;` on
+    /// the owner's ChatGPT plan. Until 2026-11-09 the guide said "every edit stays with you": a Codex chat with Ultra on,
+    /// fixing 152–202 build errors, fixed them one by one in one agent.
+    /// </summary>
+    private static string CodexSplitGuide() =>
+        "The user switched Ultra on for this chat (or asked for multi-agent work): you may split the work, and you decide how. "
+        + "Go down this list and take the first that fits each piece: "
+        + "(1) Do it yourself — one or two files, steps that depend on each other, or work that needs this chat's context. "
+        + $"(2) spawn_agent (agent_type \"{CliAgentPolicy.CodexExplorer}\") — two or more independent parts that are only reading or "
+        + "checking; its agents share your folder, so they never edit. "
+        + "(3) workflow (MCP server cluadex) for edits in several files at once — above all a red build or test run with many "
+        + "errors: run it once, group the errors by file (a group = files that only need each other; no file in two groups), "
+        + "then call workflow with one agents phase that has isolation \"worktree\", gate = the build or test command, and "
+        + "merge; give each agent its group's error lines and the files it owns, complete in its prompt. Each agent runs as its "
+        + "own codex exec in its own git worktree on the user's ChatGPT plan, and only diffs that turn the gate green are merged "
+        + "into the project. Read-only agents of a workflow may run on the model on this PC when the user turned that on. "
+        + "Afterwards run the command again and fix what is left yourself. "
+        + "(4) new_chat (MCP server cluadex) — a separate deliverable the user may want to steer or review on its own; put it "
+        + "away with close_chat once its result is in. A new_chat in THIS project that edits files while you are still working "
+        + "here gets isolation \"worktree\" (its own branch; you merge it or open a PR when it is told done). "
+        + "Never split pieces that edit the same files, or hand off a piece whose result you need for your very next step. "
+        + "Every brief is complete on its own: the agent cannot see this conversation. Say in one line how you split the work "
+        + "and why, and put the pieces in your plan.";
 
     private static string SplitGuide(string? spawn, string prefix, string server = "")
     {
@@ -139,7 +165,9 @@ public static class WorkflowGate
              + "multi-part build): phases of agents with JSON schemas, and refuters on what they find. "
              + $"(4) {chat} — a separate deliverable the user may want to steer or review on its own (another app or repository, a "
              + "design or asset track beside the code), or a new standalone request typed while you work; it runs in parallel and "
-             + $"shows under this chat — put it away with {close} once its result is in. "
+             + $"shows under this chat — put it away with {close} once its result is in. A {chat} in THIS project that edits files "
+             + "while you (or another split chat) still work here gets isolation \"worktree\": its own branch in its own git "
+             + "worktree, which you merge or open a PR from when it is done. "
              + "Never split pieces that edit the same files, or hand off a piece whose result you need for your very next step. "
              + "Every brief is complete on its own: the agent or chat cannot see this conversation. Say in one line how you split "
              + "the work and why, and put the pieces in your plan.";

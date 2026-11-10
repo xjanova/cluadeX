@@ -142,7 +142,7 @@ public sealed class PlanItemView : System.ComponentModel.INotifyPropertyChanged
             // Only a change someone is watching pops: a row drawn already done (a chat opened later) just sits there.
             if (IsDone && !wasDone && PropertyChanged != null) _doneAt = DateTime.UtcNow;
             Raise(nameof(State)); Raise(nameof(IsDone)); Raise(nameof(IsActive)); Raise(nameof(IsPending)); Raise(nameof(IsQueued));
-            Raise(nameof(JustDone)); Raise(nameof(IsWorking));
+            Raise(nameof(JustDone)); Raise(nameof(IsWorking)); Raise(nameof(IsStopped));
         }
     }
     public bool IsDone => _state == "done";
@@ -158,11 +158,14 @@ public sealed class PlanItemView : System.ComponentModel.INotifyPropertyChanged
     public bool IsLive
     {
         get => _isLive;
-        set { if (_isLive == value) return; _isLive = value; Raise(nameof(IsLive)); Raise(nameof(IsWorking)); }
+        set { if (_isLive == value) return; _isLive = value; Raise(nameof(IsLive)); Raise(nameof(IsWorking)); Raise(nameof(IsStopped)); }
     }
     /// <summary>The step is being worked on right now — the only state whose row animates without end (the ring turns,
     /// the light sweeps), and only while that row is on screen.</summary>
     public bool IsWorking => IsActive && _isLive;
+    /// <summary>The step was in progress when its run ended (stopped, or the chat was read back later): the row says
+    /// "stopped" so it does not read as still running.</summary>
+    public bool IsStopped => IsActive && !_isLive;
 
     /// <summary>The rows already drawn, brought to <paramref name="fresh"/>: a row with the same words at the same place
     /// is kept and its state set in place; anything else is the fresh row. Returns <paramref name="current"/> itself when
@@ -235,8 +238,49 @@ public sealed class AgentNode : System.ComponentModel.INotifyPropertyChanged
             if (wasRunning && !IsRunning && PropertyChanged != null) _endedAt = DateTime.UtcNow;
             Raise(nameof(State)); Raise(nameof(IsRunning)); Raise(nameof(IsDone)); Raise(nameof(IsFailed));
             Raise(nameof(JustDone)); Raise(nameof(JustFailed)); Raise(nameof(IsNew));
+            if (!IsRunning) _currentTool = "";
+            Raise(nameof(CurrentTool)); Raise(nameof(AvatarGlyph)); Raise(nameof(CanUpgrade));
         }
     }
+    private string _currentTool = "";
+    /// <summary>The tool it is calling right now (read_file, grep, …); empty between tools and once it ended.</summary>
+    public string CurrentTool
+    {
+        get => _currentTool;
+        set { _currentTool = value ?? ""; Raise(nameof(CurrentTool)); Raise(nameof(AvatarGlyph)); }
+    }
+    /// <summary>The avatar's glyph: what it is doing now while it runs (a magnifier when it searches, a pencil when it
+    /// edits …), its kind's glyph otherwise.</summary>
+    public string AvatarGlyph => IsRunning && _currentTool.Length > 0 ? ToolLook.Of(_currentTool).Glyph : KindGlyph;
+    private string _tier = "";
+    /// <summary>"cheap", "mid" or "deep" — the routing tier it runs on (empty = not routed).</summary>
+    public string Tier
+    {
+        get => _tier;
+        set { _tier = value ?? ""; Raise(nameof(Tier)); Raise(nameof(HasTier)); Raise(nameof(CanUpgrade)); }
+    }
+    /// <summary>A tier badge shows (its words come from the view's triggers, in the app's language).</summary>
+    public bool HasTier => _tier.Length > 0;
+    private string _color = "";
+    /// <summary>A specialist's own colour from its agent file (blue, green, …); empty = by kind.</summary>
+    public string Color { get => _color; set { _color = value ?? ""; Raise(nameof(Color)); Raise(nameof(ColorKey)); } }
+    /// <summary>The avatar's colour family: by kind (explore blue, general cyan, worker mint, fixer amber, reviewer
+    /// violet), a specialist's own colour, else magenta.</summary>
+    public string ColorKey => (_color.Length > 0 ? _color.ToLowerInvariant() : Kind.ToLowerInvariant()) switch
+    {
+        "explore" or "blue" => "blue",
+        "" or "general" or "cyan" => "cyan",
+        "worker" or "green" or "mint" => "mint",
+        "fixer" or "orange" or "yellow" or "amber" => "amber",
+        "reviewer" or "purple" or "violet" => "violet",
+        "red" => "red",
+        _ => "magenta",
+    };
+    private Services.ChatCharacter? _mascot;
+    /// <summary>The girl of the provider it runs on (น้อง Colibri when it runs on this PC): her face on the avatar's corner.</summary>
+    public Services.ChatCharacter? Mascot { get => _mascot; set { _mascot = value; Raise(nameof(Mascot)); } }
+    /// <summary>The Upgrade button shows: it runs, can be steered and is not already on the deep tier.</summary>
+    public bool CanUpgrade => IsRunning && _control?.CanUpgrade == true && _tier is "cheap" or "mid";
     /// <summary>What it is doing now ("อ่าน main.ts"), or how it ended.</summary>
     public string Action { get => _action; set { _action = value; Raise(nameof(Action)); } }
     public int Steps { get => _steps; set { _steps = value; Raise(nameof(Steps)); Raise(nameof(StatsText)); } }
@@ -271,7 +315,9 @@ public sealed class AgentNode : System.ComponentModel.INotifyPropertyChanged
     private Services.Agents.SubAgentControl? _control;
     /// <summary>The owner's hold on it (stop, messages) — only for a sub-agent CluadeX runs itself; null for a CLI's own
     /// sub-agent and the dispatcher's workers, which cannot be steered from here.</summary>
-    public Services.Agents.SubAgentControl? Control { get => _control; set { _control = value; Raise(nameof(Control)); } }
+    public Services.Agents.SubAgentControl? Control { get => _control; set { _control = value; Raise(nameof(Control)); Raise(nameof(CanUpgrade)); } }
+    /// <summary>Re-reads whether the Upgrade button shows (the control's flag changes behind the node's back).</summary>
+    public void RefreshUpgrade() => Raise(nameof(CanUpgrade));
     private bool _stoppedByOwner;
     /// <summary>It ended because the owner pressed Stop in its window.</summary>
     public bool StoppedByOwner { get => _stoppedByOwner; set { _stoppedByOwner = value; Raise(nameof(StoppedByOwner)); } }

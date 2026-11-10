@@ -18,6 +18,17 @@ presence does not imply endorsement.
 | `ollama.png` | Ollama | Ollama llama, `#000000` | Simple Icons 16.36.0, `icons/ollama.svg` (`source/ollama.svg`); listed source github.com/ollama/ollama issue 2152 | Simple Icons: CC0 1.0. The mark: Ollama's |
 | `llamacpp.png` | llama-server, Local GGUF (LLamaSharp runs llama.cpp) | llama.cpp icon | ggml-org/llama.cpp, `media/llama1-icon.svg` (`source/llamacpp-llama1-icon.svg`), master, 2026-11-02 | Repository licence MIT (ggml-org) |
 
+## NVIDIA (DGX Spark)
+
+| File | Used for | Mark | Source (fetched 2026-11-08) | Terms |
+|---|---|---|---|---|
+| `nvidia.png` | Every DGX Spark entry: the title-bar chip, the DGX Spark window, the command palette row | NVIDIA logo, horizontal format: eye mark `#76B900` + wordmark `#000000`, 632×120 | NVIDIA's own file from its Logo and Brand Usage page (nvidia.com/en-us/about-nvidia/legal-info/logo-brand-usage/): `https://www.nvidia.com/content/dam/en-zz/Solutions/about-nvidia/logo-and-brand/nvidia-logo-horz.svg` (`source/nvidia-logo-horz.svg`, unmodified). Rendered by headless Microsoft Edge with the viewBox cut to the artwork's own bounds (2069.12 × 392.92) — shapes, proportions and colours untouched | NVIDIA trademark; NVIDIA logo and brand usage guidelines |
+
+How the app follows NVIDIA's rules for it: eye mark and wordmark are never separated; it sits on a white tile (green eye +
+black wordmark is NVIDIA's approved combination on white) in every theme; it is never drawn smaller than NVIDIA's digital
+minimum for the horizontal format, 15 px tall; no effects, recolouring or stretching. It names the hardware CluadeX
+connects to; it does not claim an NVIDIA partnership or endorsement.
+
 ## Not bundled — shown as a neutral text badge
 
 * **OpenAI** (OpenAI API, OpenAI Dev / Codex CLI). OpenAI's Blossom is not in Simple Icons any more, and the official

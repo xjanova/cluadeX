@@ -73,6 +73,10 @@ public class DgxSparkViewModel : ViewModelBase
         // this window opened.
         _spark.ContextRestored += OnContextRestored;
         if (!_spark.IsActive && _spark.LastContextRestore is { } earlier) ContextNote = DescribeRestore(earlier);
+        // The same live status as the title-bar chip, in the header.
+        _link = _spark.LinkStatus;
+        _spark.LinkStatusChanged += OnLinkStatusChanged;
+        _loc.LanguageChanged += OnLanguageChanged;
         // A remembered Spark is looked up straight away, so the window opens on its real state.
         if (!string.IsNullOrWhiteSpace(_hostInput)) _ = ConnectAsync();
     }
@@ -100,6 +104,33 @@ public class DgxSparkViewModel : ViewModelBase
     /// Empty while on the Spark.</summary>
     public string ContextNote { get => _contextNote; private set { if (SetProperty(ref _contextNote, value)) OnPropertyChanged(nameof(HasContextNote)); } }
     public bool HasContextNote => !string.IsNullOrEmpty(_contextNote);
+
+    private SparkLinkStatus _link;
+    /// <summary>Where CluadeX stands with the remembered Spark (not configured / connecting / online / in use / unreachable).</summary>
+    public SparkLinkState LinkState => _link.State;
+    public string LinkText => SparkStatusText.Chip(_loc, _link);
+    public string LinkTip => SparkStatusText.Tip(_loc, _link);
+
+    private void OnLinkStatusChanged(SparkLinkStatus status)
+    {
+        void Apply()
+        {
+            if (_closed) return;
+            _link = status;
+            OnPropertyChanged(nameof(LinkState));
+            OnPropertyChanged(nameof(LinkText));
+            OnPropertyChanged(nameof(LinkTip));
+        }
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) Apply();
+        else dispatcher.BeginInvoke(Apply);
+    }
+
+    private void OnLanguageChanged()
+    {
+        OnPropertyChanged(nameof(LinkText));
+        OnPropertyChanged(nameof(LinkTip));
+    }
 
     public ObservableCollection<SparkModelRow> Models { get; } = [];
     /// <summary>A download onto the Spark is running (closing the window would stop it).</summary>
@@ -151,6 +182,8 @@ public class DgxSparkViewModel : ViewModelBase
     {
         _closed = true;
         _spark.ContextRestored -= OnContextRestored;
+        _spark.LinkStatusChanged -= OnLinkStatusChanged;
+        _loc.LanguageChanged -= OnLanguageChanged;
         _probeCts?.Cancel();
         foreach (var m in Models) m.PullCts?.Cancel();
     }
@@ -196,7 +229,8 @@ public class DgxSparkViewModel : ViewModelBase
             if (!probe.Reachable)
             {
                 ShowRows([]);
-                Say(T("spark.unreachable", host), error: true);
+                // Why, as finely as the network said: no such name / Ollama's port closed / no answer in time.
+                Say(SparkStatusText.Reason(_loc, host, probe.Reason), error: true);
                 return;
             }
             if (probe.Backend != "Ollama")

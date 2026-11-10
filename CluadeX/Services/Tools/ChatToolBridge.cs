@@ -429,7 +429,7 @@ public static class ChatToolBridge
     /// of the agent's next CluadeX tool call — the only way in while a CLI runs. It was read by the native loop alone, so a
     /// Claude Dev turn never saw an item added to its plan until the turn had ended (GigLive, 2026-11-03).</summary>
     private static string NotesFor(Registration reg) =>
-        reg.Scope?.TakeUserNotes() is { } notes ? "\n\n" + notes : "";
+        reg.Scope?.TakeUserNotes(PlanToolName) is { } notes ? "\n\n" + notes : "";
 
     /// <summary>The pipe's name for a spawn the CLI's hook asks about (never offered to a model).</summary>
     public const string AgentGateToolName = "agent_gate";
@@ -822,7 +822,9 @@ public static class ChatToolBridge
         var sb = new StringBuilder("CluadeX's chat tools" + server + ": ");
         if (splitChats)
             sb.Append($"{T(ProjectToolModule.NewChatToolName)} opens a new chat that runs beside this one — for a separate task, ")
-              .Append("or a new, independent request that arrives mid-task; give it the whole brief, it does not see this chat — ")
+              .Append("or a new, independent request that arrives mid-task; give it the whole brief, it does not see this chat; ")
+              .Append("in THIS project, when it will edit files while this chat still works here, pass isolation \"worktree\" so it ")
+              .Append("works on its own branch — ")
               .Append($"and {T(ProjectToolModule.CloseChatToolName)} lists the chats you split off and puts finished ones away. ")
               .Append("Never answer that you cannot open a chat. ");
         if (plan)
@@ -835,7 +837,9 @@ public static class ChatToolBridge
           .Append($"{T("checkpoint_list")}, {T("checkpoint_diff")} and {T("checkpoint_restore")} show or undo what the AI changed ")
           .Append($"in this chat; {T("git_blame")}, {T("git_show")}, {T("gh_pr_view")}, {T("gh_pr_checks")} and {T("gh_run_log")} ")
           .Append($"read history, pull requests and CI; {T("debug")} runs a debugger; {T(AutoComment.AutoCommentToolModule.ToolName)} ")
-          .Append("adds comments to existing code without changing the code.");
+          .Append("adds comments to existing code without changing the code. ")
+          .Append($"To wait for CI or a background process, call {T("watch_ci")} / {T("watch_process")} and END your turn — ")
+          .Append($"CluadeX starts your next turn with the result; never poll or sleep ({T("watch_list")}, {T("watch_cancel")}).");
         return sb.ToString();
     }
 
@@ -1009,7 +1013,8 @@ public static class ChatToolBridge
         name = PlanToolName,
         description = "Your plan, shown to the user as a live checklist pinned under the latest message in CluadeX. Send the WHOLE "
             + "list once with todos; then step along with advance=true (finish the current item, start the next) or done + start "
-            + "(1-based step numbers). One item in_progress at a time.",
+            + "(1-based step numbers). One item in_progress at a time. Give scope (first_task / continuation / new_task) with each "
+            + "new whole list.",
         inputSchema = (object)new
         {
             type = "object",
@@ -1028,6 +1033,7 @@ public static class ChatToolBridge
                 advance = new { type = "boolean", description = "Finish the item in progress and start the next pending one" },
                 done = new { type = "array", items = new { type = "integer" }, description = "Step numbers to mark finished" },
                 start = new { type = "integer", description = "Step number to start" },
+                scope = new { type = "string", @enum = new[] { "first_task", "continuation", "new_task" }, description = "With a new whole list: what this request is to the chat" },
             },
         },
     }).Concat(OrchestrationToolModule.Schemas().Select(s => (object)new

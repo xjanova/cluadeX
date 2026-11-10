@@ -59,6 +59,9 @@ public class AgentToolService : IDisposable
         return type != null && allowed.Any(t => ResolveToolType(t) == type);
     }
 
+    /// <summary>The skill store (pins, learned words) — for the turn's skill picker in CodeAgentService.</summary>
+    public SkillService Skills => _skillService;
+
     /// <summary>Returns list of available skill names + descriptions for system prompt injection.</summary>
     public List<(string Name, string Description)> GetAvailableSkillNames() =>
         GetAdvertisedSkills().Select(s => (s.Name, s.Description)).ToList();
@@ -109,7 +112,7 @@ public class AgentToolService : IDisposable
         var copy = items.Select(t => new TodoItem { Content = t.Content, Status = t.Status }).ToList();
         _todoItems.Clear();
         _todoItems.AddRange(copy);
-        TodoChanged?.Invoke();
+        PlanChanged();
     }
 
     // ─── REPL Session State ───
@@ -715,6 +718,16 @@ public class AgentToolService : IDisposable
         return Math.Clamp(ctx, 6_000, 100_000);
     }
 
+    /// <summary>How much of a page one web_fetch returns: (by default, at most when the model asks for more). A cloud
+    /// model gets 20,000 characters (≈ 5k tokens) and may ask for up to 30,000 — the module output budget. A local
+    /// model gets half its read budget (which follows its context window), never under 4,000.</summary>
+    public (int Default, int Most) WebFetchReadBudget()
+    {
+        if (!IsLocalProvider) return (20_000, 30_000);
+        int most = Math.Max(4_000, ReadCharBudget());
+        return (Math.Clamp(most / 2, 4_000, 20_000), most);
+    }
+
     /// <summary>Largest command output returned to the model.</summary>
     private int ShellOutputBudget() => IsLocalProvider ? Math.Clamp(ReadCharBudget() / 2, 4_000, 12_000) : 30_000;
 
@@ -1131,14 +1144,7 @@ public class AgentToolService : IDisposable
         foreach (var r in results)
         {
             sb.AppendLine($"--- {r.ToolName} ({(r.Success ? "OK" : "ERROR")}) ---");
-            if (r.Success)
-            {
-                sb.AppendLine(r.Output);
-            }
-            else
-            {
-                sb.AppendLine($"Error: {r.Error}");
-            }
+            sb.AppendLine(r.Success ? r.Output : $"Error: {ModelText(r)}");
             sb.AppendLine();
         }
 
@@ -1297,7 +1303,7 @@ public class AgentToolService : IDisposable
         // Web tools
         if (features.WebFetch && _activationService.IsFeatureUnlocked("feature.webFetch"))
         {
-            schemas.Add(new() { Name = "web_fetch", Description = "Fetch a web page or file by URL (http/https) and return its text — docs, an API reference, a README, a JSON endpoint. Use it to check facts that may have changed since your training.", InputSchema = MakeSchema(("url", "string", "Full URL to fetch, starting with https://", true)) });
+            schemas.Add(new() { Name = "web_fetch", Description = "Fetch a web page or file by URL (http/https) and return its text — docs, an API reference, a README, a JSON endpoint. Use it to check facts that may have changed since your training. A long page comes back in parts: the reply says which characters you got and the offset to pass to read on. No JavaScript runs — for a page that builds itself in the browser, or one behind your sign-in, use the browser tools.", InputSchema = MakeSchema(("url", "string", "Full URL to fetch, starting with https://", true), ("offset", "integer", "Character to start from, to read on in a long page (default 0)", false), ("max_chars", "integer", "Most characters to return (default 20000)", false)) });
             schemas.Add(new() { Name = "web_search", Description = "Search the web; returns titles, links and snippets. Use it for current versions, error messages, recent news or anything you are not sure of, then web_fetch the best link.", InputSchema = MakeSchema(("query", "string", "What to search for, in a few keywords", true)) });
         }
 
@@ -1311,17 +1317,18 @@ public class AgentToolService : IDisposable
         // Meta tools
         // 'action' was missing from the schema, so completing/listing/clearing todos was
         // unreachable and "mark done" silently appended a duplicate instead.
-        schemas.Add(new() { Name = "todo_write", Description = "Your plan, shown to the user as a live checklist pinned under the latest message. Send the WHOLE list once with `todos` (it replaces the plan); then move along with `advance: true` (finish the current item, start the next) or `done` + `start`, instead of resending the list. One item in_progress at a time; what runs under the active item (sub-agents, workflows, background commands) is shown to the user automatically.",
+        schemas.Add(new() { Name = "todo_write", Description = "Your plan, shown to the user as a live checklist pinned under the latest message. Send the WHOLE list once with `todos` (it replaces the plan); then move along with `advance: true` (finish the current item, start the next) or `done` + `start`, instead of resending the list. Exactly one item in_progress while work is left; a changed plan (also after the user interrupts) is sent whole again and replaces the list; what runs under the active item (sub-agents, workflows, background commands) is shown to the user automatically. wrap_up checks off what is left at the end of the turn.",
             InputSchema = MakeSchema(("todos", "array", "The whole plan, e.g. [{\"content\":\"Read the client\",\"status\":\"completed\"},{\"content\":\"Fix the timeout\",\"status\":\"in_progress\"},{\"content\":\"Run the tests\",\"status\":\"pending\"}]", false),
                 ("advance", "boolean", "true: finish the item in progress and start the next pending one (no need to resend the list)", false),
                 ("done", "array", "Step numbers (1-based) to mark finished, e.g. [2]", false), ("start", "integer", "Step number (1-based) to start now", false),
+                ("scope", "string", "With each new whole list: first_task (nothing finished in this chat yet), continuation (builds on this chat's work: a follow-up, the next iteration, acting on what you just found) or new_task (unrelated to anything done here)", false),
                 ("action", "string", "Without todos: add|complete|list|clear (default add)", false), ("content", "string", "Without todos: the item text (add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
         schemas.Add(new() { Name = "ask_user", Description = AskUserDescription, InputSchema = System.Text.Json.JsonDocument.Parse(AskUserSchemaJson).RootElement.Clone() });
         schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
-        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "array", "workers only: [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false), ("continue_agent", "string", "The number from a sub-agent's report: carry on with that one in this run, keeping what it already read, instead of starting fresh. task is then your next message to it", false)) });
+        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself. tier picks its model and effort to save tokens: \"cheap\" (the provider's smallest model, low effort) for lookups, listing, reading and summarising; \"mid\" (a middle model, medium effort) for a scoped edit, a test or a review with clear instructions; \"deep\" (your own model and effort) only for hard reasoning, design or a fix that already failed. When unsure, pick mid: a cheap attempt that falls short is redone one tier up, so it is paid for twice. Leave it out and read-only work runs cheap, editing work deep.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "array", "workers only: [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false), ("continue_agent", "string", "The number from a sub-agent's report: carry on with that one in this run, keeping what it already read, instead of starting fresh. task is then your next message to it", false), ("tier", "string", "cheap, mid or deep — how hard the sub-task is (cheap = small model + low effort; deep = your own model)", false), ("model", "string", "\"fable\" = run this part on Claude Fable 5.2, the most capable model, at several times the cost — ONLY when the user asked for Fable in their own words this turn (\"use fable for this\", \"ส่วนนี้ให้ fable คิด\") or said yes on CluadeX's Fable card; otherwise the call is refused. Give it the part's brief alone (the problem, the files, what was tried and failed, what done looks like); its short report comes back. Leave it out otherwise.", false)) });
         schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
 
         // Subagent system — specialised single-purpose agents (code-reviewer, security-reviewer, architect, etc.)
@@ -1660,7 +1667,7 @@ public class AgentToolService : IDisposable
 
             WEB TOOLS:
 
-            26. web_fetch - Fetch a URL and get text content
+            26. web_fetch - Fetch a URL and get text content (a long page comes in parts; add offset: N to read on)
                 [ACTION: web_fetch]
                 url: https://example.com/api/data
                 [/ACTION]
@@ -1710,6 +1717,7 @@ public class AgentToolService : IDisposable
                 Or the whole plan, then step along (also named update_plan):
                 [ACTION: update_plan]
                 todos: [{"content":"Read the client","status":"in_progress"},{"content":"Fix it","status":"pending"}]
+                scope: first_task
                 [/ACTION]
                 [ACTION: update_plan]
                 advance: true
@@ -2910,6 +2918,48 @@ public class AgentToolService : IDisposable
         };
     }
 
+    /// <summary>Starts the error of a run_build / run_tests that found nothing to run ("couldn't detect a build system …").
+    /// The agent loop reads it: such a result is not a red build (<see cref="FoundNothingToRun"/>).</summary>
+    public const string NothingToRunMarker = "couldn't detect a";
+
+    /// <summary>run_tests with no test runner in the project. Says there are no tests and how to check the change
+    /// instead. The old "pass an explicit 'command'" sent gpt-4o-mini hunting: pytest (exit 127), unittest (exit 5,
+    /// no tests ran) six times in a row until the loop guard stopped it (smallbench T05/T07/T11, 2026-11-08).</summary>
+    public static string NoTestsMessage(string? projectDir)
+    {
+        bool python = projectDir != null && FileSystemService.PythonCompileCommand(projectDir) != null;
+        string example = python
+            ? " e.g. run_command `python -c \"from pkg.module import thing; print(thing(...))\"` with your own module and inputs"
+            : "";
+        return $"run_tests: {NothingToRunMarker} test runner in the project or the folders below it (no test project, " +
+               "Cargo.toml, go.mod, pyproject, package.json, pom.xml…). This project has no tests, so nothing was run. " +
+               "Do not look for or install a test runner (pytest, unittest, jest…): there are no tests for it to find. " +
+               $"To check your change, run the code you changed once and read what it prints{example}. " +
+               "If you did run it already and it printed what you expected, the change is checked: finish.";
+    }
+
+    /// <summary>The text a model gets back for one tool result. A failure carries its output too: a failed
+    /// run_command used to reach the model as just "Exit code: 1", without the compiler's own SyntaxError line, so
+    /// gpt-4o-mini never learned which file was broken and went through lsp/pyflakes/flake8/pylint instead
+    /// (smallbench T04, 2026-11-08).</summary>
+    public static string ModelText(ToolResult r)
+    {
+        if (r.Success) return r.Output ?? "";
+        string err = (r.Error ?? "").Trim();
+        string output = (r.Output ?? "").Trim();
+        if (output.Length == 0) return err;
+        if (err.Length == 0 || output.Contains(err, StringComparison.Ordinal)) return output;
+        return err + "\n" + output;
+    }
+
+    /// <summary>A run_build / run_tests that ran nothing because no build system or test runner was found. It is not a
+    /// failing build: counting it as one made the red-build guard refuse every finish on a project with no build
+    /// (small-model bench 2026-11-08, Python repo: 3 of 5 edit tasks fixed at step 2, then forced to rewrite the whole
+    /// file at steps 9-10 to "fix" a build that never existed).</summary>
+    public static bool FoundNothingToRun(ToolResult r) =>
+        r.Type is ToolType.RunBuild or ToolType.RunTests && !r.Success
+        && (r.Error ?? "").Contains(": " + NothingToRunMarker, StringComparison.Ordinal);
+
     private async Task<ToolResult> ExecuteRunBuildAsync(ToolCall call, CancellationToken ct)
         => (await RunBuildCoreAsync(call, call.GetArg("command"), IsTrue(call.GetArg("scratch")), ct)).Result;
 
@@ -2930,7 +2980,8 @@ public class AgentToolService : IDisposable
     /// only because a running program holds an output file says who holds it and how to build into scratch — it never
     /// kills anything. Callers have already passed the permission gate.
     /// </summary>
-    public async Task<BuildRun> RunBuildCoreAsync(ToolCall call, string? command, bool scratch, CancellationToken ct)
+    public async Task<BuildRun> RunBuildCoreAsync(ToolCall call, string? command, bool scratch, CancellationToken ct,
+        int timeoutMs = DefaultRunTimeoutMs)
     {
         string cmd = command ?? "";
         string foundIn = "";
@@ -2941,7 +2992,7 @@ public class AgentToolService : IDisposable
         }
         BuildRun Failed(string msg) => new(Fail(call, msg), "", "", Array.Empty<CluadeX.Helpers.LockedFiles.LockedOutput>(), null);
         if (string.IsNullOrEmpty(cmd))
-            return Failed($"{call.ToolName}: couldn't detect a build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
+            return Failed($"{call.ToolName}: {NothingToRunMarker} build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/*.py…). Nothing was built, so this says nothing about your change. Pass an explicit 'command', or use run_command.");
 
         string? scratchDir = null;
         if (scratch)
@@ -2963,13 +3014,13 @@ public class AgentToolService : IDisposable
         if (danger != null) return Failed(danger);
 
         // Always from the project root: detected commands are root-relative, whatever `cd` the model did.
-        var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
+        var run = await RunShellAsync(cmd, timeoutMs, useSessionCwd: false, ct);
         if (run.Error != null) return Failed(run.Error);
         var r = run.Result!;
 
         bool ok = r.ExitCode == 0 && !r.TimedOut && !r.Cancelled;
         string body = r.TimedOut
-            ? "Build timed out after 300 s. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
+            ? $"Build timed out after {TimeoutText(timeoutMs)} and was stopped. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
             : CluadeX.Helpers.BuildOutputDistiller.Distill(r.Output, ok, _fileSystem.WorkingDirectory, ShellOutputBudget());
 
         var locked = ok ? new List<CluadeX.Helpers.LockedFiles.LockedOutput>()
@@ -2997,6 +3048,24 @@ public class AgentToolService : IDisposable
         return new BuildRun(result, cmd, r.Output ?? "", locked, scratchDir);
     }
 
+    /// <summary>How long run_build / run_tests / verify_change wait for a command unless told otherwise.</summary>
+    public const int DefaultRunTimeoutMs = 300_000;
+
+    private static string TimeoutText(int ms) => ms % 60_000 == 0 ? $"{ms / 60_000} min" : $"{ms / 1000} s";
+
+    /// <summary>
+    /// The guards a project command passes before it runs, for one that will not run through <see cref="RunShellAsync"/>
+    /// (verify_change's tests_background starts it as a background process): an open project, the dangerous-command
+    /// check and the red prompt. Null = it may run; else why not. Callers have already passed the permission gate.
+    /// </summary>
+    public async Task<string?> GateProjectCommandAsync(string command)
+    {
+        if (!_fileSystem.HasWorkingDirectory) return "No project folder is open — open one first so commands have a working directory.";
+        if (CheckDangerousCommand(command, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell)) is { } danger) return danger;
+        return await Safety.DangerApproval.GateAsync("run_command", command,
+            await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.WorkingDirectory));
+    }
+
     /// <summary>The build or test command the project's files point to, or null (verify_change's prompt and report).</summary>
     public string? DetectedProjectCommand(bool test) => _fileSystem.HasWorkingDirectory ? _fileSystem.DetectProjectCommand(test)?.Command : null;
 
@@ -3005,7 +3074,8 @@ public class AgentToolService : IDisposable
 
     /// <summary>The project's tests (detected, or <paramref name="command"/>) as run_tests runs them, with the runner's
     /// whole output (verify_change reads the counts from it). Callers have already passed the permission gate.</summary>
-    public async Task<(ToolResult Result, string RawOutput)> RunTestsCoreAsync(ToolCall call, string? command, CancellationToken ct)
+    public async Task<(ToolResult Result, string RawOutput)> RunTestsCoreAsync(ToolCall call, string? command, CancellationToken ct,
+        int timeoutMs = DefaultRunTimeoutMs)
     {
         string cmd = command ?? "";
         string foundIn = "";
@@ -3015,12 +3085,12 @@ public class AgentToolService : IDisposable
             if (detected != null) { cmd = detected.Command; foundIn = detected.FoundIn; }
         }
         if (string.IsNullOrEmpty(cmd))
-            return (Fail(call, "run_tests: couldn't detect a test runner in the project or the folders below it (no test project, Cargo.toml, go.mod, pyproject, package.json, pom.xml…). Pass an explicit 'command', or use run_command."), "");
+            return (Fail(call, NoTestsMessage(_fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null)), "");
 
         var danger = CheckDangerousCommand(cmd, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell));
         if (danger != null) return (Fail(call, danger), "");
 
-        var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
+        var run = await RunShellAsync(cmd, timeoutMs, useSessionCwd: false, ct);
         if (run.Error != null) return (Fail(call, run.Error), "");
         var r = run.Result!;
 
@@ -3028,7 +3098,7 @@ public class AgentToolService : IDisposable
         // text into a pass/fail summary + failing tests so a weak model gets an actionable signal.
         bool ok = r.ExitCode == 0 && !r.TimedOut && !r.Cancelled;
         string distilled = r.TimedOut
-            ? "Tests timed out after 300 s. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
+            ? $"Tests timed out after {TimeoutText(timeoutMs)} and were stopped. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
             : CluadeX.Helpers.OutputBudget.HeadAndTail(
                 CluadeX.Helpers.TestOutputDistiller.Distill(r.Output, ok ? "" : $"Exit code: {r.ExitCode}", cmd), ShellOutputBudget());
 
@@ -3625,10 +3695,18 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(url))
             return Fail(call, "Missing 'url' argument");
 
+        // Read a long page in parts: offset = where this part starts, max_chars = how long it may be. The model used
+        // to get the first 4,000 characters and nothing after them — an article, a changelog or an API page was
+        // cut a few paragraphs in, with no way to read on.
+        int offset = int.TryParse(call.GetArg("offset"), out var off) && off > 0 ? off : 0;
+        var (defaultChars, mostChars) = WebFetchReadBudget();
+        int maxChars = int.TryParse(call.GetArg("max_chars"), out var mc) && mc > 0 ? Math.Clamp(mc, 500, mostChars) : defaultChars;
+
         WebFetchPage page;
         try
         {
-            page = await _webFetchService.FetchAsync(url, (from, to) => AllowRedirectAsync(call.ToolName, from, to), ct);
+            page = await _webFetchService.FetchForReadingAsync(url, reuse: offset > 0,
+                (from, to) => AllowRedirectAsync(call.ToolName, from, to), ct);
         }
         catch (OperationCanceledException)
         {
@@ -3640,14 +3718,24 @@ public class AgentToolService : IDisposable
         switch (page.Outcome)
         {
             case WebFetchOutcome.Ok:
-                string content = page.Content;
+                var part = WebFetchService.Slice(page.Content, offset, maxChars);
+                if (part.Total > 0 && part.Start >= part.Total)
+                    return Fail(call, string.Format(L("chat.web.offsetPastEnd"), offset, shownUrl, part.Total));
+                var body = new StringBuilder();
+                body.Append($"{shownUrl} — characters {part.Start:N0}–{part.End:N0} of {part.Total:N0}\n");
+                // Page text is data, not instructions — the same envelope the browser tools put around a page.
+                body.Append(Browser.UrlPolicy.Envelope(part.Text.Length > 0 ? part.Text : "(the page has no text)"));
+                if (part.End < part.Total)
+                    body.Append($"\n({part.Total - part.End:N0} more characters — call web_fetch again with the same url and offset={part.End} to read on)");
                 return new ToolResult
                 {
                     Type = call.Type,
                     ToolName = call.ToolName,
                     Success = true,
-                    Output = content.Length > 4000 ? content[..4000] + "\n... (truncated)" : content,
-                    Summary = $"Fetched {shownUrl} ({content.Length} chars)",
+                    Output = body.ToString(),
+                    Summary = part.Start == 0 && part.End >= part.Total
+                        ? $"Fetched {shownUrl} ({part.Total:N0} chars)"
+                        : $"Fetched {shownUrl} (chars {part.Start:N0}–{part.End:N0} of {part.Total:N0})",
                 };
             case WebFetchOutcome.InvalidUrl:
                 return Fail(call, string.Format(L("chat.web.invalidUrl"), url));
@@ -3698,8 +3786,31 @@ public class AgentToolService : IDisposable
     // TODO & Plan Mode Tools
     // ════════════════════════════════════════════
 
+    /// <summary>The plan changed in this run: wrap_up may check it off, and the card follows.</summary>
+    private void PlanChanged()
+    {
+        if (AgentRunScope.Current is { } run) run.PlanTouched = true;
+        TodoChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// wrap_up was called: the turn is over, so the plan this run worked on is checked off (Claude Code's wrap_up "also
+    /// checks off the task list"). Only the run's own plan, and only one it wrote or moved itself — a plan carried over
+    /// from the last turn that this turn never touched is a different request's and stays as it was; a sub-agent's
+    /// wrap_up does not finish its parent's plan. Returns how many items it finished.
+    /// </summary>
+    public int FinishPlanAtWrapUp()
+    {
+        int n = Agents.PlanOps.FinishForWrapUp(AgentRunScope.Current);
+        if (n > 0) TodoChanged?.Invoke();
+        return n;
+    }
+
     private ToolResult ExecuteTodoWrite(ToolCall call)
     {
+        // What the request is to the chat (Claude Code's update_plan scope): the card's chip.
+        if (Agents.PlanOps.Scope(call.GetArg("scope")) is { } planScope && AgentRunScope.Current is { } scoped)
+            scoped.PlanScope = planScope;
         // The whole plan in one call (Claude Code's TodoWrite): five separate "add" calls used to be the only way to
         // write a five-item plan (Reverse X run, 2026-10-16).
         string todosJson = call.GetArg("todos", call.GetArg("items"));
@@ -3710,7 +3821,7 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrWhiteSpace(todosJson) && (advance || doneSteps.Count > 0 || startStep != null))
         {
             if (Agents.PlanOps.Apply(_todoItems, advance, doneSteps, startStep) is { } refusal) return Fail(call, refusal);
-            TodoChanged?.Invoke();
+            PlanChanged();
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -3744,12 +3855,14 @@ public class AgentToolService : IDisposable
             // Whole list plus a step operation in one call ("here is the plan, start step 1").
             if (advance || doneSteps.Count > 0 || startStep != null)
                 Agents.PlanOps.Apply(_todoItems, advance, doneSteps, startStep);
-            TodoChanged?.Invoke();
+            // One step in progress while work is left — the card shows one turning ring, never two or none.
+            string fixedUp = Agents.PlanOps.Normalize(_todoItems);
+            PlanChanged();
             int doneCount = items.Count(t => t.Status == "completed");
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = Agents.PlanOps.Describe(items),
+                Output = Agents.PlanOps.Describe(items) + (fixedUp.Length > 0 ? $" ({fixedUp})" : ""),
                 Summary = $"Plan: {doneCount}/{items.Count}",
             };
         }
@@ -3764,7 +3877,7 @@ public class AgentToolService : IDisposable
                 if (string.IsNullOrEmpty(content))
                     return Fail(call, "Missing 'content' for todo item");
                 _todoItems.Add(new TodoItem { Content = content, Status = status });
-                TodoChanged?.Invoke();
+                PlanChanged();
                 return new ToolResult
                 {
                     Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -3777,7 +3890,7 @@ public class AgentToolService : IDisposable
                 if (idx >= 0 && idx < _todoItems.Count)
                 {
                     _todoItems[idx].Status = "completed";
-                    TodoChanged?.Invoke();
+                    PlanChanged();
                     return new ToolResult
                     {
                         Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -3791,7 +3904,7 @@ public class AgentToolService : IDisposable
                 if (match != null)
                 {
                     match.Status = "completed";
-                    TodoChanged?.Invoke();
+                    PlanChanged();
                     return new ToolResult
                     {
                         Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -3825,7 +3938,7 @@ public class AgentToolService : IDisposable
 
             case "clear":
                 _todoItems.Clear();
-                TodoChanged?.Invoke();
+                PlanChanged();
                 return new ToolResult
                 {
                     Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -4063,7 +4176,10 @@ public class AgentToolService : IDisposable
             {
                 string? result = await OnAgentSpawnRequested.Invoke(new SubAgentRequest(task, context, call.GetArg("type", "explore"),
                     Pieces: call.GetArg("pieces", ""),
-                    ContinueId: int.TryParse(call.GetArg("continue_agent"), out int carryOn) ? carryOn : null), ct);
+                    ContinueId: int.TryParse(call.GetArg("continue_agent"), out int carryOn) ? carryOn : null,
+                    Tier: call.GetArg("tier", "") is { Length: > 0 } tier ? tier : null,
+                    // Only Fable is taken from the model's call: other models stay the tier routing's choice.
+                    Model: Agents.DispatchPolicy.FableIdOf(call.GetArg("model", ""))), ct);
                 if (result != null)
                     return new ToolResult
                     {
@@ -4906,6 +5022,8 @@ public class AgentToolService : IDisposable
             return Fail(call, $"Skill '{skill.Name}' is switched off by the user (Skills page). Do the task without it, or ask the user to switch it on.");
         }
         _skillService.RecordUse(skill.Name, SkillService.UseKind.Tool);
+        // The model chose it for this turn's task: the task's words are remembered for it, so the picker finds it next time.
+        _skillService.LearnTerms(skill.Name, AgentRunScope.Current?.TurnText);
 
         string args = call.GetArg("args", "");
 
@@ -4964,7 +5082,10 @@ public class AgentToolService : IDisposable
             try
             {
                 string? report = await OnAgentSpawnRequested.Invoke(new SubAgentRequest(task, context, specialist.Name,
-                    specialist.SystemPrompt, specialist.AllowedTools.Count > 0 ? specialist.AllowedTools : null), ct);
+                    specialist.SystemPrompt, specialist.AllowedTools.Count > 0 ? specialist.AllowedTools : null,
+                    Tier: _settingsService.Settings.SubAgentTierOverrides?.GetValueOrDefault(specialist.Name) is { Length: > 0 } setTier
+                        ? setTier : specialist.Tier.ToString().ToLowerInvariant(),
+                    Model: specialist.Model, Color: specialist.Color), ct);
                 if (report != null)
                     return new ToolResult
                     {

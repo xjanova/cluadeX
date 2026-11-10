@@ -65,7 +65,13 @@ public sealed class ChromeDictationService : IDisposable
     private long _sayId;
     private string _sayText = "";
     private string _sayLang = "";
+    // The free browser voice's name, rate and pitch for this reply; or the reply as audio another engine made.
+    private string _sayVoice = "";
+    private double _sayRate = 1, _sayPitch = 1;
+    private byte[]? _sayAudio;
+    private string _sayMime = "";
     private int _hush;
+    private IReadOnlyList<string> _browserVoices = [];
     // Live voice: this session runs the WebRTC page; its one offer; messages waiting for the page's data channel.
     private bool _live;
     private bool _offered;
@@ -150,6 +156,7 @@ public sealed class ChromeDictationService : IDisposable
             _live = live;
             _offered = false;
             _sayText = "";
+            _sayAudio = null;
             _sayLang = "";
             _out.Clear();
             BumpLocked();
@@ -160,7 +167,7 @@ public sealed class ChromeDictationService : IDisposable
 
     /// <summary>Read <paramref name="text"/> aloud in the page (the browser's own free speech synthesis). A newer
     /// reply replaces one not yet finished.</summary>
-    public void Speak(string text, string lang)
+    public void Speak(string text, string lang, string? voice = null, double rate = 1, double pitch = 1)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         lock (_gate)
@@ -169,9 +176,40 @@ public sealed class ChromeDictationService : IDisposable
             _sayId++;
             _sayText = text.Length > MaxTextChars ? text[..MaxTextChars] : text;
             _sayLang = lang;
+            _sayVoice = voice ?? "";
+            _sayRate = Math.Clamp(rate, 0.5, 2);
+            _sayPitch = Math.Clamp(pitch, 0.5, 2);
+            _sayAudio = null;
             BumpLocked();
         }
     }
+
+    /// <summary>The largest reply audio the page is handed (an ElevenLabs / OpenAI mp3 of a long reply is a few MB).</summary>
+    public const int MaxAudioBytes = 16 * 1024 * 1024;
+
+    /// <summary>Play speech another engine made (ElevenLabs, OpenAI, Windows) in the page, which stops listening
+    /// while it plays — the same as its own voice. The page fetches it from <c>/audio</c>.</summary>
+    public bool SpeakAudio(byte[] audio, string mime, string text, string lang)
+    {
+        if (audio == null || audio.Length == 0 || audio.Length > MaxAudioBytes) return false;
+        lock (_gate)
+        {
+            if (!_active) return false;
+            _sayId++;
+            _sayText = string.IsNullOrWhiteSpace(text) ? "…" : text.Length > MaxTextChars ? text[..MaxTextChars] : text;
+            _sayLang = lang;
+            _sayVoice = "";
+            _sayAudio = audio;
+            _sayMime = mime;
+            BumpLocked();
+        }
+        return true;
+    }
+
+    /// <summary>The voices the mic window's browser has (name and language), reported by the page when it opens.</summary>
+    public IReadOnlyList<string> BrowserVoices { get { lock (_gate) return _browserVoices; } }
+    /// <summary>The page reported its voice list.</summary>
+    public event Action<IReadOnlyList<string>>? BrowserVoicesChanged;
 
     /// <summary>Stop reading aloud (the user sent something new, or pressed Stop).</summary>
     public void Hush()
@@ -181,6 +219,7 @@ public sealed class ChromeDictationService : IDisposable
             if (!_active) return;
             _hush++;
             _sayText = "";
+            _sayAudio = null;
             BumpLocked();
         }
     }
@@ -306,6 +345,11 @@ public sealed class ChromeDictationService : IDisposable
                     if (n == 0) return;
                     filled += n;
                 }
+                if (first[0] == "GET" && IsLoopbackHost(headers.GetValueOrDefault("Host")) && AudioFor(first[1]) is { } clip)
+                {
+                    await WriteBytesAsync(stream, 200, clip.Mime, clip.Bytes, stop);
+                    return;
+                }
                 string body = Encoding.UTF8.GetString(buffer, bodyStart, length);
                 var (code, type, text) = await HandleAsync(first[0], first[1], headers, body, stream, stop).ConfigureAwait(false);
                 await WriteAsync(stream, code, type, text, stop);
@@ -395,6 +439,13 @@ public sealed class ChromeDictationService : IDisposable
             case "/event":
                 string type = Clean(Str(json, "type"));
                 if (type.Length > 40) type = type[..40];
+                if (type == "voices")
+                {
+                    var names = Str(json, "detail").Split('\n').Select(Clean).Where(n => n.Length is > 0 and <= 120).Distinct().Take(400).ToList();
+                    lock (_gate) _browserVoices = names;
+                    Raise(() => BrowserVoicesChanged?.Invoke(names));
+                    return (204, "text/plain", "");
+                }
                 string detail = Clean(Str(json, "detail"));
                 if (detail.Length > 200) detail = detail[..200];
                 Raise(() => PageEvent?.Invoke(session, type, detail));
@@ -439,7 +490,7 @@ public sealed class ChromeDictationService : IDisposable
         ? JsonSerializer.Serialize(new
         {
             active, sent = _sent, v = _version,
-            say = new { id = _sayId, text = _sayText, lang = _sayLang },
+            say = new { id = _sayId, text = _sayText, lang = _sayLang, audio = _sayAudio != null, voice = _sayVoice, rate = _sayRate, pitch = _sayPitch },
             hush = _hush,
             @out = _out.Select(m => new { n = m.N, m = m.Msg }).ToArray(),
         })
@@ -488,9 +539,22 @@ public sealed class ChromeDictationService : IDisposable
         return -1;
     }
 
-    private static async Task WriteAsync(NetworkStream stream, int code, string type, string text, CancellationToken stop)
+    /// <summary><c>GET /audio?t=TOKEN&amp;id=N</c>: the reply audio of say id N, while it is still the current one.</summary>
+    private (byte[] Bytes, string Mime)? AudioFor(string target)
     {
-        var body = Encoding.UTF8.GetBytes(text);
+        int q = target.IndexOf('?');
+        if (q < 0 || target[..q] != "/audio") return null;
+        var query = ParseQuery(target[(q + 1)..]);
+        if (!TokenOk(query.GetValueOrDefault("t"))) return null;
+        if (!long.TryParse(query.GetValueOrDefault("id"), out long id)) return null;
+        lock (_gate) return _active && id == _sayId && _sayAudio != null ? (_sayAudio, _sayMime) : null;
+    }
+
+    private static Task WriteAsync(NetworkStream stream, int code, string type, string text, CancellationToken stop) =>
+        WriteBytesAsync(stream, code, type, Encoding.UTF8.GetBytes(text), stop);
+
+    private static async Task WriteBytesAsync(NetworkStream stream, int code, string type, byte[] body, CancellationToken stop)
+    {
         string reason = code switch
         {
             200 => "OK", 204 => "No Content", 400 => "Bad Request", 403 => "Forbidden", 404 => "Not Found",
@@ -503,11 +567,11 @@ public sealed class ChromeDictationService : IDisposable
             "Cache-Control: no-store\r\n" +
             "X-Content-Type-Options: nosniff\r\n" +
             "Referrer-Policy: no-referrer\r\n" +
-            (type.StartsWith("text/html") ? "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'\r\n" : "") +
+            (type.StartsWith("text/html") ? "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self'\r\n" : "") +
             "Connection: close\r\n" +
             "Server: CluadeX\r\n\r\n";
         using var write = CancellationTokenSource.CreateLinkedTokenSource(stop);
-        write.CancelAfter(TimeSpan.FromSeconds(10));
+        write.CancelAfter(TimeSpan.FromSeconds(body.Length > 1_000_000 ? 30 : 10));
         await stream.WriteAsync(Encoding.ASCII.GetBytes(head), write.Token).ConfigureAwait(false);
         if (code != 204 && body.Length > 0) await stream.WriteAsync(body, write.Token).ConfigureAwait(false);
     }

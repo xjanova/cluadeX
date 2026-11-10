@@ -164,7 +164,14 @@
                             <Run Text=" 🔥"/>
                         </TextBlock>
                     </StackPanel>
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <WrapPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right" MaxWidth="760">
+                        <Button Command="{Binding ReportCommand}" Style="{StaticResource NeonAction}" ToolTip="{services:Loc dbglog.reportTip}"
+                                BorderBrush="{DynamicResource Accent.1}" Margin="0,0,6,4">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0" Foreground="{DynamicResource Accent.1}"/>
+                                <TextBlock Text="{services:Loc dbglog.report}" FontWeight="SemiBold"/>
+                            </StackPanel>
+                        </Button>
                         <Button Command="{Binding TestCommand}" Style="{StaticResource NeonAction}" ToolTip="{services:Loc dbglog.selfTestTip}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xEC7A;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
@@ -185,7 +192,7 @@
                         </Button>
                         <Button Command="{Binding OpenLogFolderCommand}" Style="{StaticResource NeonAction}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <ContentControl Style="{StaticResource FolderIconOpen}" Width="13" Height="10.6" Margin="0,0,6,0" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{services:Loc debuglog.logFolder}"/>
                             </StackPanel>
                         </Button>
@@ -195,7 +202,13 @@
                                 <TextBlock Text="{services:Loc debuglog.clear}"/>
                             </StackPanel>
                         </Button>
-                    </StackPanel>
+                        <Button Command="{Binding ClearFilesCommand}" Style="{StaticResource NeonAction}" ToolTip="{services:Loc dbglog.clearFilesTip}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0" Foreground="{DynamicResource Status.Danger}"/>
+                                <TextBlock Text="{services:Loc dbglog.clearFiles}"/>
+                            </StackPanel>
+                        </Button>
+                    </WrapPanel>
                 </Grid>
             </Border>
 
@@ -274,12 +287,28 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="{Binding StatusMessage}" FontSize="11"
+                    <TextBlock Text="{Binding StatusMessage}" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                FontFamily="{DynamicResource Font.Mono.Display}"
                                Foreground="{DynamicResource Status.Success}"/>
-                    <TextBlock Grid.Column="1" Text="{Binding LogDirectory}" FontSize="10"
-                               FontFamily="{DynamicResource Font.Mono.Display}"
+                    <!-- the log files: detailed logging, how long they stay (deleted by themselves), how many there are -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0">
+                        <CheckBox IsChecked="{Binding Verbose}" Content="{services:Loc dbglog.verbose}" ToolTip="{services:Loc dbglog.verboseTip}"
+                                  Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center" FontSize="11" Margin="0,0,16,0"/>
+                        <TextBlock Text="{services:Loc dbglog.retention}" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="9" FontWeight="Bold"
+                                   Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox ItemsSource="{Binding RetentionChoices}" DisplayMemberPath="Label" SelectedValuePath="Days"
+                                  SelectedValue="{Binding RetentionDays}" ToolTip="{Binding RetentionTip}"
+                                  Width="84" Height="24" VerticalContentAlignment="Center" FontSize="11" Margin="0,0,10,0"
+                                  FontFamily="{DynamicResource Font.Mono.Display}"
+                                  Background="{DynamicResource Surface.Input}" Foreground="{DynamicResource Text.Primary}"
+                                  BorderBrush="{DynamicResource Border.Default}"/>
+                        <TextBlock Text="{Binding FileStats}" FontSize="10" VerticalAlignment="Center"
+                                   FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Faint}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Text="{Binding LogDirectory}" FontSize="10" VerticalAlignment="Center"
+                               FontFamily="{DynamicResource Font.Mono.Display}" TextTrimming="CharacterEllipsis" MaxWidth="320"
                                Foreground="{DynamicResource Text.Faint}"/>
                 </Grid>
             </Border>

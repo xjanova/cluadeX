@@ -233,6 +233,37 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   after xAI's API card. Locked while the chat's run works. Proven by `tests/chattest` PK/PR/PF/PKS.
 - Girls (owner 2026-11-06): a GGUF is CluadeX's purple girl, Ollama stays มายด์, Antigravity has her own, Grok = Grok.
 
+## Replies read aloud — ElevenLabs, OpenAI, free voices (2026-11-09)
+- Settings › Voice (`Views/Settings/VoiceSettingsPanel.xaml` + `VoiceSettingsViewModel`, settings in `Models/VoiceSettings.cs`):
+  browser (free, mic window only), Windows (free, offline System.Speech), ElevenLabs (own key, DPAPI like the others),
+  OpenAI (reuses the OpenAI provider's key). ElevenLabs controls follow what the chosen model reports (style, speaker boost,
+  v3's three stabilities, Thai or not); voice cloning needs the consent tick.
+- Each girl reads her own reply in her own mood (`Services/Voice/Tts/VoicePersona.cs`) and can have her own voice per engine.
+  Audio plays in the mic window when it is open (`/audio` on ChromeDictationService), else in the app (`VoicePlayer`).
+- The app's ComboBox template ignores DisplayMemberPath in the closed box: give records `ToString() => Label`.
+- Proven offline by `tests/apitest --voice` (stand-in ElevenLabs/OpenAI server) and `tests/voicetest` (renders the panel
+  per engine to PNGs). **No live ElevenLabs/OpenAI call yet** — set ELEVENLABS_API_KEY for apitest's live check.
+- **Edge is the default engine** (`Services/Voice/Tts/EdgeTts.cs`): Microsoft Edge read-aloud's free neural voices over a
+  WebSocket, Thai Premwadee/Niwat. It is unofficial and has **two hosts**, tried in this order:
+  `api.msedgeservices.com` with a `Sec-MS-GEC` **v1** token (edge-tts 7.2.3), then `speech.platform.bing.com` with a **v2**
+  token (edge-tts 7.3.1). Both tokens are pinned by vectors in `tests/apitest/EdgeTtsWire.cs`. **Trap (2026-11-10):** the bing
+  host drops nearly every request over ~300 Thai characters, and edge-tts 7.3.1 fails the same way. A finished reply is
+  longer than that, so with bing alone every reply was silent and the only sign was a status line. Text also goes in pieces of
+  ≤3,000 UTF-8 bytes (`EdgeTts.Pieces`). `apitest --edge` speaks a 1,456-character Thai reply three times and checks it
+  came from msedgeservices. If voices fail, compare both hosts against the current edge-tts on PyPI first.
+- **Every read-aloud decision is logged under `[Voice]`**: what was read (engine, host, size, time), or why nothing was —
+  the row the turn ended on, an Edge failure, or audio that did not play. Look there before guessing.
+- **Trap: Windows voices read Thai as silence.** System.Speech sees desktop voices only; this PC has en-US only, and an
+  English voice given Thai text writes a 46-byte WAV with no error. `WindowsTts` now throws `WindowsVoiceMissingException`
+  (no voice for the language, or a silent WAV) and the chat/test fall back to Edge. Windows' own Thai voice (Pattara) is
+  OneCore — System.Speech cannot use it even when installed.
+- The browser engine is used only while the mic window is open; otherwise the reply goes through Edge.
+- The speaker under the girl's face on each reply (`ChatView.xaml`, `ToggleSpeakRepliesCommand`) flips the same switch as
+  Settings › Voice; turning it off stops her mid-sentence.
+- Settings cards can be narrow: rows are `Views/Settings/FitRow.cs` (label + controls on one line until the label would
+  drop under 180 px, then controls under the label); the mascot moves above the settings below 640 px. voicetest checks
+  420/520/900 px for squeezed text and controls outside the card.
+
 ## A CLI agent in a chat with no project (2026-11-06)
 - A CLI agent (Codex, Gemini Dev, Antigravity, Claude Dev, Grok Dev) gets its sandbox from `DecideWorkerGrant`: no folder,
   or a folder with no write Allow rule and Accept edits off = read-only (it cannot ask before each write). Codex answered
@@ -247,6 +278,20 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   new_chat, close_chat, update_plan, wrap_up); Codex now gets `CliAgentPolicy.PromptLine` (it has no spawn hook).
 - Proven by `tests/chattest` COP0–COP4 (`CHATTEST_ONLY=COP`, scripted CLI through the real chat page) and safetytest's
   Antigravity card checks. Not yet tried with a real Codex turn.
+
+## Codex's Windows sandbox — what CluadeX repairs (2026-11-09)
+- Codex gives a folder two write SIDs (`~/.codex/cap_sid`): `workspace_by_cwd` for runs whose cwd it is (shell commands) and
+  `writable_root_by_path` for runs that have it as a writable root — the file-edit helper (`codex --codex-run-as-fs-helper`)
+  starts at the drive root, so its edits use the second. The setup step grants each SID on the root when it is first used and
+  cannot re-stamp anything the sandbox account owns. A folder the sandbox made before the second SID existed keeps only
+  the first: edits in it fail ("write file … failed"), shell writes work. XSurLab, 2026-11-09: src/tests/design/docs/scripts.
+- `CodexSandboxRepair` rebuilds (copy as the user, swap, delete) a sandbox-owned `.git`, and every sandbox-owned file or
+  folder missing one of the root's inherited grants (`StaleEntries`). Before a turn: folders + root files, skipped when the
+  root's grants are unchanged since the last walk; after a failed edit/command: every file, 10 s budget. Package caches and
+  build output are never walked; a tree over 20,000 files / 1 GB or written while copying is left as it was.
+- Proven by `tests/apitest --codex-sandbox` (offline with real ACLs + live `codex sandbox` reproducing the gap and the fix).
+  `apitest --repair-sandbox <dir> [--dry]` runs the same repair on a real folder.
+- Python edits on Windows: open with `newline=''` (else LF files come back CRLF) and keep the BOM.
 
 ## CLI parity — what Claude Dev gets, every CLI gets (2026-11-06, audit = brain note 77faca9ac76d)
 - `ChatToolBridge.ChatToolsHint(CliToolNames, splitChats, plan)` names new_chat / close_chat, wrap_up, every
@@ -348,6 +393,71 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   when it is out and talks (`PetMoment.GpuShareHint`). Keys in `Localization/GpuShareKeys.cs`.
 - Proven by `tests/gpusharetest` (103 checks: math, synthetic GGUF headers, persistence, hint, the real popup XAML
   rendered in all 4 themes to `bin/.../renders`). Not yet driven by hand in the running app.
+
+## Smart skill picking + the token gauge (2026-11-07)
+- Every switched-on skill used to cost its line in the system prompt on every turn. Now, per chat (composer switch
+  "Skill อัตโนมัติ", default from Skills page ▸ `SkillAutoPickEnabled`, overrides in `skill-pick-chats.json` via
+  `Services/Skills/SkillPickGate`), `CodeAgentService.PickSkillsForTurnAsync` picks the skills that fit the turn **before**
+  the model starts and appends them to the turn's message (`SkillPick.BlockFor`). The system prompt then carries one fixed
+  line, so a different pick each turn never breaks the prompt cache. Off = the old full list (`SkillBudget.ListingLine`).
+- `Skills/SkillPicker` (pure): the owner's typed words (`AgentRunScope.TurnText`, set by the chat page, without the folders
+  line / notices / attachments), a Thai→English word table, words learned from turns that ran a skill
+  (`SkillService.LearnTerms`, ≤ 40 per skill in skill-usage.json), pins ("ใช้ทุกงาน", `PinnedSkills`), the turn's brain
+  recall text (weak), and the brain's ranking. Rare words weigh more (idf); ≥ 3.0 and ≥ 35 % of the best match; ≤ `SkillPickMax`
+  (5) and ≤ the ceiling; named (/name, `commit` as a word) and pinned always. Small local window: ≤ 2, ≤ 200 tok. A /command
+  turn picks nothing (`NoSkillPick`). The chat shows a ✦ row under the message (nothing fitted = no row, the tooltip says so).
+- The brain's half (`Skills/SkillBrainIndex`, `SkillBrainIndexEnabled`): with BrainX connected, one card note per skill in
+  `Notes/CluadeX-Skills`, tag `cluadex-skill` (name, description, when to use — **never the prompt**; a skill always runs from
+  its file here). Written in the background when missing/changed (state `skill-brain-index.json`, found by exact title first
+  so a reinstall does not duplicate, a refused card is not retried until restart). Each turn `brain_semantic_search` with
+  `tag` runs beside the auto-recall (4 s cap): its first place counts on its own, later ones need a word of the task too.
+- Gauge (`Skills/SkillBudget`, Skills page header): per-turn tokens of the offered list vs the ceiling = 1 % of the active
+  model's window (250–4000), the ceiling at mid-bar; each row shows ≈ per turn / ≈ when it runs, "หนัก" when its prompt is
+  over a tenth of the window. CLI agents use their own skills (noted, not counted).
+- Proven by `tests/skilltest` K*/A*/L*/G*/B*/S*/V13–14 (99 checks) and `tests/chattest` SP1–SP7 (`CHATTEST_ONLY=SP`, the real
+  chat page + native loop). **Not yet with a live brain**: the card writing and ranking were only checked against the brain's
+  answer shape, not run by the app against BrainX.
+
+## Reading long pages and media transcripts (2026-11-10)
+- `web_fetch` reads a page in parts: `offset` + `max_chars` (clamped to [500, most]; `AgentToolService.WebFetchReadBudget()`:
+  cloud 20k default / 30k most, local = half of `ReadCharBudget`, 4k–20k). The answer says "characters a–b of N" and ends with
+  the offset to read on. Parts after the first come from `WebFetchService.FetchForReadingAsync` (8 pages, 10 min, Ok outcomes
+  only) so part 2 never downloads again; a first read (offset 0) always fetches fresh. `WebFetchService.Slice` never splits a
+  surrogate pair and backs up to a space within the last tenth. Offset past the end = `chat.web.offsetPastEnd`.
+- `media_transcript` (`Services/Tools/MediaTranscriptToolModule.cs`, ToolType `MediaTranscript` appended last; helpers in
+  `Services/Media/`: `YtDlp.cs`, `Subtitles.cs`, `SpeechToText.cs`): a link (YouTube or anything yt-dlp knows), an 11-char
+  YouTube id, or a local audio/video file. A link → yt-dlp subtitles (human first, then the original-language auto track;
+  free, card `browse` once per host). `speech=true` (or a file) → ffmpeg 10-min mono 16 kHz pieces → OpenAI `whisper-1`
+  with the key of AI Provider › OpenAI — **paid ($0.006/min)**, so its card shows the length and price and is asked even with
+  permissions off; refused above 4 h. yt-dlp always runs `--ignore-config --no-playlist` with the URL after `--`.
+  Transcripts are saved in `DataRoot\transcripts` (30 days) and read again in parts for free. Neither yt-dlp nor the key is
+  bundled: missing ones answer with the install line / where to set the key. Web gate = Features.WebFetch + `feature.webFetch`.
+- Proven by `tests/tooltest` WR1–WR3 (slicer, parts through `ExecuteWebFetchAsync` against RedirectMock `/long`, cache life)
+  and MT1–MT6 (parsers, track choice, a stand-in yt-dlp, a real ffmpeg tone → a localhost stand-in Whisper).
+  **Not yet:** a real yt-dlp run (not installed here), a real Whisper call, the tool driven in the running app, and whether
+  CLI agents (Claude Dev / Codex) see it over ChatToolBridge.
+
+## Watches: the AI waits for CI / a background process and is woken with the result (2026-11-07)
+- Tools `watch_ci` (pr / commit / branch / repo; none = the current branch's PR, else HEAD), `watch_process` (bg id),
+  `watch_list`, `watch_cancel` live in `EngineeringToolModule.Watch.cs`, so every CLI agent gets them over ChatToolBridge
+  too. Free (no card): they only read. The tool result tells the model to end its turn — no polling, no sleep.
+- `Services/Watch/RunWatchService.cs` (`RunWatchService.Current`, made with the tool modules in App.ConfigureServices):
+  CI looked at every 15→90 s through `GhCiProbe` (`gh pr checks --json`, plain listing on an old gh, `gh run list
+  --commit|--branch`; argv only, every value re-checked each look, nothing may start with '-'). **gh matches a commit by
+  its full hash only** — a short one is expanded with `git rev-parse` or refused. No checks within 5 min = ended;
+  5 failed looks in a row or a fatal answer (gh missing / signed out / no such PR) = error; deadline (CI ≤ 6 h, process
+  ≤ 12 h). ≤ 3 per chat, ≤ 12 in all, same target = the watch already there. `DataRoot\watch-jobs.json`: CI watches
+  are picked up again after a restart, process watches are closed (bg ids restart with the app).
+- `ViewModels/ChatViewModel.Watch.cs`: the card row (`ChatMessage.WatchTag`, `WatchCardView`, Cancel). On the end: a run
+  works in that chat → notice row + a note it reads at its next step (a note it never took is delivered again at
+  EndTurn); nobody works there → a turn starts in that chat (`ContinueChatForPipeAsync(..., fromWatch: true)`: not
+  marked FromPipe, off screen in its own list). Settings ▸ Agent ▸ `WatchAutoContinue` off, or more than `MaxWakes` (6)
+  such turns in 2 h (reset when the owner writes there) = a notice only. Ctrl+Alt+End and deleting the chat cancel watches.
+- Dry-run (`ProcessLaunchPolicy`, every host but CluadeX.exe) blocks gh here too (`GhCiProbe.GhBlocked`): the probe answers
+  a fatal `[dry-run]` and `watch_ci` skips `gh pr view` — a harness never polls GitHub unless it adds gh.exe to `Allowed`.
+- Proven by `tests/watchtest` (92 offline + 4 `--live` = real gh, read-only, on this repo's PR 91 and commit ddbd141) and
+  `tests/chattest` WJ0–WJ14 (`CHATTEST_ONLY=WJ`, the real chat page + native loop + real `cmd` background processes).
+  Not yet: a real CI watch woken in the running app, and a CLI agent (Claude Dev / Codex) calling watch_ci for real.
 
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).

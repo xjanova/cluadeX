@@ -38,6 +38,19 @@ public partial class ChatView : UserControl
         InitializeComponent();
         Instances.Add(new WeakReference<ChatView>(this));
 
+        // The model · effort chip's words change length with what really answers ("auto" ↔ "auto → high (bug fix)").
+        // In the wrapping row under the input box, that moved the chips after it between two and three lines, the
+        // chat list grew and shrank 34 px and every row jumped. The chip only grows, never shrinks back, while the
+        // row is the same width; a resize (the row is laid out again anyway) lets it fit its words again.
+        LiveEffortChip.SizeChanged += (_, e) =>
+        {
+            if (e.NewSize.Width > LiveEffortChip.MinWidth) LiveEffortChip.MinWidth = Math.Ceiling(e.NewSize.Width);
+        };
+        ComposerOptions.SizeChanged += (_, e) =>
+        {
+            if (e.WidthChanged && Math.Abs(e.NewSize.Width - e.PreviousSize.Width) >= 1) LiveEffortChip.MinWidth = 0;
+        };
+
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         // The chat page is kept and only hidden when another page is shown (Views/PageHost): coming back is not a
@@ -195,6 +208,7 @@ public partial class ChatView : UserControl
                 SidePanelHeightGrip.Visibility = Visibility.Collapsed;
             }
             _panelStacked = stack;
+            ActivityCard.Compact = stack;
         }
         finally { _fittingPanel = false; }
     }
@@ -825,6 +839,18 @@ public partial class ChatView : UserControl
         catch { /* Explorer could not be started — nothing else to do */ }
     }
 
+    // ─── The chat's reference chip (CX-8cf58c2a) at the top of the chat ───
+
+    /// <summary>A click anywhere on the chip copies the reference — except on its copy button (its own command does) and
+    /// after a drag over the text, which selected part of it for the owner to copy themselves.</summary>
+    private void ChatRefChip_Click(object sender, MouseButtonEventArgs e)
+    {
+        for (var d = e.OriginalSource as DependencyObject; d != null && d != ChatRefChip; d = d is Visual ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d == ChatRefCopyButton) return;
+        if (ChatRefText.SelectionLength > 0) return;
+        if (DataContext is ChatViewModel vm && vm.CopyChatRefCommand.CanExecute(null)) vm.CopyChatRefCommand.Execute(null);
+    }
+
     // ─── Tool-row thumbnail → the full image ───
 
     /// <summary>Opens the image a tool saved, in the system's image viewer. Only an existing local .jpg/.png/.webp/.gif
@@ -915,6 +941,28 @@ public sealed class FileGlyphConverter : System.Windows.Data.IValueConverter
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
         => throw new NotSupportedException();
+}
+
+/// <summary>
+/// An <see cref="Image"/> for <see cref="ThumbnailSourceConverter"/>: that converter hands back an empty picture that
+/// fills in when the decode is done, and a plain Image measured it at 0 × 0 and kept that size until something else
+/// re-laid the row out (2026-11-10: with the right-hand panel already open for the activity card, nothing did, and
+/// the thumbnail stayed invisible). This one measures again when its picture changes inside.
+/// </summary>
+public sealed class ThumbImage : Image
+{
+    private Freezable? _watched;
+
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.Property != SourceProperty) return;
+        if (_watched != null) _watched.Changed -= OnSourceChanged;
+        _watched = e.NewValue is Freezable { IsFrozen: false } f ? f : null;
+        if (_watched != null) _watched.Changed += OnSourceChanged;
+    }
+
+    private void OnSourceChanged(object? sender, EventArgs e) => InvalidateMeasure();
 }
 
 /// <summary>

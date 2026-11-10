@@ -7,6 +7,33 @@ internal static class MediaKeys
 {
     internal static readonly Dictionary<string, Dictionary<string, string>> Keys = new()
     {
+        // ── media_transcript (Services/Tools/MediaTranscriptToolModule): what the model and the user are told ──
+        ["media.tr.noSource"] = new() { ["en"] = "No source given — pass a video link or the path of an audio or video file.", ["th"] = "ไม่ได้ระบุแหล่งที่มา — ใส่ลิงก์วิดีโอ หรือที่อยู่ไฟล์เสียงหรือวิดีโอ" },
+        ["media.tr.badSource"] = new() { ["en"] = "'{0}' is neither a web link (http/https) nor an audio or video file on this PC.", ["th"] = "'{0}' ไม่ใช่ลิงก์เว็บ (http/https) และไม่ใช่ไฟล์เสียงหรือวิดีโอในเครื่องนี้" },
+        ["media.tr.webOff"] = new() { ["en"] = "Reading a video link uses the web tools, which are switched off (Settings ▸ Features ▸ Web fetch).", ["th"] = "การอ่านลิงก์วิดีโอต้องใช้เครื่องมือเว็บ ซึ่งปิดอยู่ (ตั้งค่า ▸ ฟีเจอร์ ▸ Web fetch)" },
+        ["media.tr.noYtDlp"] = new() { ["en"] = "Reading a video's subtitles needs yt-dlp, which is not installed. Install it with: {0} — then try again.", ["th"] = "การอ่านซับของวิดีโอต้องใช้ yt-dlp ซึ่งยังไม่ได้ติดตั้ง ติดตั้งด้วยคำสั่ง: {0} แล้วลองใหม่" },
+        ["media.tr.noFfmpeg"] = new() { ["en"] = "Turning speech into text needs ffmpeg, which is not installed. Install it with: winget install Gyan.FFmpeg — then try again.", ["th"] = "การถอดเสียงเป็นข้อความต้องใช้ ffmpeg ซึ่งยังไม่ได้ติดตั้ง ติดตั้งด้วยคำสั่ง: winget install Gyan.FFmpeg แล้วลองใหม่" },
+        ["media.tr.noKey"] = new() { ["en"] = "Speech to text uses your OpenAI key, and none is set. Add one at AI Provider ▸ OpenAI, then try again.", ["th"] = "การถอดเสียงใช้ key ของ OpenAI แต่ยังไม่ได้ใส่ ใส่ได้ที่ ผู้ให้บริการ AI ▸ OpenAI แล้วลองใหม่" },
+        ["media.tr.keyRefused"] = new() { ["en"] = "OpenAI refused the key (HTTP 401). Check it at AI Provider ▸ OpenAI.", ["th"] = "OpenAI ไม่รับ key นี้ (HTTP 401) ตรวจดูได้ที่ ผู้ให้บริการ AI ▸ OpenAI" },
+        ["media.tr.noSubs"] = new()
+        {
+            ["en"] = "{0} has no subtitles to read. To turn its speech into text, call media_transcript again with speech=true — about {1} min, ≈ {2} with OpenAI {3}; the sound is sent to OpenAI and the user is asked first.",
+            ["th"] = "{0} ไม่มีซับให้อ่าน ถ้าจะถอดเสียงเป็นข้อความ ให้เรียก media_transcript อีกครั้งพร้อม speech=true — ยาวประมาณ {1} นาที ราว {2} ด้วย OpenAI {3} เสียงจะถูกส่งไป OpenAI และจะถามผู้ใช้ก่อน",
+        },
+        ["media.tr.tooLong"] = new() { ["en"] = "{0} is {1} long — speech to text takes up to {2} at a time.", ["th"] = "{0} ยาว {1} — ถอดเสียงได้ครั้งละไม่เกิน {2}" },
+        ["media.tr.probeFailed"] = new() { ["en"] = "yt-dlp could not read {0}: {1}", ["th"] = "yt-dlp อ่าน {0} ไม่ได้: {1}" },
+        ["media.tr.subFailed"] = new() { ["en"] = "Could not get the subtitles of {0}: {1}", ["th"] = "ดึงซับของ {0} ไม่ได้: {1}" },
+        ["media.tr.audioFailed"] = new() { ["en"] = "yt-dlp could not download the sound of {0}: {1}", ["th"] = "yt-dlp โหลดเสียงของ {0} ไม่ได้: {1}" },
+        ["media.tr.ffmpegFailed"] = new() { ["en"] = "ffmpeg could not prepare the sound: {0}", ["th"] = "ffmpeg เตรียมไฟล์เสียงไม่สำเร็จ: {0}" },
+        ["media.tr.sttFailed"] = new() { ["en"] = "Speech to text stopped at piece {0} of {1}: {2}", ["th"] = "การถอดเสียงหยุดที่ท่อน {0} จาก {1}: {2}" },
+        ["media.tr.timedOutShort"] = new() { ["en"] = "it took too long and was stopped", ["th"] = "ใช้เวลานานเกินไปจึงหยุดไว้" },
+        ["media.tr.cancelled"] = new() { ["en"] = "Stopped.", ["th"] = "หยุดแล้ว" },
+        ["media.tr.offsetPastEnd"] = new() { ["en"] = "Offset {0} is past the end — the transcript has {1:N0} characters. Use a smaller offset (0 = from the start).", ["th"] = "ตำแหน่ง {0} เลยท้ายไปแล้ว — ข้อความถอดมี {1:N0} ตัวอักษร ให้ใช้ offset ที่น้อยกว่านี้ (0 = เริ่มจากต้น)" },
+        ["media.tr.permSubs"] = new() { ["en"] = "Read the subtitles of {0} with yt-dlp (free — only the video's own site is asked).", ["th"] = "อ่านซับของ {0} ด้วย yt-dlp (ฟรี — ติดต่อเฉพาะเว็บของวิดีโอนั้น)" },
+        ["media.tr.permSpeech"] = new() { ["en"] = "Send the sound of {0} to OpenAI ({1}) to turn it into text — {2}. Paid from your OpenAI key.", ["th"] = "ส่งเสียงของ {0} ไปให้ OpenAI ({1}) ถอดเป็นข้อความ — {2} คิดเงินจาก key OpenAI ของคุณ" },
+        ["media.tr.lengthKnown"] = new() { ["en"] = "{0} long, about {1}", ["th"] = "ยาว {0} ประมาณ {1}" },
+        ["media.tr.lengthUnknown"] = new() { ["en"] = "length not known yet, {0} a minute", ["th"] = "ยังไม่รู้ความยาว คิดนาทีละ {0}" },
+
         // ── status line / questions (view model, host) ──
         ["media.status.opened"] = new() { ["en"] = "Opened {0} · {1}", ["th"] = "เปิด {0} แล้ว · {1}" },
         ["media.status.gone"] = new() { ["en"] = "{0} is not on disk any more.", ["th"] = "ไม่พบไฟล์ {0} บนดิสก์แล้ว" },

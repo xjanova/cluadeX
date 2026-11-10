@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:vm="clr-namespace:CluadeX.ViewModels"
+             xmlns:plugins="clr-namespace:CluadeX.Views.Plugins"
              xmlns:m="clr-namespace:CluadeX.Models"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -226,6 +227,7 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
@@ -259,7 +261,7 @@
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button Command="{Binding OpenFolderCommand}" Style="{StaticResource NeonAction}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <ContentControl Style="{StaticResource FolderIconOpen}" Width="13" Height="10.6" Margin="0,0,6,0" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{services:Loc plugins.folder}"/>
                             </StackPanel>
                         </Button>
@@ -279,8 +281,14 @@
                 </Grid>
             </Border>
 
+            <!-- Built-in plugin: Colibri (on-PC AI for sub-agents) -->
+            <ScrollViewer Grid.Row="1" Margin="20,16,20,0" MaxHeight="380" VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding Colibri, Converter={StaticResource NullToCollapsed}}">
+                <plugins:ColibriCard DataContext="{Binding Colibri}"/>
+            </ScrollViewer>
+
             <!-- Body: list (left, tab toggle on top) + detail (right) -->
-            <Grid Grid.Row="1" Margin="20,16,20,16">
+            <Grid Grid.Row="2" Margin="20,16,20,16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="420"/>
                     <ColumnDefinition Width="20"/>

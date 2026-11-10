@@ -73,6 +73,7 @@ public partial class ChatViewModel
         if (_dictation == null) { StatusText = LocF("chat.mic.failed", error ?? "?"); return false; }
         _dictation.TextReceived += (s, fin, interim) => OnUi(() => ApplyDictation(s, fin, interim));
         _dictation.PageEvent += (s, type, detail) => OnUi(() => OnDictationEvent(s, type, detail));
+        _dictation.BrowserVoicesChanged += names => OnUi(() => RememberBrowserVoices(names));
         _dictation.SendRequested += s => OnUi(() =>
         {
             if (IsDictating && s == _dictation?.Session && SendMessageCommand.CanExecute(null)) SendMessageCommand.Execute(null);

@@ -295,7 +295,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
         string transcript, string userMessage, string? codeComments = null, string? browserHint = null, string? agentLine = null,
-        bool noProject = false, bool chatTools = false, string? splitGuide = null)
+        bool noProject = false, bool chatTools = false, string? splitGuide = null, bool hasRipgrep = false)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -323,6 +323,10 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
         if (worker && !string.IsNullOrWhiteSpace(agentLine)) wrapper += " " + agentLine;
         if (worker && chatTools && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();
+        // Codex runs every shell command in its Windows sandbox, as another account (CodexSandbox): say what that blocks and
+        // where builds and tests go instead, so a sandbox refusal is not taken for a bug in the code.
+        if (worker) wrapper += " " + CodexSandbox.PromptSection(chatTools, hasRipgrep);
+        else if (!hasRipgrep) wrapper += " `rg` is not installed here: search with `git grep -n` or PowerShell `Select-String`.";
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.OpenAIDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
         var sb = new StringBuilder();
@@ -348,10 +352,15 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             yield break;
         }
 
-        string cwd = _fileSystemService.HasWorkingDirectory
-            ? _fileSystemService.WorkingDirectory
-            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var grant = ClaudeDevProvider.Grant.Value;
+        // A workflow agent's own git worktree (the grant's folder) is where it runs, never the project: `codex exec -C`.
+        string? turnFolder = ClaudeDevProvider.TurnFolder(grant, _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null, Directory.Exists);
+        if (turnFolder == null)
+        {
+            OnError?.Invoke("The worker's folder is gone: " + grant?.Folder);
+            yield break;
+        }
+        string cwd = turnFolder;
         bool worker = grant is { Edit: true } || grant is { Run: true };
         var sink = worker ? ClaudeDevProvider.StreamSink.Value : null;
         var extras = ClaudeDevProvider.Extras.Value;
@@ -389,10 +398,37 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                      brainInConfig ? null : GeminiDevProvider.BrainServerFromClaude(),
                      Attachments.AttachmentDigest.CliImagePaths(userMessage).Where(File.Exists).Take(MaxImages).ToList())) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
+        // Codex ships a ripgrep but its shell has none on PATH; the sandbox inherits PATH, so the copy is put in front.
+        string? path = psi.Environment.TryGetValue("PATH", out var p) ? p : Environment.GetEnvironmentVariable("PATH");
+        bool hasRipgrep = CodexSandbox.OnPath("rg.exe", path);
+        if (!hasRipgrep && CodexSandbox.FindRipgrepDir(exe) is { } rgDir)
+        {
+            psi.Environment["PATH"] = CodexSandbox.PrependPath(path, rgDir);
+            hasRipgrep = true;
+        }
 
         string shownModel = !string.IsNullOrWhiteSpace(model) && model is not ("default" or "auto") ? model : "";
         LiveModelReport.Sent(AiProviderType.OpenAIDev, shownModel, effort, true);
-        var translator = new CodexStreamTranslator(cwd, ReadForDiff);
+        // A .git that Codex's sandbox account owns (a `git init` run inside the sandbox) stops the sandbox from starting
+        // in that folder, every command, every turn: rebuilt here before the turn, and again if a command shows it mid-turn.
+        var writeRoots = new List<string?> { cwd };
+        writeRoots.AddRange(addDirs);
+        string? preflight = null;
+        foreach (var o in CodexSandboxRepair.RepairRoots(writeRoots, beforeTurn: true))
+        {
+            var loc = LocalizedResources.Instance;
+            string note = o.Repaired
+                ? string.Format(loc[o.Folder ? "codex.sandbox.folderPreflight" : "codex.sandbox.preflight"], o.Path)
+                : string.Format(loc[o.Folder ? "codex.sandbox.folderRepairFailed" : "codex.sandbox.repairFailed"], o.Path, o.Error);
+            preflight = preflight == null ? note : preflight + "\n" + note;
+        }
+        var translator = new CodexStreamTranslator(cwd, ReadForDiff,
+            setupFailed => CodexSandboxRepair.NoteAfterFailure(writeRoots, setupFailed));
+        if (preflight != null)
+        {
+            if (sink != null) foreach (var noticeLine in translator.Notice("⚠ " + preflight)) { try { sink(noticeLine); } catch { } }
+            else yield return "⚠ " + preflight + "\n\n";
+        }
         SetStatus("OpenAI Dev thinking…");
         Process? proc = null;
         try
@@ -410,9 +446,11 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                     CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
                     chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
                     // Codex has no spawn hook: this line is the only thing that keeps its sub-agents to the step's policy.
-                    agentLine: Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.OpenAIDev),
+                    agentLine: Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.OpenAIDev,
+                        workflow: chatToolsJson != null && Agents.WorkflowGate.Allowed(Agents.WorkflowGate.CurrentChat)),
                     noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
-                    splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.OpenAIDev)));
+                    splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.OpenAIDev),
+                    hasRipgrep: hasRipgrep));
             }
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -612,11 +650,31 @@ public sealed class CodexStreamTranslator
     private int _message = 1;
     private bool _afterTools;
     private string? _lastError;
+    private readonly Func<bool, string?>? _afterFailure;
 
-    public CodexStreamTranslator(string cwd, Func<string, string?>? read = null)
+    /// <param name="afterFailure">Called for a failed command, edit or MCP call with "did the sandbox fail to start?";
+    /// what it returns (CodexSandboxRepair's note, after it repaired what stopped the sandbox) is added to the row.</param>
+    public CodexStreamTranslator(string cwd, Func<string, string?>? read = null, Func<bool, string?>? afterFailure = null)
     {
         _cwd = cwd;
         _read = read ?? (_ => null);
+        _afterFailure = afterFailure;
+    }
+
+    /// <summary>A line of CluadeX's own in the chat (not the model's words): an assistant text block.</summary>
+    public List<string> Notice(string text)
+    {
+        var output = new List<string>();
+        Assistant(output, new JsonObject { ["type"] = "text", ["text"] = text });
+        return output;
+    }
+
+    /// <summary>The repair note for a failed row, or null. A throwing callback never breaks the stream.</summary>
+    private string? AfterFailure(bool setupFailed)
+    {
+        if (_afterFailure == null) return null;
+        try { return _afterFailure(setupFailed); }
+        catch { return null; }
     }
 
     public bool ResultIsError { get; private set; }
@@ -728,7 +786,16 @@ public sealed class CodexStreamTranslator
                 if (!done) { Start(id, output, "Bash", new JsonObject { ["command"] = Command(Str(item, "command") ?? "") }); return; }
                 if (!_started.Contains(id)) Start(id, output, "Bash", new JsonObject { ["command"] = Command(Str(item, "command") ?? "") });
                 int? exit = item["exit_code"] is JsonValue ev && ev.TryGetValue(out int code) ? code : null;
-                Result(id, output, Str(item, "aggregated_output") ?? "", failed: exit is not (null or 0) || Str(item, "status") == "failed");
+                bool commandFailed = exit is not (null or 0) || Str(item, "status") == "failed";
+                string commandOutput = Str(item, "aggregated_output") ?? "";
+                // A refusal of the sandbox's, not a bug: the row says so (CodexSandbox), so neither the user nor a reviewer
+                // takes 68 DPAPI / AppData / WMI failures for broken code (BrainX chat, 2026-11-09).
+                if (commandFailed && CodexSandbox.Notice(commandOutput, _cwd) is { } sandboxNote)
+                    commandOutput = commandOutput.TrimEnd() + "\n\n⚠ " + sandboxNote;
+                // The sandbox could not start at all (XSurLab chat, 2026-11-09): repair what stopped it, and say so.
+                if (commandFailed && AfterFailure(CodexSandboxRepair.LooksLikeSetupFailure(commandOutput)) is { } repairNote)
+                    commandOutput = commandOutput.TrimEnd() + "\n\n⚠ " + repairNote;
+                Result(id, output, commandOutput, failed: commandFailed);
                 return;
             case "file_change":
                 OnFileChange(id, item, done, output);
@@ -740,7 +807,9 @@ public sealed class CodexStreamTranslator
                 if (!done) { Start(id, output, name, input); return; }
                 if (!_started.Contains(id)) Start(id, output, name, input);
                 bool failed = Str(item, "status") == "failed" || item["error"] is JsonObject;
-                string body = failed ? Str(item["error"] as JsonObject, "message") ?? "MCP tool error" : McpResultText(item["result"]);
+                string body = failed ? McpFailureText(item, name) : McpResultText(item["result"]);
+                if (failed && CodexSandboxRepair.LooksLikeSetupFailure(body) && AfterFailure(true) is { } mcpNote)
+                    body = body.TrimEnd() + "\n\n⚠ " + mcpNote;
                 Result(id, output, body, failed);
                 return;
             }
@@ -792,6 +861,10 @@ public sealed class CodexStreamTranslator
         }
         _before.Remove(id, out var before);
         bool failed = Str(item, "status") == "failed";
+        // An edit carries no reason; when it failed, a sandbox-owned .git, or a folder missing the sandbox's write grant
+        // (XSurLab, 2026-11-09), is looked for and rebuilt.
+        string failedText = "The change was not applied";
+        if (failed && changes.Count > 0 && AfterFailure(false) is { } editNote) failedText += "\n\n⚠ " + editNote;
         int n = 0;
         foreach (var (path, kind) in changes)
         {
@@ -805,7 +878,7 @@ public sealed class CodexStreamTranslator
             string? after = failed ? null : _read(path);
             string? original = before != null && before.TryGetValue(path, out var b) ? b : (kind == "add" ? "" : null);
             Start(callId, output, "Write", new JsonObject { ["file_path"] = path, ["content"] = after ?? "" });
-            Result(callId, output, failed ? "The change was not applied" : "", failed,
+            Result(callId, output, failed ? failedText : "", failed,
                 original != null && after != null ? new JsonObject { ["originalFile"] = original } : null);
         }
     }
@@ -825,6 +898,20 @@ public sealed class CodexStreamTranslator
         if (inner.Length >= 2 && (inner[0] == '\'' && inner[^1] == '\'' || inner[0] == '"' && inner[^1] == '"'))
             inner = inner[1..^1];
         return inner.Replace("''", "'");
+    }
+
+    /// <summary>
+    /// A failed MCP call's text. A tool that answers isError=true (verify_change's FAILED verdict, a refused build) comes as
+    /// status "failed" with no error object and its report in result.content; that report was dropped for a bare
+    /// "MCP tool error" (four verify_change rows of the 2026-11-09 chat), while the model read the real one. Pure.
+    /// </summary>
+    public static string McpFailureText(JsonObject item, string toolName)
+    {
+        if (item["error"] is JsonObject e && Str(e, "message") is { Length: > 0 } message) return message;
+        if (item["error"] is JsonValue ev && ev.TryGetValue(out string? s) && !string.IsNullOrWhiteSpace(s)) return s;
+        string report = McpResultText(item["result"]);
+        if (!string.IsNullOrWhiteSpace(report) && report != "null") return report;
+        return string.Format(LocalizedResources.Instance["codex.mcp.failedNoMessage"], toolName);
     }
 
     private static string McpResultText(JsonNode? result)

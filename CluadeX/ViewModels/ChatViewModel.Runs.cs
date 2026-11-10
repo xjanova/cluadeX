@@ -40,10 +40,15 @@ public partial class ChatViewModel
         /// <summary>"⏵ writing file x — 3,200 chars…" while the model still streams a long tool input.</summary>
         public ChatMessage? DraftRow;
         public ChatMessage? TodoMsg;
+        /// <summary>The chat's last plan card with work left when this run began: its plan came over into the run
+        /// (PlanRecord.CarryNote), and the card carries on in place unless the model starts a new task.</summary>
+        public ChatMessage? CarriedPlanMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
         /// <summary>This command's split-chat chips (made with its first new_chat).</summary>
         public ChatMessage? SplitsMsg;
+        /// <summary>The files this turn wrote and its pictures: the change card at its end (ChatViewModel.Vibe).</summary>
+        public readonly Services.Agents.TurnChanges Changes = new();
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
@@ -58,6 +63,10 @@ public partial class ChatViewModel
         /// <summary>Send now on a run that cannot stop one reply (a CLI agent, the [ACTION:] loop): it was stopped, and
         /// what was typed goes out as the next turn instead of back into the box.</summary>
         public bool SendNotesAfterStop;
+        /// <summary>Rows its chat had when the turn began: how it ended is read from the rows after it.</summary>
+        public int FirstRow;
+        /// <summary>The activity card already knows the model is writing its answer (reset when a tool starts).</summary>
+        public volatile bool ActivityWriting;
 
         /// <summary>Who started the turn, for a supervisor: "pipe" (a program over the pipe), "split_parent" (new_chat from
         /// another chat's agent) or "user". The pipe flag is read live: it is set right after the run begins.</summary>
@@ -195,9 +204,11 @@ public partial class ChatViewModel
             bool waiting = run.Messages.Any(m => m.Role is MessageRole.PermissionRequest && !m.PermissionAnswered
                                                  || m.Role == MessageRole.Question && !m.QuestionAnswered);
             run.Session.RunStatus = waiting ? "waiting" : "working";
+            ActivityWaiting(run.Session.Id, waiting);
             run.Session.RunStep = waiting ? Loc("chat.runs.waitingForYou") : (run.ActiveStatus?.Content ?? "").TrimStart('⏵', ' ');
         }
-        if (CurrentSession is { RunStatus: "done" } open) open.RunStatus = "";
+        if (CurrentSession is { } open) open.RunStatus = RunBadge.OnOpen(open.RunStatus);
+        RefreshBuddy();
     }
 
     // ─── open folders (the project + related ones) ───
@@ -462,7 +473,8 @@ public partial class ChatViewModel
         }
         string? taskFolder = TaskFolderFor(session);
         string? folder = taskFolder ?? _fileSystemService.AppWorkingDirectory;
-        if (taskFolder != null)
+        // A split chat in its own worktree said where it works when it opened (its 🌿 notice): no row every turn.
+        if (taskFolder != null && WorktreeFolderOf(session) == null)
         {
             Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "📁 " + LocF("chat.resume.inTaskFolder", taskFolder) });
             _debugLog?.Info("Chat", $"turn runs in the chat's own folder {taskFolder} (window: {_fileSystemService.AppWorkingDirectory})");
@@ -474,18 +486,24 @@ public partial class ChatViewModel
     /// screen or not), working in <paramref name="folder"/>. Enters the run's scope for the calling flow.</summary>
     private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
     {
-        var run = new ChatRun { Session = session, Messages = messages };
+        var run = new ChatRun { Session = session, Messages = messages, FirstRow = messages.Count };
+        NoteRunBegan(session);
+        ActivityBegan(session);
         if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
+        ApplyChatModel(run, session, messages);
         run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
         run.Scope.PromptSized = tokens => OnPromptSized(run, tokens);
+        run.Scope.SkillsPicked = pick => OnSkillsPicked(run, pick);
         run.Scope.UserNotesTaken += tags => OnUserNotesTaken(run, tags);
         // The chat's first request in full — the model's view may hold only a compaction summary of it (AgentHandoff).
         run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;
         foreach (var extra in session.ExtraFolders.ToList())
             if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);
+        run.Changes.SeedBefore(NewestPicture(messages));
+        CarryPlanOver(run);
         _runs.Add(run);
         AgentRunScope.Enter(run.Scope);
         // The app-wide key too (code that runs outside the scope — a UI-thread callback — keys by the latest chat).
@@ -503,7 +521,9 @@ public partial class ChatViewModel
             Services.Agents.RunActivity.ClearRun(run.Session.Id);
             PostRunCostSummary(run);
             RememberRunStats(run);
+            AddTurnChangesCard(run);
             AddNextStepBox(run);
+            MaybeOfferFable(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
                 open.CloseQuestion(Loc("chat.ask.cancelled"));
@@ -516,17 +536,29 @@ public partial class ChatViewModel
             _runs.Remove(run);
             DropDraft(run);
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
-            // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it.
-            run.Session.RunStatus = ReferenceEquals(run.Session, CurrentSession) ? "" : "done";
+            // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it. An error or a stop says
+            // so (red) until the next turn begins, on screen or not.
+            var (stopped, failed) = RunBadge.Outcome(run.Messages, run.FirstRow, run.Stopped);
+            run.Session.RunStatus = RunBadge.AtEnd(stopped, failed, ReferenceEquals(run.Session, CurrentSession));
+            NoteRunEnded(run.Session, run.Session.RunStatus);
+            ActivityEnded(run.Session, stopped, failed);
             run.Session.RunStep = "";
             // Its chat is not on screen: the live list is that chat now — store it.
             if (!ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
-            if (ReferenceEquals(AgentRunScope.Current, run.Scope)) AgentRunScope.Enter(null);
+            if (ReferenceEquals(AgentRunScope.Current, run.Scope))
+            {
+                AgentRunScope.Enter(null);
+                // ...and a Fable chat's model and task budget end with its run: a later request on this flow (a title,
+                // a summary) goes out on the app's pick.
+                Services.Agents.SubAgentModel.UseChat(null);
+                Services.Agents.SubAgentModel.UseTaskBudget(null);
+            }
         }
         done.TrySetResult();
         RaiseRunStateChanged();
         if (run != null && ReferenceEquals(run.Session, CurrentSession)) RefreshStickyPlan();   // its rows stop moving too
         if (run != null) TellParentSplitFinished(run.Session, run.Messages);
+        if (run != null && leftover is { Count: > 0 }) HandOnUntakenWatchNotes(run, leftover);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
     }
@@ -542,16 +574,27 @@ public partial class ChatViewModel
         if (child.ParentId is not { } pid) return;
         if (Sessions.Any(s => s.Id == pid))
         {
+            // A Fable chat's report is what the work was for: it comes back whole (it was asked to keep it short).
+            if (Services.Agents.DispatchPolicy.IsFable(child.OwnModel) && GistOf(childMessages, FableReportChars) is { Length: > 0 } report)
+            {
+                AddNotice(pid, "🧠 " + LocF("fable.report", child.Title, report),
+                    $"Claude Fable 5.2 in split chat \"{child.Title}\" (id {child.Id}) ended a turn. Its report: " + report);
+                RebuildVisibleSessions();
+                return;
+            }
             string gist = GistOf(childMessages);
+            // In its own worktree: the notice names the branch, so the parent can merge it or open a PR from it.
+            var (treeShown, treeForModel) = WorktreeNoticeOf(child);
             AddNotice(pid,
-                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)),
-                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : ""));
+                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)) + treeShown,
+                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : "") + treeForModel);
         }
         RebuildVisibleSessions();
     }
 
     private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)
     {
+        NoteActivityAgent(run?.Session.Id ?? CurrentSession?.Id, e);
         if (e.WorkflowId != null) return;   // a workflow's agents are on its card
         var list = run?.Messages ?? Messages;
         var map = run?.AgentMapMsg;
@@ -575,10 +618,18 @@ public partial class ChatViewModel
         if (e.Steps > 0) node.Steps = e.Steps;
         if (!string.IsNullOrEmpty(e.Model)) node.Model = e.Model;
         if (e.CostUsd > node.CostUsd) node.CostUsd = e.CostUsd;
+        if (!string.IsNullOrEmpty(e.Tier)) node.Tier = e.Tier;     // its routing tier (deep once the owner upgraded it)
+        if (!string.IsNullOrEmpty(e.Color)) node.Color = e.Color;
+        if (Enum.TryParse<AiProviderType>(e.Provider, out var runsOn)) node.Mascot = ChatCharacter.ForProvider(runsOn);
+        node.RefreshUpgrade();
         switch (e.Phase)
         {
             case "start": node.Action = Loc("agentmap.starting"); break;
-            case "tool": node.ToolCalls++; node.Action = e.Detail; node.BeginStep(e.CallId, e.Detail); break;
+            case "tool":
+                // a tool call: the avatar shows that tool; a note from the loop itself (the upgrade) is a step, not a call
+                if (!string.IsNullOrEmpty(e.Tool)) { node.ToolCalls++; node.CurrentTool = e.Tool; }
+                node.Action = e.Detail; node.BeginStep(e.CallId, e.Detail);
+                break;
             // A tool came back: its row in the agent's window gets the result; the card's line keeps what runs now.
             case "result": node.EndStep(e.CallId, e.Ok, e.Result); break;
             case "done": node.State = "done"; node.Action = e.Detail; node.CloseSteps(); break;
@@ -667,8 +718,10 @@ public partial class ChatViewModel
             try { if (run.Cts is { } cts) { cts.Cancel(); n++; } }
             catch (ObjectDisposedException) { }
         }
-        if (n > 0) StatusText = Loc("desktop.hotkeyStopped");
-        _debugLog?.Info("Chat", $"Ctrl+Alt+End stopped {n} run(s)");
+        // …and every watch: nothing starts a new turn behind the owner's back after they pulled the brake.
+        int watches = _watch?.CancelAll(Loc("watch.cancelledByHotkey")) ?? 0;
+        if (n > 0 || watches > 0) StatusText = Loc("desktop.hotkeyStopped");
+        _debugLog?.Info("Chat", $"Ctrl+Alt+End stopped {n} run(s) and {watches} watch(es)");
         return n;
     }
 

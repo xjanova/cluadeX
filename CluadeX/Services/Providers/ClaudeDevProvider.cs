@@ -44,7 +44,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>What the chat's model box offers for Claude Dev: the CLI's own default (no --model flag) and the CLI's
     /// aliases for the latest of each family. All four ran on the owner's subscription login with no credit error
     /// (CLI 2.1.296, 2026-10-20: haiku→claude-haiku-5-5, sonnet→claude-sonnet-5-5, opus→claude-opus-5-5,
-    /// fable→claude-fable-5-1). Aliases, not full ids, so a new model generation needs no CluadeX release.</summary>
+    /// fable→claude-fable-5-1; Claude Fable 5.2 shipped 2026-11-09 and the alias follows the CLI's own releases).
+    /// Aliases, not full ids, so a new model generation needs no CluadeX release.</summary>
     public static readonly string[] KnownModels = ["default", "fable", "opus", "sonnet", "haiku"];
 
     /// <summary>Spawns sub-agents of its own; the dispatch policy reaches them through the CLI (Agents.CliAgentGate).</summary>
@@ -134,11 +135,16 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>The brain tools a headless turn may call without asking, as bare names (brain_search…): exactly the brain
     /// part of what --allowedTools gives Claude Dev — recall and the agent bus always, the brain's write tools with the
     /// edit grant. OpenAI Dev hands the same set to Codex (OpenAIDevProvider.BuildArgs).</summary>
+    /// <remarks>Every look-up of the brain is in it (Mcp.McpToolClassifier.BrainLookupTools): Codex runs with
+    /// approval_policy=never, so a read left out — brain_list, brain_walk, brain_lookup — was refused outright ("MCP tool
+    /// call requires approval, but approval policy is never", BrainX chat 2026-11-09).</remarks>
     public static List<string> BrainToolsFor(WorkerGrant? grant)
     {
         const string prefix = "mcp__brainx-brain__";
         string all = AllowedTools + "," + AgentTools + (grant is { Edit: true } ? "," + EditTools : "");
-        return all.Split(',').Where(t => t.StartsWith(prefix)).Select(t => t[prefix.Length..]).ToList();
+        return all.Split(',').Where(t => t.StartsWith(prefix)).Select(t => t[prefix.Length..])
+            .Concat(Mcp.McpToolClassifier.BrainLookupTools)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>Extra folders a turn may add with --add-dir.</summary>
@@ -579,10 +585,15 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         // big prompt would just be noise on top — send a short wrapper instead (BuildArgs).
         bool worker = grant is { Edit: true } || grant is { Run: true };
         var sink = worker ? StreamSink.Value : null;
-        string model = _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
-            && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
+        // A chat with a model of its own (a Fable split chat) runs on it; every other chat on the pick.
+        string model = Agents.SubAgentModel.ChatModel is { Length: > 0 } own ? own
+            : _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
+              && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
         var effortScope = AgentRunScope.Current;
         var (effort, whyKey) = ResolveEffort(_settingsService.Settings.ReasoningEffort, userMessage, effortScope?.UserImages?.Count ?? 0, history);
+        // The run's ceiling (a Fable chat runs at high, not max): "auto" under it is the ceiling itself.
+        // Only on Fable: other Claude Dev runs keep reading the setting as before.
+        if (Agents.DispatchPolicy.IsFable(model) && effortScope?.EffortCap is { } cap) effort = Models.EffortLevels.Capped(effort, cap);
         if (effortScope != null) effortScope.EffortWhy = whyKey != null ? LocalizedResources.Instance["auto.why." + whyKey] : null;
         var extras = Extras.Value;
         // The policy reads the level this turn really runs at, resolved above.
@@ -591,7 +602,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         if (ReportedCliVersion == null && !_versionProbed) { _versionProbed = true; await ProbeCliVersionAsync(ct); }
         bool allLevels = CliTakesAllLevels(ReportedCliVersion);
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
-            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
+            CodeCommentPolicy.ForAgent(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
             extras?.DesktopRefusal, Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, cli: true),
             noProject: !_fileSystemService.HasWorkingDirectory);
         // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.

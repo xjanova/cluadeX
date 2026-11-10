@@ -181,13 +181,14 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
         if (call.Type == ToolType.WrapUp)
         {
-            var step = NextStep.FromArgs(call.GetArg("recap"), call.GetArg("ask"), call.GetArg("actions"), out var err);
+            var step = NextStep.FromArgsRepaired(call.GetArg("recap"), call.GetArg("ask"), call.GetArg("actions"), out var err, out var repaired);
             if (step == null) return Fail(err!);
             NextStepRequested?.Invoke(Chat, step);
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = "The next-step box will show under your closing message. Now write that message (your answer in full) and end the turn; do not repeat the box's question in prose.",
+                Output = (repaired != null ? repaired + " Nothing else is needed: do not redo any work. " : "")
+                    + "The next-step box will show under your closing message. Now write that message (your answer in full) and end the turn; do not repeat the box's question in prose.",
                 Summary = "⏭ " + (step.Ask ?? step.Recap),
             };
         }
@@ -226,13 +227,35 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         };
     }
 
+    /// <summary>How to keep the plan card, in the system prompt (fixed text: the cached prompt never changes with it).</summary>
+    public const string PlanGuide =
+        "PLAN: for every request that edits files or runs more than one command, your FIRST tool call is todo_write with the "
+        + "whole plan in `todos` — short imperative steps (about 7 words each), the step you are starting in_progress, the rest "
+        + "pending — and `scope`: first_task (nothing finished in this chat yet), continuation (builds on this chat's work, "
+        + "including a follow-up or acting on what you just found; when unsure, this one) or new_task (unrelated to anything "
+        + "done here). Send it in the same response as that first real tool call, not alone. Then `advance: true` alongside "
+        + "the call that begins each next step (`done` + `start` when out of order); keep exactly one step in_progress. When "
+        + "the plan changes (also right after the user interrupts with a new instruction), send the whole new list again: it "
+        + "replaces the old one. Do not write the plan as a numbered list in your reply — the card is the plan. A one-step "
+        + "answer or pure conversation needs no plan.";
+
+    /// <summary>The same rule for a local model (small context, every token counts — the 2026-11-06 Sudoku run overflowed):
+    /// about a fifth of <see cref="PlanGuide"/>, and only what it must do.</summary>
+    public const string PlanGuideShort =
+        "PLAN: a task with several steps → first call todo_write {todos:[{content,status}], scope} (scope: first_task / "
+        + "continuation / new_task), one step in_progress; then todo_write {advance:true} as each step finishes.";
+
     public IReadOnlyCollection<string> LocalCoreToolNames { get; } = Array.Empty<string>();
 
     public string? GetPromptSection(PromptSectionContext context)
     {
         bool wf = context.OfferedToolNames.Contains(WorkflowToolName);
-        string s = "At the end of a turn that did multi-step work, call wrap_up once (recap, and at most one question with 1-2 "
-                 + "buttons when the next move is the user's), then write your closing message.";
+        string s = "";
+        // The plan card (Claude Code's update_plan): the user follows the work through it, so it comes first, not by step 3.
+        if (context.OfferedToolNames.Contains("todo_write") || context.OfferedToolNames.Contains("update_plan"))
+            s = (context.IsLocalModel ? PlanGuideShort : PlanGuide) + "\n";
+        s += "At the end of a turn that did multi-step work, call wrap_up once (recap, and at most one question with 1-2 "
+           + "buttons when the next move is the user's; it also checks off the plan's remaining steps), then write your closing message.";
         if (!context.NativeTools)
             s += "\n[ACTION: wrap_up]\nrecap: Fixed the timeout in client.cs; the build passes. Not run against the live API.\n"
                + "ask: Run the live test now?\nactions: [\"Yes, run it\", \"Not now\"]\n[/ACTION]";

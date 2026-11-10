@@ -28,11 +28,11 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
     public static readonly string[] KnownModels =
     [
         "claude-opus-5-5",         // default — current Opus ($4/$20 per MTok)
-        "claude-fable-5-1",        // most capable (1M ctx, $10/$50) — "มหาเทพ"
+        "claude-fable-5-2",        // most capable (1M ctx, $8/$40, released 2026-11-09) — "มหาเทพ"
         "claude-sonnet-5-5",       // near-Opus quality, faster ($2/$10)
         "claude-haiku-5-5",        // fastest / cheapest ($0.10/$0.50)
-        // previous generation (still served)
-        "claude-opus-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5",
+        // previous generation (still served — kept so a saved pick keeps working)
+        "claude-fable-5-1", "claude-opus-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5",
         "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
     ];
 
@@ -51,16 +51,17 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
 
     /// <summary>The wire messages: effort-only system messages kept where the model takes them, dropped elsewhere.</summary>
     private static List<Dictionary<string, object>> WireMessages(List<NativeMessage> messages, string model, AppSettings settings,
-        Func<NativeMessage, object> content, out bool usedPerMessageEffort)
+        Func<NativeMessage, object> content, out bool usedPerMessageEffort, List<int>? cacheMarks = null)
     {
         bool ok = PerMessageEffortOk(model, settings);
         usedPerMessageEffort = false;
         var list = new List<Dictionary<string, object>>();
         foreach (var m in messages)
         {
+            if (m.CacheMark && m.Role != "system") cacheMarks?.Add(list.Count);   // its index on the wire
             if (m.Role == "system")
             {
-                if (!ok || EffortFor(Traits(model), m.Effort) is not { } eff) continue;
+                if (!ok || EffortFor(Traits(model), EffortLevels.CappedHere(m.Effort)) is not { } eff) continue;
                 list.Add(new Dictionary<string, object>
                 {
                     ["role"] = "system",
@@ -162,7 +163,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
 
     /// <summary>What a model's request surface accepts. Every Claude generation moved these — sampling
     /// removed (4.7+), adaptive thinking (4.6+), thinking that can't be switched off (Opus 5+, Fable,
-    /// Sonnet/Haiku 5.5), forced tool_choice rejected (Fable 5.1, Opus/Sonnet 5.5) — and each wrong guess
+    /// Sonnet/Haiku 5.5), forced tool_choice rejected (Fable 5.1+, Opus/Sonnet 5.5) — and each wrong guess
     /// is an HTTP 400 the user sees as "my key doesn't work". Derived from the ID, so a model released
     /// after this build (listed live from /v1/models) gets the newest family's rules, not the oldest.</summary>
     public readonly record struct ModelTraits(
@@ -174,7 +175,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         bool ForcedToolChoice,   // accepts tool_choice any / tool
         int EffortSupport,       // output_config.effort: 0 none, 1 low–high (Opus 4.5), 2 + max (4.6), 3 + xhigh
         bool BetweenToolsOff = false, // thinking can't be disabled, but {type:"between_tools"} turns it off (Sonnet 5.5+)
-        bool PerMessageEffort = false); // effort-only system messages (Fable 5.1, Opus 5+, Sonnet 5.5+, Haiku 5.5+; thinking on)
+        bool PerMessageEffort = false); // effort-only system messages (Fable 5.1+, Opus 5+, Sonnet 5.5+, Haiku 5.5+; thinking on)
 
     public static ModelTraits Traits(string? model)
     {
@@ -294,6 +295,29 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         if (t.Sampling)   // the API's range is 0–1; the shared slider goes to 2 for other providers
             requestObj["temperature"] = Math.Min((double)settings.Temperature, 1.0);
         return false;
+    }
+
+    /// <summary>Task budgets: the beta header that lets output_config carry one.</summary>
+    public const string TaskBudgetBeta = "task-budgets-2026-03-13";
+
+    /// <summary>
+    /// A Fable flow with a task budget (a hard task sent to Fable: its new chat or its sub-agent,
+    /// <see cref="Agents.SubAgentModel.TaskBudget"/>) tells the model how much it may generate and read back this turn,
+    /// so it paces itself and finishes with its report instead of being cut off. Merged into output_config beside the
+    /// effort; <c>remaining</c> is left out — the server counts down itself. Returns true when the request carries one
+    /// (it then needs <see cref="TaskBudgetBeta"/>). Public for the contract harness.
+    /// </summary>
+    public static bool ApplyTaskBudget(Dictionary<string, object> requestObj, string model, int? budget)
+    {
+        if (budget is not > 0 || !Agents.DispatchPolicy.IsFable(model)) return false;
+        var oc = requestObj.TryGetValue("output_config", out var o) && o is Dictionary<string, object> d ? d : new Dictionary<string, object>();
+        oc["task_budget"] = new Dictionary<string, object>
+        {
+            ["type"] = "tokens",
+            ["total"] = Math.Max(Agents.DispatchPolicy.TaskBudgetMinimum, budget.Value),
+        };
+        requestObj["output_config"] = oc;
+        return true;
     }
 
     private static string BaseUrlOf(ProviderConfig config) =>
@@ -517,16 +541,28 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
     /// previous request wrote, read back). With only the system prompt marked, every agent step re-sent the whole
     /// conversation as uncached input. With the system breakpoint that is 3 of the API's 4. Thinking blocks never take
     /// cache_control; the nearest other block before them does. Public for the contract harness.
+    /// <para><paramref name="marks"/>: wire indices the agent loop marked (<see cref="NativeMessage.CacheMark"/>) — the
+    /// last message before microcompact's cut, which stays byte-identical from step to step. When the cut moves, the
+    /// conversation after the old cut is rewritten; before 2026-11-07 the cache then held only system + tools (the
+    /// earlier breakpoints all sat in the part that had just been shortened), so 105–167k tokens were written again
+    /// (23 times in 19 days of logs, ≈ $17.65 on Opus 5.5). A mark there keeps the shortened prefix readable. Up to
+    /// three conversation breakpoints in all (the system prompt takes the fourth): the last message, the marks, then the
+    /// previous user turn while a slot is left.</para>
     /// </summary>
-    public static void MarkConversationCache(List<Dictionary<string, object>> messages)
+    public static void MarkConversationCache(List<Dictionary<string, object>> messages, IReadOnlyList<int>? marks = null)
     {
         if (messages.Count == 0) return;
         var ephemeral = new Dictionary<string, string> { ["type"] = "ephemeral" };
         int marked = 0;
-        // The last message, then the user message before the last assistant one.
+        // The last message, the loop's marks, then the user message before the last assistant one.
         var targets = new List<int> { messages.Count - 1 };
-        for (int i = messages.Count - 2; i >= 0; i--)
-            if (Equals(messages[i]["role"], "user") && i < messages.Count - 1) { targets.Add(i); break; }
+        if (marks != null)
+            foreach (int i in marks.Where(i => i >= 0 && i < messages.Count - 1).Distinct().OrderBy(i => i).Take(2))
+                targets.Add(i);
+        if (targets.Count < 3)
+            for (int i = messages.Count - 2; i >= 0; i--)
+                if (Equals(messages[i]["role"], "user") && i < messages.Count - 1) { targets.Add(i); break; }
+        int limit = targets.Count;
         foreach (int idx in targets.Distinct())
         {
             if (messages[idx]["content"] is not List<object> blocks) continue;
@@ -540,7 +576,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                 marked++;
                 break;
             }
-            if (marked >= 2) break;
+            if (marked >= Math.Min(3, limit)) break;
         }
     }
 
@@ -565,6 +601,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         };
 
         bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
+        bool taskBudget = ApplyTaskBudget(requestObj, model, Agents.SubAgentModel.TaskBudget);
         ReportSent(requestObj, model);
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -575,6 +612,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/v1/messages");
         AddAuthHeaders(request, config);
         AddBetaHeader(request, model, thinking);
+        if (taskBudget) request.Headers.Add("anthropic-beta", TaskBudgetBeta);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -859,23 +897,25 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
             : systemPrompt;
 
         // Build request
+        var cacheMarks = new List<int>();
         var requestObj = new Dictionary<string, object>
         {
             ["model"] = model,
-            ["messages"] = WireMessages(messages, model, settings, m => WireContent(m, search), out bool perMessageEffort),
+            ["messages"] = WireMessages(messages, model, settings, m => WireContent(m, search), out bool perMessageEffort, cacheMarks),
             ["max_tokens"] = settings.MaxTokens,
             ["tools"] = toolDefs,
             ["stream"] = true,
         };
 
         bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
+        bool taskBudget = ApplyTaskBudget(requestObj, model, Agents.SubAgentModel.TaskBudget);
         ReportSent(requestObj, model);
 
         if (!string.IsNullOrWhiteSpace(requestSystem))
             requestObj["system"] = BuildSystem(requestSystem, settings, hour: true);
 
         if (settings.PromptCachingEnabled)
-            MarkConversationCache((List<Dictionary<string, object>>)requestObj["messages"]);
+            MarkConversationCache((List<Dictionary<string, object>>)requestObj["messages"], cacheMarks);
 
         // Forced tool choice (planner / forced recovery). Forcing is a 400 while the model thinks and on
         // models that dropped it — there the loop's own instruction steers instead, under "auto".
@@ -897,6 +937,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         AddAuthHeaders(request, config);
         AddBetaHeader(request, model, thinking);
         if (perMessageEffort) request.Headers.Add("anthropic-beta", PerMessageEffortBeta);
+        if (taskBudget) request.Headers.Add("anthropic-beta", TaskBudgetBeta);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);

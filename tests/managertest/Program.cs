@@ -46,7 +46,7 @@ internal static partial class Program
 
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
-        try { return Run(args.Contains("--network")).GetAwaiter().GetResult(); }
+        try { return Run(args.Contains("--network"), args.Contains("--settings-storage-only")).GetAwaiter().GetResult(); }
         catch (Exception ex) { Console.WriteLine("FATAL " + ex); return 2; }
     }
 
@@ -70,7 +70,7 @@ internal static partial class Program
 
     static void CaseSync(string id, Action body) => Case(id, () => { body(); return Task.CompletedTask; }).GetAwaiter().GetResult();
 
-    static async Task<int> Run(bool network)
+    static async Task<int> Run(bool network, bool settingsStorageOnly)
     {
         var configure = typeof(CluadeX.App).GetMethod("ConfigureServices", BindingFlags.NonPublic | BindingFlags.Static)!;
         var services = new ServiceCollection();
@@ -88,6 +88,14 @@ internal static partial class Program
         Tmp = Path.Combine(Path.GetTempPath(), "cluadex-managertest-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Tmp);
         Console.WriteLine($"scratch   : {Tmp}\n");
+
+        if (settingsStorageOnly)
+        {
+            try { SettingsTests(storageOnly: true); }
+            finally { try { Directory.Delete(Tmp, true); } catch { } }
+            Console.WriteLine($"\n═══ {Pass} pass · {Fail} FAIL ═══");
+            return Fail == 0 ? 0 : 1;
+        }
 
         Console.WriteLine("── DI: every changed page still resolves from the app's container ──");
         CaseSync("D1", () =>
@@ -713,8 +721,20 @@ internal static partial class Program
 
     // ════════════════════════════ SETTINGS ════════════════════════════
 
-    static void SettingsTests()
+    static void SettingsTests(bool storageOnly = false)
     {
+        bool dpapiAvailable;
+        try
+        {
+            byte[] probe = Encoding.UTF8.GetBytes("settings-test-probe");
+            byte[] encrypted = System.Security.Cryptography.ProtectedData.Protect(probe, null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser);
+            dpapiAvailable = System.Security.Cryptography.ProtectedData.Unprotect(encrypted, null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser).SequenceEqual(probe);
+        }
+        catch (System.Security.Cryptography.CryptographicException) { dpapiAvailable = false; }
+        Console.WriteLine(dpapiAvailable ? "DPAPI available: testing encrypted saves" :
+            "DPAPI unavailable: testing refused saves; successful encryption is not verified here");
         var shared = Sp.GetRequiredService<SettingsService>();
         string path = Path.Combine(shared.DataRoot, "settings.json");
         shared.Save();
@@ -734,10 +754,12 @@ internal static partial class Program
                 s.UpdateSettings(x => x.Temperature = 0.33f);   // any unrelated save
                 string after = (string?)JsonNode.Parse(File.ReadAllText(path))!["HuggingFaceToken"] ?? "";
                 Check("S1b", "an unrelated save writes the ORIGINAL blob back (it used to be overwritten with \"\")", after == foreignBlob, after);
-                s.UpdateSettings(x => x.HuggingFaceToken = "hf_new_token_value");
+                bool saved = s.UpdateSettings(x => x.HuggingFaceToken = "hf_new_token_value");
                 string replaced = (string?)JsonNode.Parse(File.ReadAllText(path))!["HuggingFaceToken"] ?? "";
-                Check("S1c", "typing a new key replaces the blob and clears the notice",
-                    replaced.StartsWith("ENC:") && replaced != foreignBlob && s.UndecryptableSecrets.Count == 0);
+                Check("S1c", "a replacement key is encrypted, or the old blob survives an encryption failure",
+                    dpapiAvailable
+                        ? saved && replaced.StartsWith("ENC:") && replaced != foreignBlob && s.UndecryptableSecrets.Count == 0
+                        : !saved && replaced == foreignBlob && s.LastSaveError != null && s.UndecryptableSecrets.Contains("HuggingFaceToken"));
             });
             CaseSync("S2", () =>
             {
@@ -755,7 +777,36 @@ internal static partial class Program
                 s.UpdateSettings(x => x.ModelDirectory = ghost);
                 Check("S3", "saving a folder path no longer creates the folder (typed half-paths like D:\\Mod used to appear)", !Directory.Exists(ghost));
             });
-            CaseSync("S4", () => SparkContextReloadTest(shared));
+            if (!storageOnly) CaseSync("S4", () => SparkContextReloadTest(shared));
+            CaseSync("S5", () =>
+            {
+                foreach (bool provider in new[] { false, true })
+                {
+                    File.WriteAllText(path, original);
+                    var s = new SettingsService();
+                    string before = File.ReadAllText(path);
+                    const string marker = "settings-test-only-DO-NOT-PERSIST-PLAINTEXT";
+                    if (provider) s.Settings.ProviderConfigs["SecretSaveTest"] = new ProviderConfig { ApiKey = marker };
+                    else s.Settings.HuggingFaceToken = marker;
+                    int notifications = 0;
+                    s.SettingsChanged += () => notifications++;
+                    bool saved = s.Save();
+                    string after = File.ReadAllText(path);
+                    Check(provider ? "S5p" : "S5h", "saving a secret never writes its plaintext",
+                        !after.Contains(marker) && !File.Exists(path + ".tmp"));
+                    Check(provider ? "S5pa" : "S5ha", "encryption failure preserves the old file and reports no successful save",
+                        dpapiAvailable ? saved && s.LastSaveError == null && notifications == 1
+                            : !saved && after == before && s.LastSaveError != null && notifications == 0);
+                    Check(provider ? "S5pm" : "S5hm", "saving does not replace the in-memory key with encrypted data",
+                        (provider ? s.Settings.ProviderConfigs["SecretSaveTest"].ApiKey : s.Settings.HuggingFaceToken) == marker);
+                    if (dpapiAvailable)
+                    {
+                        var reloaded = new SettingsService();
+                        Check(provider ? "S5pr" : "S5hr", "an encrypted secret reads back on the same account",
+                            (provider ? reloaded.Settings.ProviderConfigs["SecretSaveTest"].ApiKey : reloaded.Settings.HuggingFaceToken) == marker);
+                    }
+                }
+            });
         }
         finally { File.WriteAllText(path, original); shared.Load(); }
     }

@@ -97,6 +97,7 @@ public partial class ChatViewModel : ViewModelBase
             if (!SetProperty(ref _userInput, value)) return;
             if (string.IsNullOrEmpty(value)) OnInputCleared();
             else NoteUserActivity();   // typing: the screen is in use (ScreenGuard)
+            if (_buddyMood == Services.BuddyMood.Sleep) NudgeBuddy();   // she wakes when the owner types
         }
     }
 
@@ -203,8 +204,47 @@ public partial class ChatViewModel : ViewModelBase
             RaiseRunStateChanged();
             RefreshStickyPlan();
             OnPropertyChanged(nameof(FollowEditsHere));
+            OnPropertyChanged(nameof(CurrentChatRef));
+            ChatRefCopied = false;   // the "Copied" mark belonged to the chat that was on screen
             WatchChatProject(left, value);
         }
+    }
+
+    // ─── The chat's reference (CX-8cf58c2a), pinned at the top of the chat page ───
+    // Owner 2026-11-09: a visible, copyable id per chat, so the owner, the team and the AI can say which chat they mean.
+
+    /// <summary>The reference of the chat on screen ("" when there is none). The page shows it only once the chat has rows.</summary>
+    public string CurrentChatRef => CurrentSession?.Ref ?? "";
+
+    private bool _chatRefCopied;
+    /// <summary>True for a moment after the reference was copied: the chip says "Copied".</summary>
+    public bool ChatRefCopied { get => _chatRefCopied; private set => SetProperty(ref _chatRefCopied, value); }
+    private DispatcherTimer? _chatRefCopiedTimer;
+
+    private ICommand? _copyChatRefCommand;
+    public ICommand CopyChatRefCommand => _copyChatRefCommand ??= new RelayCommand(CopyChatRef);
+
+    /// <summary>The reference to the clipboard, with a short "Copied" on the chip. A second click restarts the mark.</summary>
+    private void CopyChatRef()
+    {
+        string reference = CurrentChatRef;
+        if (reference.Length == 0) return;
+        try { System.Windows.Clipboard.SetText(reference); }
+        catch
+        {
+            // Another program holds the clipboard: say so in words, never the exception's text.
+            StatusText = Loc("chat.ref.copyFailed");
+            return;
+        }
+        StatusText = LocF("chat.ref.copiedStatus", reference);
+        ChatRefCopied = true;
+        if (_chatRefCopiedTimer == null)
+        {
+            _chatRefCopiedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.6) };
+            _chatRefCopiedTimer.Tick += (_, _) => { _chatRefCopiedTimer!.Stop(); ChatRefCopied = false; };
+        }
+        _chatRefCopiedTimer.Stop();
+        _chatRefCopiedTimer.Start();
     }
     public string WorkingDirectory
     {
@@ -532,7 +572,9 @@ public partial class ChatViewModel : ViewModelBase
     public ICommand ArchiveSplitCommand => _archiveSplitCommand ??= new RelayCommand<string>(id =>
     {
         if (Sessions.FirstOrDefault(s => s.Id == id) is not { } s) return;
+        string? parent = s.ParentId;
         if (!ArchiveSplit(s)) StatusText = Loc("chat.split.stillWorking");
+        else _ = SweepWorktreesAfterOwnerArchiveAsync(parent);
         RebuildVisibleSessions();
     });
     private ICommand? _archiveSplitCommand;
@@ -553,6 +595,7 @@ public partial class ChatViewModel : ViewModelBase
         if (string.IsNullOrEmpty(id)) return;
         foreach (var (kidId, link) in ChatLinkStore.Current?.ChildrenOf(id) ?? new())
             if (link.ArchivedAt == null && Sessions.FirstOrDefault(c => c.Id == kidId) is { } kid) ArchiveSplit(kid);
+        _ = SweepWorktreesAfterOwnerArchiveAsync(id);
         RebuildVisibleSessions();
     });
     private ICommand? _archiveFinishedSplitsCommand;
@@ -565,7 +608,9 @@ public partial class ChatViewModel : ViewModelBase
     /// close_chat (UI thread): the split chats of <paramref name="parentId"/> — list them (<paramref name="target"/> empty
     /// or "list"), or put away the finished ones ("done") or one by id / title. A chat still working is never closed.
     /// </summary>
-    private string CloseChatsForAgent(string? parentId, string target)
+    /// <paramref name="held"/>: split chats whose worktree holds unmerged work (chat id → what) — never put away, nor a
+    /// chat with one of them under it, so the branch is not lost from view.
+    private string CloseChatsForAgent(string? parentId, string target, IReadOnlyDictionary<string, string>? held = null)
     {
         if (parentId == null) return "No chat is asking (close_chat works from a chat that split work off with new_chat).";
         var kids = ChatLinkStore.Current?.ChildrenOf(parentId) ?? new();
@@ -579,7 +624,10 @@ public partial class ChatViewModel : ViewModelBase
         {
             var c = Sessions.FirstOrDefault(x => x.Id == id);
             string where = string.IsNullOrEmpty(c?.ProjectPath) ? "" : $" in {c!.ProjectPath}";
-            return $"- \"{c?.Title ?? "?"}\" (id {id}){where} — {link.Task} — {StateOf(id, link)}";
+            string tree = ChatLinkStore.Current?.WorktreeOf(id) is { } wt
+                ? $" — own worktree {wt.Root}, branch {wt.Branch}" + (held != null && held.TryGetValue(id, out var why) ? $" (unmerged: {why})" : "")
+                : "";
+            return $"- \"{c?.Title ?? "?"}\" (ref {ChatRef.Of(id)}, id {id}){where} — {link.Task} — {StateOf(id, link)}{tree}";
         }
         string List() => "Split chats of this chat:\n" + string.Join("\n", kids.Select(k => Line(k.Id, k.Link)));
 
@@ -589,19 +637,28 @@ public partial class ChatViewModel : ViewModelBase
         bool all = target.ToLowerInvariant() is "done" or "finished" or "all" or "all-done" or "*";
         var picked = kids.Where(k => k.Link.ArchivedAt == null && (all
             || k.Id == target
+            || ChatRef.Matches(k.Id, target)
             || string.Equals(Sessions.FirstOrDefault(c => c.Id == k.Id)?.Title, target, StringComparison.OrdinalIgnoreCase))).ToList();
         if (picked.Count == 0) return $"No open split chat matches \"{target}\".\n" + List();
 
-        var closed = new List<string>(); var busy = new List<string>();
+        var closed = new List<string>(); var busy = new List<string>(); var unmerged = new List<string>();
         foreach (var (id, _) in picked)
         {
             var c = Sessions.FirstOrDefault(x => x.Id == id);
+            // Its worktree (or one under it) holds work nobody merged: it stays open, and so does the worktree.
+            string? holds = held == null || held.Count == 0 ? null
+                : new[] { id }.Concat((ChatLinkStore.Current?.DescendantsOf(id) ?? new()).Select(d => d.Id))
+                    .Where(held.ContainsKey).Select(k => held[k]).FirstOrDefault();
+            if (holds != null) { unmerged.Add($"\"{c?.Title ?? id}\" — {holds}"); continue; }
             if (c == null) { ChatLinkStore.Current?.SetArchived(id, true); closed.Add(id); continue; }
             if (ArchiveSplit(c)) closed.Add(c.Title); else busy.Add(c.Title);
         }
         RebuildVisibleSessions();   // at once: the store's own notice redraws again a moment later, harmlessly
         string said = closed.Count > 0 ? $"Put away {closed.Count}: {string.Join(", ", closed)} (kept, not deleted; the user can bring them back)." : "Nothing was put away.";
         if (busy.Count > 0) said += $" Still working, left open: {string.Join(", ", busy)}.";
+        if (unmerged.Count > 0)
+            said += " Left open, its worktree is kept because it holds work that is not merged: " + string.Join("; ", unmerged)
+                  + ". Merge the branch (or open a PR from it and merge that), then call close_chat again.";
         return said;
     }
 
@@ -615,7 +672,7 @@ public partial class ChatViewModel : ViewModelBase
     public int VisibleSessionsCount => VisibleSessions.Count;
 
     /// <summary>A chat with a run going, waiting for the owner, or finished while the owner looked elsewhere.</summary>
-    private bool IsActiveChat(ChatSession s) => RunOf(s) != null || s.RunStatus is "working" or "waiting" or "done";
+    private bool IsActiveChat(ChatSession s) => RunOf(s) != null || s.RunStatus is "working" or "waiting" or "done" or "failed";
 
     /// <summary>The active chats the sidebar was last built with: rebuilt only when that set changes.</summary>
     private string _activeChatsShown = "";
@@ -1151,10 +1208,14 @@ public partial class ChatViewModel : ViewModelBase
         Services.Tools.ProjectToolModule.CloseChatHandler = target =>
         {
             string? parentId = FlowRun?.Session.Id;
-            return App.Current.Dispatcher.InvokeAsync(() => CloseChatsForAgent(parentId, target)).Task;
+            return CloseChatsWithWorktreesAsync(parentId, target);
         };
+        InitFable();
+        InitSplitWorktrees();
         // Which chat split off which, and which finished split chats were put away (chat-links.json beside codex.db).
         ChatLinkStore.Current ??= new ChatLinkStore(settingsService.DataRoot);
+        // Chats with a run going (live-runs.json beside codex.db): one CluadeX never saw end shows as stopped after a restart.
+        InitLiveRuns(settingsService.DataRoot);
         ChatLinkStore.Current.Changed += id => App.Current?.Dispatcher.BeginInvoke(() => OnSplitLinkChanged(id));
         _providerManager = providerManager;
         _agentService = agentService;
@@ -1284,6 +1345,9 @@ public partial class ChatViewModel : ViewModelBase
         // the next-step box (ChatViewModel.Orchestration.cs).
         InitOrchestration();
         InitDesign();
+        // watch_ci / watch_process: their cards, and the turn a finished watch starts (ChatViewModel.Watch.cs).
+        InitWatch();
+        InitSkillPick();
 
         // Agent map: every sub-agent this command started, live, as one tree card per command.
         _agentService.OnSubAgentEvent += e =>
@@ -1300,6 +1364,7 @@ public partial class ChatViewModel : ViewModelBase
             // The run's own plan, read in its flow (each run has one) before hopping to the UI thread.
             var todoRun = Cur;
             var items = _agentToolService.TodoItems.ToList();
+            string? planScope = todoRun?.Scope.PlanScope;
             App.Current?.Dispatcher.BeginInvoke(() =>
             {
                 RememberPlan(todoRun, items);   // the plan window (and a finished run's plan) read it from here
@@ -1332,6 +1397,18 @@ public partial class ChatViewModel : ViewModelBase
                 // The same plan with a step further: its rows change state in place, so the card plays the change.
                 if (_todoListMsg != null && Messages.Contains(_todoListMsg))
                     planItems = PlanItemView.Reconcile(_todoListMsg.PlanItems, planItems);
+                // A plan carried over from the last turn goes on in its own card when this list continues it (the same
+                // steps, or the same with steps added after them). A different list is a new plan: it gets a new card and
+                // the old one stays in the chat as it was.
+                if (_todoListMsg == null && todoRun?.CarriedPlanMsg is { PlanItems: { } carriedRows } carried && Messages.Contains(carried)
+                    && planScope != Services.Agents.PlanOps.NewTask
+                    && !IsNewPlan(carriedRows.Select(r => r.Text).ToList(), planItems.Select(p => p.Text).ToList()))
+                {
+                    _todoListMsg = carried;
+                    todoRun.TodoMsg = carried;
+                    carried.PlanStopped = false;
+                    planItems = PlanItemView.Reconcile(carried.PlanItems, planItems);
+                }
                 int planDone = planItems.Count(p => p.IsDone);
                 // A change queued just before the run ended lands after EndTurn: it must not bring "working" back.
                 string planHeader = PlanCardHeader(planDone, planItems.Count, running: todoRun == null || _runs.Contains(todoRun));
@@ -1339,7 +1416,8 @@ public partial class ChatViewModel : ViewModelBase
                 if (_todoListMsg == null || !Messages.Contains(_todoListMsg))
                 {
                     _todoListMsg = new ChatMessage { Role = MessageRole.System, Content = sb.ToString().TrimEnd(),
-                                                     PlanItems = planItems, PlanHeader = planHeader, PlanElapsed = planElapsed };
+                                                     PlanItems = planItems, PlanHeader = planHeader, PlanElapsed = planElapsed,
+                                                     PlanScope = planScope };
                     if (todoRun != null) todoRun.TodoMsg = _todoListMsg;
                     Messages.Add(_todoListMsg);
                 }
@@ -1349,6 +1427,7 @@ public partial class ChatViewModel : ViewModelBase
                     _todoListMsg.PlanItems = planItems;
                     _todoListMsg.PlanHeader = planHeader;
                     _todoListMsg.PlanElapsed = planElapsed;
+                    _todoListMsg.PlanScope = planScope ?? _todoListMsg.PlanScope;
                     // Keep the plan near the action: if newer messages buried it, move it to the bottom.
                     if (Messages.IndexOf(_todoListMsg) < Messages.Count - 3)
                     {
@@ -1483,10 +1562,13 @@ public partial class ChatViewModel : ViewModelBase
             RefreshUsageStrip();
             ProbeOllamaForChatBox();   // throttled to 30 s: lists Ollama's models in the model box while it answers
             CheckSidebarDay();
+            RefreshBuddy();   // pleased → idle → asleep as time passes
         };
         _memoryTimer.Start();
         InitControls(activation);
         InitSidePanel();
+        InitVibe();
+        InitActivity();
         InitCharacter();
         InitStarters();
         HookPendingImages();
@@ -1571,6 +1653,7 @@ public partial class ChatViewModel : ViewModelBase
                 }
                 finally { _bulkSessions = false; }
                 RebuildVisibleSessions();
+                MarkOrphanRuns();
                 // Split links of chats that are gone (deleted, or dropped above as empty) are forgotten.
                 ChatLinkStore.Current?.Prune(savedSessions.Select(s => s.Id));
                 // Projects the saved chats worked in join the project list (the agent opens them by name).
@@ -1939,6 +2022,7 @@ public partial class ChatViewModel : ViewModelBase
         for (int i = Sessions.Count - 1; i >= 0; i--)
             if (Sessions[i].Id == left.Id) Sessions.RemoveAt(i);
         Services.Agents.DesignGate.Forget(left.Id);
+        Services.Skills.SkillPickGate.Forget(left.Id);
     }
 
     /// <summary>
@@ -2013,6 +2097,8 @@ public partial class ChatViewModel : ViewModelBase
         _persistenceService.DeleteSession(sessionId);
         await CleanUpSessionAsync(sessionId, deleteImages: false);   // DeleteSession already removed its screenshots
         Services.Agents.DesignGate.Forget(sessionId);
+        _watch?.CancelChat(sessionId, "the chat was deleted");
+        Services.Skills.SkillPickGate.Forget(sessionId);
 
         if (_settingsService.Settings.PinnedChatIds.Contains(sessionId))
         {
@@ -2643,25 +2729,22 @@ public partial class ChatViewModel : ViewModelBase
     /// with <paramref name="message"/>, its first turn started as the user's message. The asking chat keeps running
     /// beside it (each run has its own folder). Not awaited: the new chat's turn is its own. Returns the tool's report.
     /// </summary>
-    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null, bool fork = false)
+    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null, bool fork = false,
+        Services.Agents.ChatWorktree? worktree = null) =>
+        OpenModelChatForAgent(path, message, title, parentId, fork, model: null, openedNote: null, worktree);
+
+    /// <summary>
+    /// <see cref="OpenChatForAgent"/> for a chat with a model of its own (<paramref name="model"/>, kept in chat-links.json:
+    /// its runs go out on it — ChatViewModel.Fable). <paramref name="openedNote"/>: a row the new chat shows under the
+    /// "opened by" line (what it runs on and what it may cost).
+    /// </summary>
+    private string OpenModelChatForAgent(string? path, string? message, string? title, string? parentId, bool fork,
+        string? model, string? openedNote, Services.Agents.ChatWorktree? worktree = null)
     {
         parentId ??= CurrentSession?.Id;
         // A ceiling on agent splits: each one starts a run that may split again (SplitLimits). Thrown = the tool fails
         // with the reason, so the agent does the work itself instead of breeding chats.
-        if (parentId != null && ChatLinkStore.Current is { } store)
-        {
-            bool Working(string id) => Sessions.FirstOrDefault(s => s.Id == id) is { } s && RunOf(s) != null;
-            string? refusal = SplitLimits.Refusal(
-                store.DepthOf(parentId),
-                store.ChildrenOf(parentId).Count(k => k.Link.ArchivedAt == null && Working(k.Id)),
-                Sessions.Count(s => store.Get(s.Id) != null && RunOf(s) != null),
-                store.CreatedSince(DateTime.Now - SplitLimits.Window));
-            if (refusal != null)
-            {
-                _debugLog?.Info("Chat", $"new_chat refused · parent={parentId} · {refusal}");
-                throw new InvalidOperationException(refusal);
-            }
-        }
+        if (SplitRefusal(parentId) is { } refusal) throw new InvalidOperationException(refusal);
         string? from = Sessions.FirstOrDefault(s => s.Id == parentId)?.Title ?? CurrentSession?.Title;
         // Read before the new chat goes on screen: from the store, as Fork does, so the copy holds no live rows or callbacks.
         List<ChatMessage>? inherited = null;
@@ -2686,21 +2769,50 @@ public partial class ChatViewModel : ViewModelBase
         // The split, for the sidebar's tree and for close_chat: what this chat was opened to do.
         if (parentId != null)
         {
-            ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "");
+            ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "", model);
             NoteSplitChip(parentId, chat);
         }
+        // Its own worktree: recorded before its first turn begins, so that turn (and every later one) runs there.
+        if (worktree != null) ChatLinkStore.Current?.SetWorktree(chat.Id, worktree);
         string folder = string.IsNullOrWhiteSpace(chat.ProjectPath) ? "(no project)" : chat.ProjectPath;
         Messages.Add(new ChatMessage
         {
             Role = MessageRole.System,
             Content = "💬 " + LocF("chat.newChat.byAgent", from ?? "?", folder),
         });
+        if (openedNote != null) Messages.Add(new ChatMessage { Role = MessageRole.System, Content = openedNote });
+        if (worktree != null)
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System, ToolName = ChatMessage.NoticeTag,
+                Content = "🌿 " + LocF("chat.split.worktreeOpened", worktree.Folder, worktree.Branch,
+                    worktree.BaseCommit[..Math.Min(9, worktree.BaseCommit.Length)]),
+            });
         RebuildVisibleSessions();
+        string where = worktree == null ? folder
+            : $"its own git worktree {worktree.Folder} (branch {worktree.Branch}, cut from this chat's HEAD {worktree.BaseCommit}; "
+              + "uncommitted changes here are not in it)";
         if (message == null)
-            return $"Opened a new empty chat (id {chat.Id}) in {folder}. It is on screen now; the user types there.";
+            return $"Opened a new empty chat (ref {chat.Ref}, id {chat.Id}) in {where}. It is on screen now; the user types there.";
         _ = StartAgentChatTurnAsync(message, chat.Id);
-        return $"Opened a new chat (id {chat.Id}) in {folder} and started it with your message. It runs on its own beside "
-             + "this chat; the user follows it in the sidebar. Do not wait for it — carry on here or finish your reply.";
+        return $"Opened a new chat (ref {chat.Ref}, id {chat.Id}) in {where} and started it with your message. It runs on its own beside "
+             + "this chat; the user follows it in the sidebar. Do not wait for it — carry on here or finish your reply."
+             + (worktree == null ? "" : $" When it ends a turn you are told; merge branch {worktree.Branch} or open a PR from it, "
+                + "then close_chat removes the worktree.");
+    }
+
+    /// <summary>Why <paramref name="parentId"/> may not split off another chat now (SplitLimits), or null when it may.</summary>
+    private string? SplitRefusal(string? parentId)
+    {
+        if (parentId == null || ChatLinkStore.Current is not { } store) return null;
+        bool Working(string id) => Sessions.FirstOrDefault(s => s.Id == id) is { } s && RunOf(s) != null;
+        string? refusal = SplitLimits.Refusal(
+            store.DepthOf(parentId),
+            store.ChildrenOf(parentId).Count(k => k.Link.ArchivedAt == null && Working(k.Id)),
+            Sessions.Count(s => store.Get(s.Id) != null && RunOf(s) != null),
+            store.CreatedSince(DateTime.Now - SplitLimits.Window));
+        if (refusal != null) _debugLog?.Info("Chat", $"new_chat refused · parent={parentId} · {refusal}");
+        return refusal;
     }
 
     private async Task StartAgentChatTurnAsync(string message, string chatId)
@@ -3300,6 +3412,7 @@ public partial class ChatViewModel : ViewModelBase
                     Content = finalText
                         ?? (toolsRun > 0 ? $"*{LocF("chat.agent.noSummary", toolsRun)}*" : $"*{Loc("chat.agent.noReply")}*"),
                     HasError = nothing,
+                    IsTurnNote = finalText == null,
                     CodeBlocks = finalText != null ? _vm._codeExecutionService.ExtractCodeBlocks(finalText) : new(),
                 };
                 _vm.PostTurnMessage(_target, final);
@@ -3525,6 +3638,8 @@ public partial class ChatViewModel : ViewModelBase
         if (CurrentSession is { } s && input.Length > 0)
         {
             Services.Agents.WorkflowGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
+            // ...and for Fable: only the owner's own words (or a yes on the Fable card) may put work on it.
+            Services.Agents.FableGate.NoteOwnerMessage(s.Id, input, append: IsGenerating);
             // The UI Studio's own request ("[UI Studio] Change one element of the UI.") is not the owner asking for a
             // design: its words are none (the chat's Design switch still counts).
             Services.Agents.DesignGate.NoteOwnerMessage(s.Id, _sendingFromStudio ? "" : input, append: IsGenerating);
@@ -3540,6 +3655,8 @@ public partial class ChatViewModel : ViewModelBase
     {
         bool fromBox = pipe == null;
         void ClearBox() { if (fromBox) UserInput = string.Empty; }
+        // The owner wrote here: watches may start turns in this chat again (RunWatchService.MaxWakes).
+        if (fromBox && CurrentSession is { } spoke) _watch?.OwnerSpoke(spoke.Id);
         // Files dropped a moment ago may still be copying in (a big zip): the message waits for them rather than
         // going out without them. A second Send pressed meanwhile does nothing — the first one sends.
         if (fromBox && !IsGenerating && !_attachingFiles.IsCompleted)
@@ -3552,7 +3669,7 @@ public partial class ChatViewModel : ViewModelBase
         int images = fromBox ? PendingImages.Count : 0;
         int files = fromBox ? PendingFiles.Count : 0;
         if (string.IsNullOrEmpty(input) && images == 0 && files == 0) return;
-        if (fromBox) _dictation?.Hush();   // a reply still being read aloud stops: the user has moved on
+        if (fromBox) { _dictation?.Hush(); StopReplyVoice(); }   // a reply still being read aloud stops: the user has moved on
         // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
         // to do nothing at all (the box was even disabled) until the run ended. Attachments wait for the next turn.
         if (IsGenerating)
@@ -3650,6 +3767,8 @@ public partial class ChatViewModel : ViewModelBase
             {
                 activeSkill = skill;
                 _skillService.RecordUse(skill.Name, SkillService.UseKind.Slash);
+                // What the owner asked it for is remembered for it (the picker finds it for a task said that way).
+                if (!string.IsNullOrWhiteSpace(skillArgs)) _skillService.LearnTerms(skill.Name, skillArgs);
                 // Replace input with skill prompt + user args
                 skillPromptOverride = skill.PromptContent;
                 if (!string.IsNullOrEmpty(skillArgs))
@@ -3884,6 +4003,21 @@ public partial class ChatViewModel : ViewModelBase
             input += "\n\n[Open folders — main: " + _fileSystemService.AppWorkingDirectory + "; also open: "
                 + string.Join(", ", withExtras.ExtraFolders) + ". Relative paths are in the main folder; use absolute paths for the others.]";
         var turn = BeginTurn();
+        // A /command turn already runs its skill: its input is the skill's prompt, nothing to pick from. Otherwise the
+        // skill picker reads what the owner typed — not the folders line, a notice or an attachment's text added below.
+        if (FlowRun is { } pickRun)
+        {
+            if (isSkill) pickRun.Scope.NoSkillPick = true;
+            else if (userMsg.Content == Loc("chat.pause.resumeText"))
+            {
+                // "Continue the paused task…" is the app's wording: the skills are the ones the task itself asked for —
+                // its last request in this chat (none = no pick).
+                string? task = pickRun.Messages.LastOrDefault(m => m.Role == MessageRole.User && !ReferenceEquals(m, userMsg)
+                    && !string.IsNullOrWhiteSpace(m.Content) && m.Content != userMsg.Content && !m.Content.StartsWith('/'))?.Content;
+                if (task != null) pickRun.Scope.TurnText = task; else pickRun.Scope.NoSkillPick = true;
+            }
+            else if (!string.IsNullOrWhiteSpace(userMsg.Content)) pickRun.Scope.TurnText = userMsg.Content;
+        }
         if (design && CurrentSession is { } designChat)
         {
             // what the model is told rides on this turn's input (the first request reads it; the shared system prompt
@@ -3892,11 +4026,15 @@ public partial class ChatViewModel : ViewModelBase
             MarkDesignTurn(turn, userMsg);
             BeginDesignTurn(designChat);
         }
+        // A split chat in its own worktree hears where it works with every turn (the parent's checkout is not its own).
+        // (A worktree removed by hand is not mentioned: the turn then runs in the project, as TaskFolderFor says.)
+        if (FlowRun is { } wtRun && ChatLinkStore.Current?.WorktreeOf(wtRun.Session.Id) is { } ownTree && Directory.Exists(ownTree.Folder))
+            input += "\n\n" + NoticePrefix + Services.Agents.SplitWorktree.InstructionFor(ownTree);
         if (pipe != null && FlowRun is { } pipeRun)
         {
             // A message a pipe caller sent (cluadex.continue_chat): marked as such (the BrainX model never relays it
             // back into the room), with the caller's step limit; the caller reads its outcome from this run.
-            pipeRun.Scope.FromPipe = true;
+            pipeRun.Scope.FromPipe = !pipe.FromWatch;
             pipeRun.MaxSteps = pipe.MaxSteps;
             pipe.Run = pipeRun;
             pipe.UserMessage = userMsg;
@@ -4316,6 +4454,7 @@ public partial class ChatViewModel : ViewModelBase
                     schedule = !thoughtQueued;
                     thoughtQueued = true;
                 }
+                if (schedule) { run.ActivityWriting = false; NoteActivityThinking(run.Session.Id); }
                 if (schedule)
                     App.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
                     {
@@ -4335,6 +4474,7 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
+            if (!run.ActivityWriting) { run.ActivityWriting = true; NoteActivityWriting(run.Session.Id); }
             agenticTokenCount++;
             bool needsNewBubble = step != lastStreamStep;
 
@@ -4422,6 +4562,7 @@ public partial class ChatViewModel : ViewModelBase
             if (!Mine() || string.IsNullOrWhiteSpace(text)) return;
             string streamedNow = streamSb.ToString();   // same thread as the token appends
             bool alreadyShown = LooksAlreadyStreamed(text, streamedNow);
+            if (!alreadyShown) { run.ActivityWriting = false; NoteActivityThinking(run.Session.Id); }
             App.Current?.Dispatcher.Invoke(() =>
             {
                 // Stop the streaming cursor on the current text bubble, but KEEP the reference so the
@@ -4537,6 +4678,7 @@ public partial class ChatViewModel : ViewModelBase
                 {
                     Role = MessageRole.Assistant,
                     Content = note,
+                    IsTurnNote = true,
                     HasError = toolsRun == 0,
                     CanRetry = toolsRun == 0,
                 };
@@ -4652,6 +4794,8 @@ public partial class ChatViewModel : ViewModelBase
     {
         var run = Cur;   // the run whose tool is starting, captured at event time (its chat may not be on screen)
         if (run == null) return;
+        run.ActivityWriting = false;
+        NoteActivityTool(run.Session.Id, toolName, statusMessage);
         if (toolName != "agent") run.ToolStarts.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp());
         // For a supervisor on the pipe: the tool's name only — its arguments (paths, commands) stay in the chat.
         if (toolName != "agent") run.LastTool = toolName;
@@ -4851,6 +4995,7 @@ public partial class ChatViewModel : ViewModelBase
         var run = Cur;
         run?.Touch();
         ChatSession? target = run?.Session;
+        NoteActivityDone(target?.Id ?? CurrentSession?.Id, toolResult);
         App.Current?.Dispatcher.BeginInvoke(() =>
         {
             var list = run?.Messages ?? (target == null || ReferenceEquals(target, CurrentSession) ? Messages : null);
@@ -4933,6 +5078,7 @@ public partial class ChatViewModel : ViewModelBase
             // A screenshot (or any image a tool returned) shows on its own row as a thumbnail — by its saved file
             // path only; the image bytes never reach the chat or codex.db. Such a row is never merged into a group.
             string? thumbnail = ToolThumbnailPath(toolResult);
+            NoteTurnChange(run, toolResult, runFolder ?? windowFolder, thumbnail);
 
             // ─── Tool call grouping: collapse consecutive same-category calls ───
             string category = GetToolCategory(toolResult.ToolName);
@@ -5250,7 +5396,11 @@ public partial class ChatViewModel : ViewModelBase
     {
         if (run.TodoMsg?.PlanItems is not { Count: > 0 } items) return;
         foreach (var item in items) item.IsLive = false;
-        run.TodoMsg.PlanHeader = PlanCardHeader(items.Count(p => p.IsDone), items.Count, running: false);
+        // Stopped by the owner with a step in progress: "หยุดไว้ (2/6)", and the card is saved as stopped.
+        run.TodoMsg.PlanStopped = run.Stopped && items.Any(p => p.IsActive);
+        run.TodoMsg.PlanHeader = run.TodoMsg.PlanStopped
+            ? Services.Agents.PlanRecord.EndedHeader(items, stopped: true, Loc)
+            : PlanCardHeader(items.Count(p => p.IsDone), items.Count, running: false);
         run.TodoMsg.PlanElapsed = PlanElapsedText(run.Stopwatch.Elapsed);
     }
 

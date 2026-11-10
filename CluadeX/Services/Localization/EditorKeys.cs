@@ -277,6 +277,11 @@ internal static class EditorKeys
         ["ide.cantOpen"] = new() { ["en"] = "Can't open {0} — it is binary or larger than 2 MB.", ["th"] = "เปิด {0} ไม่ได้ — เป็นไฟล์ไบนารีหรือใหญ่เกิน 2 MB" },
         ["ide.openFailed"] = new() { ["en"] = "Could not open {0} — see the Debug Log.", ["th"] = "เปิด {0} ไม่ได้ — ดูบันทึกดีบัก" },
         // terminal
+        ["ide.termShell"] = new() { ["en"] = "PowerShell", ["th"] = "PowerShell" },
+        ["ide.termReady"] = new() { ["en"] = "ready", ["th"] = "พร้อมใช้" },
+        ["ide.termIdle"] = new() { ["en"] = "not started", ["th"] = "ยังไม่เริ่ม" },
+        ["ide.termOpenHint"] = new() { ["en"] = "Click to open — a real PowerShell in the project folder", ["th"] = "คลิกเพื่อเปิด — PowerShell จริงในโฟลเดอร์โปรเจกต์" },
+        ["ide.termPlaceholder"] = new() { ["en"] = "Type a PowerShell command, Enter to run · Ctrl+C stops", ["th"] = "พิมพ์คำสั่ง PowerShell แล้วกด Enter · Ctrl+C หยุด" },
         ["ide.termExited"] = new() { ["en"] = "[terminal exited — the next command restarts it]", ["th"] = "[เทอร์มินัลปิดแล้ว — คำสั่งถัดไปจะเปิดใหม่ให้]" },
         ["ide.termStopped"] = new() { ["en"] = "[stopped — everything the terminal was running was ended; fresh prompt ready]", ["th"] = "[หยุดแล้ว — ปิดทุกอย่างที่เทอร์มินัลรันอยู่ พร้อมรับคำสั่งใหม่]" },
         // save / close / unsaved

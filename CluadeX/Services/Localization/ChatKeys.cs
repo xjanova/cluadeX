@@ -64,6 +64,12 @@ internal static class ChatKeys
         ["chat.cleanup.previewClosed"] = new() { ["en"] = ", preview closed", ["th"] = " ปิดหน้าพรีวิว" },
         ["chat.status.deleted"] = new() { ["en"] = "Chat deleted", ["th"] = "ลบแชทแล้ว" },
         ["chat.status.copied"] = new() { ["en"] = "Copied!", ["th"] = "คัดลอกแล้ว!" },
+        // ─── The chat's reference (CX-8cf58c2a), pinned at the top of the chat ───
+        ["chat.ref.tip"] = new() { ["en"] = "This chat's reference — click to copy. Use it to tell your team or the AI which chat you mean.", ["th"] = "รหัสอ้างอิงแชทนี้ — คลิกเพื่อคัดลอก ใช้บอกทีมหรือ AI ว่าหมายถึงแชทไหน" },
+        ["chat.ref.copyTip"] = new() { ["en"] = "Copy the reference", ["th"] = "คัดลอกรหัสอ้างอิง" },
+        ["chat.ref.copied"] = new() { ["en"] = "Copied", ["th"] = "คัดลอกแล้ว" },
+        ["chat.ref.copiedStatus"] = new() { ["en"] = "Copied {0} — paste it to say which chat you mean.", ["th"] = "คัดลอก {0} แล้ว — วางเพื่อบอกว่าหมายถึงแชทไหน" },
+        ["chat.ref.copyFailed"] = new() { ["en"] = "Couldn't copy — another program is using the clipboard. Select the reference and press Ctrl+C.", ["th"] = "คัดลอกไม่ได้ — มีโปรแกรมอื่นใช้คลิปบอร์ดอยู่ ลองเลือกรหัสแล้วกด Ctrl+C" },
         ["chat.status.working"] = new() { ["en"] = "Working...", ["th"] = "กำลังทำงาน..." },
         ["chat.status.workingSecs"] = new() { ["en"] = "Working... ({0}s)", ["th"] = "กำลังทำงาน... ({0} วิ)" },
         ["chat.status.generating"] = new() { ["en"] = "Generating...", ["th"] = "กำลังเขียนคำตอบ..." },
@@ -173,6 +179,22 @@ internal static class ChatKeys
         ["chat.split.archiveDoneTip"] = new() { ["en"] = "Put away the finished split chats of this chat (kept, not deleted)", ["th"] = "เก็บแชทงานแยกที่เสร็จแล้วของแชทนี้ (ไม่ลบ เรียกคืนได้)" },
         ["chat.split.archiveTip"] = new() { ["en"] = "Put this split chat away (kept, not deleted)", ["th"] = "เก็บแชทงานแยกนี้ (ไม่ลบ เรียกคืนได้)" },
         ["chat.split.unarchiveTip"] = new() { ["en"] = "Bring this split chat back into the list", ["th"] = "นำแชทงานแยกนี้กลับมาในรายการ" },
+        // A split chat in its own git worktree (new_chat isolation "worktree")
+        ["chat.split.worktreeOpened"] = new()
+        {
+            ["en"] = "This chat works in its own git worktree {0}, on branch {1} (cut from {2}), so its edits and builds never clash with the chat that opened it.",
+            ["th"] = "แชทนี้ทำงานใน git worktree ของตัวเอง {0} บน branch {1} (แยกมาจาก {2}) งานที่แก้และการ build จึงไม่ชนกับแชทที่เปิดมันขึ้นมา",
+        },
+        ["chat.split.worktreeNote"] = new()
+        {
+            ["en"] = "Its work is on branch {0} (worktree {1}) — merge it or open a PR from it.",
+            ["th"] = "งานอยู่บน branch {0} (worktree {1}) — merge เข้ามาหรือเปิด PR จาก branch นี้ได้เลย",
+        },
+        ["chat.split.worktreeKept"] = new()
+        {
+            ["en"] = "Put away. Its worktree stays: branch {0} holds work that is not merged yet.",
+            ["th"] = "เก็บแชทแล้ว แต่ยังไม่ลบ worktree — branch {0} ยังมีงานที่ยังไม่ได้ merge",
+        },
         ["chat.perm.prompt"] = new() { ["en"] = "Allow {0} to {1}?", ["th"] = "อนุญาตให้ {0} ทำสิ่งนี้ไหม: {1}" },
         ["chat.perm.allowed"] = new() { ["en"] = "✓ Allowed", ["th"] = "✓ อนุญาตแล้ว" },
         ["chat.perm.denied"] = new() { ["en"] = "✗ Denied", ["th"] = "✗ ปฏิเสธแล้ว" },
@@ -215,6 +237,7 @@ internal static class ChatKeys
         ["chat.web.timedOut"] = new() { ["en"] = "Fetching {0} timed out ({1} s) — the site was too slow to send the page.", ["th"] = "ดึงข้อมูลจาก {0} หมดเวลา ({1} วินาที) — เว็บไซต์ส่งหน้าเว็บช้าเกินไป" },
         ["chat.web.failed"] = new() { ["en"] = "Couldn't fetch {0} — the site couldn't be reached (details are in the Debug Log).", ["th"] = "ดึงข้อมูลจาก {0} ไม่สำเร็จ — ติดต่อเว็บไซต์ไม่ได้ (ดูรายละเอียดที่หน้า Debug Log)" },
         ["chat.web.cancelled"] = new() { ["en"] = "The fetch was stopped.", ["th"] = "หยุดการดึงข้อมูลแล้ว" },
+        ["chat.web.offsetPastEnd"] = new() { ["en"] = "Offset {0} is past the end of {1} — the page has {2:N0} characters of text. Use a smaller offset (0 = from the start).", ["th"] = "ตำแหน่ง {0} เลยท้ายหน้า {1} ไปแล้ว — หน้านี้มีข้อความ {2:N0} ตัวอักษร ให้ใช้ offset ที่น้อยกว่านี้ (0 = เริ่มจากต้นหน้า)" },
         ["chat.repl.unsupported"] = new() { ["en"] = "Unsupported REPL language '{0}' — use python or node. For shell commands use run_command.", ["th"] = "ไม่รองรับภาษา REPL '{0}' — ใช้ python หรือ node · สำหรับคำสั่ง shell ให้ใช้ run_command" },
 
         // ─── Toggles (project bar / bottom bar) ───
@@ -314,6 +337,7 @@ internal static class ChatKeys
         ["chat.fork.failed"] = new() { ["en"] = "Could not read this chat back to fork it", ["th"] = "อ่านแชทนี้เพื่อแยกไม่สำเร็จ" },
         ["chat.tools.editGroupVerb"] = new() { ["en"] = "Edited {0} files", ["th"] = "แก้ไข {0} ไฟล์" },
         ["chat.model.stopping"] = new() { ["en"] = "Stopping this step to switch to {0}…", ["th"] = "กำลังหยุดขั้นนี้เพื่อเปลี่ยนเป็น {0}…" },
+        ["chat.model.switchedLive"] = new() { ["en"] = "Switching to {0} — the task carries on from this step, nothing is redone", ["th"] = "กำลังสลับเป็น {0} — งานทำต่อจากขั้นนี้ ไม่เริ่มใหม่" },
         ["chat.model.carryOn"] = new() { ["en"] = "Switched to {0} mid-way: carrying on from where it stopped", ["th"] = "เปลี่ยนเป็น {0} กลางทาง ทำต่อจากจุดที่หยุด" },
         ["chat.plan.branchParent"] = new() { ["en"] = "⤴ Branched from", ["th"] = "⤴ แยกมาจาก" },
         ["chat.plan.branchChild"] = new() { ["en"] = "⑂ Branch at step {0}", ["th"] = "⑂ แยกที่ขั้น {0}" },

@@ -57,10 +57,46 @@ public class DebugLogService
 
     public string LogDirectory => _logDir;
 
-    public DebugLogService()
+    /// <summary>Log files older than this are deleted (at start and at each day's first line); 0 = keep them all.
+    /// Settings › the Debug Log page (AppSettings.DebugLogRetentionDays), 14 by default.</summary>
+    public int RetentionDays { get; set; } = 14;
+
+    /// <summary>All log files together never grow past this: the oldest go first (today's file is never deleted
+    /// by the cap). 0 = no cap. AppSettings.DebugLogMaxMegabytes, 200 MB by default.</summary>
+    public long MaxTotalBytes { get; set; } = 200L * 1024 * 1024;
+
+    /// <summary>The choices the Debug Log page offers for <see cref="RetentionDays"/>.</summary>
+    public static readonly int[] RetentionChoices = { 3, 7, 14, 30, 0 };
+
+    private Timer? _resourceTimer;
+
+    /// <summary>Verbose: every level down to Trace is kept, and every few minutes a line of the process's memory,
+    /// threads and handles (a leak shows as a line that only grows). Off: Debug and up, no resource lines.</summary>
+    public bool Verbose
+    {
+        get => _minLevel == LogLevel.Trace;
+        set
+        {
+            _minLevel = value ? LogLevel.Trace : LogLevel.Debug;
+            lock (_lock)
+            {
+                _resourceTimer?.Dispose();
+                _resourceTimer = value
+                    ? new Timer(_ => Trace("Resources", BugReports.DiagnosticsCollector.ResourceLine()), null, TimeSpan.FromSeconds(5), ResourceInterval)
+                    : null;
+            }
+        }
+    }
+
+    public static readonly TimeSpan ResourceInterval = TimeSpan.FromMinutes(3);
+
+    public DebugLogService() : this(Path.Combine(SettingsService.ResolveDataRoot(out _), "logs")) { }
+
+    /// <summary>Logs into <paramref name="logDir"/> — the test harness, so clearing and pruning never touch the real logs.</summary>
+    public DebugLogService(string logDir)
     {
         // The data home's logs folder: ~/.cluadex/logs, or <exe>\Data\logs for a portable copy / a test harness.
-        _logDir = Path.Combine(SettingsService.ResolveDataRoot(out _), "logs");
+        _logDir = logDir;
         try { Directory.CreateDirectory(_logDir); } catch { }
         Info("DebugLog", $"DebugLogService started · log dir = {_logDir}");
     }
@@ -109,6 +145,111 @@ public class DebugLogService
             sb.AppendLine(entry.ToFlatString());
         }
         return sb.ToString();
+    }
+
+    /// <summary>The head of a session in the log: what this PC and this copy are, one "Session" line per section, so
+    /// any log a user sends starts with the facts a developer would otherwise have to ask for.</summary>
+    public void LogSessionStart(IEnumerable<(string Section, IReadOnlyDictionary<string, object?> Values)> sections)
+    {
+        foreach (var (section, values) in sections)
+        {
+            if (values.Count == 0) continue;
+            var line = string.Join(" · ", values.Select(kv => $"{kv.Key}={Format(kv.Value)}"));
+            Info("Session", $"{section}: {line}");
+        }
+        Info("Session", $"log: retention={(RetentionDays > 0 ? RetentionDays + " days" : "forever")} · cap={(MaxTotalBytes > 0 ? MaxTotalBytes / 1048576 + " MB" : "none")} · verbose={Verbose}");
+    }
+
+    private static string Format(object? v) => v switch
+    {
+        null => "-",
+        bool b => b ? "yes" : "no",
+        IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+        _ => v.ToString() ?? "-",
+    };
+
+    /// <summary>The log files on disk and their total size.</summary>
+    public (int Files, long Bytes) MeasureFiles()
+    {
+        int n = 0; long bytes = 0;
+        try
+        {
+            foreach (var f in new DirectoryInfo(_logDir).EnumerateFiles("cluadex-*.log"))
+            {
+                n++;
+                bytes += f.Length;
+            }
+        }
+        catch { }
+        return (n, bytes);
+    }
+
+    /// <summary>
+    /// "ล้างไฟล์ล็อก": deletes every log file (today's too — the next line starts a fresh one with its header), the
+    /// lines not yet written, and the in-memory list. <paramref name="alsoIn"/>: other folders of the app's own
+    /// logs to empty (crash logs), only files matching <c>*.log</c> directly in them. Returns what went.
+    /// The caller asks the user first.
+    /// </summary>
+    public (int Files, long Bytes) DeleteLogFiles(params string[] alsoIn)
+    {
+        int n = 0; long bytes = 0;
+        lock (_fileLock)
+        {
+            lock (_lock) _unwritten.Clear();
+            foreach (var (dir, pattern) in new[] { (_logDir, "cluadex-*.log") }.Concat(alsoIn.Select(d => (d, "*.log"))))
+            {
+                try
+                {
+                    if (!Directory.Exists(dir) || (File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0) continue;
+                    foreach (var f in new DirectoryInfo(dir).EnumerateFiles(pattern, SearchOption.TopDirectoryOnly))
+                    {
+                        if ((f.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                        long len = f.Length;
+                        try { f.Delete(); n++; bytes += len; } catch { }
+                    }
+                }
+                catch { }
+            }
+            _currentLogDate = DateTime.MinValue;   // the next line writes today's header again
+        }
+        Clear();
+        Info("DebugLog", $"log files cleared by the user: {n} file(s), {bytes / 1024} KB");
+        return (n, bytes);
+    }
+
+    /// <summary>Apply <see cref="RetentionDays"/> and <see cref="MaxTotalBytes"/> now (start, settings change).
+    /// Returns how many files went.</summary>
+    public int PruneFiles()
+    {
+        lock (_fileLock) return PruneFilesLocked();
+    }
+
+    private int PruneFilesLocked()
+    {
+        int removed = 0;
+        try
+        {
+            var todayName = $"cluadex-{DateTime.Now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture)}.log";
+            var files = new DirectoryInfo(_logDir).EnumerateFiles("cluadex-*.log")
+                .Where(f => (f.Attributes & FileAttributes.ReparsePoint) == 0)
+                .OrderByDescending(f => f.LastWriteTime)
+                .ToList();
+            var cutoff = RetentionDays > 0 ? DateTime.Now.AddDays(-RetentionDays) : DateTime.MinValue;
+            long total = 0;
+            foreach (var f in files)
+            {
+                bool today = string.Equals(f.Name, todayName, StringComparison.OrdinalIgnoreCase);
+                bool old = RetentionDays > 0 && f.LastWriteTime < cutoff;
+                bool overCap = MaxTotalBytes > 0 && total + f.Length > MaxTotalBytes;
+                if (!today && (old || overCap))
+                {
+                    try { f.Delete(); removed++; continue; } catch { }
+                }
+                total += f.Length;
+            }
+        }
+        catch { }
+        return removed;
     }
 
     // ─── Core write path ────────────────────────────────────────────
@@ -197,15 +338,7 @@ public class DebugLogService
             catch { }
         }
 
-        // Prune logs older than 30 days
-        try
-        {
-            foreach (var f in Directory.EnumerateFiles(_logDir, "cluadex-*.log"))
-            {
-                if (File.GetLastWriteTime(f) < DateTime.Now.AddDays(-30))
-                    File.Delete(f);
-            }
-        }
-        catch { }
+        // Old days and anything over the size cap go (RetentionDays / MaxTotalBytes; called under _fileLock).
+        PruneFilesLocked();
     }
 }

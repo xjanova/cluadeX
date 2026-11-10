@@ -19,8 +19,25 @@ public static class EffortLevels
     public static string Effective(string? setting)
     {
         string s = Normalize(setting);
-        return s == Auto && Services.AgentRunScope.Current?.StepEffort is { } step ? Normalize(step) : s;
+        var scope = Services.AgentRunScope.Current;
+        if (s == Auto && scope?.StepEffort is { } step) s = Normalize(step);
+        return Capped(s, scope?.EffortCap);
     }
+
+    /// <summary><paramref name="level"/> held under <paramref name="cap"/> (a sub-agent's tier ceiling,
+    /// <see cref="Services.AgentRunScope.EffortCap"/>): the lower of the two. "auto" under a cap is the cap itself — the
+    /// provider's own default may think far more than a cheap sub-agent needs. No cap (or an unknown one): unchanged.</summary>
+    public static string Capped(string? level, string? cap)
+    {
+        string l = Normalize(level), c = Normalize(cap);
+        if (c == Auto) return l;
+        if (l == Auto) return c;
+        return Array.IndexOf(All, l) > Array.IndexOf(All, c) ? c : l;
+    }
+
+    /// <summary>A per-message effort (Anthropic's effort-only system messages) held under this flow's cap.</summary>
+    public static string? CappedHere(string? level) =>
+        level == null || Services.AgentRunScope.Current?.EffortCap is not { } cap ? level : Capped(level, cap);
 
     /// <summary>A stored or bound value as one of <see cref="All"/>; anything unknown is "auto".</summary>
     public static string Normalize(string? value)

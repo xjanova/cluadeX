@@ -40,6 +40,12 @@
     <PackageReference Include="LLamaSharp" Version="0.26.0" />
     <PackageReference Include="Velopack" Version="1.1.1" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+  </ItemGroup>
+
+  <!-- น้อง CluadeX's clips sit next to the exe (CluadexBuddy.ClipDir): copied from the build under test. -->
+  <ItemGroup>
+    <None Include="$(CluadeXBin)Assets\Buddy\Clips\*.mp4" Link="Assets\Buddy\Clips\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- portable.txt next to the exe => SettingsService uses <exe>\Data as its data root, so this

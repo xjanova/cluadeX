@@ -25,9 +25,16 @@ public static class McpToolClassifier
         "brain_search", "brain_semantic_search", "brain_recall", "brain_get_note", "brain_list", "brain_walk",
         "brain_bundle", "brain_bundles_list", "brain_stats", "brain_expertise", "brain_get_backlinks",
         "brain_suggest_links", "brain_suggest_topics", "brain_find_contradictions", "brain_scope_list",
+        "brain_lookup", "brain_code_trace",
         "brain_audit", "bridge_status", "agent_peers", "agent_inbox", "agent_activity", "cowork_read",
         "cowork_who", "task_queue", "fetch_review_queue", "media_status", "ssh_profiles_list",
     };
+
+    /// <summary>The brain tools that only look things up and stay on this machine (brain_*, bridge_status, the agent bus's
+    /// reads) — what a headless CLI turn may call unasked (ClaudeDevProvider.BrainToolsFor). ssh_profiles_list,
+    /// media_status and fetch_review_queue are left to the per-turn sets.</summary>
+    public static IReadOnlyList<string> BrainLookupTools { get; } = ReadOnlyTools
+        .Where(t => t.StartsWith("brain_", StringComparison.OrdinalIgnoreCase) || t is "bridge_status").ToList();
 
     /// <summary>BrainX tools that add to the user's own memory — saving a lesson must not need a click.</summary>
     private static readonly HashSet<string> MemoryWriteTools = new(StringComparer.OrdinalIgnoreCase)

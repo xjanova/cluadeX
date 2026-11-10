@@ -140,7 +140,7 @@ public static class ModelFacts
         "opus" => AnthropicProvider.DefaultModel,
         "sonnet" => "claude-sonnet-5-5",
         "haiku" => "claude-haiku-5-5",
-        "fable" => "claude-fable-5-1",
+        "fable" => "claude-fable-5-2",
         _ => m,
     };
 

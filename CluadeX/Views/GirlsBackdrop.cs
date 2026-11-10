@@ -11,7 +11,8 @@ namespace CluadeX.Views;
 /// 2026-11-01: "ภาพสาวๆทุกคนเป็นแบล็คกราวด์ด้านหลังลางๆ แบบเท่ห์ๆ ไล่เฟด"). Never hit-tested.
 ///
 /// What it costs: the pictures are decoded only once it is first on screen (a theme that hides it, Classic, never
-/// decodes them) and at the height they are shown, not the cut-outs' 820 px. The one animation is the entrance — each
+/// decodes them) and at the height they are shown, not the cut-outs' 1000 px. Every other girl stands in her second
+/// pose (GirlArt.PoseImage), so the row is not the model picker's line-up again. The one animation is the entrance — each
 /// girl fading up in turn, ~1.7 s, capped at 30 fps — played when the page appears; nothing runs after it, so an empty
 /// chat left open costs no frames. AmbientAnimation pauses the entrance while the page is hidden or the window is
 /// minimised, like every other storyboard started from Triggers.
@@ -21,7 +22,7 @@ public sealed class GirlsBackdrop : Grid
     /// <summary>The tallest the figures stand (DIPs): they shrink with a short chat area, never grow past this.</summary>
     public const double MaxFigureHeight = 560, MinFigureHeight = 240;
     /// <summary>The cut-outs' own height in pixels: decoding taller only adds memory.</summary>
-    private const int SourceHeight = 820;
+    private const int SourceHeight = 1000;
 
     private readonly StackPanel _row = new()
     {
@@ -130,7 +131,8 @@ public sealed class GirlsBackdrop : Grid
         if (DecodedHeight > 0 || _figures.Count == 0) return;
         double scale = VisualTreeHelper.GetDpi(this).DpiScaleY;
         int px = Math.Min(SourceHeight, (int)Math.Ceiling(MaxFigureHeight * scale));
-        foreach (var img in _figures) img.Source = GirlArt.Image(img.Tag as string, px);
+        for (int i = 0; i < _figures.Count; i++)
+            _figures[i].Source = GirlArt.Image(_figures[i].Tag as string, px, pose: i % 2 == 1 ? 2 : 1);
         DecodedHeight = px;
     }
 

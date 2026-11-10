@@ -79,9 +79,23 @@ public static class DesignGate
 
     public static event Action<string>? Changed;
 
+    /// <summary>Design mode is off for now (owner 2026-11-09: "ปุ่มติ๊ก ดีไซด์ … เอาออกไปก่อนเพราะไม่ได้ใช้ ให้วิ่งไปหน้าโค๊ด
+    /// อย่างเดียวถูกแล้ว เพราะ หน้าดีไซด์ต้องเขียนโค๊ดก่อนจึงจะเห็นหน้าดีไซด์ได้"): the composer hides its switch and no turn
+    /// is a design turn — neither by a switch left on from before nor by the owner's words — so a turn follows the Code
+    /// page. The rules stay here for when it comes back; the harness turns it on to check them.</summary>
+    public static bool Enabled
+    {
+        get => _enabled;
+        set { if (_enabled == value) return; _enabled = value; EnabledChanged?.Invoke(); }
+    }
+    private static volatile bool _enabled;
+
+    /// <summary><see cref="Enabled"/> changed: the composer shows or hides its Design switch.</summary>
+    public static event Action? EnabledChanged;
+
     public static bool IsOn(string? chat)
     {
-        if (string.IsNullOrEmpty(chat)) return false;
+        if (!Enabled || string.IsNullOrEmpty(chat)) return false;
         lock (Lock) return On.Contains(chat);
     }
 
@@ -147,7 +161,7 @@ public static class DesignGate
     /// <summary>Why: "switch" (the chat's Design switch), "asked" (the owner's words this turn), or null = not a design turn.</summary>
     public static string? Why(string? chat)
     {
-        if (string.IsNullOrEmpty(chat)) return null;
+        if (!Enabled || string.IsNullOrEmpty(chat)) return null;
         if (IsOn(chat)) return "switch";
         string? words;
         lock (Lock) OwnerWords.TryGetValue(chat, out words);

@@ -185,6 +185,88 @@ public class WebFetchService
         => string.Equals(from.IdnHost, to.IdnHost, StringComparison.OrdinalIgnoreCase)
            && (from.Port == to.Port || (from.IsDefaultPort && to.IsDefaultPort));
 
+    // ─── Reading a long page in parts (web_fetch offset / max_chars) ───
+
+    /// <summary>How long a fetched page is kept so that reading on (offset &gt; 0) does not download it again.</summary>
+    public static readonly TimeSpan PageCacheLife = TimeSpan.FromMinutes(10);
+
+    /// <summary>Pages kept at once; the oldest goes first.</summary>
+    public const int PageCacheSize = 8;
+
+    /// <summary>The clock the page cache reads. Settable so the harness can age a page without waiting.</summary>
+    public Func<DateTime> Now { get; set; } = () => DateTime.UtcNow;
+
+    private readonly object _pageCacheLock = new();
+    private readonly LinkedList<(string Key, DateTime At, WebFetchPage Page)> _pageCache = new();
+
+    /// <summary>
+    /// <see cref="FetchAsync"/> for a reader. With <paramref name="reuse"/> (the model is reading on, offset &gt; 0)
+    /// a page this service fetched from the same URL in the last <see cref="PageCacheLife"/> is returned as it was,
+    /// so part 2 is cut from the same text as part 1 and the site is not asked again. A first read (offset 0) always
+    /// fetches. Only a page that came back Ok is kept. The caller's permission check runs before this, cached or not.
+    /// </summary>
+    public async Task<WebFetchPage> FetchForReadingAsync(string url, bool reuse,
+        Func<Uri, Uri, Task<bool>>? allowRedirect = null, CancellationToken ct = default)
+    {
+        string key = (url ?? "").Trim();
+        if (reuse && Recall(key) is { } kept) return kept;
+        var page = await FetchAsync(url ?? "", allowRedirect, ct);
+        if (page.Outcome == WebFetchOutcome.Ok) Remember(key, page);
+        return page;
+    }
+
+    private WebFetchPage? Recall(string key)
+    {
+        lock (_pageCacheLock)
+        {
+            DateTime now = Now();
+            for (var node = _pageCache.First; node != null;)
+            {
+                var next = node.Next;
+                if (now - node.Value.At > PageCacheLife) _pageCache.Remove(node);
+                else if (node.Value.Key == key) return node.Value.Page;
+                node = next;
+            }
+            return null;
+        }
+    }
+
+    private void Remember(string key, WebFetchPage page)
+    {
+        lock (_pageCacheLock)
+        {
+            for (var node = _pageCache.First; node != null; node = node.Next)
+                if (node.Value.Key == key) { _pageCache.Remove(node); break; }
+            _pageCache.AddFirst((key, Now(), page));
+            while (_pageCache.Count > PageCacheSize) _pageCache.RemoveLast();
+        }
+    }
+
+    /// <summary>
+    /// The part of <paramref name="text"/> from <paramref name="offset"/>, at most <paramref name="maxChars"/> long.
+    /// The cut never splits a surrogate pair (an emoji, a rare CJK letter) and moves back to the last space or line
+    /// break in the final tenth of the part when there is one, so a word is not cut in two. <c>End</c> is where the
+    /// next part starts. An offset at or past the end gives an empty part with <c>End == Total</c>.
+    /// </summary>
+    public static (string Text, int Start, int End, int Total) Slice(string text, int offset, int maxChars)
+    {
+        text ??= "";
+        int total = text.Length;
+        int start = Math.Clamp(offset, 0, total);
+        if (start > 0 && start < total && char.IsLowSurrogate(text[start])) start--;   // never begin on half a pair
+        int end = (int)Math.Min((long)start + Math.Max(1, maxChars), total);
+        if (end < total)
+        {
+            if (end > start && char.IsHighSurrogate(text[end - 1])) end--;
+            int floor = start + (end - start) * 9 / 10;
+            for (int i = end - 1; i > floor; i--)
+            {
+                if (text[i] is ' ' or '\n' or '\t') { end = i + 1; break; }
+            }
+        }
+        return (text[start..end], start, end, total);
+    }
+
     /// <summary>
     /// Search the web using DuckDuckGo HTML (no API key required).
     /// Returns a formatted list of search results with title, URL, and snippet.

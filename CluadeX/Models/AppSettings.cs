@@ -60,6 +60,10 @@ public class AppSettings
     public string GpuBackend { get; set; } = "Auto";
     public int BatchSize { get; set; } = 512;
     public int ThreadCount { get; set; } = 0;
+    /// <summary>llama-server's KV cache type: "auto" (q8_0 when the build has flash attention on/off, else f16),
+    /// "f16", "q8_0", "q4_0". q8_0 is about half of f16 with no visible loss; K and V always get the same type
+    /// (see LlamaServerArgs). "f16" turns it off.</summary>
+    public string LocalKvCacheType { get; set; } = "auto";
 
     /// <summary>
     /// Path to a custom llama.cpp backend directory containing llama.dll, ggml.dll, etc.
@@ -132,6 +136,11 @@ public class AppSettings
     /// Claude login) and a handoff brief instead of stopping on a billing error.</summary>
     public bool AutoFailoverOnQuota { get; set; } = true;
 
+    /// <summary>Where a run goes when its provider runs out (Services/Agents/ProviderFailover.cs): provider names, best
+    /// first ("OpenAI", "ClaudeDev", …); "-Name" leaves one out. Empty = automatic: the other cloud APIs set up, then the
+    /// CLI logins, then a model on this PC. Only providers that are set up (a key, a login, a running server) are used.</summary>
+    public List<string> FailoverOrder { get; set; } = new();
+
     // ─── Dispatch policy (Services/Agents/DispatchPolicy.cs) ───
     /// <summary>Effort decides when the agent fans out: low none, medium read-only sub-agents on the cheapest model,
     /// high workers in git worktrees with a reviewer, xhigh/max also speculative fixes. Off = sub-agents as before.</summary>
@@ -156,8 +165,21 @@ public class AppSettings
     public int SpeculativeFixCount { get; set; } = 3;
     /// <summary>How long a speculative-fix race may take before the main loop gets the build back.</summary>
     public int SpeculativeFixMinutes { get; set; } = 6;
-    /// <summary>Model per sub-agent kind ("explore", "code", "review", "fix", "hardfix"); empty = the policy's choice.</summary>
+    /// <summary>Model per sub-agent kind ("explore", "code", "review", "fix", "hardfix") or tier ("cheap", "mid", "deep");
+    /// empty = the policy's choice.</summary>
     public Dictionary<string, string> SubAgentModelOverrides { get; set; } = new();
+
+    // ─── Sub-agent auto model (owner 2026-11-08: "เรียกเอเจนย่อย ฉลาดในการเรียกใช้โมเดล หรือ effort ที่อ่อนกว่าเพื่อประหยัดโทเค็น"
+    //     · "ทำให้เลือกได้ว่า จะเปิดโหมด auto model นี้ด้วยไหม") — Services/Agents/DispatchPolicy.cs, tier routing ───
+    /// <summary>Each sub-agent runs on the model and effort its tier needs (cheap / mid / deep). Off: every sub-agent on
+    /// the run's own model and effort (Settings' per-kind models still apply).</summary>
+    public bool SubAgentAutoModel { get; set; } = true;
+    /// <summary>A sub-agent whose report says it did not get it done runs once more one tier up (at most cheap → deep).</summary>
+    public bool SubAgentEscalate { get; set; } = true;
+    /// <summary>Cheap read-only sub-agents go to the local model already loaded on this machine (≥ 7B, tool use) — free.</summary>
+    public bool SubAgentLocalCheap { get; set; } = false;
+    /// <summary>The tier per specialist (its name → "cheap" / "mid" / "deep"), set on the Sub-agents page; overrides its file.</summary>
+    public Dictionary<string, string> SubAgentTierOverrides { get; set; } = new();
     /// <summary>When the agent mutates a file while the user is on the Chat page, auto-switch to the
     /// Code Editor page so the edit is visible live (the editor embeds the same chat docked right).
     /// Off by default since 2026-10-20 (owner: "ไม่จำเป็นต้องสลับไปดูแบบ real time อัตโนมัติแล้ว แต่ให้อัพเดทตามกันจริงๆ
@@ -179,6 +201,11 @@ public class AppSettings
     /// <summary>Code Editor view toggles (toolbar): long lines wrap, spaces/tabs/line ends shown, text zoom.</summary>
     public bool EditorWordWrap { get; set; }
     public bool EditorShowWhitespace { get; set; }
+
+    /// <summary>Code Editor: on save, put a "[user-edit yyyy-MM-dd]" comment at the end of each run of lines the user edited
+    /// by hand (in the file's comment syntax, only where it cannot change the code). Off = the lines are still remembered
+    /// and coloured, just not commented in the file.</summary>
+    public bool EditorUserEditMarkers { get; set; } = true;
     public double EditorZoom { get; set; } = 1.0;
     public string PreferredLanguage { get; set; } = "C#";
     /// <summary>Code Editor ▸ AI comments: how much the AI comments the code it writes ("none" | "key" | "detailed") and in
@@ -256,6 +283,10 @@ public class AppSettings
     /// </summary>
     public bool AutoVerifyAfterEditEnabled { get; set; } = true;
 
+    /// <summary>A watch the AI started (watch_ci / watch_process) that ends while nobody works in its chat starts a new turn
+    /// there with the result. Off = a notice row only, and the owner sends when they want.</summary>
+    public bool WatchAutoContinue { get; set; } = true;
+
     // ─── Model-escalation ladder (local → stronger API model) ───
     /// <summary>
     /// Escalate to a stronger API model when the LOCAL model stalls (hits max iterations OR repeats the same
@@ -305,6 +336,9 @@ public class AppSettings
     public decimal CliDailyBudgetUsd { get; set; }
     /// <summary>The chat page's right-hand panel (project files, latest image, latest run) is shown.</summary>
     public bool ChatSidePanel { get; set; } = true;
+    /// <summary>The activity card at the top of that panel: a live scene of what the run does now (closed with its ✕,
+    /// turned on again from the chat's "+" menu).</summary>
+    public bool ChatActivityCard { get; set; } = true;
     /// <summary>Widths the user dragged panels to, by <see cref="Views.ResizeGrip.Key"/> (px).</summary>
     public Dictionary<string, double> PanelWidths { get; set; } = new();
     /// <summary>Where each page's own window was (Node Graph, UI Studio, Code Editor popped out), by page key
@@ -348,6 +382,8 @@ public class AppSettings
     public int VoiceLiveMaxMinutes { get; set; } = 10;
     /// <summary>GPT-Live's voice (fixed for a session). marin is the API's default.</summary>
     public string VoiceLiveVoice { get; set; } = "marin";
+    /// <summary>Settings › Voice: the engine that reads replies aloud, its key, model, voice and fine settings (VoiceSettings).</summary>
+    public VoiceSettings Voice { get; set; } = new();
 
     /// <summary>Background work nobody waits for (session-memory and instinct extraction) goes through the
     /// provider's batch API when it has one — Anthropic and OpenAI: half the price, the result lands within
@@ -414,8 +450,44 @@ public class AppSettings
     /// Nothing outside this list is ever fetched.</summary>
     public List<string> TrustedSkillSources { get; set; } = new() { "https://github.com/anthropics/skills" };
 
+    /// <summary>Smart skill picking, the default for every chat (owner 2026-11-07): each turn offers the model only the
+    /// switched-on skills that fit it, in the turn's message, instead of listing them all in the system prompt. The
+    /// composer's switch overrides it per chat (Services/Skills/SkillPickGate).</summary>
+    public bool SkillAutoPickEnabled { get; set; } = true;
+
+    /// <summary>The most skills one turn's pick offers (named and pinned ones always come on top).</summary>
+    public int SkillPickMax { get; set; } = 5;
+
+    /// <summary>With a BrainX brain connected, keep a short card per skill in it (Notes/CluadeX-Skills, tag cluadex-skill)
+    /// and let its semantic search help each turn's pick (Services/Skills/SkillBrainIndex).</summary>
+    public bool SkillBrainIndexEnabled { get; set; } = true;
+
+    /// <summary>Skills offered on every turn while picking is on ("ใช้ทุกงาน" on the Skills page).</summary>
+    public List<string> PinnedSkills { get; set; } = new();
+
     // UI settings
     public double FontSize { get; set; } = 14;
+
+    /// <summary>Zoom of the whole main window, 0.8–1.6 (Settings › General › Text size and font; 1 = 100 %).
+    /// See Services/TypographyService.</summary>
+    public double UiScale { get; set; } = 1.0;
+
+    /// <summary>The UI font: "" = the theme's own, "bundled" = Noto Sans shipped with CluadeX (Thai from Leelawadee UI), otherwise the name of
+    /// an installed font (anything else is ignored at startup).</summary>
+    public string UiFont { get; set; } = "";
+
+    /// <summary>น้อง CluadeX may speak up in a bubble: a tip now and then, a word when a chat finishes or waits
+    /// (MainWindow.Buddy.cs; Settings › General › Appearance).</summary>
+    public bool BuddyBubbles { get; set; } = true;
+
+    /// <summary>น้อง CluadeX's sound: the small sounds in her clips and the short lines she says ("All done!", "Your call!",
+    /// "Hello? Is anyone there?"). Views/CluadexBuddy.Clips.cs; Settings › General › Appearance.</summary>
+    public bool BuddySounds { get; set; } = true;
+
+    /// <summary>How น้อง CluadeX shows (her right-click menu, owner 2026-11-08): "clips" (her video clips, the default),
+    /// "stills" (her still pictures only, no clips) or "slides" (the girls one after another, waist up). Views/CluadexBuddy.Slides.cs.</summary>
+    public string BuddyDisplay { get; set; } = "clips";
+
     public bool StreamOutput { get; set; } = true;
 
     // Language / Localization
@@ -441,6 +513,32 @@ public class AppSettings
     public bool LicenseTrialRequested { get; set; }
     /// <summary>The "your free trial has ended" invitation has been shown.</summary>
     public bool LicenseTrialEndedNoticeShown { get; set; }
+
+    // ─── Xman Studio account (installer contract 2.2) — never a password, a token or a device code ───
+    /// <summary>This PC is linked to an Xman Studio account (sign-in from the app). Entitles auto-update on its own.</summary>
+    public bool AccountLinked { get; set; }
+    /// <summary>The account's e-mail as the server masked it (xj***@gmail.com) — shown, never the full address.</summary>
+    public string? AccountEmailMasked { get; set; }
+    /// <summary>The account's display name.</summary>
+    public string? AccountName { get; set; }
+    /// <summary>When the account was linked on this PC (UTC).</summary>
+    public DateTime? AccountLinkedUtc { get; set; }
+
+    /// <summary>The first-run setup wizard ran (or this install was already in use before the wizard existed).</summary>
+    public bool SetupWizardCompleted { get; set; }
+
+    /// <summary>The user's own switch for automatic updates (the update dialog). Automatic updating also needs the
+    /// entitlement (a paid or trial license, or a linked account) — see <see cref="Services.AutoUpdateEntitlement"/>.</summary>
+    public bool AutoUpdateEnabled { get; set; } = true;
+
+    // ─── Debug log (the Debug Log page) ───
+    /// <summary>Log files older than this many days are deleted by themselves; 0 = never (owner 2026-11-09: "ให้ระบบ
+    /// เครียออโต้"). One of 3 / 7 / 14 / 30 / 0.</summary>
+    public int DebugLogRetentionDays { get; set; } = 14;
+    /// <summary>All log files together stay under this many MB (the oldest go first); 0 = no cap.</summary>
+    public int DebugLogMaxMegabytes { get; set; } = 200;
+    /// <summary>Verbose logging: Trace lines too, and a resource line every few minutes. Off by default (big logs).</summary>
+    public bool DebugLogVerbose { get; set; }
 
     /// <summary>The user chose "Not interested" / "don't show again" on the BrainX invitation — never opened by
     /// itself again (the brain chip still opens it on request).</summary>

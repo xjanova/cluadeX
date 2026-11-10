@@ -82,13 +82,13 @@ public class LlamaServerProvider : ApiProviderBase
         }
         if (projector == null)
         {
-            await LaunchAsync(modelPath, null, progress, ct);
+            await LaunchWithFallbackAsync(modelPath, null, progress, ct);
             return;
         }
 
         try
         {
-            await LaunchAsync(modelPath, projector, progress, ct);
+            await LaunchWithFallbackAsync(modelPath, projector, progress, ct);
         }
         catch (InvalidOperationException ex) when (!ct.IsCancellationRequested)
         {
@@ -101,17 +101,90 @@ public class LlamaServerProvider : ApiProviderBase
             string why = hits.Count > 0 ? string.Join(" / ", hits) : ex.Message;
             VisionFallbackReason = $"{Path.GetFileName(projector)} could not be loaded ({why.Trim()}) — started without vision.";
             progress?.Report("The vision part could not be loaded with this llama.cpp — starting the model without it...");
-            await LaunchAsync(modelPath, null, progress, ct);
+            await LaunchWithFallbackAsync(modelPath, null, progress, ct);
         }
     }
 
     /// <summary>Last stderr lines of the current/last server process (the projector error is usually among them).</summary>
     private readonly System.Collections.Concurrent.ConcurrentQueue<string> _lastStderr = new();
 
-    private async Task LaunchAsync(string modelPath, string? projector, IProgress<string>? progress, CancellationToken ct)
+    /// <summary>The memory / speed part of the running server's command line (<see cref="LlamaServerArgs"/>).</summary>
+    public LlamaLaunchPlan? LaunchPlan { get; private set; }
+
+    /// <summary>Why the server runs with the previous settings ("" when it runs with the new ones).</summary>
+    public string NewFlagsFallbackReason { get; private set; } = "";
+
+    /// <summary>exe|model pairs that started only without the MoE / KV / cache flags, so the next load goes straight there.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _newFlagsRefused = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Start with the MoE offload, KV cache and cache-reuse flags; when that start fails, start again exactly
+    /// as before them. Only a start that then succeeds blames the flags (and skips them for this model from now on) —
+    /// one that fails both ways is the model's or the projector's failure, and goes up as it always did.</summary>
+    private async Task LaunchWithFallbackAsync(string modelPath, string? projector, IProgress<string>? progress, CancellationToken ct)
+    {
+        NewFlagsFallbackReason = "";
+        string key = (FindServerExe() ?? "") + "|" + modelPath;
+        if (_newFlagsRefused.TryGetValue(key, out var known))
+        {
+            NewFlagsFallbackReason = known;
+            await LaunchAsync(modelPath, projector, progress, ct, legacy: true);
+            return;
+        }
+        try
+        {
+            await LaunchAsync(modelPath, projector, progress, ct, legacy: false);
+        }
+        catch (InvalidOperationException ex) when (!ct.IsCancellationRequested && LaunchPlan is { UsesNewFlags: true })
+        {
+            var tail = _lastStderr.Select(l => l.Trim()).Where(l => l.Length > 0).TakeLast(2).ToList();
+            string why = tail.Count > 0 ? string.Join(" / ", tail) : ex.Message;
+            progress?.Report("Starting again with the previous settings (this llama.cpp did not take the MoE / KV cache settings)...");
+            await LaunchAsync(modelPath, projector, progress, ct, legacy: true);
+            NewFlagsFallbackReason = $"started without the MoE / KV cache settings: {why}";
+            _newFlagsRefused[key] = NewFlagsFallbackReason;
+        }
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, LlamaServerFeatures> _featuresByExe = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>For the harness: forget what each exe's --help said and which models refused the new flags.</summary>
+    public static void ResetLaunchMemory() { _featuresByExe.Clear(); _newFlagsRefused.Clear(); }
+
+    /// <summary>What this llama-server build accepts, from its --help (no model is loaded). Read once per build of the exe;
+    /// a build that will not answer gets <see cref="LlamaServerFeatures.None"/>, i.e. the launch line of before.</summary>
+    public static LlamaServerFeatures ServerFeatures(string exe)
+    {
+        string key;
+        try { var fi = new FileInfo(exe); key = $"{exe}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}"; } catch { key = exe; }
+        return _featuresByExe.GetOrAdd(key, _ =>
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(exe, "--help")
+                {
+                    UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
+                };
+                psi.EnvironmentVariables["PATH"] = Path.GetDirectoryName(exe) + ";" + (psi.EnvironmentVariables["PATH"] ?? "");
+                using var p = Process.Start(psi);
+                if (p == null) return LlamaServerFeatures.None;
+                var o = p.StandardOutput.ReadToEndAsync();
+                var e = p.StandardError.ReadToEndAsync();
+                if (!p.WaitForExit(10_000)) { try { p.Kill(true); } catch { } }
+                string help = (o.Wait(2000) ? o.Result : "") + "\n" + (e.Wait(2000) ? e.Result : "");
+                return LlamaServerFeatures.Parse(help);
+            }
+            catch
+            {
+                return LlamaServerFeatures.None;
+            }
+        });
+    }
+
+    private async Task LaunchAsync(string modelPath, string? projector, IProgress<string>? progress, CancellationToken ct, bool legacy = false)
     {
         while (_lastStderr.TryDequeue(out _)) { }
         LoadedProjectorPath = null;
+        LaunchPlan = null;   // a failure before the new plan must not be blamed on the last one's flags
 
         // Stop existing server
         await StopServerAsync();
@@ -132,10 +205,13 @@ public class LlamaServerProvider : ApiProviderBase
                 "or run Scripts/update-llama-backend.ps1 to download it.");
 
         var settings = _settingsService.Settings;
-        // The owner's GPU share (status-bar slider) scales -ngl from the model's real layer count; 100 % = as before.
+        bool cpuOnly = settings.GpuBackend == "CPU";
+        // The owner's GPU share (status-bar slider) scales -ngl from the model's real layer count; 100 % = as before
+        // (-1 stays "auto", so LlamaServerArgs may still split a MoE or let the server fit it). 0 layers = the CPU route.
         int blockCount = settings.GpuUsagePercent < 100 ? GgufMetadataReader.TryReadBlockCount(modelPath) : 0;
-        int gpuLayers = Services.Gpu.GpuShare.EffectiveNgl(settings.GpuLayerCount, settings.GpuBackend,
-            settings.GpuUsagePercent, blockCount, allValue: 999);
+        int shareLayers = Services.Gpu.GpuShare.EffectiveNgl(settings.GpuLayerCount, settings.GpuBackend,
+            settings.GpuUsagePercent, blockCount, allValue: -1);
+        if (shareLayers == 0) cpuOnly = true;
 
         // ─── Multi-GPU tensor split ───
         // If the user has more than one NVIDIA card, proportionally split the model
@@ -161,12 +237,34 @@ public class LlamaServerProvider : ApiProviderBase
             catch { /* single-GPU fallback */ }
         }
 
-        // ─── Threads ───
-        // 0 (our default) = use ALL physical cores. Without -t llama.cpp picks its own
-        // default which is often half the cores, leaving performance on the table.
-        int threads = settings.ThreadCount > 0
-            ? settings.ThreadCount
-            : Math.Max(1, Environment.ProcessorCount);
+        // ─── Offload, KV cache, threads (LlamaServerArgs) ───
+        // The file's expert / KV sizes, this build's flags and the physical core count are read off the caller's
+        // thread: a 20 GB GGUF's tensor table (~20 ms) and the first --help can each take a moment.
+        string exeForFeatures = serverExe;
+        var (moeFacts, features, physical) = await Task.Run(() =>
+            (cpuOnly ? null : GgufMoeReader.TryRead(modelPath),
+             legacy ? LlamaServerFeatures.None : ServerFeatures(exeForFeatures),
+             CpuTopology.PhysicalCores), ct);
+        long projectorBytes = 0;
+        if (projector != null) { try { projectorBytes = new FileInfo(projector).Length; } catch { } }
+        var plan = LlamaServerArgs.Build(new LlamaLaunchInput
+        {
+            GpuLayerSetting = shareLayers,
+            CpuOnly = cpuOnly,
+            FreeVramMB = freeVramMB,
+            ContextTokens = (int)settings.ContextSize,
+            BatchSize = settings.BatchSize,
+            ThreadSetting = settings.ThreadCount,
+            PhysicalCores = physical,
+            LogicalCores = Environment.ProcessorCount,
+            KvCacheSetting = settings.LocalKvCacheType,
+            Features = features,
+            Model = moeFacts,
+            ProjectorBytes = projectorBytes,
+            Legacy = legacy,
+        });
+        LaunchPlan = plan;
+        int gpuLayers = plan.GpuLayers;
 
         // Inspect arch so we can apply model-specific defaults. For Gemma 4 the
         // Unsloth + ggml-org cards both prescribe temp=1.0 / top-p=0.95 / top-k=64
@@ -202,7 +300,6 @@ public class LlamaServerProvider : ApiProviderBase
             "-m", $"\"{modelPath}\"",
             "--port", _port.ToString(),
             "--host", "127.0.0.1",
-            "-ngl", gpuLayers.ToString(),
             "-c", settings.ContextSize.ToString(),
             "-b", settings.BatchSize.ToString(),
             "--temp", temp.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
@@ -210,8 +307,9 @@ public class LlamaServerProvider : ApiProviderBase
             "--top-k", topK.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "--jinja",
             "--reasoning-format", "none",
-            "-t", threads.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
+        // -ngl (or --fit) / --n-cpu-moe / -fa -ctk -ctv / -t / --cache-reuse.
+        args.AddRange(plan.Args);
 
         // Multi-GPU: split model by VRAM weight across all NVIDIA cards.
         if (tensorSplit != null)
@@ -219,7 +317,11 @@ public class LlamaServerProvider : ApiProviderBase
             args.AddRange(new[] { "--tensor-split", tensorSplit });
         }
         // Vision needs a multimodal projector; without one, tool images are omitted (and the model is told).
-        args.AddRange(VisionArgs(modelPath, projector, freeVramMB, (int)settings.ContextSize, gpuLayers >= 999));
+        var vision = VisionArgs(modelPath, projector, freeVramMB, (int)settings.ContextSize, gpuLayers >= 999 && !plan.ServerFits);
+        // The MoE split already kept room for the projector on the card; ShouldOffload's whole-file test would refuse it
+        // (the file is bigger than the card — that is why experts went to RAM).
+        if (plan.CpuMoeLayers is > 0) vision.Remove("--no-mmproj-offload");
+        args.AddRange(vision);
         _launchedWithMmproj = args.Any(a => a.StartsWith("--mmproj", StringComparison.OrdinalIgnoreCase));
 
         string fileName = Path.GetFileName(modelPath);
@@ -302,7 +404,7 @@ public class LlamaServerProvider : ApiProviderBase
             {
                 IsReady = true;
                 LoadedProjectorPath = projector;
-                string backendInfo = (gpuLayers > 0 ? $"GPU ({gpuLayers} layers)" : "CPU") + (projector != null ? " + vision" : "");
+                string backendInfo = plan.Summary + (projector != null ? " + vision" : "");
                 SetStatus($"Ready: {Path.GetFileNameWithoutExtension(modelPath)} [{backendInfo}]");
                 progress?.Report($"llama-server ready! [{backendInfo}]");
 
@@ -520,6 +622,9 @@ public class LlamaServerProvider : ApiProviderBase
             max_tokens = maxTokens,
             temperature = (double)settings.Temperature,
             top_p = (double)settings.TopP,
+            // Keep this conversation's KV in its slot: the next turn reads only what is new. On by default in current
+            // builds — said here so an older or user-supplied build does not prefill the whole history every turn.
+            cache_prompt = true,
         };
 
         var body = JsonSerializer.Serialize(requestObj);
@@ -628,19 +733,10 @@ public class LlamaServerProvider : ApiProviderBase
     protected override ChatToolImageMode ToolImageMode =>
         SupportsToolResultImages("") ? ChatToolImageMode.ImageUrlMessage : ChatToolImageMode.Omit;
 
-    /// <summary>
-    /// Native tool-calling via llama-server's OpenAI-compatible endpoint. Requires the loaded model's
-    /// chat template to support tools (Qwen2.5-Coder, Llama 3.x, Hermes, Mistral…) — we already start
-    /// the server with --jinja so the template is honoured. Non-streaming: the agent loop consumes one
-    /// response per turn, exactly like the Anthropic path.
-    /// </summary>
-    public override async Task<NativeToolResponse> ChatWithToolsAsync(
-        List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools,
-        Action<string>? onTextDelta = null, CancellationToken ct = default, string? toolChoice = null)
+    /// <summary>The body of one native tool-calling request (public for the harness: it is the contract with
+    /// llama-server).</summary>
+    public Dictionary<string, object> BuildToolRequest(List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools, string? toolChoice = null)
     {
-        if (!IsServerRunning || !IsReady)
-            return new NativeToolResponse { TextContent = "llama-server is not running. Load a model first.", StopReason = "end_turn" };
-
         var settings = _settingsService.Settings;
         // Weak-model tool path: low temperature + top_k/min_p/repeat_penalty for deterministic, well-formed
         // tool-call JSON (chat temp 0.6 + only top_p let small models drift into broken/looping output here).
@@ -654,6 +750,10 @@ public class LlamaServerProvider : ApiProviderBase
             ["min_p"] = (double)settings.MinP,
             ["repeat_penalty"] = (double)settings.RepeatPenalty,
             ["stream"] = false,
+            // The system prompt and the tool list are the same every step of a run (CodeAgentService builds them once),
+            // so they are the prefix the server keeps; each step reads only the new tool result. With --cache-reuse the
+            // chunks after a compaction cut are kept as well.
+            ["cache_prompt"] = true,
         };
         if (tools.Count > 0)
         {
@@ -669,8 +769,23 @@ public class LlamaServerProvider : ApiProviderBase
         int approxPromptTokens = Math.Max(0, CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj))
             + ToolImageTokenAdjustment(messages));
         requestObj["max_tokens"] = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
+        return requestObj;
+    }
 
-        var body = JsonSerializer.Serialize(requestObj);
+    /// <summary>
+    /// Native tool-calling via llama-server's OpenAI-compatible endpoint. Requires the loaded model's
+    /// chat template to support tools (Qwen2.5-Coder, Llama 3.x, Hermes, Mistral…) — we already start
+    /// the server with --jinja so the template is honoured. Non-streaming: the agent loop consumes one
+    /// response per turn, exactly like the Anthropic path.
+    /// </summary>
+    public override async Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools,
+        Action<string>? onTextDelta = null, CancellationToken ct = default, string? toolChoice = null)
+    {
+        if (!IsServerRunning || !IsReady)
+            return new NativeToolResponse { TextContent = "llama-server is not running. Load a model first.", StopReason = "end_turn" };
+
+        var body = JsonSerializer.Serialize(BuildToolRequest(messages, systemPrompt, tools, toolChoice));
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/v1/chat/completions");
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 

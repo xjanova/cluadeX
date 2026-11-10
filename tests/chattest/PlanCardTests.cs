@@ -89,6 +89,61 @@ internal static partial class Program
             Check("PC3 a plan ticked to the end says done, with the run's time",
                 done != null && !ReferenceEquals(done, card) && done.PlanHeader == LocF("chat.plan.done", 2, 2) && done.PlanElapsed.Length > 0,
                 $"{done?.PlanHeader} · {done?.PlanElapsed}");
+
+            // ── PC4–PC6: the next turn carries the plan on; wrap_up ticks it off; its button answers (owner 2026-11-08:
+            //    Claude Code's planning — a pinned list, a wrap-up box, a scope tag) ──
+            static NativeToolResponse Call(string id, string name, object input) => new()
+            {
+                StopReason = "tool_use",
+                ToolCalls = { new NativeToolCall { Id = id, Name = name, Input = JsonDocument.Parse(JsonSerializer.Serialize(input)).RootElement.Clone() } },
+            };
+            provider.Steps.Enqueue((_, _) => Task.FromResult(Plan("p4", ("Write the parser", "in_progress"), ("Test the parser", "pending"))));
+            provider.Steps.Enqueue((_, _) => Task.FromResult(new NativeToolResponse { StopReason = "end_turn", TextContent = "Paused here." }));
+            await Send("[PC4] write the parser");
+            await WaitIdle();
+            var left = Card();
+
+            int callsBefore = provider.Texts.Count;
+            provider.Steps.Enqueue((_, _) => Task.FromResult(Call("p5", "todo_write", new { advance = true, scope = "continuation" })));
+            provider.Steps.Enqueue((_, _) => Task.FromResult(Call("w5", "wrap_up", new { recap = "The parser is written and tested.", ask = "Commit it?", actions = new[] { "Yes, commit", "Not now" } })));
+            provider.Steps.Enqueue((_, _) => Task.FromResult(new NativeToolResponse { StopReason = "end_turn", TextContent = "Done." }));
+            await Send("[PC5] carry on");
+            await WaitIdle();
+            string told = provider.Texts.Count > callsBefore ? provider.Texts[callsBefore] : "";
+            Check("PC4 the next turn is told the plan it left open",
+                told.Contains("[CluadeX: your plan from the last turn") && told.Contains("1. Write the parser (stopped mid-way)"), told.Length > 300 ? told[^300..] : told);
+            var carried = Card();
+            Check("PC5 advance carries the plan on in the same card; wrap_up ticks the rest off; the chip says continuation",
+                left != null && ReferenceEquals(carried, left) && carried!.PlanHeader == LocF("chat.plan.done", 2, 2)
+                && carried.PlanItems!.All(p => p.IsDone) && carried.PlanScope == "continuation"
+                && Vm.Messages.Count(m => m.IsPlan) == 3,   // PC1's, PC3's, and PC4's carried on (no second card for it)
+                $"same={ReferenceEquals(carried, left)} · {carried?.PlanHeader} · {carried?.PlanScope}");
+
+            var box = Vm.Messages.LastOrDefault(m => m.IsNextStep)?.NextStep;
+            provider.Steps.Enqueue((_, _) => Task.FromResult(new NativeToolResponse { StopReason = "end_turn", TextContent = "Committed." }));
+            box?.Actions[0].Command.Execute(null);
+            await WaitUntil(() => Vm.IsGenerating, 3000);
+            await WaitIdle();
+            var reply = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.User);
+            Check("PC6 the box's button sends its label as the owner's reply, once",
+                box != null && box.Ask == "Commit it?" && box.IsAnswered && reply?.Content == "Yes, commit"
+                && Vm.Messages.Count(m => m.Role == MessageRole.User && m.Content == "Yes, commit") == 1,
+                $"box={box != null} · last user: {reply?.Content}");
+
+            // ── PC7: Stop mid-plan: the step it was on says stopped, no box ──
+            var hold = new TaskCompletionSource();
+            provider.Steps.Enqueue((_, _) => Task.FromResult(Plan("p7", ("Migrate the table", "in_progress"), ("Check the rows", "pending"))));
+            provider.Steps.Enqueue(async (_, ct) => { await hold.Task.WaitAsync(ct); return new NativeToolResponse { StopReason = "end_turn", TextContent = "late" }; });
+            await Send("[PC7] migrate the table");
+            await WaitUntil(() => Card()?.PlanItems?.FirstOrDefault()?.Text == "Migrate the table", 10000);
+            int boxes = Vm.Messages.Count(m => m.IsNextStep);
+            Vm.StopGenerationCommand.Execute(null);
+            await WaitIdle();
+            var stopped = Card();
+            Check("PC7 Stop mid-plan: the step says stopped, the header says so, no next-step box",
+                stopped?.PlanItems?[0].IsStopped == true && stopped.PlanStopped && stopped.PlanHeader == LocF("plan.card.stopped", 0, 2)
+                && Vm.Messages.Count(m => m.IsNextStep) == boxes,
+                $"{stopped?.PlanHeader} · stopped={stopped?.PlanItems?[0].IsStopped}");
         }
         finally
         {

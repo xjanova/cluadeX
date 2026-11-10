@@ -7,8 +7,16 @@ public enum AiChangeKind { Added, Modified, Removed }
 /// lines from there are the AI's (0 for <see cref="AiChangeKind.Removed"/>: the AI deleted <see cref="OldLines"/>, which
 /// stood just before line <see cref="StartLine"/> — one past the last line when they were at the end).
 /// </summary>
-public sealed record AiChangeHunk(AiChangeKind Kind, int StartLine, int LineCount, IReadOnlyList<string> OldLines, IReadOnlyList<string> NewLines)
+/// <param name="ByUser">The user wrote these lines by hand (or deleted these), not the AI: drawn in the user's colour
+/// (<see cref="ChangeMarks"/>).</param>
+/// <param name="Partial">Part of an AI change the user edited inside: putting it back alone would not restore the AI's
+/// before-text, so the peek offers no Revert for it.</param>
+public sealed record AiChangeHunk(AiChangeKind Kind, int StartLine, int LineCount, IReadOnlyList<string> OldLines, IReadOnlyList<string> NewLines,
+    bool ByUser = false, bool Partial = false)
 {
+    /// <summary>The peek may put this change back: the AI's own, whole, with its before and after lines known.</summary>
+    public bool CanRevert => !ByUser && !Partial && OldLines.Count + NewLines.Count > 0;
+
     /// <summary>The line the gutter mark and "next change" point at.</summary>
     public int AnchorLine => StartLine;
     public int EndLine => LineCount > 0 ? StartLine + LineCount - 1 : StartLine;

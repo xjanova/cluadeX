@@ -66,7 +66,8 @@ public class CostTrackingService
     /// <summary>One day of the ledger for the spend panel (a copy; days with no use are all zero).</summary>
     public sealed record UsageDay(DateTime Day, decimal Usd, decimal BaselineUsd, int Requests, decimal SavedCacheUsd,
         decimal SavedToolSearchUsd, decimal SavedCompactionUsd, decimal SavedBatchUsd,
-        long InputTokens = 0, long CacheReadTokens = 0, long OutputTokens = 0);
+        long InputTokens = 0, long CacheReadTokens = 0, long OutputTokens = 0, decimal SavedRoutingUsd = 0,
+        decimal SavedLocalUsd = 0, int LocalRequests = 0, long LocalTokens = 0);
 
     /// <summary>The provider a model id belongs to, for the per-provider ledger: "Anthropic", "OpenAI", "Google", else "Other".</summary>
     public static string ProviderOf(string? model)
@@ -116,6 +117,7 @@ public class CostTrackingService
             SavedToolSearchUsd = all.SavedToolSearchUsd - parts.Sum(p => p.SavedToolSearchUsd),
             SavedCompactionUsd = all.SavedCompactionUsd - parts.Sum(p => p.SavedCompactionUsd),
             SavedBatchUsd = all.SavedBatchUsd - parts.Sum(p => p.SavedBatchUsd),
+            SavedRoutingUsd = all.SavedRoutingUsd - parts.Sum(p => p.SavedRoutingUsd),
         };
     }
 
@@ -160,7 +162,8 @@ public class CostTrackingService
                     u = provider == null ? all : provider == UnattributedProvider ? Unattributed(all) : all.ByProvider?.GetValueOrDefault(provider);
                 list.Add(u != null
                     ? new UsageDay(d, u.Usd, Math.Max(u.BaselineUsd, u.Usd), u.Requests, u.SavedCacheUsd, u.SavedToolSearchUsd,
-                        u.SavedCompactionUsd, u.SavedBatchUsd, u.InputTokens, u.CacheReadTokens, u.OutputTokens)
+                        u.SavedCompactionUsd, u.SavedBatchUsd, u.InputTokens, u.CacheReadTokens, u.OutputTokens, u.SavedRoutingUsd,
+                        u.SavedLocalUsd, u.LocalRequests, u.LocalTokens)
                     : new UsageDay(d, 0, 0, 0, 0, 0, 0, 0));
             }
         }
@@ -326,6 +329,14 @@ public class CostTrackingService
         }
         var price = Price(model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, cacheWrite1hTokens,
             priceFactor, promptTokens, tsAvoided, compAvoided);
+        // A tiered sub-agent: the same tokens on the run's own model (what it would have cost without routing).
+        var tierScope = AgentRunScope.Current;
+        string? tier = tierScope?.SubAgentTier;
+        decimal onRunModel = tier != null && RoutedAway(model, tierScope!.TierRunModel)
+            ? Price(tierScope.TierRunModel!, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, cacheWrite1hTokens,
+                priceFactor, promptTokens).Actual
+            : price.Actual;
+        decimal savedRouting = Math.Max(0m, onRunModel - price.Actual);
         lock (_lock)
         {
             TotalInputTokens += inputTokens;
@@ -353,11 +364,14 @@ public class CostTrackingService
                 u.SavedToolSearchUsd += price.SavedByToolSearch;
                 u.SavedCompactionUsd += price.SavedByCompaction;
                 u.SavedBatchUsd += price.SavedByBatch;
+                u.SavedRoutingUsd += savedRouting;
+                u.BaselineUsd += savedRouting;
                 u.InputTokens += inputTokens + cacheCreationTokens;
                 u.CacheReadTokens += cacheReadTokens;
                 u.OutputTokens += outputTokens;
                 if (isNewRequest) u.Requests++;
             }
+            if (tier != null) { AddTier(du, tier, isNewRequest, cost, onRunModel); tierScope!.AddRouting(savedRouting, onRunModel); }
             _ledgerDirty = true;
             saveLedger = _ledgerPath != null && (DateTime.UtcNow - _lastLedgerSave).TotalSeconds >= 5;
 
@@ -385,7 +399,92 @@ public class CostTrackingService
     /// <summary>A model on this machine answered (Ollama, llama-server, local GGUF): $0 — its tokens and the time it took
     /// go to the Billing page only (the spend ledger and the budgets count money).</summary>
     public void RecordLocalUsage(string provider, string? model, int inputTokens, int outputTokens, double seconds)
-        => LogRow(provider, model ?? "", Billing.UsageCostKind.Free, 0m, inputTokens, outputTokens, 0, 0, 0, 1, seconds);
+    {
+        LogRow(provider, model ?? "", Billing.UsageCostKind.Free, 0m, inputTokens, outputTokens, 0, 0, 0, 1, seconds);
+        var scope = AgentRunScope.Current;
+        lock (_lock)
+        {
+            string day = DayKey(DateTime.Now);
+            if (!_days.TryGetValue(day, out var du)) _days[day] = du = new DailyUsage();
+            // Everything a model on this PC answered, for the "saved by AI on this PC" chart.
+            du.LocalRequests++;
+            du.LocalTokens += Math.Max(0, inputTokens) + Math.Max(0, outputTokens);
+            _ledgerDirty = true;
+            // A sub-agent routed to the model on this machine: what the run's own model would have charged for it.
+            if (scope?.SubAgentTier is not { } tier || string.IsNullOrWhiteSpace(scope.TierRunModel)) return;
+            decimal onRunModel = Price(scope.TierRunModel!, inputTokens, outputTokens).Actual;
+            du.SavedRoutingUsd += onRunModel;
+            du.SavedLocalUsd += onRunModel;
+            du.BaselineUsd += onRunModel;
+            AddTier(du, tier, true, 0m, onRunModel);
+            scope.AddRouting(onRunModel, onRunModel);
+            scope.AddLocalSaving(onRunModel);
+        }
+    }
+
+    /// <summary>The request went out on another model than the run's (the sub-agent was routed away from it).</summary>
+    public static bool RoutedAway(string model, string? runModel) =>
+        !string.IsNullOrWhiteSpace(runModel) && !string.Equals(model, runModel, StringComparison.OrdinalIgnoreCase)
+        && !model.EndsWith("/" + runModel, StringComparison.OrdinalIgnoreCase);
+
+    private static void AddTier(DailyUsage du, string tier, bool isNewRequest, decimal usd, decimal onRunModel)
+    {
+        du.ByTier ??= new();
+        if (!du.ByTier.TryGetValue(tier, out var t)) du.ByTier[tier] = t = new TierUsage();
+        if (isNewRequest) t.Requests++;
+        t.Usd += usd;
+        t.RunModelUsd += onRunModel;
+    }
+
+    /// <summary>
+    /// A sub-agent of <paramref name="tier"/> fell short and its task went one tier up. Its attempt saved nothing — had
+    /// the task started on the stronger model it would not have run at all — so the saving it booked is taken back and
+    /// its cost counts as a loss (<paramref name="attempt"/> is that attempt's own scope). The routing saving is net.
+    /// </summary>
+    public void RecordTierClimb(string tier, AgentRunScope? attempt = null)
+    {
+        if (string.IsNullOrWhiteSpace(tier)) return;
+        decimal saved = attempt?.RoutingSavedUsd ?? 0, baseline = attempt?.RoutingBaselineUsd ?? 0, spent = attempt?.CostUsd ?? 0;
+        decimal savedLocal = attempt?.LocalSavedUsd ?? 0;
+        lock (_lock)
+        {
+            string day = DayKey(DateTime.Now);
+            if (!_days.TryGetValue(day, out var du)) _days[day] = du = new DailyUsage();
+            du.ByTier ??= new();
+            if (!du.ByTier.TryGetValue(tier, out var t)) du.ByTier[tier] = t = new TierUsage();
+            t.Climbs++;
+            t.RunModelUsd -= baseline;
+            du.SavedRoutingUsd -= saved + spent;
+            du.SavedLocalUsd -= savedLocal;   // the local attempt was redone on the API: it saved nothing
+            du.BaselineUsd -= saved;
+            _ledgerDirty = true;
+        }
+    }
+
+    /// <summary>Sub-agent use by tier over a span of local days: requests, cost, cost on the run's model, and how many
+    /// times it fell short and climbed. The saving is net: a climbed attempt's cost is in <see cref="Usd"/> already.</summary>
+    public sealed record TierRow(string Tier, int Requests, decimal Usd, decimal RunModelUsd, int Climbs = 0)
+    {
+        public decimal SavedUsd => RunModelUsd - Usd;
+    }
+
+    public static readonly string[] TierOrder = ["cheap", "mid", "deep"];
+
+    public IReadOnlyList<TierRow> TierBreakdown(DateTime start, DateTime end)
+    {
+        var sum = new Dictionary<string, TierUsage>(StringComparer.Ordinal);
+        lock (_lock)
+            foreach (var (key, u) in _days)
+                if (u.ByTier != null && DateTime.TryParseExact(key, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var day) && day >= start.Date && day <= end.Date)
+                    foreach (var (k, v) in u.ByTier)
+                    {
+                        if (!sum.TryGetValue(k, out var t)) sum[k] = t = new TierUsage();
+                        t.Requests += v.Requests; t.Usd += v.Usd; t.RunModelUsd += v.RunModelUsd; t.Climbs += v.Climbs;
+                    }
+        return sum.OrderBy(kv => Array.IndexOf(TierOrder, kv.Key) is var at && at < 0 ? 99 : at)
+                  .Select(kv => new TierRow(kv.Key, kv.Value.Requests, kv.Value.Usd, kv.Value.RunModelUsd, kv.Value.Climbs)).ToList();
+    }
 
     /// <summary>The Billing page's tab for a model an API provider recorded: from the model id, else the run's provider.</summary>
     public static string ApiProviderKey(string? model)
@@ -552,7 +651,7 @@ public class CostTrackingService
     /// Anthropic pricing updated October 2026 (first-party API rates).
     /// Format: (InputPerMToken, OutputPerMToken, CacheReadPerMToken, CacheWritePerMToken)
     /// Cache write = 1.25x input price; cache read = 0.1x input, except where a model's row says otherwise.
-    /// Order matters: "opus-5-5" must be tested before "opus-5", "fable-5-1" before "fable".
+    /// Order matters: "opus-5-5" must be tested before "opus-5", "fable-5-2" / "fable-5-1" before "fable".
     /// </remarks>
     /// <summary>List price per MTok for a model (the same table the costs are recorded with). <paramref name="promptTokens"/>
     /// = a request's whole prompt (input + cache reads + cache writes); Claude Haiku 5.5's and GPT-6's prices depend on it.</summary>
@@ -587,11 +686,14 @@ public class CostTrackingService
             ? new(p.InputPerMToken * 2m, p.OutputPerMToken * 1.5m, p.CacheReadPerMToken * 2m, p.CacheWritePerMToken * 2m)
             : p;
         // Anthropic rows checked against platform.claude.com/docs/en/about-claude/pricing on 2026-10-13. Cache reads are
-        // 0.1x input except Fable/Mythos 5.1 (0.025x) and Opus 5.5 / Sonnet 5.5 (0.05x); 5-minute writes 1.25x input,
+        // 0.1x input except Fable/Mythos 5.1 and 5.2 (0.025x) and Opus 5.5 / Sonnet 5.5 (0.05x); 5-minute writes 1.25x input,
         // 1-hour writes 2x input (RecordUsage prices those from the input column).
         return m switch
         {
             // ── Anthropic Models ── (ModelPricing = input, output, cacheRead, cacheWrite per MTok)
+            // Fable 5.2 / Mythos 5.2 (models/fable-5-2/overview, 2026-11-10): $8 / $40, cache reads $0.20 (0.025x),
+            // 5-minute writes $10. Cheaper than 5.1 — without this row it fell to the Fable 5 row's $10 / $50.
+            _ when m.Contains("fable-5-2") || m.Contains("mythos-5-2") => new(8.0m, 40.0m, 0.2m, 10.0m),
             // Fable 5.1 / Mythos 5.1: $10 / $50, cache reads $0.25 (0.025x)
             _ when m.Contains("fable-5-1") || m.Contains("mythos-5-1") => new(10.0m, 50.0m, 0.25m, 12.5m),
             // Fable 5 / Mythos 5: $10 in / $50 out (most capable, above Opus tier)
@@ -691,6 +793,17 @@ public class DailyUsage
     public decimal SavedToolSearchUsd { get; set; }
     public decimal SavedCompactionUsd { get; set; }
     public decimal SavedBatchUsd { get; set; }
+    /// <summary>Sub-agents on a cheaper model than the run's: what the same tokens would have cost on the run's model,
+    /// less what they cost (<see cref="Agents.DispatchPolicy.ModelForTier"/>).</summary>
+    public decimal SavedRoutingUsd { get; set; }
+    /// <summary>The part of <see cref="SavedRoutingUsd"/> a model on this PC earned: sub-agent work it did instead of the
+    /// API, priced at the run's model, less what had to be redone after a weak report.</summary>
+    public decimal SavedLocalUsd { get; set; }
+    /// <summary>Requests and tokens (in + out) any model on this PC answered — the sub-agents' and the chat's.</summary>
+    public int LocalRequests { get; set; }
+    public long LocalTokens { get; set; }
+    /// <summary>Sub-agent use by tier ("cheap", "mid", "deep"). Null on days before tiers.</summary>
+    public Dictionary<string, TierUsage>? ByTier { get; set; }
     /// <summary>Prompt tokens sent at full or cache-write price, read from the cache, and generated.</summary>
     public long InputTokens { get; set; }
     public long CacheReadTokens { get; set; }
@@ -699,6 +812,16 @@ public class DailyUsage
     public Dictionary<string, DailyUsage>? ByProvider { get; set; }
     /// <summary>Finished agent runs by dispatch strategy ("single", "fan-out", "workers", "speculative-fix"). Null before any.</summary>
     public Dictionary<string, StrategyUsage>? ByStrategy { get; set; }
+}
+
+/// <summary>Sub-agent requests of one tier on one day: their cost, and what they would have cost on the run's model.</summary>
+public class TierUsage
+{
+    public int Requests { get; set; }
+    public decimal Usd { get; set; }
+    public decimal RunModelUsd { get; set; }
+    /// <summary>Sub-agents of this tier whose weak report sent the task one tier up (it was paid for twice).</summary>
+    public int Climbs { get; set; }
 }
 
 /// <summary>Agent runs of one dispatch strategy on one day.</summary>

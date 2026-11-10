@@ -4,6 +4,12 @@
 //   E* switching a skill off: gone from the prompt list, refused by skill_invoke, counted
 //   I* installing from a trusted source through a fake network (no request leaves this PC)
 //   V* the Skills page view model and its localisation keys
+//   K* what skills cost per turn / when they run, and the gauge's ceiling (Skills/SkillBudget)
+//   A* picking the skills that fit a turn: English, Thai, named, pinned, learned, the brain's ranking (Skills/SkillPicker)
+//   L* words learned from turns that ran a skill, and pins (SkillService)
+//   G* the composer's per-chat switch (Skills/SkillPickGate)
+//   B* the brain's skill cards and its ranking answer (Skills/SkillBrainIndex — no brain on this PC)
+//   S* the system prompt is the same whatever a turn picked (the prompt cache holds)
 //
 // Build CluadeX first (the app may be running: build it with -p:OutDir=<dir>\), then:
 //   dotnet run --project tests/skilltest -p:CluadeXBin=<dir>\
@@ -253,7 +259,8 @@ string Seen(ToolResult r) => r.Success ? r.Output : r.Error + " " + r.Output;
     while (!File.Exists(Path.Combine(root, "CluadeX", "CluadeX.csproj"))) root = Path.GetDirectoryName(root)!;
     string xaml = File.ReadAllText(Path.Combine(root, "CluadeX", "Views", "SkillsView.xaml"));
     string code = File.ReadAllText(Path.Combine(root, "CluadeX", "ViewModels", "SkillsViewModel.cs"))
-                + File.ReadAllText(Path.Combine(root, "CluadeX", "ViewModels", "ChatViewModel.cs"));
+                + File.ReadAllText(Path.Combine(root, "CluadeX", "ViewModels", "ChatViewModel.cs"))
+                + File.ReadAllText(Path.Combine(root, "CluadeX", "ViewModels", "ChatViewModel.SkillPick.cs"));
     var keys = Regex.Matches(xaml, @"\{services:Loc ([\w.]+)\}").Select(m => m.Groups[1].Value)
         .Concat(Regex.Matches(code, "\"((?:skill|chat\\.skill)\\.[\\w]+)\"").Select(m => m.Groups[1].Value)).Distinct().ToList();
     var missing = keys.Where(k => loc.T(k) == k || string.IsNullOrWhiteSpace(loc.T(k))).ToList();
@@ -264,6 +271,198 @@ string Seen(ToolResult r) => r.Success ? r.Output : r.Error + " " + r.Output;
         .Append("DataContext").ToHashSet();
     var unknown = bindings.Where(b => !vmProps.Contains(b)).ToList();
     Check("V12", "every {Binding} root in the page is a real property", unknown.Count == 0, string.Join(",", unknown));
+}
+
+// ─── K: what skills cost (SkillBudget) ───────────────────────────────────
+{
+    var all = skills.GetAllSkills();
+    var scan = all.First(s => s.Name == "security-scan");
+    int line = CluadeX.Services.Skills.SkillBudget.ListingTokens(scan, false);
+    Check("K1", "a skill's per-turn cost is its listing line, small; its load cost is its whole prompt, larger",
+        line > 5 && line < 80 && CluadeX.Services.Skills.SkillBudget.LoadTokens(scan) > line * 3, $"{line} / {CluadeX.Services.Skills.SkillBudget.LoadTokens(scan)}");
+    Check("K2", "the ceiling is 1% of the window, 250..4000",
+        CluadeX.Services.Skills.SkillBudget.CapFor(200_000) == 2000 && CluadeX.Services.Skills.SkillBudget.CapFor(8192) == 250
+        && CluadeX.Services.Skills.SkillBudget.CapFor(1_000_000) == 4000 && CluadeX.Services.Skills.SkillBudget.CapFor(0) == 250);
+    var g = CluadeX.Services.Skills.SkillBudget.Measure(all, false, 200_000);
+    Check("K3", "the gauge measures the header + every line, the ceiling sits at half the bar",
+        g.Used == CluadeX.Services.Skills.SkillBudget.HeaderTokens + all.Sum(s => CluadeX.Services.Skills.SkillBudget.ListingTokens(s, false))
+        && Math.Abs(g.Fill - Math.Min(1, g.Used / 4000.0)) < 1e-9 && g.Count == all.Count, $"{g.Used} {g.Fill}");
+    var small = CluadeX.Services.Skills.SkillBudget.Measure(all, false, 8192);
+    Check("K4", "the same list on a small window is over the ceiling; nothing on = Empty",
+        small.Level == CluadeX.Services.Skills.SkillBudget.Level.Over
+        && CluadeX.Services.Skills.SkillBudget.Measure(Array.Empty<SkillDefinition>(), false, 8192).Level == CluadeX.Services.Skills.SkillBudget.Level.Empty
+        && CluadeX.Services.Skills.SkillBudget.Measure(new[] { scan }, false, 200_000).Level == CluadeX.Services.Skills.SkillBudget.Level.Light,
+        small.Level.ToString());
+    Check("K5", "Thai costs more per character than English (the listing word ใช้เมื่อ counts)",
+        CluadeX.Services.Skills.SkillBudget.ListingTokens(all.First(s => s.Name == "tool-precision"), true)
+        > CluadeX.Services.Skills.SkillBudget.ListingTokens(all.First(s => s.Name == "tool-precision"), false));
+    var heavy = new SkillDefinition { Name = "big", Description = "x", PromptContent = new string('a', 4000 * 4) };
+    Check("K6", "a skill whose prompt takes over a tenth of the window is heavy", CluadeX.Services.Skills.SkillBudget.HeavyToLoad(heavy, 32_000)
+        && !CluadeX.Services.Skills.SkillBudget.HeavyToLoad(heavy, 200_000));
+}
+
+// ─── A: the picker (SkillPicker) ─────────────────────────────────────────
+{
+    var all = skills.GetAllSkills();
+    CluadeX.Services.Skills.SkillPick P(string msg, string brain = null, IReadOnlyList<string> ranked = null, string[] pinned = null,
+        Func<string, IReadOnlyDictionary<string, int>> learned = null, int budget = 2000, int max = 5) =>
+        CluadeX.Services.Skills.SkillPicker.Pick(new(msg, brain, all, pinned ?? Array.Empty<string>(), learned, budget, max, false, ranked));
+    string Names(CluadeX.Services.Skills.SkillPick p) => string.Join(",", p.Names);
+
+    var p1 = P("scan this code for security holes and hardcoded secrets");
+    Check("A1", "an English security task picks security-scan first", p1.Picked.FirstOrDefault()?.Skill.Name == "security-scan", Names(p1));
+    Check("A1b", "…and not a skill sharing one weak word with it (market-research: \"Competitive scan\")", !p1.Names.Contains("market-research"), Names(p1));
+    var p2 = P("ช่วยตรวจช่องโหว่ความปลอดภัยของโค้ดนี้หน่อย");
+    Check("A2", "the same task in Thai picks security-scan (Thai → English words)", p2.Names.Contains("security-scan"), Names(p2));
+    var p3 = P("เขียนเทสต์ end-to-end แล้วรันทดสอบให้หน่อย");
+    Check("A3", "a Thai testing task picks e2e-testing", p3.Names.Contains("e2e-testing"), Names(p3));
+    var p4 = P("hi");
+    Check("A4", "\"hi\" picks nothing, and the block is empty", p4.Picked.Count == 0 && p4.BlockFor(true) == "" && p4.TokensPicked == 0, Names(p4));
+    var p5 = P("ช่วย commit งานนี้ให้หน่อย");
+    Check("A5", "a skill named in the message comes first (commit)", p5.Picked.FirstOrDefault() is { Reason: CluadeX.Services.Skills.PickReason.Named } n && n.Skill.Name == "commit", Names(p5));
+    Check("A5", "/name names it too; a bare short word inside another word does not",
+        CluadeX.Services.Skills.SkillPicker.IsNamed("simplify", "/simplify now") && CluadeX.Services.Skills.SkillPicker.IsNamed("review-pr", "do a review-pr pass")
+        && !CluadeX.Services.Skills.SkillPicker.IsNamed("commit", "recommitted") && !CluadeX.Services.Skills.SkillPicker.IsNamed("comment", "commented"));
+    var p6 = P("hi", pinned: new[] { "tool-precision" });
+    Check("A6", "a pinned skill is offered on every turn", p6.Picked.Count == 1 && p6.Picked[0].Reason == CluadeX.Services.Skills.PickReason.Pinned, Names(p6));
+    var many = P("security test review simplify research cost context content market plan comment eval debug loop agent", max: 3);
+    Check("A7", "a pick never offers more than its maximum", many.Picked.Count <= 3, Names(many));
+    var tight = P("security test review simplify research cost context content market plan comment eval", budget: 120);
+    Check("A8", "…nor more tokens than its budget", tight.TokensPicked <= 120 || tight.Picked.All(e => e.Reason is CluadeX.Services.Skills.PickReason.Named or CluadeX.Services.Skills.PickReason.Pinned),
+        $"{tight.TokensPicked} {Names(tight)}");
+    Check("A9", "the pick costs less than the full list", p1.TokensPicked < p1.TokensAll && p1.Offered == all.Count, $"{p1.TokensPicked}/{p1.TokensAll}");
+    var learnedMap = new Dictionary<string, int> { ["checkout"] = 3, [CluadeX.Services.Skills.SkillPicker.Stem("staging")] = 2 };
+    var p10 = P("checkout is broken on staging", learned: name => name == "e2e-testing" ? learnedMap : null);
+    Check("A10", "words learned for a skill pick it for a task said that way", p10.Names.Contains("e2e-testing")
+        && p10.Picked.First(e => e.Skill.Name == "e2e-testing").Reason == CluadeX.Services.Skills.PickReason.Learned, Names(p10));
+    var one = new Dictionary<string, int> { ["checkout"] = 3, ["keep"] = 3 };
+    var p10b = P("keep the readme short", learned: name => name == "e2e-testing" ? one : null);
+    Check("A10b", "one learned word in common is a coincidence, not a pick", !p10b.Names.Contains("e2e-testing"), Names(p10b));
+    var p11 = P("make it better please", ranked: new[] { "harness-optimizer", "multi-plan" });
+    Check("A11", "the brain's first-ranked card is picked on its own; its later ones need a word of the task",
+        p11.Names.Contains("harness-optimizer") && !p11.Names.Contains("multi-plan")
+        && p11.Picked.First(e => e.Skill.Name == "harness-optimizer").Reason == CluadeX.Services.Skills.PickReason.Brain, Names(p11));
+    var p12 = P("make it better please", brain: "Notes: the OWASP security audit found hardcoded secrets and missing rate limits");
+    Check("A12", "the brain's recall text alone is a weak signal (it never outweighs the task's own words)",
+        !p12.Names.Contains("market-research") && p12.Picked.All(e => e.Score < 100), Names(p12));
+    string block = p1.BlockFor(true);
+    Check("A13", "the block names each picked skill with the prompt's own line and says how to list the rest",
+        block.StartsWith("[Skill ที่เข้ากับงานนี้") && block.Contains(CluadeX.Services.Skills.SkillBudget.ListingLine(p1.Picked[0].Skill, true)) && block.Contains("skill_invoke"));
+    Check("A14", "Terms: stems, stop words, Thai", CluadeX.Services.Skills.SkillPicker.Terms("Testing the tests reviewed").SequenceEqual(new[] { "test", "review" })
+        && CluadeX.Services.Skills.SkillPicker.Terms("ช่วยทดสอบ").Contains("test") && CluadeX.Services.Skills.SkillPicker.Terms("").Count == 0,
+        string.Join(",", CluadeX.Services.Skills.SkillPicker.Terms("Testing the tests reviewed")));
+    var huge = new string('x', 200_000) + " security";
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    P(huge);
+    Check("A15", "a huge message is cut, the pick stays fast", sw.ElapsedMilliseconds < 1500, sw.ElapsedMilliseconds + " ms");
+}
+
+// ─── L: learned words and pins (SkillService) ────────────────────────────
+{
+    skills.LearnTerms("verification-loop", "the payment webhook retries forever");
+    skills.LearnTerms("verification-loop", "webhook retries again");
+    var t = skills.LearnedTerms("verification-loop");
+    Check("L1", "the words of a turn that ran a skill are counted for it", t.TryGetValue("webhook", out var c) && c == 2 && t.ContainsKey("payment"), string.Join(",", t.Keys));
+    for (int i = 0; i < 60; i++) skills.LearnTerms("verification-loop", $"word{i:00}a word{i:00}b");
+    t = skills.LearnedTerms("verification-loop");
+    Check("L2", "at most 40 words are kept, the most counted stay", t.Count == SkillService.MaxLearnedTerms && t.ContainsKey("webhook"), t.Count.ToString());
+    string usageFile = Path.Combine(settings.DataRoot, "skill-usage.json");
+    Check("L3", "the words live in skill-usage.json (inside the harness's data root)", File.Exists(usageFile) && File.ReadAllText(usageFile).Contains("webhook"));
+    skills.LearnTerms("verification-loop", null);
+    skills.LearnTerms("", "x y z");
+    Check("L4", "nothing to learn is not an error", true);
+    skills.SetPinned("simplify", true);
+    Check("L5", "pinning saves to settings and survives a re-read", skills.IsPinned("simplify") && settings.Settings.PinnedSkills.Contains("simplify"));
+    skills.SetPinned("simplify", false);
+    Check("L6", "and unpins", !skills.IsPinned("simplify") && settings.Settings.PinnedSkills.Count == 0);
+}
+
+// ─── G: the per-chat switch (SkillPickGate) ──────────────────────────────
+{
+    CluadeX.Services.Skills.SkillPickGate.Load(settings.DataRoot);
+    Check("G1", "a chat with no override follows the default; no chat = off",
+        CluadeX.Services.Skills.SkillPickGate.IsOn("c1", true) && !CluadeX.Services.Skills.SkillPickGate.IsOn("c1", false)
+        && !CluadeX.Services.Skills.SkillPickGate.IsOn(null, true));
+    CluadeX.Services.Skills.SkillPickGate.Set("c1", false, defaultOn: true);
+    CluadeX.Services.Skills.SkillPickGate.Load(settings.DataRoot);
+    Check("G2", "a chat switched off stays off after a restart, others still follow the default",
+        !CluadeX.Services.Skills.SkillPickGate.IsOn("c1", true) && CluadeX.Services.Skills.SkillPickGate.IsOn("c2", true));
+    CluadeX.Services.Skills.SkillPickGate.Set("c1", true, defaultOn: true);
+    string f = Path.Combine(settings.DataRoot, "skill-pick-chats.json");
+    Check("G3", "switched back to the default = no entry kept", File.Exists(f) && !File.ReadAllText(f).Contains("c1"), File.Exists(f) ? File.ReadAllText(f) : "-");
+    CluadeX.Services.Skills.SkillPickGate.Set("c3", false, true);
+    CluadeX.Services.Skills.SkillPickGate.Forget("c3");
+    Check("G4", "a deleted chat's override goes", !File.ReadAllText(f).Contains("c3"));
+    File.WriteAllText(f, "{not json");
+    CluadeX.Services.Skills.SkillPickGate.Load(settings.DataRoot);
+    Check("G5", "a damaged file = every chat follows the default", CluadeX.Services.Skills.SkillPickGate.IsOn("c1", true));
+}
+
+// ─── B: the brain's cards (SkillBrainIndex, no brain on this PC) ─────────
+{
+    var scan = skills.GetAllSkills().First(s => s.Name == "security-scan");
+    string body = CluadeX.Services.Skills.SkillBrainIndex.CardBody(scan);
+    Check("B1", "a card is the name, description and slash command — never the prompt",
+        CluadeX.Services.Skills.SkillBrainIndex.CardTitle(scan) == "CluadeX skill: security-scan" && body.Contains(scan.Description)
+        && !body.Contains("OWASP Top 10") && body.Contains("/security-scan"));
+    var copy = SkillService.ParseSkillContent("---\nname: security-scan\ndescription: other text\n---\nbody", "x");
+    Check("B2", "the card's hash follows its text", CluadeX.Services.Skills.SkillBrainIndex.CardHash(scan) != CluadeX.Services.Skills.SkillBrainIndex.CardHash(copy)
+        && CluadeX.Services.Skills.SkillBrainIndex.CardHash(scan) == CluadeX.Services.Skills.SkillBrainIndex.CardHash(scan));
+    var ranked = CluadeX.Services.Skills.SkillBrainIndex.ParseRanked("""
+        {"query":"x","results":[{"id":"1","title":"CluadeX skill: e2e-testing"},{"id":"2","title":"Some other note"},
+        {"id":"3","title":"CluadeX skill: ../evil"},{"id":"4","title":"CluadeX skill: security-scan"},{"id":"5","title":"CluadeX skill: e2e-testing"}]}
+        """);
+    Check("B3", "the brain's answer → skill names, best first; other notes, bad names and repeats dropped",
+        ranked.SequenceEqual(new[] { "e2e-testing", "security-scan" }), string.Join(",", ranked));
+    Check("B4", "an answer that is not JSON is an empty ranking", CluadeX.Services.Skills.SkillBrainIndex.ParseRanked("(brain search error: timeout)").Count == 0
+        && CluadeX.Services.Skills.SkillBrainIndex.ParseRanked(null).Count == 0);
+    Check("B4b", "a card already in the brain is found by its exact title (not written twice after a reinstall)",
+        CluadeX.Services.Skills.SkillBrainIndex.IdForTitle("""{"results":[{"id":"a","title":"CluadeX skill: security-scan v2"},{"id":"b","title":"CluadeX skill: security-scan"}]}""",
+            "CluadeX skill: security-scan") == "b"
+        && CluadeX.Services.Skills.SkillBrainIndex.IdForTitle("""{"results":[]}""", "CluadeX skill: x") == null
+        && CluadeX.Services.Skills.SkillBrainIndex.IdForTitle("oops", "x") == null);
+    var index = provider.GetRequiredService<CluadeX.Services.Skills.SkillBrainIndex>();
+    var r = index.RankAsync("scan for security holes").GetAwaiter().GetResult();
+    int w = index.EnsureIndexedAsync(skills.GetAllSkills()).GetAwaiter().GetResult();
+    Check("B5", "with no brain connected: no ranking, nothing written, nothing thrown", r.Count == 0 && w == 0 && !index.BrainReady);
+    Check("B6", "every skill's card is missing until a brain takes it", index.Stale(skills.GetAllSkills()).Count == skills.GetAllSkills().Count);
+}
+
+// ─── S: the system prompt stays the same whatever a turn picks ───────────
+{
+    var agent = provider.GetRequiredService<CodeAgentService>();
+    var wasProvider = settings.Settings.ActiveProvider;
+    settings.Settings.ActiveProvider = AiProviderType.Anthropic;
+    try
+    {
+        string plain = agent.GetSystemPrompt();
+        var scope = new AgentRunScope("chat-s", null);
+        AgentRunScope.Enter(scope);
+        scope.SkillPick = CluadeX.Services.Skills.SkillPicker.Pick(new("scan for security holes", null, tools.GetAdvertisedSkills(),
+            Array.Empty<string>(), null, 2000, 5, false));
+        string a = agent.GetSystemPrompt();
+        scope.SkillPick = CluadeX.Services.Skills.SkillPicker.Pick(new("write a blog post", null, tools.GetAdvertisedSkills(),
+            Array.Empty<string>(), null, 2000, 5, false));
+        string b = agent.GetSystemPrompt();
+        AgentRunScope.Enter(null);
+        Check("S1", "without picking, the system prompt lists every offered skill with SkillBudget's line",
+            tools.GetAdvertisedSkills().All(s => plain.Contains(CluadeX.Services.Skills.SkillBudget.ListingLine(s, loc.CurrentLanguage == "th"))));
+        Check("S2", "with picking, it names no skill — and two turns that picked differently send the same system prompt",
+            a == b && !a.Contains("`security-scan`:") && !a.Contains("`content-engine`:") && a.Contains("skill_invoke"),
+            a == b ? "" : "the prompts differ");
+    }
+    finally { settings.Settings.ActiveProvider = wasProvider; AgentRunScope.Enter(null); }
+}
+
+// ─── V13: every smart-picking key has a Thai value ───────────────────────
+{
+    var t = typeof(CluadeX.App).Assembly.GetType("CluadeX.Services.Localization.SkillPickKeys")!;
+    var dict = (Dictionary<string, Dictionary<string, string>>)t.GetField("Keys", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+    var bad = dict.Where(kv => !kv.Value.TryGetValue("th", out var th) || string.IsNullOrWhiteSpace(th) || !kv.Value.ContainsKey("en")
+        || loc.T(kv.Key) == kv.Key).Select(kv => kv.Key).ToList();
+    Check("V13", $"all {dict.Count} smart-picking keys have English and Thai, and are loaded", bad.Count == 0, string.Join(",", bad));
+    var why = Enum.GetNames<CluadeX.Services.Skills.PickReason>().Select(n => "skill.why." + n.ToLowerInvariant()).Where(k => loc.T(k) == k).ToList();
+    Check("V14", "every pick reason has words", why.Count == 0, string.Join(",", why));
 }
 
 try { Directory.Delete(scratch, true); } catch { }

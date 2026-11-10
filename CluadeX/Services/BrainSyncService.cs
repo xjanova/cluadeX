@@ -74,6 +74,21 @@ public class BrainSyncService
         }
     }
 
+    /// <summary>The system prompt's form of <see cref="LiveStatusLine"/>: while CONNECTED, without the tool count and the
+    /// last error. Both move on their own (BrainX adds tools between versions, an old error lingers after a reconnect),
+    /// and every change rewrote the whole prompt cache on the next request. Disconnected keeps the full line — then the
+    /// reason is the point. A question about the connection is still answered from the full line (AgentPersona.MeasuredStatus).</summary>
+    public string PromptStatusLine
+    {
+        get
+        {
+            string? server = _mcp.BrainServerName;
+            return server != null && _mcp.IsBrainConnected
+                ? $"brain: CONNECTED · server `{server}` · its tools are available right now"
+                : LiveStatusLine;
+        }
+    }
+
     /// <summary>
     /// Pick the first running MCP server whose name suggests it's an ObsidianX
     /// brain. We don't enforce a specific tool list here because querying

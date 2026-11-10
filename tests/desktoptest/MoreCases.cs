@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using CluadeX.Models;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows.Automation;
@@ -76,12 +77,18 @@ internal static partial class Program
         await T("desktop_window", Win, ("action", "move"), ("x", start.Left.ToString()), ("y", start.Top.ToString()));
         await T("desktop_window", Win, ("action", "resize"), ("width", start.Width.ToString()), ("height", start.Height.ToString()));
 
-        var extra = Fx.Extra("CX close me " + Guid.NewGuid().ToString("N")[..6]);
-        await Task.Delay(300);
-        string extraTitle = Fx.On(() => extra.Title);
+        // Another process's window (this harness hosts CluadeX.dll, so its own windows count as CluadeX and are never closed).
+        string extraTitle = "CX close me " + Guid.NewGuid().ToString("N")[..6];
+        using var closeMe = Process.Start(new ProcessStartInfo(Environment.ProcessPath!, $"--child \"{extraTitle}\" 0") { UseShellExecute = false })!;
+        for (int i = 0; i < 40 && !DesktopWindows.List().Any(w => w.Title == extraTitle); i++) await Task.Delay(250);
         var close = await T("desktop_window", ("title", Regex.Escape(extraTitle)), ("action", "close"));
+        bool gone = closeMe.WaitForExit(5000);
+        Check("N1c", "close sends the X button's message and the window goes", close.Success && close.Output.StartsWith("Closed") && gone, Seen(close));
+        var extra = Fx.Extra("CX mine " + Guid.NewGuid().ToString("N")[..6]);
         await Task.Delay(300);
-        Check("N1c", "close sends the X button's message and the window goes", close.Success && close.Output.StartsWith("Closed") && !Fx.On(() => extra.IsVisible), Seen(close));
+        var mine = await T("desktop_window", ("title", Regex.Escape(Fx.On(() => extra.Title))), ("action", "close"));
+        Check("N1c2", "…but a window of CluadeX's own process is never closed", !mine.Success && mine.Error.Contains("never closes CluadeX") && Fx.On(() => extra.IsVisible), Seen(mine));
+        Fx.On(() => extra.Close());
 
         var self = await T("desktop_window", ("pid", Environment.ProcessId.ToString()), ("action", "close"));
         Check("N1d", "desktop_window refuses to close a CluadeX process window",
@@ -127,15 +134,29 @@ internal static partial class Program
             // inputs in tooltest DK4 instead of typing into whatever window happens to be in front.
             var keys = await T("desktop_keys", tw, ("keys", "Enter"));
             var c = (term.X + term.Width / 2, term.Y + term.Height / 2);
-            var click = await T("desktop_mouse", ("action", "right_click"), ("x", c.Item1.ToString()), ("y", c.Item2.ToString()));
+            // A real right-click is sent only when the console is what lies under that point: were another window in front
+            // there, the click would be allowed and land on it (the owner's window), which proves nothing and is not ours.
+            // The fixture is Topmost and the console often opens under it: let the console come up over it for this case.
+            Fx.On(() => Fx.Win.Topmost = false);
+            await T("desktop_window", tw, ("action", "focus"));
+            await Task.Delay(300);
+            ToolResult? click = null;
+            for (int i = 0; i < 8 && click == null; i++)
+            {
+                if (DesktopSafety.WindowAtPoint(c.Item1, c.Item2) is { } under && DesktopSafety.IsCommandSurface(under))
+                    click = await T("desktop_mouse", ("action", "right_click"), ("x", c.Item1.ToString()), ("y", c.Item2.ToString()));
+                else await Task.Delay(250);
+            }
             var close = await T("desktop_window", tw, ("action", "close"));
             var shot = await T("desktop_screenshot", tw);
+            if (click == null) Gap("T1b", "a right-click in a terminal is refused", "another window stayed in front of the console — no click sent");
             Check("T1b", "keys, a right-click (paste) and close are refused in a terminal; a screenshot still works",
-                !keys.Success && keys.Error.Contains("terminal") && !click.Success && !close.Success && shot.Success,
-                string.Join("\n", Seen(keys), Seen(click), Seen(close), Seen(shot)));
+                !keys.Success && keys.Error.Contains("terminal") && click is not { Success: true } && !close.Success && shot.Success,
+                string.Join("\n", Seen(keys), click == null ? "(no click sent)" : Seen(click), Seen(close), Seen(shot)));
         }
         finally
         {
+            Fx.On(() => Fx.Win.Topmost = true);
             try { if (proc is { HasExited: false }) proc.Kill(entireProcessTree: true); } catch { }
             foreach (var w in DesktopWindows.List().Where(w => w.Title.Contains(title)))
                 DesktopNative.PostMessageW(w.Handle, DesktopNative.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
@@ -184,7 +205,8 @@ internal static partial class Program
             }
 
             var addr = await T("desktop_find", tw, ("automation_id", "/^(41477|PART_AutoSuggestBox)$/"));
-            string bar = Regex.Match(addr.Output, @"(e\d+) ").Groups[1].Value;
+            // The ref of the match itself — not the first "eN " in the output, which may be the focus line (the fixture's box).
+            string bar = Regex.Match(addr.Output, @"(e\d+) [^\n]*?id=(?:41477|PART_AutoSuggestBox)\b").Groups[1].Value;
             if (bar.Length == 0) Gap("X1c", "typing into Explorer's address bar is refused", "address bar not found: " + Trunc(addr.Output, 200));
             else
             {
