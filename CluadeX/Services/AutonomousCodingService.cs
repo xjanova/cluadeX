@@ -22,6 +22,9 @@ namespace CluadeX.Services;
 /// </summary>
 public class AutonomousCodingService
 {
+    /// <summary>The most fix iterations / review rounds one run takes — Settings › Autonomous caps its boxes here too.</summary>
+    public const int MaxLoopCap = 25;
+
     private readonly CodeAgentService _agent;
     private readonly FileSystemService _fileSystem;
     private readonly SettingsService _settings;
@@ -46,8 +49,8 @@ public class AutonomousCodingService
         // decision of the user's): the run asks again. One given during it is — the run stops instead of asking twice.
         long declineMark = _tools.AutoBuildDeclineMark;
 
-        int maxFix = Math.Clamp(s.AutoFixMaxIterations, 1, 25);
-        int maxReview = Math.Clamp(s.AutoReviewMaxRounds, 1, 25);
+        int maxFix = Math.Clamp(s.AutoFixMaxIterations, 1, MaxLoopCap);
+        int maxReview = Math.Clamp(s.AutoReviewMaxRounds, 1, MaxLoopCap);
         string verifyCmd = string.IsNullOrWhiteSpace(s.AutoVerifyCommand)
             ? DetectVerifyCommand()
             : s.AutoVerifyCommand.Trim();

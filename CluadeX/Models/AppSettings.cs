@@ -113,8 +113,6 @@ public class AppSettings
     public string ClaudeCodePathOverride { get; set; } = "";
     /// <summary>The browser the connector drives when several are connected (the extension's device id). Empty = ask.</summary>
     public string ChromePairedDeviceId { get; set; } = "";
-    /// <summary>Let Claude in Chrome act without its own per-action prompts — only honoured in bypass mode.</summary>
-    public bool ChromeActWithoutAsking { get; set; } = false;
     /// <summary>IDLE timeout (seconds) for an interactive model call in the chat/agent loop: the window
     /// resets on every streamed token, so a healthy (even slow) generation is never cut off — only a
     /// connection that produces NOTHING for this long is aborted, surfacing a clean "timed out" error
@@ -207,7 +205,6 @@ public class AppSettings
     /// and coloured, just not commented in the file.</summary>
     public bool EditorUserEditMarkers { get; set; } = true;
     public double EditorZoom { get; set; } = 1.0;
-    public string PreferredLanguage { get; set; } = "C#";
     /// <summary>Code Editor ▸ AI comments: how much the AI comments the code it writes ("none" | "key" | "detailed") and in
     /// which language ("th" | "en" | "match" = the file's own). "none" sends no instruction at all — the old behaviour.
     /// <see cref="CodeCommentProjects"/> overrides both for one project (key: Services.CodeCommentPolicy.ProjectKey).</summary>
@@ -465,8 +462,9 @@ public class AppSettings
     /// <summary>Skills offered on every turn while picking is on ("ใช้ทุกงาน" on the Skills page).</summary>
     public List<string> PinnedSkills { get; set; } = new();
 
-    // UI settings
-    public double FontSize { get; set; } = 14;
+    // UI settings. Removed 2026-11-10 because nothing read them: FontSize, StreamOutput, PreferredLanguage,
+    // ChromeActWithoutAsking. An older settings.json that still has them loads fine — System.Text.Json skips unknown
+    // keys (JsonOptions in SettingsService has no UnmappedMemberHandling.Disallow), and the next save drops them.
 
     /// <summary>Zoom of the whole main window, 0.8–1.6 (Settings › General › Text size and font; 1 = 100 %).
     /// See Services/TypographyService.</summary>
@@ -487,8 +485,6 @@ public class AppSettings
     /// <summary>How น้อง CluadeX shows (her right-click menu, owner 2026-11-08): "clips" (her video clips, the default),
     /// "stills" (her still pictures only, no clips) or "slides" (the girls one after another, waist up). Views/CluadexBuddy.Slides.cs.</summary>
     public string BuddyDisplay { get; set; } = "clips";
-
-    public bool StreamOutput { get; set; } = true;
 
     // Language / Localization
     public string Language { get; set; } = "en"; // "en" or "th"
