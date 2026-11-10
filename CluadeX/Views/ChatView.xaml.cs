@@ -38,6 +38,19 @@ public partial class ChatView : UserControl
         InitializeComponent();
         Instances.Add(new WeakReference<ChatView>(this));
 
+        // The model · effort chip's words change length with what really answers ("auto" ↔ "auto → high (bug fix)").
+        // In the wrapping row under the input box, that moved the chips after it between two and three lines, the
+        // chat list grew and shrank 34 px and every row jumped. The chip only grows, never shrinks back, while the
+        // row is the same width; a resize (the row is laid out again anyway) lets it fit its words again.
+        LiveEffortChip.SizeChanged += (_, e) =>
+        {
+            if (e.NewSize.Width > LiveEffortChip.MinWidth) LiveEffortChip.MinWidth = Math.Ceiling(e.NewSize.Width);
+        };
+        ComposerOptions.SizeChanged += (_, e) =>
+        {
+            if (e.WidthChanged && Math.Abs(e.NewSize.Width - e.PreviousSize.Width) >= 1) LiveEffortChip.MinWidth = 0;
+        };
+
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         // The chat page is kept and only hidden when another page is shown (Views/PageHost): coming back is not a
