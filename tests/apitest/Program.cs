@@ -133,6 +133,7 @@ internal static class Program
             Console.WriteLine($"after: {left.Count} stale");
             return left.Count == 0 ? 0 : 1;
         }
+        if (args.Contains("--llama-launch")) { await LlamaLaunchWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--buddy")) { await RunBadgeWire.Run(Check, Section); await BuddyIdleWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
@@ -580,6 +581,7 @@ internal static class Program
         await BatchWire.Run(Check, Section);
         await ToolSearchWire.Run(Check, Section);
         SmallModelWire.Run(Check, Section);
+        await LlamaLaunchWire.Run(Check, Section);
         await PricingWire.Run(Check, Section);
         await RunBadgeWire.Run(Check, Section);
         await BuddyIdleWire.Run(Check, Section);
