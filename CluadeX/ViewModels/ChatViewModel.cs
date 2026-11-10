@@ -3669,7 +3669,7 @@ public partial class ChatViewModel : ViewModelBase
         int images = fromBox ? PendingImages.Count : 0;
         int files = fromBox ? PendingFiles.Count : 0;
         if (string.IsNullOrEmpty(input) && images == 0 && files == 0) return;
-        if (fromBox) { _dictation?.Hush(); StopReplyVoice(); }   // a reply still being read aloud stops: the user has moved on
+        // A reply still being read aloud plays on (owner 2026-11-10: "ไม่ตัด"): the next reply waits for it in VoiceQueue.
         // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
         // to do nothing at all (the box was even disabled) until the run ended. Attachments wait for the next turn.
         if (IsGenerating)

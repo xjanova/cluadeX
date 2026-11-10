@@ -95,8 +95,17 @@ public class ChatMessage : INotifyPropertyChanged
     public bool IsStreaming
     {
         get => _isStreaming;
-        set { if (_isStreaming != value) { _isStreaming = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanExplainSimply)); } }
+        set { if (_isStreaming != value) { _isStreaming = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanExplainSimply)); OnPropertyChanged(nameof(CanReadAloud)); } }
     }
+
+    // ─── Read aloud (ReplyVoiceQueue) ───
+    private bool _isVoiceCurrent, _isVoicePlaying;
+    /// <summary>A finished reply with words in it: the hover strip's ▶ reads it aloud, and so does a click on the bubble.</summary>
+    public bool CanReadAloud => Role == MessageRole.Assistant && !IsStreaming && !string.IsNullOrWhiteSpace(Content);
+    /// <summary>The voice player's current reply is this bubble's (lit while it plays).</summary>
+    public bool IsVoiceCurrent { get => _isVoiceCurrent; set { if (_isVoiceCurrent != value) { _isVoiceCurrent = value; OnPropertyChanged(); } } }
+    /// <summary>This bubble is being read aloud right now (its ▶ shows pause).</summary>
+    public bool IsVoicePlaying { get => _isVoicePlaying; set { if (_isVoicePlaying != value) { _isVoicePlaying = value; OnPropertyChanged(); } } }
 
     public List<CodeBlock> CodeBlocks { get; set; } = new();
     public string? ExecutionResult { get; set; }

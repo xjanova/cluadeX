@@ -59,6 +59,17 @@ public sealed class VoicePlayer : IDisposable
         Finished?.Invoke(error);
     }
 
+    /// <summary>Hold the sound where it is (the voice player's pause); <see cref="Resume"/> carries on from there.</summary>
+    public void Pause()
+    {
+        try { _player?.Pause(); } catch { }
+    }
+
+    public void Resume()
+    {
+        try { _player?.Play(); } catch { }
+    }
+
     public void Stop()
     {
         if (_player == null) return;

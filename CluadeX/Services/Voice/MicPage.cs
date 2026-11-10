@@ -239,7 +239,7 @@ button.b:hover{filter:brightness(1.15)}
 
   // ── Reading replies aloud: the browser's own speech synthesis, free ──
   const hushBtn = $('hush');
-  let talkGen = 0, lastSay = null, lastHush = null, pendingSay = null;
+  let talkGen = 0, lastSay = null, lastHush = null, pendingSay = null, talkSay = '';
   function pickVoice(l, want) {
     const vs = (window.speechSynthesis && speechSynthesis.getVoices()) || [];
     // Settings › Voice may name one ("Microsoft Premwadee Online (Natural) - Thai (Thailand) | th-TH").
@@ -263,6 +263,7 @@ button.b:hover{filter:brightness(1.15)}
     if (!text) return;
     if (!window.speechSynthesis) { post('/event', { type: 'error', detail: 'no-tts' }); return; }
     const gen = ++talkGen;
+    talkSay = opt && opt.id != null ? String(opt.id) : '';
     try { speechSynthesis.cancel(); } catch (e) {}
     stopClip();
     talking = true; pendingSay = { text, l, opt };
@@ -293,6 +294,7 @@ button.b:hover{filter:brightness(1.15)}
   }
   function playAudio(id, text, l) {
     const gen = ++talkGen;
+    talkSay = String(id);
     try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) {}
     stopClip();
     talking = true; pendingSay = { text, l, id, audio: true };
@@ -316,7 +318,7 @@ button.b:hover{filter:brightness(1.15)}
   function doneTalking(gen) {
     if (gen !== talkGen || !talking) return;
     talking = false; pendingSay = null; hushBtn.hidden = true;
-    post('/event', { type: 'spoke', detail: '' });
+    post('/event', { type: 'spoke', detail: talkSay });
     resumeRec();
   }
   function resumeRec() {
@@ -324,17 +326,17 @@ button.b:hover{filter:brightness(1.15)}
     if (want && !busy) startRec();
     else if (!want) show(M.paused, M.hintOff);
   }
-  function hushNow() {
+  function hushNow(byUser) {
     talkGen++;
     try { window.speechSynthesis && speechSynthesis.cancel(); } catch (e) {}
     stopClip();
-    if (talking) { talking = false; pendingSay = null; post('/event', { type: 'spoke', detail: '' }); }
+    if (talking) { talking = false; pendingSay = null; post('/event', { type: 'spoke', detail: talkSay + (byUser ? ':hush' : '') }); }
     hushBtn.hidden = true; resumeRec();
   }
   hushBtn.onclick = () => {
     if (hushBtn.textContent === M.replay && pendingSay)
       pendingSay.audio ? playAudio(pendingSay.id, pendingSay.text, pendingSay.l) : sayAloud(pendingSay.text, pendingSay.l, pendingSay.opt);
-    else hushNow();
+    else hushNow(true);
   };
 
   // ── Live voice: GPT-Live over WebRTC; the key stays in CluadeX ──
