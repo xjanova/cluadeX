@@ -1720,8 +1720,7 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Accent.1}"
-                                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <ContentControl Style="{StaticResource FolderIcon}" Width="16" Height="13" VerticalAlignment="Center" Margin="0,0,8,0" HorizontalAlignment="Left"/>
                                                 <TextBlock Text="{Binding AgentMapHeader}" FontSize="13" FontWeight="SemiBold"
                                                            Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
                                             </StackPanel>
@@ -2902,8 +2901,7 @@
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center"
-                                                       Foreground="{DynamicResource Accent.2}" Margin="0,0,10,0"/>
+                                            <ContentControl Style="{StaticResource FolderIcon}" Width="19" Height="15.4" VerticalAlignment="Center" Margin="0,0,10,0" HorizontalAlignment="Left"/>
                                             <StackPanel Grid.Column="1">
                                                 <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                                                            Foreground="{DynamicResource Text.Primary}"/>
@@ -2929,7 +2927,7 @@
                             <Button x:Name="StarterBrowseButton" Style="{StaticResource PrimaryButton}" Padding="14,8" Margin="0,4,8,0"
                                     Command="{Binding BrowseStarterProjectCommand}">
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13" VerticalAlignment="Center" Margin="0,0,8,0" HorizontalAlignment="Left"/>
                                     <TextBlock Text="{services:Loc starter.project.browse}" FontSize="12.5" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
@@ -2951,9 +2949,7 @@
                             Command="{Binding OpenFolderCommand}"
                             Padding="14,8" Margin="0,0,8,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                                       FontSize="14" VerticalAlignment="Center"
-                                       Margin="0,0,8,0"/>
+                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="17" Height="13.8" VerticalAlignment="Center" Margin="0,0,8,0" HorizontalAlignment="Left"/>
                             <TextBlock Text="{services:Loc chat.openProjectFolder}" FontFamily="{DynamicResource Font.Ui.Display}"
                                        FontSize="12.5" VerticalAlignment="Center"/>
                         </StackPanel>

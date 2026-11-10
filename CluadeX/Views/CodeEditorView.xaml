@@ -184,10 +184,13 @@
 
                     <!-- Folder icon OR extension monogram -->
                     <Border Grid.Column="1" Width="22" Height="14" Margin="4,0,6,0"
-                            VerticalAlignment="Center" CornerRadius="3" BorderThickness="1"
-                            BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Surface.Sunken}">
+                            VerticalAlignment="Center" CornerRadius="3" BorderThickness="1">
+                        <!-- the colours in the style, not on the Border: a local value there beat the directory trigger, so the
+                             folder sat in the file monogram's box -->
                         <Border.Style>
                             <Style TargetType="Border">
+                                <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
+                                <Setter Property="Background" Value="{DynamicResource Surface.Sunken}"/>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsDirectory}" Value="True">
                                         <Setter Property="Background" Value="Transparent"/>
@@ -197,21 +200,22 @@
                             </Style>
                         </Border.Style>
                         <Grid>
-                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{DynamicResource Status.Warning}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
+                            <!-- a directory: the app's drawn folder (Resources/Theme.xaml FolderIcon), open while expanded -->
+                            <ContentControl Width="15" Height="12" HorizontalAlignment="Center">
+                                <ContentControl.Style>
+                                    <Style TargetType="ContentControl" BasedOn="{StaticResource FolderIcon}">
                                         <Setter Property="Visibility" Value="Collapsed"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsDirectory}" Value="True">
                                                 <Setter Property="Visibility" Value="Visible"/>
-                                                <Setter Property="Text" Value="&#xE8B7;"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource Icon.FolderOpen}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
+                                </ContentControl.Style>
+                            </ContentControl>
                             <TextBlock Text="{Binding ExtensionLabel}" FontSize="8" FontWeight="Bold"
                                        FontFamily="{DynamicResource Font.Mono.Display}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -376,19 +380,18 @@
                                 </ControlTemplate>
                             </Button.Template>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                           Margin="0,0,6,0" VerticalAlignment="Center">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
+                                <ContentControl Width="13" Height="10.6" Margin="0,0,6,0">
+                                    <ContentControl.Style>
+                                        <Style TargetType="ContentControl" BasedOn="{StaticResource FolderIcon}">
+                                            <Setter Property="Opacity" Value="0.55"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsExplorerPanelActive}" Value="True">
-                                                    <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                    <Setter Property="Opacity" Value="1"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
+                                    </ContentControl.Style>
+                                </ContentControl>
                                 <TextBlock Text="{services:Loc editor.explorer}" FontSize="10" FontWeight="Bold"
                                            FontFamily="{DynamicResource Font.Mono.Display}" VerticalAlignment="Center">
                                     <TextBlock.Style>
@@ -555,9 +558,7 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="4">
-                                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                   Foreground="{DynamicResource Status.Warning}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <ContentControl Style="{StaticResource FolderIconOpen}" Width="13" Height="10.6" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
@@ -599,8 +600,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="13"
-                                   Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ContentControl Style="{StaticResource FolderIcon}" Width="16" Height="13" VerticalAlignment="Center" Margin="0,0,8,0" HorizontalAlignment="Left"/>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <TextBlock Text="{Binding ProjectName}" FontSize="12" FontWeight="SemiBold"
                                        Foreground="{DynamicResource Text.Primary}"
@@ -633,7 +633,7 @@
                             </ControlTemplate>
                         </Button.Template>
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0"/>
+                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="14" Height="11.4" Margin="0,0,6,0" HorizontalAlignment="Left"/>
                             <TextBlock Text="{services:Loc editor.openFolder}"/>
                         </StackPanel>
                     </Button>
