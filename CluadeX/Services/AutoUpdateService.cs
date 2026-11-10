@@ -420,6 +420,7 @@ public class AutoUpdateService : IAppShutdownHook
     public void StartBackgroundChecks()
     {
         if (CurrentBuildKind == BuildKind.Dev && Environment.GetEnvironmentVariable(FeedOverrideVariable) == null) return;
+        if (SettingsService.IsTrialCopy) return;   // a trial copy is the branch being tried — a release must not replace it
         lock (_jobLock)
         {
             if (_loop != null || _shutdown.IsCancellationRequested) return;

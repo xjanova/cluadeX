@@ -570,3 +570,14 @@ CluadeX/
     ├── ChatView.xaml            # Chat UI (cost text, context bar)
     └── SettingsView.xaml        # Settings UI (thinking toggle)
 ```
+
+## Trying a branch without a release (2026-11-10)
+Owner: releases take too long to try work. When a branch is ready for the owner to try, run
+`powershell -ExecutionPolicy Bypass -File Scripts\try-branch.ps1 <branch>` and give the owner the shortcut it prints
+("CluadeX ตัวลอง - <branch>.lnk" on the desktop). Never open it yourself.
+- It builds Debug (~1 min), copies to `D:\CluadeX-Try\<branch>\app` with `portable.txt` + `trial.txt`, copies the owner's
+  `settings.json` + `mcp_servers.json` once (read-only copy), and makes its own shortcut — never `CluadeX.lnk`.
+- `trial.txt` = `SettingsService.IsTrialCopy`: no BrainX bridge repoint (`ConnectionService.ReconcileAsync/RegisterAsync`),
+  no Chrome host registration (`ChromeBridgeConnector`), no self-update, no desktop shortcut. The version chip says "ตัวลอง".
+- A branch older than v3.0.306 lacks these guards: the script refuses it — merge main into it first.
+- `-Remove` deletes the trial folder, its shortcut and the worktree the script made.

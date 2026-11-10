@@ -112,7 +112,8 @@ public partial class MainWindow : Window
         var kind = CluadeX.Services.AutoUpdateService.CurrentBuildKind;
         if (kind != CluadeX.Services.AutoUpdateService.BuildKind.Installed)
         {
-            string tag = kind == CluadeX.Services.AutoUpdateService.BuildKind.Dev ? "DEV" : "PORTABLE";
+            string tag = CluadeX.Services.SettingsService.IsTrialCopy ? "ตัวลอง"
+                : kind == CluadeX.Services.AutoUpdateService.BuildKind.Dev ? "DEV" : "PORTABLE";
             chip = $"{tag} · {chip}";
             // A dev build's chip is the theme's danger colour — a resource reference, so a theme switch recolours it.
             if (kind == CluadeX.Services.AutoUpdateService.BuildKind.Dev)

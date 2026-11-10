@@ -130,6 +130,18 @@ public class SettingsService
     /// <summary>True when a "portable" marker file exists next to the exe.</summary>
     public bool IsPortable { get; }
 
+    /// <summary>A copy made to try a branch before it is released (Scripts/try-branch.ps1 puts "trial.txt" next to the
+    /// exe). It is portable (its own data folder) and it never writes outside that folder: no BrainX bridge or Chrome host
+    /// re-pointed at itself, no self-update, no desktop shortcut — so the installed CluadeX keeps every connection.</summary>
+    public static bool IsTrialCopy
+    {
+        get
+        {
+            try { return File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "trial.txt")); }
+            catch { return false; }
+        }
+    }
+
     /// <summary>Root data directory (either AppData\CluadeX or exe-relative Data\).</summary>
     public string DataRoot => _dataRoot;
 
@@ -148,7 +160,7 @@ public class SettingsService
     public static string ResolveDataRoot(out bool portable)
     {
         string exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        portable = File.Exists(Path.Combine(exeDir, "portable")) || File.Exists(Path.Combine(exeDir, "portable.txt"));
+        portable = File.Exists(Path.Combine(exeDir, "portable")) || File.Exists(Path.Combine(exeDir, "portable.txt")) || IsTrialCopy;
         return portable
             ? Path.Combine(exeDir, "Data")
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");

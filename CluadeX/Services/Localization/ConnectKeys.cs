@@ -98,6 +98,7 @@ internal static class ConnectKeys
         ["connect.err.noKey"] = E("No key saved.", "ยังไม่มีคีย์"),
         ["connect.err.unknown"] = E("Unknown connection.", "ไม่รู้จักการเชื่อมต่อนี้"),
         ["connect.err.noMcp"] = E("CluadeX's MCP manager isn't ready — try again in a moment.", "ตัวจัดการ MCP ของ CluadeX ยังไม่พร้อม — ลองใหม่อีกสักครู่"),
+        ["connect.err.trial"] = E("This is a trial copy — connections are made in the installed CluadeX, so it keeps them.", "นี่คือตัวลอง — การเชื่อมต่อให้ทำในตัวที่ติดตั้งไว้ จะได้ไม่ไปทับของตัวหลัก"),
         ["connect.err.mcpUnreadable"] = E("CluadeX's MCP list (mcp_servers.json) could not be read or saved, so nothing was changed. Check it on the MCP page.", "อ่านหรือบันทึกรายการ MCP ของ CluadeX (mcp_servers.json) ไม่ได้ จึงยังไม่ได้เปลี่ยนอะไร — ตรวจที่หน้า MCP"),
         ["connect.err.noAsset"] = E("GitHub's release has no Windows server file — try again later.", "release ของ GitHub ไม่มีไฟล์สำหรับ Windows — ลองใหม่ภายหลัง"),
         ["connect.err.checksum"] = E("The downloaded server didn't match GitHub's checksum — it was not installed.", "ไฟล์ที่โหลดมาไม่ตรงกับ checksum ของ GitHub — จึงไม่ได้ติดตั้ง"),

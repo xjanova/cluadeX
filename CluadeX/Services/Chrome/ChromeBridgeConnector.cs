@@ -41,11 +41,13 @@ public sealed class ChromeBridgeConnector : IAppShutdownHook
     /// moved portable copy heals itself. Throws when the data folder or the registry refuses.</summary>
     public void Ensure()
     {
-        if (Enabled) Open();
+        if (Enabled && !SettingsService.IsTrialCopy) Open();
     }
 
     private void Open()
     {
+        // A trial copy must not take Chrome's host registration (one per Windows user) away from the installed CluadeX.
+        if (SettingsService.IsTrialCopy) throw new InvalidOperationException("A trial copy does not connect Chrome — the installed CluadeX keeps that connection.");
         ChromeBridgeInstall.Install(_settings.DataRoot, Environment.ProcessPath ?? throw new InvalidOperationException("No path for this program."));
         _bridge.ExpectedVersion = ChromeBridgeInstall.BundledVersion;
         _bridge.Start();
