@@ -778,6 +778,7 @@ internal static partial class Program
                 Check("S3", "saving a folder path no longer creates the folder (typed half-paths like D:\\Mod used to appear)", !Directory.Exists(ghost));
             });
             if (!storageOnly) CaseSync("S4", () => SparkContextReloadTest(shared));
+            if (!storageOnly) CaseSync("SK", () => ProviderCardStaleTest(shared));
             CaseSync("S5", () =>
             {
                 foreach (bool provider in new[] { false, true })
@@ -855,6 +856,46 @@ internal static partial class Program
         Check("S4c", "saving the Ollama address off the Spark gives the window back in the settings", shared.Settings.ContextSize == 12288
             && shared.Settings.DgxSparkSavedContextSize == null, $"{shared.Settings.ContextSize} saved={shared.Settings.DgxSparkSavedContextSize}");
         Check("S4d", "…and the page shows it (it used to keep showing 32768)", vm.ContextSize == 12288, vm.ContextSize.ToString());
+    }
+
+    /// <summary>
+    /// The provider card loaded once and then replaced the whole saved config on its next save. A key typed on the
+    /// Setup page (or a model picked in chat) while the card showed the old values was written back over — the key
+    /// came back empty (audit 2026-11-10). Now the save merges only the fields edited on the card, and a page
+    /// reload refreshes the card too.
+    /// </summary>
+    static void ProviderCardStaleTest(SettingsService shared)
+    {
+        var vm = Sp.GetRequiredService<SettingsViewModel>();
+        var save = typeof(SettingsViewModel).GetMethod("Save", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var load = typeof(SettingsViewModel).GetMethod("LoadPageValues", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        const string key = "OpenAI";
+
+        shared.UpdateSettings(x => x.ProviderConfigs[key] = new ProviderConfig { SelectedModel = "gpt-old" });
+        if (vm.SelectedProvider == AiProviderType.OpenAI) vm.SelectedProvider = AiProviderType.Local;
+        vm.SelectedProvider = AiProviderType.OpenAI;   // the card shows: no key, gpt-old
+        Check("SK", "the card starts with no key", vm.ProviderApiKey == "", vm.ProviderApiKey);
+
+        // Elsewhere (the Setup page, the chat picker) while the card is on screen — no page reload in between.
+        shared.UpdateSettings(x => { x.ProviderConfigs[key].ApiKey = "sk-from-setup"; x.ProviderConfigs[key].SelectedModel = "gpt-chat"; });
+
+        vm.ProviderBaseUrl = "https://proxy.example.invalid/v1";   // the user edits one field on the card
+        save.Invoke(vm, null);
+        var cfg = shared.Settings.ProviderConfigs[key];
+        Check("SKb", "a card save keeps the key typed elsewhere (it used to write the empty key back)", cfg.ApiKey == "sk-from-setup", cfg.ApiKey ?? "(null)");
+        Check("SKc", "…and the model picked in chat", cfg.SelectedModel == "gpt-chat", cfg.SelectedModel ?? "(null)");
+        Check("SKd", "…while the field edited on the card is saved", cfg.BaseUrl == "https://proxy.example.invalid/v1", cfg.BaseUrl ?? "(null)");
+
+        load.Invoke(vm, new object[] { shared.Settings, true });   // what an outside SettingsChanged does
+        Check("SKe", "a page reload refreshes the card (key and model shown)", vm.ProviderApiKey == "sk-from-setup" && vm.ProviderModel == "gpt-chat",
+            $"{vm.ProviderApiKey} {vm.ProviderModel}");
+
+        // Control: clearing the key on the card does clear it.
+        vm.ProviderApiKey = "";
+        save.Invoke(vm, null);
+        Check("SKf", "clearing the key on the card still clears it (control)", shared.Settings.ProviderConfigs[key].ApiKey == null,
+            shared.Settings.ProviderConfigs[key].ApiKey ?? "(null)");
+        shared.UpdateSettings(x => x.ProviderConfigs.Remove(key));
     }
 
     // ════════════════════════════ TASKS ════════════════════════════

@@ -91,8 +91,35 @@ public static class ReadinessProbe
         catch { return Array.Empty<IPEndPoint>(); }
     }
 
-    /// <summary>Something already listens on <paramref name="port"/>.</summary>
-    public static bool IsListening(int port) => ListenersOn(port).Count > 0;
+    /// <summary>Something already listens on <paramref name="port"/>. The OS listener table comes first; when it
+    /// does not show the port, an exclusive bind probe decides — on some machines (seen 2026-11-10, Windows 11
+    /// 26300) GetActiveTcpListeners/netstat list only ~10 listeners and miss every port a user process holds,
+    /// which made a busy port look free and a stranger's server look like ours.</summary>
+    public static bool IsListening(int port) => ListenersOn(port).Count > 0 || BindBlocked(port);
+
+    private static readonly IPAddress[] BindProbeAddresses =
+        { IPAddress.Loopback, IPAddress.IPv6Loopback, IPAddress.Any, IPAddress.IPv6Any };
+
+    /// <summary>True when an exclusive bind of <paramref name="port"/> on loopback or the wildcard address (IPv4 and
+    /// IPv6) fails with "address in use" — i.e. some socket holds the port. A port in TIME_WAIT still binds, and a
+    /// port Windows reserves (WSAEACCES, Hyper-V excluded ranges) is not counted as listening.</summary>
+    public static bool BindBlocked(int port)
+    {
+        if (port is < 1 or > 65535) return false;
+        foreach (var address in BindProbeAddresses)
+        {
+            try
+            {
+                using var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                socket.ExclusiveAddressUse = true;
+                if (address.AddressFamily == AddressFamily.InterNetworkV6) socket.DualMode = false;
+                socket.Bind(new IPEndPoint(address, port));
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse) { return true; }
+            catch { /* no IPv6 stack, access denied, … — this address says nothing */ }
+        }
+        return false;
+    }
 
     /// <summary>The process listening on <paramref name="port"/> (IPv4 or IPv6), with its name when it can be read.
     /// Null when nothing listens or the table could not be read.</summary>
@@ -155,7 +182,7 @@ public static class ReadinessProbe
         try { busy = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Select(e => e.Port).ToHashSet(); }
         catch { busy = new(); }
         for (int port = from; port <= to; port++)
-            if (!busy.Contains(port)) return port;
+            if (!busy.Contains(port) && !BindBlocked(port)) return port;
         return null;
     }
 

@@ -948,15 +948,29 @@ public partial class App : Application
             $"{DateTime.Now:O} set_model AFTER-SWITCH: ActiveProviderType={midProvider} " +
             $"ActiveProvider.Type={midActive}\n"); } catch {}
 
-        // If the same-instance / already-switching guard fired and the
-        // switch was a no-op, brute-force the settings + re-init the
-        // current active provider with the new model. Worst case: the
-        // user has to flip the provider in CluadeX's UI manually.
+        // The switch was a no-op. Writing settings.ActiveProvider by hand here used to make the model box and usage
+        // bar show the new provider while requests still went to the old instance (ActiveProviderType reads the
+        // settings, ActiveProvider is the live object). Only re-sync the settings when the live provider already IS
+        // the one asked for; when another switch was in flight, wait for it and try again; otherwise say so.
         if (midProvider != providerType)
         {
-            settingsService.UpdateSettings(s => s.ActiveProvider = providerType);
-            try { System.IO.File.AppendAllText(logFile,
-                $"{DateTime.Now:O} set_model FORCE-WRITE settings.ActiveProvider={providerType}\n"); } catch {}
+            if (providerManager.IsActive(providerType))
+                settingsService.UpdateSettings(s => s.ActiveProvider = providerType);
+            else
+            {
+                for (int attempt = 0; attempt < 6 && providerManager.ActiveProviderType != providerType; attempt++)
+                {
+                    await Task.Delay(500, ct);
+                    await providerManager.SwitchProviderAsync(providerType, ct);
+                }
+                if (providerManager.ActiveProviderType != providerType
+                    || !providerManager.IsActive(providerType))
+                {
+                    try { System.IO.File.AppendAllText(logFile,
+                        $"{DateTime.Now:O} set_model NOT-SWITCHED: still {providerManager.ActiveProviderType}\n"); } catch {}
+                    return ErrorResult($"Could not switch to {providerType}: still on {providerManager.ActiveProviderType} (another switch may be running, or the provider is not available). The model was saved for {providerType} and is used when you switch to it.");
+                }
+            }
         }
         await providerManager.ReinitializeActiveAsync(ct);
 
@@ -1400,6 +1414,10 @@ public partial class App : Application
             _serviceProvider?.GetService<DebugLogService>()?.Flush();   // the log gathers lines for half a second
 
             _serviceProvider?.GetService<CostTrackingService>()?.FlushLedger();   // today's spend survives the restart
+
+            // Closing the app in the middle of a model load is not a crash: only a load the process did not live
+            // through may leave the marker that blocks the model at the next start (ModelHealthLog.TakeInterruptedLoad).
+            _serviceProvider?.GetService<Services.Providers.LocalGgufProvider>()?.Health.EndLoading();
         }
         catch (Exception ex)
         {

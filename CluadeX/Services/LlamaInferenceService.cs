@@ -185,8 +185,9 @@ public class LlamaInferenceService : IDisposable
             var settings = _settingsService.Settings;
 
             // Determine GPU layer count
-            int gpuLayers = settings.GpuLayerCount;
-            if (gpuLayers == -1) gpuLayers = 99; // auto = all layers on GPU
+            // auto = all layers on GPU (99), scaled by the owner's GPU share (status-bar slider).
+            int blockCount = settings.GpuUsagePercent < 100 ? GgufMetadataReader.TryReadBlockCount(modelPath) : 0;
+            int gpuLayers = Gpu.GpuShare.EffectiveNgl(settings.GpuLayerCount, null, settings.GpuUsagePercent, blockCount, allValue: 99);
 
             // If backend is CPU, force 0 GPU layers
             if (settings.GpuBackend == "CPU")

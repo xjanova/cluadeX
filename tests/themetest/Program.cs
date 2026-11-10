@@ -104,7 +104,7 @@ internal static partial class Program
                 case "--golden": GoldenMode = true; break;
                 case "--force": Force = true; break;
                 case "--probe": ProbeMode = true; break;
-                case "--out" when i + 1 < args.Length: OutRoot = args[++i]; break;
+                case "--out" when i + 1 < args.Length: OutRoot = args[++i]; FixtureRoot = Path.Combine(OutRoot, "_fixture"); break;   // two runs at once must not share the fixture
                 case "--tol" when i + 1 < args.Length: Tolerance = int.Parse(args[++i]); break;
                 case "--max-pct" when i + 1 < args.Length: MaxChangedPct = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); break;
                 case "--themes" when i + 1 < args.Length: OnlyThemes = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;

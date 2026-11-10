@@ -211,6 +211,13 @@ def g_billing(d, c):
     d.ellipse(box(6.9, 8.9, 12.1, 14.1), outline=c, width=int(1.4 * U))
 
 
+def g_moretools(d, c):
+    # Four rounded tiles, one cut out: the other tools and pages (Skills, Hooks, Plugins…) behind the More button.
+    for x0, y0 in ((7, 7), (17, 7), (7, 17)):
+        d.rounded_rectangle(box(x0, y0, x0 + 8, y0 + 8), radius=2.2 * U, fill=WHITE)
+    d.rounded_rectangle(box(17, 17, 25, 25), radius=2.2 * U, outline=WHITE, width=int(2.4 * U))
+
+
 # tag: (symbol, tile top, tile bottom, cut-out colour, shadow colour)
 ICONS = {
     "chat":        (g_chat,        "#C7A2FF", "#8848F0", "#9A5CF6", "#4A1E8F"),
@@ -225,6 +232,7 @@ ICONS = {
     "nodegraph":   (g_nodegraph,   "#93D6FF", "#3787E0", "#4394E6", "#123F78"),
     "settings":    (g_settings,    "#D9CDEB", "#8875A8", "#9583B4", "#3A2C55"),
     "billing":     (g_billing,     "#D6F28C", "#7AA82C", "#86B336", "#3B5410"),
+    "moretools":   (g_moretools,   "#9FEAF5", "#1E9DC2", "#2AA8CB", "#0B4A5E"),
 }
 
 

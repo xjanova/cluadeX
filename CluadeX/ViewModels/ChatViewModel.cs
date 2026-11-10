@@ -877,6 +877,15 @@ public partial class ChatViewModel : ViewModelBase
     public ICommand OpenBillingCommand { get; private set; } = null!;
 
     private static string Loc(string key) => LocalizedResources.Instance[key];
+
+    /// <summary>The status-bar sentence for a local model that would not load, when CluadeX knows why (null = generic).</summary>
+    private static string? LocalLoadFailureShort(Exception ex) => ex switch
+    {
+        ModelArchitectureNotSupportedException arch => arch.ShortMessage,
+        Services.Local.ModelBlockedException blocked => blocked.ShortMessage,
+        Services.Local.ModelLoadFailedException failed => failed.Message.Split('\n')[0],
+        _ => null,
+    };
     private static string LocF(string key, params object[] args) => string.Format(Loc(key), args);
 
     /// <summary>True when the chat is answered by a model on this PC (GGUF / llama-server). The chat's model
@@ -1778,7 +1787,7 @@ public partial class ChatViewModel : ViewModelBase
                     App.Current?.Dispatcher.Invoke(() =>
                     {
                         LoadedModelName = Loc("chat.model.autoLoadFailedShort");
-                        StatusText = ex is ModelArchitectureNotSupportedException arch ? arch.ShortMessage : Loc("chat.model.autoLoadFailed");
+                        StatusText = LocalLoadFailureShort(ex) ?? Loc("chat.model.autoLoadFailed");
                     });
                 }
             });
@@ -5868,7 +5877,8 @@ public partial class ChatViewModel : ViewModelBase
         StatusText = Loc("chat.model.loading");
         try
         {
-            // Llama-server → Local: both run on this PC; LocalGgufProvider is the router over the two.
+            // Llama-server → Local: both run on this PC; LocalGgufProvider is the router over the two. A model that failed
+            // here before is refused (ModelBlockedException) — Force load lives on the Models page.
             if (_providerManager.ActiveProviderType != AiProviderType.Local)
                 await _providerManager.SwitchProviderAsync(AiProviderType.Local);
 
@@ -5889,7 +5899,7 @@ public partial class ChatViewModel : ViewModelBase
         catch (Exception ex)
         {
             _debugLog?.Error("Chat", $"Loading {path} from the chat picker failed", ex);
-            StatusText = ex is ModelArchitectureNotSupportedException arch ? arch.ShortMessage : Loc("chat.model.loadFailed");
+            StatusText = LocalLoadFailureShort(ex) ?? Loc("chat.model.loadFailed");
             Revert();
         }
         finally

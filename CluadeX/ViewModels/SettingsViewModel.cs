@@ -682,13 +682,16 @@ public partial class SettingsViewModel : ViewModelBase
     }
 
     /// <summary>Show <paramref name="src"/>'s values on the page without marking anything as edited.
-    /// The provider card is not touched (it has its own load).</summary>
+    /// The provider card is refreshed too (quietly: no Ollama probe, the test result kept) unless one of its
+    /// fields has an edit pending — a key typed on the Setup page or a model picked in chat must show here, or
+    /// the next save of this card would write the stale values back (seen 2026-11-10: a key wiped this way).</summary>
     private void LoadPageValues(AppSettings src, bool includeStorage = true)
     {
         bool wasLoading = _loading;
         _loading = true;
         try { ApplyPageValues(src, includeStorage); }
         finally { _loading = wasLoading; }
+        if (!_dirty.Overlaps(ProviderFields)) LoadProviderConfig(SelectedProvider, quiet: true);
     }
 
     /// <summary>Write and save as this page. When something else changed the settings during the save (a
@@ -875,7 +878,7 @@ public partial class SettingsViewModel : ViewModelBase
                 foreach (var name in changed)
                     if (Writers.TryGetValue(name, out var write)) write(this, s);
                 // Never ActiveProvider: AiProviderManager.SwitchProviderAsync owns "which provider is in use".
-                if (providerChanged) s.ProviderConfigs[SelectedProvider.ToString()] = BuildProviderConfig();
+                if (providerChanged) MergeProviderEdits(s, changed);
             },
             reloadStorage: pathProblem == null,
             onFailed: () => { foreach (var name in changed) _dirty.Add(name); });
@@ -926,7 +929,7 @@ public partial class SettingsViewModel : ViewModelBase
     //  Provider card logic
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    private void LoadProviderConfig(AiProviderType type)
+    private void LoadProviderConfig(AiProviderType type, bool quiet = false)
     {
         bool wasLoading = _loading;
         _loading = true;   // showing a saved config is not an edit
@@ -971,6 +974,7 @@ public partial class SettingsViewModel : ViewModelBase
                 _ => CompatiblePresets.For(type)?.Models ?? Array.Empty<string>(),
             };
             SetModelList(models, savedModel);
+            if (quiet) return;   // a refresh of the same card: keep the test result, no new probe
             ConnectionTestResult = "";
 
             if (ollamaProvider != null)
@@ -1002,6 +1006,25 @@ public partial class SettingsViewModel : ViewModelBase
         UseCustomModel = UseCustomModel,
         WorkspaceId = string.IsNullOrWhiteSpace(ProviderWorkspaceId) ? null : ProviderWorkspaceId.Trim(),
     };
+
+    /// <summary>Write only the card fields the user edited onto the saved config, so a value changed elsewhere
+    /// meanwhile (the Setup page's key, the chat picker's model) is never replaced by what the card last showed.</summary>
+    private void MergeProviderEdits(AppSettings s, ICollection<string> changed)
+    {
+        var key = SelectedProvider.ToString();
+        var screen = BuildProviderConfig();
+        if (!s.ProviderConfigs.TryGetValue(key, out var saved) || saved == null)
+        {
+            s.ProviderConfigs[key] = screen;
+            return;
+        }
+        if (changed.Contains(nameof(ProviderApiKey))) saved.ApiKey = screen.ApiKey;
+        if (changed.Contains(nameof(ProviderBaseUrl))) saved.BaseUrl = screen.BaseUrl;
+        if (changed.Contains(nameof(ProviderModel))) saved.SelectedModel = screen.SelectedModel;
+        if (changed.Contains(nameof(ProviderCustomModel))) saved.CustomModelId = screen.CustomModelId;
+        if (changed.Contains(nameof(UseCustomModel))) saved.UseCustomModel = screen.UseCustomModel;
+        if (changed.Contains(nameof(ProviderWorkspaceId))) saved.WorkspaceId = screen.WorkspaceId;
+    }
 
     /// <summary>Write the provider card now — a test or switch must use exactly what is on screen.</summary>
     private void SaveProviderConfig()

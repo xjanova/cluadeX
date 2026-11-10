@@ -305,7 +305,13 @@ public static class ModelCapability
         if (slash >= 0) name = name[(slash + 1)..];
         if (name.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase)) name = name[..^5];
         Match? last = null;
-        foreach (Match m in Size.Matches(name)) last = m;   // the size tag comes after the family/version
+        foreach (Match m in Size.Matches(name))
+        {
+            // MoE names carry the ACTIVE parameters after the total: "Qwen3-Coder-30B-A3B", "Qwen3-235B-A22B". That
+            // "A3B" is not the model's size — reading it called a 30B coder "Tiny (3B)" and warned the owner off it.
+            if (m.Index > 0 && (name[m.Index - 1] is 'a' or 'A') && last != null) continue;
+            last = m;   // otherwise the size tag comes after the family/version
+        }
         if (last == null) return null;
         if (!double.TryParse(last.Groups["n"].Value, System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out double n) || n <= 0) return null;
