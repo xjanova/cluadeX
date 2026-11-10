@@ -28,11 +28,11 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
     public static readonly string[] KnownModels =
     [
         "claude-opus-5-5",         // default — current Opus ($4/$20 per MTok)
-        "claude-fable-5-1",        // most capable (1M ctx, $10/$50) — "มหาเทพ"
+        "claude-fable-5-2",        // most capable (1M ctx, $8/$40, released 2026-11-09) — "มหาเทพ"
         "claude-sonnet-5-5",       // near-Opus quality, faster ($2/$10)
         "claude-haiku-5-5",        // fastest / cheapest ($0.10/$0.50)
-        // previous generation (still served)
-        "claude-opus-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5",
+        // previous generation (still served — kept so a saved pick keeps working)
+        "claude-fable-5-1", "claude-opus-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5",
         "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
     ];
 
@@ -163,7 +163,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
 
     /// <summary>What a model's request surface accepts. Every Claude generation moved these — sampling
     /// removed (4.7+), adaptive thinking (4.6+), thinking that can't be switched off (Opus 5+, Fable,
-    /// Sonnet/Haiku 5.5), forced tool_choice rejected (Fable 5.1, Opus/Sonnet 5.5) — and each wrong guess
+    /// Sonnet/Haiku 5.5), forced tool_choice rejected (Fable 5.1+, Opus/Sonnet 5.5) — and each wrong guess
     /// is an HTTP 400 the user sees as "my key doesn't work". Derived from the ID, so a model released
     /// after this build (listed live from /v1/models) gets the newest family's rules, not the oldest.</summary>
     public readonly record struct ModelTraits(
@@ -175,7 +175,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         bool ForcedToolChoice,   // accepts tool_choice any / tool
         int EffortSupport,       // output_config.effort: 0 none, 1 low–high (Opus 4.5), 2 + max (4.6), 3 + xhigh
         bool BetweenToolsOff = false, // thinking can't be disabled, but {type:"between_tools"} turns it off (Sonnet 5.5+)
-        bool PerMessageEffort = false); // effort-only system messages (Fable 5.1, Opus 5+, Sonnet 5.5+, Haiku 5.5+; thinking on)
+        bool PerMessageEffort = false); // effort-only system messages (Fable 5.1+, Opus 5+, Sonnet 5.5+, Haiku 5.5+; thinking on)
 
     public static ModelTraits Traits(string? model)
     {

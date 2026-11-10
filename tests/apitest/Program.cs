@@ -402,6 +402,8 @@ internal static class Program
         // (model, adaptive, alwaysThinks, explicitDisable, sampling, omitsThinkingText, forcedToolChoice)
         var expect = new (string, bool, bool, bool, bool, bool, bool)[]
         {
+            ("claude-fable-5-2",           true,  true,  false, false, true,  false),
+            ("claude-mythos-5-2",          true,  true,  false, false, true,  false),
             ("claude-fable-5-1",           true,  true,  false, false, true,  false),
             ("claude-fable-5",             true,  true,  false, false, true,  true),
             ("claude-mythos-5-1",          true,  true,  false, false, true,  false),

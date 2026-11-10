@@ -3792,7 +3792,7 @@ public partial class CodeAgentService
             if (AgentRunScope.Current is { } s) s.EffortWhy = _localizationService.T("auto.why." + key);
         }
         if (smartEffortOn) SetEffortWhy(effortWhyKey);
-        // Per-message effort (Anthropic, Opus 5+ / Sonnet 5.5+ / Haiku 5.5+ / Fable 5.1): effort moves BOTH ways step by
+        // Per-message effort (Anthropic, Opus 5+ / Sonnet 5.5+ / Haiku 5.5+ / Fable 5.1+): effort moves BOTH ways step by
         // step — effort-only system messages change it without resetting the cache, so the top-level value stays fixed for
         // the whole turn. Elsewhere the old rule stands: climb only, each climb re-writes the cache once.
         bool perMessageEffort = smartEffortOn
