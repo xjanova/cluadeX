@@ -197,8 +197,8 @@ internal static partial class Program
             runType.GetProperty("Session")!.SetValue(run, Vm.CurrentSession);
             runType.GetProperty("Messages")!.SetValue(run, Vm.Messages);
             void Ev(int id, string phase, string detail = "", string? callId = null, string? result = null, bool ok = true, string kind = "explore",
-                string label = "Explore", string task = "", string? model = "claude-haiku-5-5")
-                => handler.Invoke(Vm, [run, new CodeAgentService.SubAgentEvent(id, label, kind, task, phase, detail, 1, model, 0.004m, null, callId, result, ok)]);
+                string label = "Explore", string task = "", string? model = "claude-haiku-5-5", string? tool = null)
+                => handler.Invoke(Vm, [run, new CodeAgentService.SubAgentEvent(id, label, kind, task, phase, detail, 1, model, 0.004m, null, callId, result, ok, Tool: tool)]);
 
             Ev(1, "start", task: "Map ReverseX analysis pipeline");
             Ev(2, "start", task: "REA tools needing Linux");
@@ -250,7 +250,7 @@ internal static partial class Program
                 && Find<TextBox>((DependencyObject)win.Content).Any(t => t.Text == "Map ReverseX analysis pipeline"));
 
             // ── it follows the agent live, through the chat's real event handler ──
-            Ev(1, "tool", "grep_search pattern=Ghidra", callId: "c1");
+            Ev(1, "tool", "grep_search pattern=Ghidra", callId: "c1", tool: "grep_search");
             await Render(); win.UpdateLayout();
             Check("AG6 a tool that starts shows up at once as a running step, and on the card",
                 win.Vm.Activity.Count == 1 && win.Vm.Activity[0].IsRunning && n1.Action == "grep_search pattern=Ghidra" && win.Vm.ToolsText == "1"
@@ -264,13 +264,13 @@ internal static partial class Program
             s1.IsExpanded = true;
             await Render(); win.UpdateLayout();
             Check("AG6 an opened step shows its whole result", Find<TextBox>((DependencyObject)win.Content).Any(t => t.IsVisible && t.Text.Contains("Ghidra 11")));
-            Ev(1, "tool", "read_file tools/rea/ghidra.sh", callId: "c2");
-            Ev(1, "tool", "⏳ thinking");   // a progress line with no call id
+            Ev(1, "tool", "read_file tools/rea/ghidra.sh", callId: "c2", tool: "read_file");
+            Ev(1, "tool", "⏳ thinking");   // a progress line from the loop: no call id, no tool — a step, not a call
             Ev(1, "result", callId: "c2", result: "Error: file is locked", ok: false);
-            Ev(1, "tool", "list_files tools/");
+            Ev(1, "tool", "list_files tools/", tool: "list_files");
             await Render(); win.UpdateLayout();
             Check("AG6 a failed tool reads as an error; a step with no id ends when the next starts",
-                win.Vm.Activity.Count == 4 && win.Vm.Activity[1].IsError && win.Vm.Activity[2].IsOk && win.Vm.Activity[3].IsRunning && win.Vm.ToolsText == "4",
+                win.Vm.Activity.Count == 4 && win.Vm.Activity[1].IsError && win.Vm.Activity[2].IsOk && win.Vm.Activity[3].IsRunning && win.Vm.ToolsText == "3",
                 string.Join(" | ", win.Vm.Activity.Select(a => a.State)));
             Check("AG6 a result with an unknown id changes nothing", !n1.EndStep("nope", true, "x") && win.Vm.Activity.Count == 4);
             string t0 = win.Vm.ElapsedText;

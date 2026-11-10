@@ -1548,7 +1548,7 @@ internal static class Program
             bool gone = await WaitUntil(() => pids.All(p => !Alive(p)) && !ReadinessProbe.IsListening(p1) && !ReadinessProbe.IsListening(p2)
                                               && !ReadinessProbe.IsListening(servePort), 3000);
             Check("B9b", "App.RunShutdownHooks (OnExit) ends every tree and closes the static server, quickly",
-                gone && hookMs < 2000, $"hook {hookMs} ms; alive: {string.Join(",", pids.Where(Alive))}");
+                gone && hookMs < 2000, $"hook {hookMs} ms; alive: {string.Join(",", pids.Where(Alive))}; listening: p1={ReadinessProbe.IsListening(p1)} p2={ReadinessProbe.IsListening(p2)} static={ReadinessProbe.IsListening(servePort)}");
             if (StartProcessPid > 0)
             {
                 // Review P1b: what the agent opened with a plain Start-Process belongs to the user — CluadeX closing

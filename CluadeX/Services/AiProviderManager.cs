@@ -117,6 +117,10 @@ public class AiProviderManager : IDisposable
         }
     }
 
+    /// <summary>The live provider object is the one registered for <paramref name="type"/> (not just what the
+    /// settings say — <see cref="ActiveProviderType"/> reads those).</summary>
+    public bool IsActive(AiProviderType type) => _providers.TryGetValue(type, out var p) && ReferenceEquals(p, _activeProvider);
+
     public IAiProvider GetProvider(AiProviderType type)
         => _providers.TryGetValue(type, out var p) ? p : _activeProvider;
 
