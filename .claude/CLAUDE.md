@@ -383,6 +383,17 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   click opens its menu) and the Settings ▸ General ▸ More tools card. Proven by `tests/pagestest` MT1–MT6
   (`dotnet run -- --tools`, the shipping MainWindow).
 
+## GPU share slider (2026-11-06)
+- Click the status-bar VRAM graph → vertical 0–100 % slider (`ViewModels/GpuShareViewModel.cs`, popups in
+  `MainWindow.xaml` beside `GpuGraph` — not inside it: a click in a Popup bubbles to its parent's MouseBinding).
+  Stored in `AppSettings.GpuUsagePercent` (100 = no cap). `Services/Gpu/GpuShare.cs` scales layers from the GGUF's
+  `{arch}.block_count` (+1 output layer): llama-server/LLamaSharp `-ngl`, Ollama `num_gpu` (block count from `/api/show`).
+  0 % = CPU route. Applies on the next load (Ollama: next request); a loaded GGUF gets a "Reload model now" button, never auto.
+- First-use hint (`GpuShareHint`: after 2 min of graph, every 3 h, ≤ 6 times, never once used); the pet says it instead
+  when it is out and talks (`PetMoment.GpuShareHint`). Keys in `Localization/GpuShareKeys.cs`.
+- Proven by `tests/gpusharetest` (103 checks: math, synthetic GGUF headers, persistence, hint, the real popup XAML
+  rendered in all 4 themes to `bin/.../renders`). Not yet driven by hand in the running app.
+
 ## Smart skill picking + the token gauge (2026-11-07)
 - Every switched-on skill used to cost its line in the system prompt on every turn. Now, per chat (composer switch
   "Skill อัตโนมัติ", default from Skills page ▸ `SkillAutoPickEnabled`, overrides in `skill-pick-chats.json` via

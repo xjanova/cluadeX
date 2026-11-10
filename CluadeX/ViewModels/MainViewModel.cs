@@ -259,6 +259,8 @@ public class MainViewModel : ViewModelBase
     public string AppVersion => $"v{AutoUpdateService.CurrentVersion}";
 
     public ChatViewModel ChatVM { get; }
+    /// <summary>The GPU share slider on the status-bar VRAM graph, and its first-use hint.</summary>
+    public GpuShareViewModel GpuShare { get; }
     public ModelManagerViewModel ModelManagerVM { get; }
     public SettingsViewModel SettingsVM { get; }
     public PluginManagerViewModel PluginManagerVM { get; }
@@ -485,6 +487,8 @@ public class MainViewModel : ViewModelBase
         _workspace = workspace;
         _log = log;
         ChatVM = chatVM;
+        GpuShare = new GpuShareViewModel(settingsService, loc, providerManager, pet, () => _liveGpuStats,
+            chatVM.ReloadLocalModelForGpuShareAsync);
 #if DEBUG
         if (Environment.GetEnvironmentVariable("CLUADEX_PERF_PROBE") == "1")
             System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle,
@@ -663,6 +667,7 @@ public class MainViewModel : ViewModelBase
             {
                 IsModelLoading = loading;
                 IsModelLoaded = _providerManager.ActiveProvider.IsReady;
+                if (!loading && IsModelLoaded) GpuShare.NoteModelLoaded();
             });
 
         _providerManager.OnProviderChanged += _ =>
@@ -731,6 +736,7 @@ public class MainViewModel : ViewModelBase
             if (!ModelRunsOnThisPc) return;
             // Minimized → the sidebar chart is off screen. A poll still running (a slow driver) → don't stack another.
             if (App.Current?.MainWindow?.WindowState == System.Windows.WindowState.Minimized) return;
+            GpuShare.Tick(ShowGpuStats, DateTime.UtcNow);
             if (Interlocked.Exchange(ref _gpuPollBusy, 1) == 1) return;
             // Keep the UI responsive: nvidia-smi can take ~200ms on first call.
             Task.Run(() =>

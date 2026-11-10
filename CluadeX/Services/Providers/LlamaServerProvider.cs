@@ -401,6 +401,12 @@ public class LlamaServerProvider : ApiProviderBase
 
         var settings = _settingsService.Settings;
         bool cpuOnly = settings.GpuBackend == "CPU";
+        // The owner's GPU share (status-bar slider) scales -ngl from the model's real layer count; 100 % = as before
+        // (-1 stays "auto", so LlamaServerArgs may still split a MoE or let the server fit it). 0 layers = the CPU route.
+        int blockCount = settings.GpuUsagePercent < 100 ? GgufMetadataReader.TryReadBlockCount(modelPath) : 0;
+        int shareLayers = Services.Gpu.GpuShare.EffectiveNgl(settings.GpuLayerCount, settings.GpuBackend,
+            settings.GpuUsagePercent, blockCount, allValue: -1);
+        if (shareLayers == 0) cpuOnly = true;
 
         // ─── Multi-GPU tensor split ───
         // If the user has more than one NVIDIA card, proportionally split the model
@@ -438,7 +444,7 @@ public class LlamaServerProvider : ApiProviderBase
         if (projector != null) { try { projectorBytes = new FileInfo(projector).Length; } catch { } }
         var plan = LlamaServerArgs.Build(new LlamaLaunchInput
         {
-            GpuLayerSetting = settings.GpuLayerCount,
+            GpuLayerSetting = shareLayers,
             CpuOnly = cpuOnly,
             FreeVramMB = freeVramMB,
             ContextTokens = (int)settings.ContextSize,
