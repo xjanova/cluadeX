@@ -829,24 +829,14 @@ public class AgentToolService : IDisposable
     /// system prompt, or null if none qualify. Closes the instinct READ-BACK loop — the model finally benefits
     /// from what was extracted across sessions (extraction was write-only before). EMERGING+ confidence only.
     /// </summary>
-    public string? GetTopInstinctsBlock(int max = 5)
+    public string? GetTopInstinctsBlock(int max = 5, string? projectFolder = null)
     {
         if (_instinctService == null) return null;
         try
         {
-            var top = _instinctService.GetAll()
-                .Where(i => i.Confidence >= 0.45 && !string.IsNullOrWhiteSpace(i.Pattern))
-                .Take(max)
-                .ToList();
-            if (top.Count == 0) return null;
-            var sb = new StringBuilder();
-            foreach (var i in top)
-            {
-                string line = i.Pattern.Trim();
-                if (!string.IsNullOrWhiteSpace(i.Action)) line += $" → {i.Action.Trim()}";
-                sb.AppendLine($"- {line}");
-            }
-            return sb.ToString().TrimEnd();
+            // Global instincts and this project's only: an Android project's "never install the APK" stays there.
+            string? folder = projectFolder ?? (_fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null);
+            return _instinctService.HabitsBlock(folder, max);
         }
         catch { return null; }
     }

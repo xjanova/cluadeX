@@ -93,6 +93,9 @@ public partial class App : Application
         _ = _serviceProvider.GetRequiredService<Services.Lsp.EditorLanguageService>();
         // Reads every build / test / command the agent runs from now on — so it must exist before the first run.
         _ = _serviceProvider.GetRequiredService<Services.Problems.BuildProblemsService>();
+        // The brain bridge tells instinct learning that BrainX is this PC's memory (InstinctService.PausedForBrain) —
+        // made now, so the first prompt and the first chat already know, not only once a page touches the brain.
+        _ = _serviceProvider.GetRequiredService<BrainSyncService>();
         // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
         var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
         _ = Task.Run(checkpoints.Prune);

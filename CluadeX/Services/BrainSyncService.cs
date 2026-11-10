@@ -28,7 +28,15 @@ public class BrainSyncService
         _mcp = mcp;
         _log = log;
         Current = this;
+        // One memory, not two (owner 2026-11-10: "เราควรให้ใช้อันเดียว เพราะ brainx ดีกว่าอยู่แล้ว"): with a BrainX
+        // brain set up on this PC, CluadeX's own instinct learning stands down — see InstinctService.PausedForBrain.
+        InstinctService.BrainIsMemory ??= () => HasBrainConfigured;
     }
+
+    /// <summary>A BrainX brain is set up (configured and enabled) on this PC — whether or not it is running this
+    /// minute. Stable on purpose: a brain that restarts must not switch instinct learning on and off.</summary>
+    public bool HasBrainConfigured =>
+        _mcp.Configs.Any(kv => McpServerManager.LooksLikeBrain(kv.Key) && kv.Value.Enabled);
 
     /// <summary>The app's brain bridge (null before DI built it, or in a harness without one).</summary>
     public static BrainSyncService? Current { get; private set; }

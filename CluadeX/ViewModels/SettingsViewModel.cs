@@ -219,6 +219,8 @@ public partial class SettingsViewModel : ViewModelBase
     public bool SemanticSearchEnabled { get => _semanticSearchEnabled; set => SetProperty(ref _semanticSearchEnabled, value); }
     public string EmbeddingModel { get => _embeddingModel; set => SetProperty(ref _embeddingModel, value); }
     public bool InstinctLearningEnabled { get => _instinctLearningEnabled; set => SetProperty(ref _instinctLearningEnabled, value); }
+    /// <summary>BrainX is this PC's memory: the switch is kept but has no effect, and the row says why.</summary>
+    public bool InstinctsPausedForBrain => InstinctService.PausedForBrain;
 
     // ── Autonomous loop ──
     private int _autoFixMaxIterations = 5, _autoReviewMaxRounds = 3;

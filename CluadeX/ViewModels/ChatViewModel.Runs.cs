@@ -489,6 +489,7 @@ public partial class ChatViewModel
         var run = new ChatRun { Session = session, Messages = messages, FirstRow = messages.Count };
         NoteRunBegan(session);
         ActivityBegan(session);
+        CancelLearning(session);   // it is working again: read it when it is quiet
         if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
@@ -557,6 +558,12 @@ public partial class ChatViewModel
         done.TrySetResult();
         RaiseRunStateChanged();
         if (run != null && ReferenceEquals(run.Session, CurrentSession)) RefreshStickyPlan();   // its rows stop moving too
+        if (run != null)
+        {
+            // Any chat — on screen or not, a split or a pipe task — is read for what it taught once it sits quiet.
+            ScheduleLearning(run.Session, run.Messages);
+            if (ReferenceEquals(run.Session, CurrentSession)) FlushInstinctCards();
+        }
         if (run != null) TellParentSplitFinished(run.Session, run.Messages);
         if (run != null && leftover is { Count: > 0 }) HandOnUntakenWatchNotes(run, leftover);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);

@@ -28,7 +28,7 @@ namespace CluadeX.Services;
 ///   "hooks": {
 ///     "PreToolUse":  [ { "matcher": "run_command", "command": "powershell -File ..." } ],
 ///     "PostToolUse": [ { "matcher": "edit_file",   "command": "prettier --write {path}" } ],
-///     "Stop":        [ { "matcher": "*", "command": "powershell -File stop-pattern-extract.ps1 -Cost {cost}" } ],
+///     "Stop":        [ { "matcher": "*", "command": "powershell -File stop-cost-summary-toast.ps1 -Cost {cost}" } ],
 ///     "SessionStart":[ { "matcher": "*", "command": "powershell -File sessionstart-load-handoff.ps1" } ],
 ///     "PreCompact":  [ { "matcher": "*", "command": "powershell -File precompact-save-snapshot.ps1" } ]
 ///   }
@@ -128,8 +128,7 @@ public class HookService
 
     // ─── Workspace trust (project-local hooks come from the opened repo, which may be hostile) ───
 
-    private string TrustFilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex", "trusted-hook-folders.json");
+    private string TrustFilePath => Path.Combine(SettingsService.ResolveDataRoot(out _), "trusted-hook-folders.json");
 
     private static string NormalizeFolder(string folder)
     {
@@ -1278,18 +1277,17 @@ public class HookService
             }
         }
 
-        // Global hooks (~/.cluadex/hooks.json)
-        string globalHooksFile = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex", "hooks.json");
+        // Global hooks (~/.cluadex/hooks.json — the data root: a portable copy, and so every test harness, has its own
+        // and never runs the owner's. chattest used to: the owner's Stop hooks appended a row to the real
+        // instincts-inbox.jsonl and session-costs.csv for every scripted turn.)
+        string dataRoot = SettingsService.ResolveDataRoot(out _);
+        string globalHooksFile = Path.Combine(dataRoot, "hooks.json");
         if (File.Exists(globalHooksFile))
             hooks.AddRange(ParseHooksFile(globalHooksFile));
 
         // Bundled hooks projected by HookBundleService (~/.cluadex/hooks-bundled.json)
         // Sprint 3 #2: enabled entries from the Hook Library catalog.
-        string bundledHooksFile = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex", "hooks-bundled.json");
+        string bundledHooksFile = Path.Combine(dataRoot, "hooks-bundled.json");
         if (File.Exists(bundledHooksFile))
         {
             // The projection may have been written by an OLDER CluadeX on this PC (the installed app and a dev build

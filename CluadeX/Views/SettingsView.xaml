@@ -813,8 +813,13 @@
                                     <StackPanel>
                                         <TextBlock Text="{services:Loc settings.learnInstincts}" Style="{StaticResource SettingLabel}"/>
                                         <TextBlock Text="{services:Loc settings.learnInstinctsDesc}" Style="{StaticResource SettingDesc}"/>
+                                        <!-- BrainX is this PC's one memory: the switch has no effect, and this says why -->
+                                        <TextBlock Text="{services:Loc settings.learnInstinctsPaused}" Style="{StaticResource SettingDesc}"
+                                                   Foreground="{DynamicResource Status.Warning}" Margin="0,4,0,0"
+                                                   Visibility="{Binding InstinctsPausedForBrain, Converter={StaticResource BoolVis}}"/>
                                     </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding InstinctLearningEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding InstinctLearningEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"
+                                              AutomationProperties.AutomationId="CxSettings.LearnInstincts"/>
                                 </Grid>
                             </StackPanel>
                         </Border>

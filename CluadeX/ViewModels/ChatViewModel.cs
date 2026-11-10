@@ -1577,6 +1577,7 @@ public partial class ChatViewModel : ViewModelBase
         InitControls(activation);
         InitSidePanel();
         InitVibe();
+        InitLearning();
         InitActivity();
         InitCharacter();
         InitStarters();
@@ -1896,6 +1897,7 @@ public partial class ChatViewModel : ViewModelBase
         // A chat with a run in progress: its live list IS the chat — never reload it from the database.
         if (_runs.FirstOrDefault(r => r.Session.Id == sessionId) is { } running)
         {
+            if (!leavingRun) LearnFrom(leaving, Messages);   // the chat left, read for what it taught
             DropIfUntouched(CurrentSession);   // no await since the click: the chat on screen is still the one left
             CurrentSession = running.Session;
             Messages = running.Messages;
@@ -1975,6 +1977,7 @@ public partial class ChatViewModel : ViewModelBase
         else session = AdoptLoadedSession(session);
 
         // Only now, when this switch really happens: a load that is overtaken leaves its chat on screen WITH its row.
+        if (!leavingRun) LearnFrom(leaving, Messages);   // the chat left (its rows are still on screen), read for what it taught
         DropIfUntouched(leaving);
         // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
         CurrentSession = session;
@@ -1997,6 +2000,7 @@ public partial class ChatViewModel : ViewModelBase
             : LocF("chat.status.loadedEmpty", session.Title);
         FollowChatProject(session);
         tFollow = switchWatch.ElapsedMilliseconds;
+        FlushInstinctCards();   // a card that waited for a chat with rows and no run
 
         UpdateContextInfo();
         tCtx = switchWatch.ElapsedMilliseconds;
@@ -2712,9 +2716,9 @@ public partial class ChatViewModel : ViewModelBase
             _isDirty = true;
             AutoSave();
 
-            // Extract durable memories from the finishing session (fire-and-forget) — not from one still running.
-            // Disabled by default — user opts in via settings.
-            if (!leavingRun) _sessionMemoryService?.ExtractInBackground(CurrentSession.Messages);
+            // Memories and instincts from the chat being left (fire-and-forget) — not from one still running: its end
+            // schedules the read. SessionMemoryEnabled / InstinctLearningEnabled gate it.
+            if (!leavingRun) LearnFrom(CurrentSession, Messages);
         }
 
         // Create new session — tag with the current project path so the sidebar can
