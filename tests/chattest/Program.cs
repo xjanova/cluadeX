@@ -372,6 +372,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=SWT: just split chats in their own git worktree (new_chat isolation "worktree").
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SWT")
+        {
+            await TestSplitWorktrees();
+            Log($"\n## Result (CHATTEST_ONLY=SWT): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=ORCH: just the orchestration views (docs/agent-orchestration.md), and the narrow composer the
         // Ultra switch joined.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "ORCH")
@@ -479,6 +488,7 @@ internal static partial class Program
         await TestAgentGraph();               // AG: the agent map as a node canvas, each agent's own window
         await TestFloatingPlan();             // MF: the floating plan card comes and goes by the chat's own card
         await TestOrchestrationViews();       // OR: workflow card, split chips, notices, next-step box, Ultra
+        await TestSplitWorktrees();           // SWT: a split chat in its own git worktree — branch in the notice, close_chat keeps unmerged
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
@@ -1833,10 +1843,10 @@ internal static partial class Program
 
             // close_chat, as the parent chat's agent calls it.
             var close = typeof(ChatViewModel).GetMethod("CloseChatsForAgent", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            string listed = (string)close.Invoke(vm, new object[] { parent.Id, "" })!;
+            string listed = (string)close.Invoke(vm, new object[] { parent.Id, "", null })!;
             Check("SC close_chat lists the split chats with what each does and how it stands",
                 listed.Contains("SC split A") && listed.Contains("finished"), listed);
-            string closed = (string)close.Invoke(vm, new object[] { parent.Id, "done" })!;
+            string closed = (string)close.Invoke(vm, new object[] { parent.Id, "done", null })!;
             Check("SC close_chat \"done\" puts the finished ones away — kept, not deleted",
                 a.IsArchived && vm.Sessions.Any(s => s.Id == aId) && !vm.VisibleSessions.Any(s => s.Id == aId), closed);
             Check("SC the parent's line counts it as put away", parent.SplitSummary.Contains("1") && !parent.HasFinishedSplits, parent.SplitSummary);
@@ -1845,7 +1855,7 @@ internal static partial class Program
             vm.ShowArchivedSplits = false;
             vm.UnarchiveSplitCommand.Execute(a.Id);
             Check("SC \"bring back\" returns it to the list", !a.IsArchived && vm.VisibleSessions.Any(s => s.Id == aId));
-            string none = (string)close.Invoke(vm, new object[] { a.Id, "done" })!;
+            string none = (string)close.Invoke(vm, new object[] { a.Id, "done", null })!;
             Check("SC close_chat from a chat that split nothing off says so", none.Contains("not split off"), none);
 
             // Owner 2026-10-18: "ระวัง … ผลิตออกมาไม่หยุด" — agent splits have a ceiling (SplitLimits).

@@ -179,6 +179,22 @@ internal static class ChatKeys
         ["chat.split.archiveDoneTip"] = new() { ["en"] = "Put away the finished split chats of this chat (kept, not deleted)", ["th"] = "เก็บแชทงานแยกที่เสร็จแล้วของแชทนี้ (ไม่ลบ เรียกคืนได้)" },
         ["chat.split.archiveTip"] = new() { ["en"] = "Put this split chat away (kept, not deleted)", ["th"] = "เก็บแชทงานแยกนี้ (ไม่ลบ เรียกคืนได้)" },
         ["chat.split.unarchiveTip"] = new() { ["en"] = "Bring this split chat back into the list", ["th"] = "นำแชทงานแยกนี้กลับมาในรายการ" },
+        // A split chat in its own git worktree (new_chat isolation "worktree")
+        ["chat.split.worktreeOpened"] = new()
+        {
+            ["en"] = "This chat works in its own git worktree {0}, on branch {1} (cut from {2}), so its edits and builds never clash with the chat that opened it.",
+            ["th"] = "แชทนี้ทำงานใน git worktree ของตัวเอง {0} บน branch {1} (แยกมาจาก {2}) งานที่แก้และการ build จึงไม่ชนกับแชทที่เปิดมันขึ้นมา",
+        },
+        ["chat.split.worktreeNote"] = new()
+        {
+            ["en"] = "Its work is on branch {0} (worktree {1}) — merge it or open a PR from it.",
+            ["th"] = "งานอยู่บน branch {0} (worktree {1}) — merge เข้ามาหรือเปิด PR จาก branch นี้ได้เลย",
+        },
+        ["chat.split.worktreeKept"] = new()
+        {
+            ["en"] = "Put away. Its worktree stays: branch {0} holds work that is not merged yet.",
+            ["th"] = "เก็บแชทแล้ว แต่ยังไม่ลบ worktree — branch {0} ยังมีงานที่ยังไม่ได้ merge",
+        },
         ["chat.perm.prompt"] = new() { ["en"] = "Allow {0} to {1}?", ["th"] = "อนุญาตให้ {0} ทำสิ่งนี้ไหม: {1}" },
         ["chat.perm.allowed"] = new() { ["en"] = "✓ Allowed", ["th"] = "✓ อนุญาตแล้ว" },
         ["chat.perm.denied"] = new() { ["en"] = "✗ Denied", ["th"] = "✗ ปฏิเสธแล้ว" },

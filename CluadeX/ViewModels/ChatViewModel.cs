@@ -572,7 +572,9 @@ public partial class ChatViewModel : ViewModelBase
     public ICommand ArchiveSplitCommand => _archiveSplitCommand ??= new RelayCommand<string>(id =>
     {
         if (Sessions.FirstOrDefault(s => s.Id == id) is not { } s) return;
+        string? parent = s.ParentId;
         if (!ArchiveSplit(s)) StatusText = Loc("chat.split.stillWorking");
+        else _ = SweepWorktreesAfterOwnerArchiveAsync(parent);
         RebuildVisibleSessions();
     });
     private ICommand? _archiveSplitCommand;
@@ -593,6 +595,7 @@ public partial class ChatViewModel : ViewModelBase
         if (string.IsNullOrEmpty(id)) return;
         foreach (var (kidId, link) in ChatLinkStore.Current?.ChildrenOf(id) ?? new())
             if (link.ArchivedAt == null && Sessions.FirstOrDefault(c => c.Id == kidId) is { } kid) ArchiveSplit(kid);
+        _ = SweepWorktreesAfterOwnerArchiveAsync(id);
         RebuildVisibleSessions();
     });
     private ICommand? _archiveFinishedSplitsCommand;
@@ -605,7 +608,9 @@ public partial class ChatViewModel : ViewModelBase
     /// close_chat (UI thread): the split chats of <paramref name="parentId"/> — list them (<paramref name="target"/> empty
     /// or "list"), or put away the finished ones ("done") or one by id / title. A chat still working is never closed.
     /// </summary>
-    private string CloseChatsForAgent(string? parentId, string target)
+    /// <paramref name="held"/>: split chats whose worktree holds unmerged work (chat id → what) — never put away, nor a
+    /// chat with one of them under it, so the branch is not lost from view.
+    private string CloseChatsForAgent(string? parentId, string target, IReadOnlyDictionary<string, string>? held = null)
     {
         if (parentId == null) return "No chat is asking (close_chat works from a chat that split work off with new_chat).";
         var kids = ChatLinkStore.Current?.ChildrenOf(parentId) ?? new();
@@ -619,7 +624,10 @@ public partial class ChatViewModel : ViewModelBase
         {
             var c = Sessions.FirstOrDefault(x => x.Id == id);
             string where = string.IsNullOrEmpty(c?.ProjectPath) ? "" : $" in {c!.ProjectPath}";
-            return $"- \"{c?.Title ?? "?"}\" (ref {ChatRef.Of(id)}, id {id}){where} — {link.Task} — {StateOf(id, link)}";
+            string tree = ChatLinkStore.Current?.WorktreeOf(id) is { } wt
+                ? $" — own worktree {wt.Root}, branch {wt.Branch}" + (held != null && held.TryGetValue(id, out var why) ? $" (unmerged: {why})" : "")
+                : "";
+            return $"- \"{c?.Title ?? "?"}\" (ref {ChatRef.Of(id)}, id {id}){where} — {link.Task} — {StateOf(id, link)}{tree}";
         }
         string List() => "Split chats of this chat:\n" + string.Join("\n", kids.Select(k => Line(k.Id, k.Link)));
 
@@ -633,16 +641,24 @@ public partial class ChatViewModel : ViewModelBase
             || string.Equals(Sessions.FirstOrDefault(c => c.Id == k.Id)?.Title, target, StringComparison.OrdinalIgnoreCase))).ToList();
         if (picked.Count == 0) return $"No open split chat matches \"{target}\".\n" + List();
 
-        var closed = new List<string>(); var busy = new List<string>();
+        var closed = new List<string>(); var busy = new List<string>(); var unmerged = new List<string>();
         foreach (var (id, _) in picked)
         {
             var c = Sessions.FirstOrDefault(x => x.Id == id);
+            // Its worktree (or one under it) holds work nobody merged: it stays open, and so does the worktree.
+            string? holds = held == null || held.Count == 0 ? null
+                : new[] { id }.Concat((ChatLinkStore.Current?.DescendantsOf(id) ?? new()).Select(d => d.Id))
+                    .Where(held.ContainsKey).Select(k => held[k]).FirstOrDefault();
+            if (holds != null) { unmerged.Add($"\"{c?.Title ?? id}\" — {holds}"); continue; }
             if (c == null) { ChatLinkStore.Current?.SetArchived(id, true); closed.Add(id); continue; }
             if (ArchiveSplit(c)) closed.Add(c.Title); else busy.Add(c.Title);
         }
         RebuildVisibleSessions();   // at once: the store's own notice redraws again a moment later, harmlessly
         string said = closed.Count > 0 ? $"Put away {closed.Count}: {string.Join(", ", closed)} (kept, not deleted; the user can bring them back)." : "Nothing was put away.";
         if (busy.Count > 0) said += $" Still working, left open: {string.Join(", ", busy)}.";
+        if (unmerged.Count > 0)
+            said += " Left open, its worktree is kept because it holds work that is not merged: " + string.Join("; ", unmerged)
+                  + ". Merge the branch (or open a PR from it and merge that), then call close_chat again.";
         return said;
     }
 
@@ -1192,9 +1208,10 @@ public partial class ChatViewModel : ViewModelBase
         Services.Tools.ProjectToolModule.CloseChatHandler = target =>
         {
             string? parentId = FlowRun?.Session.Id;
-            return App.Current.Dispatcher.InvokeAsync(() => CloseChatsForAgent(parentId, target)).Task;
+            return CloseChatsWithWorktreesAsync(parentId, target);
         };
         InitFable();
+        InitSplitWorktrees();
         // Which chat split off which, and which finished split chats were put away (chat-links.json beside codex.db).
         ChatLinkStore.Current ??= new ChatLinkStore(settingsService.DataRoot);
         // Chats with a run going (live-runs.json beside codex.db): one CluadeX never saw end shows as stopped after a restart.
@@ -2712,8 +2729,9 @@ public partial class ChatViewModel : ViewModelBase
     /// with <paramref name="message"/>, its first turn started as the user's message. The asking chat keeps running
     /// beside it (each run has its own folder). Not awaited: the new chat's turn is its own. Returns the tool's report.
     /// </summary>
-    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null, bool fork = false) =>
-        OpenModelChatForAgent(path, message, title, parentId, fork, model: null, openedNote: null);
+    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null, bool fork = false,
+        Services.Agents.ChatWorktree? worktree = null) =>
+        OpenModelChatForAgent(path, message, title, parentId, fork, model: null, openedNote: null, worktree);
 
     /// <summary>
     /// <see cref="OpenChatForAgent"/> for a chat with a model of its own (<paramref name="model"/>, kept in chat-links.json:
@@ -2721,25 +2739,12 @@ public partial class ChatViewModel : ViewModelBase
     /// "opened by" line (what it runs on and what it may cost).
     /// </summary>
     private string OpenModelChatForAgent(string? path, string? message, string? title, string? parentId, bool fork,
-        string? model, string? openedNote)
+        string? model, string? openedNote, Services.Agents.ChatWorktree? worktree = null)
     {
         parentId ??= CurrentSession?.Id;
         // A ceiling on agent splits: each one starts a run that may split again (SplitLimits). Thrown = the tool fails
         // with the reason, so the agent does the work itself instead of breeding chats.
-        if (parentId != null && ChatLinkStore.Current is { } store)
-        {
-            bool Working(string id) => Sessions.FirstOrDefault(s => s.Id == id) is { } s && RunOf(s) != null;
-            string? refusal = SplitLimits.Refusal(
-                store.DepthOf(parentId),
-                store.ChildrenOf(parentId).Count(k => k.Link.ArchivedAt == null && Working(k.Id)),
-                Sessions.Count(s => store.Get(s.Id) != null && RunOf(s) != null),
-                store.CreatedSince(DateTime.Now - SplitLimits.Window));
-            if (refusal != null)
-            {
-                _debugLog?.Info("Chat", $"new_chat refused · parent={parentId} · {refusal}");
-                throw new InvalidOperationException(refusal);
-            }
-        }
+        if (SplitRefusal(parentId) is { } refusal) throw new InvalidOperationException(refusal);
         string? from = Sessions.FirstOrDefault(s => s.Id == parentId)?.Title ?? CurrentSession?.Title;
         // Read before the new chat goes on screen: from the store, as Fork does, so the copy holds no live rows or callbacks.
         List<ChatMessage>? inherited = null;
@@ -2767,6 +2772,8 @@ public partial class ChatViewModel : ViewModelBase
             ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "", model);
             NoteSplitChip(parentId, chat);
         }
+        // Its own worktree: recorded before its first turn begins, so that turn (and every later one) runs there.
+        if (worktree != null) ChatLinkStore.Current?.SetWorktree(chat.Id, worktree);
         string folder = string.IsNullOrWhiteSpace(chat.ProjectPath) ? "(no project)" : chat.ProjectPath;
         Messages.Add(new ChatMessage
         {
@@ -2774,12 +2781,38 @@ public partial class ChatViewModel : ViewModelBase
             Content = "💬 " + LocF("chat.newChat.byAgent", from ?? "?", folder),
         });
         if (openedNote != null) Messages.Add(new ChatMessage { Role = MessageRole.System, Content = openedNote });
+        if (worktree != null)
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System, ToolName = ChatMessage.NoticeTag,
+                Content = "🌿 " + LocF("chat.split.worktreeOpened", worktree.Folder, worktree.Branch,
+                    worktree.BaseCommit[..Math.Min(9, worktree.BaseCommit.Length)]),
+            });
         RebuildVisibleSessions();
+        string where = worktree == null ? folder
+            : $"its own git worktree {worktree.Folder} (branch {worktree.Branch}, cut from this chat's HEAD {worktree.BaseCommit}; "
+              + "uncommitted changes here are not in it)";
         if (message == null)
-            return $"Opened a new empty chat (ref {chat.Ref}, id {chat.Id}) in {folder}. It is on screen now; the user types there.";
+            return $"Opened a new empty chat (ref {chat.Ref}, id {chat.Id}) in {where}. It is on screen now; the user types there.";
         _ = StartAgentChatTurnAsync(message, chat.Id);
-        return $"Opened a new chat (ref {chat.Ref}, id {chat.Id}) in {folder} and started it with your message. It runs on its own beside "
-             + "this chat; the user follows it in the sidebar. Do not wait for it — carry on here or finish your reply.";
+        return $"Opened a new chat (ref {chat.Ref}, id {chat.Id}) in {where} and started it with your message. It runs on its own beside "
+             + "this chat; the user follows it in the sidebar. Do not wait for it — carry on here or finish your reply."
+             + (worktree == null ? "" : $" When it ends a turn you are told; merge branch {worktree.Branch} or open a PR from it, "
+                + "then close_chat removes the worktree.");
+    }
+
+    /// <summary>Why <paramref name="parentId"/> may not split off another chat now (SplitLimits), or null when it may.</summary>
+    private string? SplitRefusal(string? parentId)
+    {
+        if (parentId == null || ChatLinkStore.Current is not { } store) return null;
+        bool Working(string id) => Sessions.FirstOrDefault(s => s.Id == id) is { } s && RunOf(s) != null;
+        string? refusal = SplitLimits.Refusal(
+            store.DepthOf(parentId),
+            store.ChildrenOf(parentId).Count(k => k.Link.ArchivedAt == null && Working(k.Id)),
+            Sessions.Count(s => store.Get(s.Id) != null && RunOf(s) != null),
+            store.CreatedSince(DateTime.Now - SplitLimits.Window));
+        if (refusal != null) _debugLog?.Info("Chat", $"new_chat refused · parent={parentId} · {refusal}");
+        return refusal;
     }
 
     private async Task StartAgentChatTurnAsync(string message, string chatId)
@@ -3993,6 +4026,10 @@ public partial class ChatViewModel : ViewModelBase
             MarkDesignTurn(turn, userMsg);
             BeginDesignTurn(designChat);
         }
+        // A split chat in its own worktree hears where it works with every turn (the parent's checkout is not its own).
+        // (A worktree removed by hand is not mentioned: the turn then runs in the project, as TaskFolderFor says.)
+        if (FlowRun is { } wtRun && ChatLinkStore.Current?.WorktreeOf(wtRun.Session.Id) is { } ownTree && Directory.Exists(ownTree.Folder))
+            input += "\n\n" + NoticePrefix + Services.Agents.SplitWorktree.InstructionFor(ownTree);
         if (pipe != null && FlowRun is { } pipeRun)
         {
             // A message a pipe caller sent (cluadex.continue_chat): marked as such (the BrainX model never relays it

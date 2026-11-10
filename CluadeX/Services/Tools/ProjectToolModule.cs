@@ -52,6 +52,14 @@ public sealed class ProjectToolModule : IAgentToolModule
     /// </summary>
     public static Func<ModelChatRequest, Task<string>>? ModelChatHandler;
 
+    /// <summary>
+    /// Opens a split chat in a git worktree of its own for new_chat isolation "worktree" (set by the chat page): the
+    /// asking chat's folder (null = the one its run works in), the first message, a title. Makes the worktree on a new
+    /// branch cut from that checkout's HEAD, opens the chat there and starts it. Returns what the tool reports, or throws
+    /// to fail it. Null in harnesses with no chat page.
+    /// </summary>
+    public static Func<string?, string?, string?, Task<string>>? WorktreeChatHandler;
+
     public const string CloseChatToolName = "close_chat";
 
     /// <summary>
@@ -172,6 +180,16 @@ public sealed class ProjectToolModule : IAgentToolModule
                     ["description"] = "With model \"fable\": what done looks like (the test or build that must pass, the "
                         + "behaviour to see).",
                 },
+                ["isolation"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "\"worktree\" = the new chat works in its own git worktree, on a new branch cut from this "
+                        + "chat's HEAD, instead of sharing this checkout. Use it whenever the new chat will EDIT files in this same "
+                        + "project while this chat (or another split chat) is still running here, so their edits and builds never "
+                        + "clash. When it finishes you are told its branch: merge it or open a PR; close_chat removes the worktree "
+                        + "once nothing on it is unmerged. Uncommitted changes here are not in it — commit first if it needs them. "
+                        + "Git repositories only; not with fork, not for another project (that has its own checkout).",
+                },
             },
         };
         yield return new ToolSchema
@@ -183,7 +201,9 @@ public sealed class ProjectToolModule : IAgentToolModule
                 + "work to its own chat, or when the user adds a NEW, independent request while you are still working on "
                 + "something else (a note that arrives mid-task): start that request in its own chat so both run at once, and "
                 + "keep corrections or follow-ups of the current task here. The message must be complete — that chat does not "
-                + "see this one, unless you pass fork. Never answer that you cannot open a chat.",
+                + "see this one, unless you pass fork. A new chat in THIS project shares this checkout: when it will edit files "
+                + "while a chat is still running here, pass isolation \"worktree\" so it works on its own branch. Never answer "
+                + "that you cannot open a chat.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(chatSchema)).RootElement.Clone(),
         };
 
@@ -206,7 +226,10 @@ public sealed class ProjectToolModule : IAgentToolModule
             Name = CloseChatToolName,
             Description = "The chats THIS chat split off with new_chat: list them with how each stands (working / finished / put "
                 + "away), or put finished ones away so the chat list stays tidy. Put away = hidden from the list, kept, the user "
-                + "can bring it back; a chat still working is never closed. Use it once a split chat's result is in.",
+                + "can bring it back; a chat still working is never closed. A split chat in its own git worktree (new_chat "
+                + "isolation \"worktree\") is put away only once nothing on its branch is unmerged: then its worktree and branch "
+                + "are removed; otherwise close_chat says what is left and keeps both — merge the branch or open a PR first. "
+                + "Use it once a split chat's result is in.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(closeSchema)).RootElement.Clone(),
         };
     }
@@ -269,7 +292,7 @@ public sealed class ProjectToolModule : IAgentToolModule
     }
 
     /// <summary>new_chat: a new chat in the sidebar, in this project or <c>path</c>, started with <c>message</c>.</summary>
-    private async Task<ToolResult> ExecuteNewChatAsync(ToolCall call)
+    private async Task<ToolResult> ExecuteNewChatAsync(ToolCall call, ToolModuleContext context)
     {
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
         if (NewChatHandler == null) return Fail("No chat page is running here, so a new chat cannot be opened.");
@@ -294,6 +317,11 @@ public sealed class ProjectToolModule : IAgentToolModule
             && !modelArg.Equals("auto", StringComparison.OrdinalIgnoreCase))
             return await ExecuteModelChatAsync(call, full, message, title, fork, modelArg, Fail);
         if (fork && full != null) return Fail("fork stays in this chat's project: leave path out, or start clean with a complete message.");
+        string isolation = call.GetArg("isolation").Trim().Trim('"', '\'').ToLowerInvariant();
+        if (isolation is "worktree" or "git-worktree" or "branch")
+            return await ExecuteWorktreeChatAsync(call, context, full, message, title, fork, Fail);
+        if (isolation.Length > 0 && isolation is not ("none" or "shared" or "no"))
+            return Fail($"isolation takes \"worktree\" (or leave it out); '{isolation}' is not one.");
         try
         {
             string said = await NewChatHandler(full, message, title, fork);
@@ -337,6 +365,33 @@ public sealed class ProjectToolModule : IAgentToolModule
             };
         }
         catch (Exception ex) { return Fail("The Fable chat could not be opened: " + ex.Message); }
+    }
+
+    /// <summary>new_chat isolation "worktree": the split chat works on its own branch in its own git worktree, cut from
+    /// the asking chat's HEAD — for a split in THIS project that edits files while the asking chat still runs.</summary>
+    private static async Task<ToolResult> ExecuteWorktreeChatAsync(ToolCall call, ToolModuleContext context, string? full,
+        string? message, string? title, bool fork, Func<string, ToolResult> Fail)
+    {
+        if (fork)
+            return Fail("isolation \"worktree\" starts clean: a forked history points at this checkout's files. Leave fork out "
+                + "and give a complete message.");
+        string? here = string.IsNullOrWhiteSpace(context.WorkingDirectory) ? null : context.WorkingDirectory;
+        if (full != null && (here == null || !IsSameOrInside(here, full)))
+            return Fail($"isolation \"worktree\" is for a split in this chat's own project; {full} is another folder, which has a "
+                + "checkout of its own — leave isolation out.");
+        if (message == null) return Fail("A chat in its own worktree needs message: the complete task to start there.");
+        if (WorktreeChatHandler == null) return Fail("No chat page is running here, so a new chat cannot be opened.");
+        try
+        {
+            // The folder this call runs in (the asking chat's run) unless path names one inside it.
+            string said = await WorktreeChatHandler(full ?? here, message, title);
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true, Output = said,
+                Summary = "💬+ 🌿 " + (title ?? "new chat"), FilePath = full,
+            };
+        }
+        catch (Exception ex) { return Fail("The new chat could not be opened in its own worktree: " + ex.Message); }
     }
 
     /// <summary>close_chat: list this chat's split chats, or put finished ones away.</summary>
@@ -386,7 +441,7 @@ public sealed class ProjectToolModule : IAgentToolModule
 
     public Task<ToolResult> ExecuteAsync(ToolCall call, ToolModuleContext context, CancellationToken ct)
     {
-        if (call.Type == ToolType.NewChat) return ExecuteNewChatAsync(call);
+        if (call.Type == ToolType.NewChat) return ExecuteNewChatAsync(call, context);
         if (call.Type == ToolType.CloseChat) return ExecuteCloseChatAsync(call);
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
 
