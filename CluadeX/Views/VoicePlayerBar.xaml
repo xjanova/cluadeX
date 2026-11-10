@@ -8,6 +8,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:services="clr-namespace:CluadeX.Services"
+             xmlns:views="clr-namespace:CluadeX.Views"
              x:Name="Root"
              AutomationProperties.AutomationId="CxChat.VoicePlayer"
              AutomationProperties.Name="{services:Loc voice.player.title}">
@@ -35,13 +36,29 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <!-- her face; a speaker when the reply has no girl (or her picture is missing) -->
+            <!-- the same face as the AI avatar beside the reply's bubble (AiAvatar, style CxAiAvatar): her face and colour
+                 where the theme shows the girls (views:CharacterLook.Show, inherited from the chat view), CluadeX's logo
+                 otherwise (Classic) or when her picture is missing -->
             <Grid Width="36" Height="36" VerticalAlignment="Center">
-                <Ellipse Fill="{DynamicResource Surface.Sunken}"/>
-                <TextBlock Text="&#xE767;" FontFamily="Segoe MDL2 Assets" FontSize="15" Foreground="{DynamicResource Accent.1}"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                <Ellipse Fill="{Binding Current.Character.FaceBrush}" Stroke="{Binding Current.Character.AccentBrush}" StrokeThickness="2"
-                         Visibility="{Binding Current.Character.FaceBrush, Converter={StaticResource NullToCollapsed}, FallbackValue=Collapsed}"/>
+                <Ellipse Fill="{DynamicResource Bg.Elevated}" Stroke="{DynamicResource Accent.1}" StrokeThickness="2"/>
+                <Image Source="pack://application:,,,/CluadeX;component/Assets/logo.png" Width="20" Height="20"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <Ellipse x:Name="FaceDisc" Fill="{Binding Current.Character.FaceBrush}" Stroke="{Binding Current.Character.AccentBrush}" StrokeThickness="2">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible"/>
+                                        <Condition Binding="{Binding Current.Character.FaceBrush, Converter={StaticResource NullToCollapsed}, FallbackValue=Collapsed}" Value="Visible"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </MultiDataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Ellipse.Style>
+                </Ellipse>
             </Grid>
 
             <!-- who · state · position · waiting; then her first words -->
