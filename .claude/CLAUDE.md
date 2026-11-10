@@ -572,12 +572,21 @@ CluadeX/
 ```
 
 ## Trying a branch without a release (2026-11-10)
-Owner: releases take too long to try work. When a branch is ready for the owner to try, run
-`powershell -ExecutionPolicy Bypass -File Scripts\try-branch.ps1 <branch>` and give the owner the shortcut it prints
-("CluadeX ตัวลอง - <branch>.lnk" on the desktop). Never open it yourself.
+Owner: releases take too long to try work — and (2026-11-11) "เมื่อทำเสร็จคุณบิ้วทดสอบเอง ไม่ต้องให้ฉันลอง".
+When a branch is done, test it yourself:
+`powershell -ExecutionPolicy Bypass -File Scripts\try-branch.ps1 <branch> -Smoke` (~2 min). It builds, opens the trial
+minimised, checks it, closes it, prints PASS/FAIL per check and exits 1 on a failure. Report those lines; do not hand the
+owner a shortcut to try. Check the feature itself as well (its test harness, or the trial's log under
+`D:\CluadeX-Try\<branch>\app\Data\logs`). Without `-Smoke` the script makes a desktop shortcut "CluadeX ตัวลอง - <branch>.lnk"
+for when the owner asks to try it themselves.
+- `-Smoke` checks: still running, main window, chip says "ตัวลอง", `app\Data\install.json` is the trial's, no trial path in
+  `~\.cluadex`, BrainX `mcp-bridges.json` or the Chrome host manifest, `CluadeX.lnk` unchanged, no update check, no
+  `[CRITICAL]`/unhandled line in this run's log (`[ERROR]` lines are listed, not failed).
 - It builds Debug (~1 min), copies to `D:\CluadeX-Try\<branch>\app` with `portable.txt` + `trial.txt`, copies the owner's
   `settings.json` + `mcp_servers.json` once (read-only copy), and makes its own shortcut — never `CluadeX.lnk`.
 - `trial.txt` = `SettingsService.IsTrialCopy`: no BrainX bridge repoint (`ConnectionService.ReconcileAsync/RegisterAsync`),
-  no Chrome host registration (`ChromeBridgeConnector`), no self-update, no desktop shortcut. The version chip says "ตัวลอง".
+  no Chrome host registration (`ChromeBridgeConnector`), no self-update (`AutoUpdateService.StartBackgroundChecks` and the
+  window's `MainViewModel.CheckForUpdate` — a portable copy used to offer the release over itself), no desktop shortcut.
+  The version chip says "ตัวลอง".
 - A branch older than v3.0.306 lacks these guards: the script refuses it — merge main into it first.
 - `-Remove` deletes the trial folder, its shortcut and the worktree the script made.

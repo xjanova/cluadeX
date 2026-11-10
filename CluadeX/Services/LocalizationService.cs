@@ -112,7 +112,8 @@ public class LocalizationService
         // Settings page (categories, cards, statuses)
         ["update.checking"] = new() { ["en"] = "Checking for updates…", ["th"] = "กำลังตรวจหาอัปเดต…" },
         ["update.upToDate"] = new() { ["en"] = "✓ You're on the latest version (v{0}).", ["th"] = "✓ เป็นเวอร์ชันล่าสุดแล้ว (v{0})" },
-        ["update.devBuildNote"] = new() { ["en"] = "This is a development / portable build — updates download and install by themselves only in the installed version.", ["th"] = "ตัวนี้เป็น build สำหรับพัฒนา/แบบพกพา — การดาวน์โหลดและติดตั้งอัปเดตอัตโนมัติทำงานเฉพาะเวอร์ชันที่ติดตั้งด้วยตัวติดตั้ง" },
+        ["update.trialNote"] = new() { ["en"] = "This is a trial copy of a branch — it does not check for or install updates, so the release never replaces what is being tried.", ["th"] = "นี่คือตัวลองของ branch — ไม่เช็กและไม่ติดตั้งอัปเดต รุ่น release จะได้ไม่มาทับของที่กำลังลอง" },
+        ["update.devBuildNote"] =new() { ["en"] = "This is a development / portable build — updates download and install by themselves only in the installed version.", ["th"] = "ตัวนี้เป็น build สำหรับพัฒนา/แบบพกพา — การดาวน์โหลดและติดตั้งอัปเดตอัตโนมัติทำงานเฉพาะเวอร์ชันที่ติดตั้งด้วยตัวติดตั้ง" },
         ["update.staged"] = new() { ["en"] = "v{0} is downloaded — it installs by itself when you close CluadeX, or press Install to restart into it now.", ["th"] = "ดาวน์โหลด v{0} เสร็จแล้ว — จะติดตั้งให้เองตอนปิดโปรแกรม หรือกด \"ติดตั้งแล้วเริ่มใหม่\" เพื่อใช้เวอร์ชันใหม่ตอนนี้" },
         ["update.bgDownloading"] = new() { ["en"] = "Downloading v{0} in the background — {1}", ["th"] = "กำลังดาวน์โหลด v{0} เบื้องหลัง — {1}" },
         ["update.bgPreparing"] = new() { ["en"] = "Update v{0}: {1}", ["th"] = "อัปเดต v{0}: {1}" },

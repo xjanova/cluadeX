@@ -1059,6 +1059,20 @@ public class MainViewModel : ViewModelBase
     /// there is something to install.</param>
     private async Task CheckForUpdate(bool manual)
     {
+        // ตัวลอง (trial.txt) คือ branch ที่กำลังลอง — ห้ามชวนติดตั้ง release ทับ
+        if (SettingsService.IsTrialCopy)
+        {
+            if (manual)
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    UpdateMessage = L("update.trialNote");
+                    CanInstallUpdate = false;
+                    ShowUpdateBar = true;
+                    IsUpdating = false;
+                });
+            return;
+        }
+
         if (manual)
             App.Current?.Dispatcher.Invoke(() =>
             {
