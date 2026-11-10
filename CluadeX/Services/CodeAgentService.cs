@@ -80,6 +80,16 @@ public partial class CodeAgentService
         return head + "\n" + string.Join("\n", lines);
     }
 
+    /// <summary>What the user reads under an answer whose page still fails to load (the model was asked twice to fix it).</summary>
+    internal static string PageIssuesWarning(IReadOnlyList<Agents.FileCheckIssue> issues, bool thai, string? root = null)
+    {
+        var lines = issues.Take(3).Select(i => $"- `{Agents.WrittenFileCheck.Shown(i.Path, root)}{(i.Line > 0 ? $":{i.Line}" : "")}` — {i.Message}");
+        string head = thai
+            ? "⚠️ CluadeX เปิดหน้าเว็บที่ AI เขียนแล้ว: ยังรันไม่ผ่าน (AI ถูกขอให้แก้ 2 ครั้งแล้วแต่ยังไม่หาย) — งานนี้ยังไม่เสร็จจริง:"
+            : "⚠️ CluadeX opened the page the AI wrote: it still fails to run (it was asked twice to fix it) — this is not really done:";
+        return head + "\n" + string.Join("\n", lines);
+    }
+
     /// <summary>A tool result's path (as the model wrote it, often relative) as a full path, or null when it cannot be
     /// placed: inside the project through the same resolver the file tools use, else an absolute path as given (the
     /// agent scratch folder).</summary>
@@ -3735,6 +3745,10 @@ public partial class CodeAgentService
         int describedNotDoneGuards = 0;          // blocks on "showed the code but never wrote it"
         var brokenFiles = new Dictionary<string, List<Agents.FileCheckIssue>>(StringComparer.OrdinalIgnoreCase); // written files that do not parse (WrittenFileCheck)
         int brokenFileGuards = 0;                // how many times we've blocked a finish on a file that does not parse
+        var pagesToOpen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // pages this run wrote (or whose script it wrote): PageLoadCheck
+        bool pagesChangedSinceCheck = false;     // a file was written after the last page check
+        var pageIssues = new List<Agents.FileCheckIssue>(); // what the last page check found
+        int pageLoadGuards = 0;                  // how many times we've blocked a finish on a page that fails to load
         bool lastBuildFailed = false;            // the build/tests are currently RED
         string lastBuildError = "";              // …and this is what they said
         string lastBuildPath = "build";          // "build" or "tests" — for the message wording
@@ -4860,6 +4874,58 @@ public partial class CodeAgentService
                     continue;
                 }
 
+                // ─── Page-load guard ───
+                // A page that parses can still freeze or throw the moment it opens (Sudoku, 2026-11-06: a solver that never
+                // returned). Before the run may finish, the pages it wrote are opened in a headless browser
+                // (Agents/PageLoadCheck.cs) — once per round of edits, only when every written file parses. An uncaught
+                // error or a page that never loads outranks the model's "done", like a red build. Twice at most.
+                if (_settingsService.Settings.AutoVerifyAfterEditEnabled && pagesChangedSinceCheck && pagesToOpen.Count > 0
+                    && brokenFiles.Count == 0 && !ct.IsCancellationRequested)
+                {
+                    pagesChangedSinceCheck = false;
+                    OnAgentStatus?.Invoke(isThai ? "กำลังเปิดหน้าเว็บที่เขียนเพื่อตรวจว่ารันได้จริง..." : "Opening the page it wrote to check it runs...");
+                    try
+                    {
+                        pageIssues = (await Agents.PageLoadCheck.CheckAsync(pagesToOpen, () => CluadeX.Services.Voice.ChromeDictationService.FindBrowser()?.Path,
+                            null, ct)).ToList();
+                        _debugLog?.Info("Agent", $"page-check at step {iteration + 1}: {pagesToOpen.Count} page(s) · {pageIssues.Count} issue(s)"
+                            + (pageIssues.Count > 0 ? " · first=" + pageIssues[0].Message : ""));
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception ex) { pageIssues.Clear(); _debugLog?.Warn("Agent", $"page-check failed: {ex.Message}"); }
+                }
+                if (pageLoadGuards < 2 && pageIssues.Count > 0 && iteration < MaxAgentIterations - 1)
+                {
+                    pageLoadGuards++;
+                    string root = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+                    string first = Agents.WrittenFileCheck.Shown(pageIssues[0].Path, root);
+                    _debugLog?.Warn("Agent", $"page-load guard at step {iteration + 1}: {pageIssues.Count} issue(s) ({first}) — refusing to finish (guard {pageLoadGuards}/2)");
+                    OnAgentStatus?.Invoke(isThai ? $"หน้าเว็บ {first} ยังรันไม่ผ่าน — ให้แก้ต่อ..." : $"The page {first} fails to run — fixing...");
+                    result.Steps.Add(step);
+                    var pageAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    pageAssistant.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent,
+                    });
+                    nativeMessages.Add(pageAssistant);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = "STOP — do not summarise. " + Agents.PageLoadCheck.Note(pageIssues, root)
+                                 + "\nFix it: read_file the file around that line, find the real cause, then edit it.",
+                        } },
+                    });
+                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                    forceToolNextStep = "required";
+                    wrapUpForced = false;
+                    stepsSinceMutation = 0;
+                    continue;
+                }
+
                 // ─── Described-but-not-done guard ───
                 // The weak-model failure that no build check can catch: it does step 1, then WRITES OUT
                 // steps 2-4 as prose ("Now let's add the call in Program.cs: ```csharp …```") and stops.
@@ -5039,6 +5105,9 @@ public partial class CodeAgentService
                 if (brokenFiles.Count > 0)
                     result.FinalResponse = (result.FinalResponse ?? "").TrimEnd() + "\n\n"
                         + BrokenFilesWarning(brokenFiles.Values.SelectMany(v => v).ToList(), isThai);
+                else if (pageIssues.Count > 0)
+                    result.FinalResponse = (result.FinalResponse ?? "").TrimEnd() + "\n\n" + PageIssuesWarning(pageIssues, isThai,
+                        _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null);
                 result.Success = true;
                 result.StopReason = response.StopReason;
                 // Silent after the window had to be cut: the model lost its place, it did not finish. Saying "finished
@@ -5367,10 +5436,15 @@ public partial class CodeAgentService
             // refuses to finish while one is still broken.
             if (_settingsService.Settings.AutoVerifyAfterEditEnabled && !ct.IsCancellationRequested && mutatedThisStep)
             {
-                var written = toolResults.Where(r => r.Success && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit
+                var writtenAll = toolResults.Where(r => r.Success && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit
                         && !string.IsNullOrEmpty(r.FilePath))
-                    .Select(r => FullPathOf(r.FilePath!)).Where(p => p != null && Agents.WrittenFileCheck.Covers(p)).Select(p => p!)
+                    .Select(r => FullPathOf(r.FilePath!)).Where(p => p != null).Select(p => p!)
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                // The pages to open before the run may finish (the page-load guard below).
+                try { foreach (var pg in Agents.PageLoadCheck.PagesFor(writtenAll)) pagesToOpen.Add(pg); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { _debugLog?.Warn("Agent", $"page list failed: {ex.Message}"); }
+                pagesChangedSinceCheck = true;
+                var written = writtenAll.Where(Agents.WrittenFileCheck.Covers).ToList();
                 if (written.Count > 0)
                 {
                     try
