@@ -1350,4 +1350,68 @@
         </Style.Triggers>
     </Style>
 
+    <!--
+        FOLDERS — one drawn folder for the whole app (owner 2026-11-10: "ไอค่อนโฟลเด้อ มันดูไม่ชัด … สำรวจไอค่อน โฟลเด้อ
+        จุดอื่นให้เปลี่ยนตามกันด้วยเช่น ไฟล์ในโปรเจค"). The Segoe MDL2 folders were thin outlines that read as a grey box
+        at 11-13 px, and E838 (open folder) drew as a half bracket. These are filled, in the theme's accents (the tab in
+        Accent.2, the body in Accent.Gradient), and scale to any size: give the ContentControl a Width and Height in about
+        16:13. FolderIcon = a folder (a project, a directory in a tree, a folder setting); FolderIconOpen = an open folder
+        (an expanded directory, an "open / browse folder" action); FolderIconNew = a folder with a plus (add / make one).
+        Dimmed with the control they sit in when it is disabled.
+    -->
+    <DataTemplate x:Key="Icon.Folder">
+        <Viewbox Stretch="Uniform">
+            <Canvas Width="16" Height="13">
+                <Path Data="M1,1.6 Q1,0.5 2.1,0.5 L5.8,0.5 Q6.4,0.5 6.8,1 L7.8,2.2 L13.9,2.2 Q15,2.2 15,3.3 L15,5 L1,5 Z"
+                      Fill="{DynamicResource Accent.2}"/>
+                <Path Data="M0.5,4.6 Q0.5,3.6 1.5,3.6 L14.5,3.6 Q15.5,3.6 15.5,4.6 L15.5,11.7 Q15.5,12.8 14.4,12.8 L1.6,12.8 Q0.5,12.8 0.5,11.7 Z"
+                      Fill="{DynamicResource Accent.Gradient}"/>
+                <Path Data="M1.6,5 L14.4,5" Stroke="#59FFFFFF" StrokeThickness="0.9" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+            </Canvas>
+        </Viewbox>
+    </DataTemplate>
+    <DataTemplate x:Key="Icon.FolderOpen">
+        <Viewbox Stretch="Uniform">
+            <Canvas Width="16" Height="13">
+                <Path Data="M0.5,1.6 Q0.5,0.5 1.6,0.5 L5.3,0.5 Q5.9,0.5 6.3,1 L7.3,2.2 L13.2,2.2 Q14.3,2.2 14.3,3.3 L14.3,5.4 L2.6,5.4 Q1.6,5.4 1.4,6.4 L0.5,11.6 Z"
+                      Fill="{DynamicResource Accent.2}"/>
+                <Path Data="M2.7,5.4 L15,5.4 Q15.9,5.4 15.7,6.3 L14.4,11.9 Q14.2,12.8 13.3,12.8 L1.3,12.8 Q0.4,12.8 0.6,11.9 L1.8,6.3 Q2,5.4 2.7,5.4 Z"
+                      Fill="{DynamicResource Accent.Gradient}"/>
+                <Path Data="M2.8,6.8 L14.6,6.8" Stroke="#59FFFFFF" StrokeThickness="0.9" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+            </Canvas>
+        </Viewbox>
+    </DataTemplate>
+    <DataTemplate x:Key="Icon.FolderNew">
+        <Viewbox Stretch="Uniform">
+            <Canvas Width="16" Height="13">
+                <Path Data="M1,1.6 Q1,0.5 2.1,0.5 L5.8,0.5 Q6.4,0.5 6.8,1 L7.8,2.2 L13.9,2.2 Q15,2.2 15,3.3 L15,5 L1,5 Z"
+                      Fill="{DynamicResource Accent.2}"/>
+                <Path Data="M0.5,4.6 Q0.5,3.6 1.5,3.6 L14.5,3.6 Q15.5,3.6 15.5,4.6 L15.5,11.7 Q15.5,12.8 14.4,12.8 L1.6,12.8 Q0.5,12.8 0.5,11.7 Z"
+                      Fill="{DynamicResource Accent.Gradient}"/>
+                <Path Data="M8,6.1 L8,11 M5.55,8.55 L10.45,8.55" Stroke="{DynamicResource Text.OnAccent}" StrokeThickness="1.6"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+            </Canvas>
+        </Viewbox>
+    </DataTemplate>
+    <Style x:Key="FolderIcon" TargetType="ContentControl">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="IsTabStop" Value="False"/>
+        <Setter Property="Width" Value="16"/>
+        <Setter Property="Height" Value="13"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Content" Value="folder"/>
+        <Setter Property="ContentTemplate" Value="{StaticResource Icon.Folder}"/>
+        <Style.Triggers>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="FolderIconOpen" TargetType="ContentControl" BasedOn="{StaticResource FolderIcon}">
+        <Setter Property="ContentTemplate" Value="{StaticResource Icon.FolderOpen}"/>
+    </Style>
+    <Style x:Key="FolderIconNew" TargetType="ContentControl" BasedOn="{StaticResource FolderIcon}">
+        <Setter Property="ContentTemplate" Value="{StaticResource Icon.FolderNew}"/>
+    </Style>
+
 </ResourceDictionary>

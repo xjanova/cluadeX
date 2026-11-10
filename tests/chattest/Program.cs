@@ -422,6 +422,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=SPK: just the speaker under her face on a reply (hover holds still, the click switches reading aloud).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SPK")
+        {
+            await TestSpeakerHover();
+            Log($"\n## Result (CHATTEST_ONLY=SPK): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=UX: just code boxes, the question card with steps, and media / web-picture attachments.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "UX")
         {
@@ -445,6 +454,7 @@ internal static partial class Program
         await TestAttachedFiles();            // XF: any file dropped into a message — read, unpacked, by path
         await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
         await TestVoiceMode();                // VM: replies read aloud + a GPT-Live call through the chat (mock API)
+        await TestSpeakerHover();             // SPK: the speaker under her face holds still on hover; its click switches reading aloud
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
         await TestScrollFollow();             // U6

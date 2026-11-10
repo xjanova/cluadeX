@@ -651,7 +651,7 @@ public class CostTrackingService
     /// Anthropic pricing updated October 2026 (first-party API rates).
     /// Format: (InputPerMToken, OutputPerMToken, CacheReadPerMToken, CacheWritePerMToken)
     /// Cache write = 1.25x input price; cache read = 0.1x input, except where a model's row says otherwise.
-    /// Order matters: "opus-5-5" must be tested before "opus-5", "fable-5-1" before "fable".
+    /// Order matters: "opus-5-5" must be tested before "opus-5", "fable-5-2" / "fable-5-1" before "fable".
     /// </remarks>
     /// <summary>List price per MTok for a model (the same table the costs are recorded with). <paramref name="promptTokens"/>
     /// = a request's whole prompt (input + cache reads + cache writes); Claude Haiku 5.5's and GPT-6's prices depend on it.</summary>
@@ -686,11 +686,14 @@ public class CostTrackingService
             ? new(p.InputPerMToken * 2m, p.OutputPerMToken * 1.5m, p.CacheReadPerMToken * 2m, p.CacheWritePerMToken * 2m)
             : p;
         // Anthropic rows checked against platform.claude.com/docs/en/about-claude/pricing on 2026-10-13. Cache reads are
-        // 0.1x input except Fable/Mythos 5.1 (0.025x) and Opus 5.5 / Sonnet 5.5 (0.05x); 5-minute writes 1.25x input,
+        // 0.1x input except Fable/Mythos 5.1 and 5.2 (0.025x) and Opus 5.5 / Sonnet 5.5 (0.05x); 5-minute writes 1.25x input,
         // 1-hour writes 2x input (RecordUsage prices those from the input column).
         return m switch
         {
             // ── Anthropic Models ── (ModelPricing = input, output, cacheRead, cacheWrite per MTok)
+            // Fable 5.2 / Mythos 5.2 (models/fable-5-2/overview, 2026-11-10): $8 / $40, cache reads $0.20 (0.025x),
+            // 5-minute writes $10. Cheaper than 5.1 — without this row it fell to the Fable 5 row's $10 / $50.
+            _ when m.Contains("fable-5-2") || m.Contains("mythos-5-2") => new(8.0m, 40.0m, 0.2m, 10.0m),
             // Fable 5.1 / Mythos 5.1: $10 / $50, cache reads $0.25 (0.025x)
             _ when m.Contains("fable-5-1") || m.Contains("mythos-5-1") => new(10.0m, 50.0m, 0.25m, 12.5m),
             // Fable 5 / Mythos 5: $10 in / $50 out (most capable, above Opus tier)

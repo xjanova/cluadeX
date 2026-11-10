@@ -85,14 +85,36 @@ internal static partial class Program
         Check("RB4b it is told once (taken off the ledger)", !Ledger().Contains(crashed.Id), Ledger());
         if (liveRuns != null) liveRuns.IsAlive = pid => pid == Environment.ProcessId;
 
-        // RB5 — her clock: nothing for a minute → asleep; typing wakes her
-        typeof(CluadeX.ViewModels.ChatViewModel).GetField("_lastActivityUtc", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(Vm, DateTime.UtcNow - BuddyMood.SleepAfter - TimeSpan.FromSeconds(1));
-        typeof(CluadeX.ViewModels.ChatViewModel).GetMethod("RefreshBuddy", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(Vm, null);
-        Check("RB5a nothing ran for a minute: the buddy sleeps (never while a chat works)", Mood(BuddyMood.Sleep), $"{Vm.BuddyMoodState} · {OtherRuns()} other runs");
-        Vm.UserInput = "hello?";
-        Check("RB5b typing wakes her", Mood(BuddyMood.Idle), $"{Vm.BuddyMoodState} · {OtherRuns()} other runs");
-        Vm.UserInput = "";
+        // RB5 — her clock: no run and no mouse/keyboard for SleepAfter → asleep; input or typing wakes her
+        // (owner 2026-11-10: "เธอหลับบ่อยเกินไป" — one minute without a run put her to sleep while the owner read)
+        var inputIdleWas = CluadeX.ViewModels.ChatViewModel.InputIdle;
+        var inputIdle = TimeSpan.FromHours(1);
+        CluadeX.ViewModels.ChatViewModel.InputIdle = () => inputIdle;
+        var lastActivity = typeof(CluadeX.ViewModels.ChatViewModel).GetField("_lastActivityUtc", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var refreshBuddy = typeof(CluadeX.ViewModels.ChatViewModel).GetMethod("RefreshBuddy", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        try
+        {
+            lastActivity.SetValue(Vm, DateTime.UtcNow - TimeSpan.FromMinutes(2));
+            refreshBuddy.Invoke(Vm, null);
+            Check("RB5a two minutes without a run: still awake (it used to be one)", Vm.BuddyMoodState != BuddyMood.Sleep, $"{Vm.BuddyMoodState}");
+            lastActivity.SetValue(Vm, DateTime.UtcNow - BuddyMood.SleepAfter - TimeSpan.FromSeconds(1));
+            inputIdle = TimeSpan.FromSeconds(3);
+            refreshBuddy.Invoke(Vm, null);
+            Check("RB5b nothing ran for SleepAfter but the owner moved the mouse: awake", Vm.BuddyMoodState != BuddyMood.Sleep, $"{Vm.BuddyMoodState}");
+            inputIdle = BuddyMood.SleepAfter + TimeSpan.FromSeconds(1);
+            refreshBuddy.Invoke(Vm, null);
+            Check("RB5c no run and no input for SleepAfter: the buddy sleeps (never while a chat works)", Mood(BuddyMood.Sleep), $"{Vm.BuddyMoodState} · {OtherRuns()} other runs");
+            inputIdle = TimeSpan.Zero;
+            refreshBuddy.Invoke(Vm, null);
+            Check("RB5d the mouse moves: she wakes on the next tick", Mood(BuddyMood.Idle), $"{Vm.BuddyMoodState} · {OtherRuns()} other runs");
+            inputIdle = TimeSpan.FromHours(1);
+            refreshBuddy.Invoke(Vm, null);
+            Check("RB5e asleep again", Mood(BuddyMood.Sleep), $"{Vm.BuddyMoodState}");
+            Vm.UserInput = "hello?";
+            Check("RB5f typing wakes her", Mood(BuddyMood.Idle), $"{Vm.BuddyMoodState} · {OtherRuns()} other runs");
+            Vm.UserInput = "";
+        }
+        finally { CluadeX.ViewModels.ChatViewModel.InputIdle = inputIdleWas; }
 
         // RB6 — clicking her goes Home (owner 2026-11-08: "กดที่ไอค่อนแมว หรือ หน้า น้อง cluadex ควรเป็นการกลับไปหน้า home ตอนรอเปิด
         // โปรเจค"): the Chat page, an empty chat, no folder open — and the chat that was running keeps running.

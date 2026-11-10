@@ -6,6 +6,7 @@
 // The output record of a streamed reply carries no prompt tokens, so it is priced with the prompt size passed along.
 // Savings: baseline − actual must equal cache + tool search + microcompact + batch, to the last decimal.
 using CluadeX.Services;
+using CluadeX.Services.Providers;
 
 namespace ApiTest;
 
@@ -30,6 +31,13 @@ internal static class PricingWire
         check("price", "Opus 5.5: $4 / $20, cache reads $0.20, 5-minute writes $5", o55 == new ModelPricing(4m, 20m, 0.2m, 5m), o55.ToString());
         var f51 = CostTrackingService.PricingOf("claude-fable-5-1");
         check("price", "Fable 5.1: $10 / $50, cache reads $0.25", f51 == new ModelPricing(10m, 50m, 0.25m, 12.5m), f51.ToString());
+        var f52 = CostTrackingService.PricingOf("claude-fable-5-2");
+        check("price", "Fable 5.2: $8 / $40, cache reads $0.20, 5-minute writes $10 (not the Fable 5 row's $10 / $50)",
+            f52 == new ModelPricing(8m, 40m, 0.2m, 10m), f52.ToString());
+        check("price", "Mythos 5.2 shares Fable 5.2's prices", CostTrackingService.PricingOf("claude-mythos-5-2") == f52, "");
+        check("price", "the offline model list leads with Fable 5.2 and still carries Fable 5.1 (a saved pick keeps working)",
+            AnthropicProvider.KnownModels.Contains("claude-fable-5-2") && AnthropicProvider.KnownModels.Contains("claude-fable-5-1")
+            && Array.IndexOf(AnthropicProvider.KnownModels, "claude-fable-5-2") < Array.IndexOf(AnthropicProvider.KnownModels, "claude-fable-5-1"), "");
 
         // Haiku 5.5's tier: the whole prompt decides, cache included; every token of that request pays the higher price.
         var hShort = CostTrackingService.PricingOf("claude-haiku-5-5", 100_000);

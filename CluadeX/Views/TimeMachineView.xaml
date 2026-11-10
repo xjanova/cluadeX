@@ -534,8 +534,7 @@
                         </Grid.RowDefinitions>
                         <Border Grid.Row="0" Padding="16,14" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                           Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <ContentControl Style="{StaticResource FolderIcon}" Width="17" Height="13.8" VerticalAlignment="Center" Margin="0,0,10,0" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{services:Loc tm.project}" FontWeight="SemiBold"
                                            Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
                                 <TextBlock Text="{Binding ProjectCountText}" FontSize="10" Margin="10,0,0,0"

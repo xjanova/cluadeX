@@ -16,7 +16,8 @@ namespace CluadeX.Views;
 /// <item><see cref="DisplayStills"/> — her still pictures and the drawn motion only, no clips.</item>
 /// <item><see cref="DisplaySlides"/> — the girls (<see cref="GirlArt"/>: the main girls in both poses and the providers'
 /// girls) one after another, every <see cref="SlideEvery"/>, cut at the waist; the order is shuffled and every picture
-/// shows once before any shows again. The glow, the mood chips and the drawn motion stay.</item>
+/// shows once before any shows again. The glow and the mood chips stay; her head's drawn motion does not reach the slide
+/// (a tilted rectangle leaves her plate), which breathes and pops inside its rounded clip instead.</item>
 /// </list>
 /// </summary>
 public partial class CluadexBuddy
@@ -97,6 +98,20 @@ public partial class CluadexBuddy
         SlideA.Opacity = SlideB.Opacity = 0;
         _slideFront = null;
         SlideShown = "";
+    }
+
+    /// <summary>The slideshow is what shows in her plate now.</summary>
+    private bool SlidesOn => Slides.Visibility == Visibility.Visible;
+
+    /// <summary>The slide's clip: her 120×240 canvas with her plate's corners. The plate's corners are a fixed 14 px on
+    /// screen (MainWindow BuddyPlate, 1 px outside her), so in her canvas — scaled by the Viewbox — the radius is 13 px over
+    /// that scale: rounder when she is small (rail-sized), so no square corner of the picture pokes past the plate's.</summary>
+    private void UpdateSlideClip()
+    {
+        double scale = ActualWidth > 0 ? Math.Min(ActualWidth / 120, ActualHeight / 240) : 0;
+        double r = scale > 0 ? Math.Clamp(13 / scale, 4, 30) : 11;
+        if (Math.Abs(SlideClip.RadiusX - r) < 0.01) return;
+        SlideClip.RadiusX = SlideClip.RadiusY = r;
     }
 
     /// <summary>Only while someone could see her: CluadeX in front and not minimised.</summary>

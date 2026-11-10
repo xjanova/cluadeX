@@ -134,6 +134,7 @@ internal static class Program
             return left.Count == 0 ? 0 : 1;
         }
         if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--buddy")) { await RunBadgeWire.Run(Check, Section); await BuddyIdleWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--voice")) { await VoiceWire.Run(Check, Section); await EdgeTtsWire.Run(Check, Section); await SpokenReplyWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--edge")) { await EdgeTtsWire.Run(Check, Section); await EdgeTtsWire.RunLive(Check, Section); return Finish(); }
@@ -401,6 +402,8 @@ internal static class Program
         // (model, adaptive, alwaysThinks, explicitDisable, sampling, omitsThinkingText, forcedToolChoice)
         var expect = new (string, bool, bool, bool, bool, bool, bool)[]
         {
+            ("claude-fable-5-2",           true,  true,  false, false, true,  false),
+            ("claude-mythos-5-2",          true,  true,  false, false, true,  false),
             ("claude-fable-5-1",           true,  true,  false, false, true,  false),
             ("claude-fable-5",             true,  true,  false, false, true,  true),
             ("claude-mythos-5-1",          true,  true,  false, false, true,  false),
@@ -579,6 +582,7 @@ internal static class Program
         SmallModelWire.Run(Check, Section);
         await PricingWire.Run(Check, Section);
         await RunBadgeWire.Run(Check, Section);
+        await BuddyIdleWire.Run(Check, Section);
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);
         await Gpt6Wire.Run(Check, Section);

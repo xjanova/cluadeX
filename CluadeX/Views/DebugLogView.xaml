@@ -192,7 +192,7 @@
                         </Button>
                         <Button Command="{Binding OpenLogFolderCommand}" Style="{StaticResource NeonAction}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <ContentControl Style="{StaticResource FolderIconOpen}" Width="13" Height="10.6" Margin="0,0,6,0" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{services:Loc debuglog.logFolder}"/>
                             </StackPanel>
                         </Button>
