@@ -1596,6 +1596,12 @@ internal static partial class Program
             Console.WriteLine("\n── blocklist & web_fetch, round 4 ──");
             await Round4(provider, settings, loc);
 
+            Console.WriteLine("\n── web_fetch reads a long page in parts (offset / max_chars) ──");
+            await WebRead(provider, loc);
+
+            Console.WriteLine("\n── media_transcript: subtitles (stand-in yt-dlp), speech to text (real ffmpeg, stand-in Whisper) ──");
+            await MediaTranscript(provider, loc);
+
             Console.WriteLine("\n── restore points (Time Machine / plan window) ──");
             await Checkpoints();
 
