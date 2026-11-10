@@ -65,6 +65,8 @@ public partial class ChatViewModel
         public bool SendNotesAfterStop;
         /// <summary>Rows its chat had when the turn began: how it ended is read from the rows after it.</summary>
         public int FirstRow;
+        /// <summary>The activity card already knows the model is writing its answer (reset when a tool starts).</summary>
+        public volatile bool ActivityWriting;
 
         /// <summary>Who started the turn, for a supervisor: "pipe" (a program over the pipe), "split_parent" (new_chat from
         /// another chat's agent) or "user". The pipe flag is read live: it is set right after the run begins.</summary>
@@ -202,6 +204,7 @@ public partial class ChatViewModel
             bool waiting = run.Messages.Any(m => m.Role is MessageRole.PermissionRequest && !m.PermissionAnswered
                                                  || m.Role == MessageRole.Question && !m.QuestionAnswered);
             run.Session.RunStatus = waiting ? "waiting" : "working";
+            ActivityWaiting(run.Session.Id, waiting);
             run.Session.RunStep = waiting ? Loc("chat.runs.waitingForYou") : (run.ActiveStatus?.Content ?? "").TrimStart('⏵', ' ');
         }
         if (CurrentSession is { } open) open.RunStatus = RunBadge.OnOpen(open.RunStatus);
@@ -484,6 +487,7 @@ public partial class ChatViewModel
     {
         var run = new ChatRun { Session = session, Messages = messages, FirstRow = messages.Count };
         NoteRunBegan(session);
+        ActivityBegan(session);
         if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
@@ -534,6 +538,7 @@ public partial class ChatViewModel
             var (stopped, failed) = RunBadge.Outcome(run.Messages, run.FirstRow, run.Stopped);
             run.Session.RunStatus = RunBadge.AtEnd(stopped, failed, ReferenceEquals(run.Session, CurrentSession));
             NoteRunEnded(run.Session, run.Session.RunStatus);
+            ActivityEnded(run.Session, stopped, failed);
             run.Session.RunStep = "";
             // Its chat is not on screen: the live list is that chat now — store it.
             if (!ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
@@ -569,6 +574,7 @@ public partial class ChatViewModel
 
     private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)
     {
+        NoteActivityAgent(run?.Session.Id ?? CurrentSession?.Id, e);
         if (e.WorkflowId != null) return;   // a workflow's agents are on its card
         var list = run?.Messages ?? Messages;
         var map = run?.AgentMapMsg;
