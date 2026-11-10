@@ -83,6 +83,44 @@ internal static partial class Program
         MainWin.Width = W; MainWin.Height = H;
         if (themes != null) { Invoke(themes, "Apply", "Midnight", false); await Idle(200); }
 
+        // ---- the list's header beside her and its projects (owner 2026-11-10: the folder icon read as a grey box, the
+        // buttons above the search box were too small to tell what they were): drawn folders, button chips, every theme
+        {
+            var cvm = MainVm.ChatVM;
+            var made = new[] { "Revenue dashboard", "snooker-bot", "Warranty site" }
+                .Select(n => new CluadeX.Models.ChatProject { Name = n }).ToList();
+            foreach (var pr in made) cvm.ChatProjects.Add(pr);
+            cvm.GetType().GetMethod("OnPropertyChanged", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public, null, new[] { typeof(string) }, null)
+                ?.Invoke(cvm, new object[] { "HasChatProjects" });
+            if (!cvm.IsProjectsExpanded) cvm.IsProjectsExpanded = true;
+            MainWin.Width = 1600; MainWin.Height = 1000;
+            MainVm.NavigateToCommand.Execute("Chat");
+            foreach (var (id, label) in sets)
+            {
+                if (themes != null) { Invoke(themes, "Apply", id, false); await Idle(250); }
+                var root = (UIElement)RootVisual(MainWin);
+                var full = Snapshot(root, 1600, 1000);
+                SavePng(new TransformedBitmap(new CroppedBitmap(full, new Int32Rect(0, 0, 440, 420)), new ScaleTransform(2, 2)),
+                        Path.Combine(dir, $"{label}-projects-2x.png"));
+            }
+            var sidebar = (FrameworkElement)MainWin.FindName("ChatSidebar");
+            var folders = FindAll<ContentControl>(sidebar).Count(c => c.Style == MainWin.TryFindResource("FolderIcon") && c.IsVisible && c.ActualWidth >= 15);
+            var chips = FindAll<ToggleButton>(sidebar).Where(t => t.Style == MainWin.TryFindResource("SidebarChipToggle")).ToList();
+            var newChat = (FrameworkElement)MainWin.FindName("SidebarNewChat");
+            Check("list header: a drawn folder on every project row", folders >= made.Count, $"{folders} for {made.Count}");
+            Check("list header: the buttons above the search box are chips at least 28 px tall",
+                  chips.Count == 2 && chips.All(c => c.ActualHeight >= 27.5) && newChat is { ActualHeight: >= 27.5 },
+                  $"{chips.Count} chips {string.Join(",", chips.Select(c => c.ActualHeight))} new {newChat?.ActualHeight}");
+            var her = Bounds(hero, (UIElement)RootVisual(MainWin));
+            var under = Under(hero, her, (UIElement)RootVisual(MainWin));
+            Check("list header: nothing of it under her with projects showing", under.Count == 0, string.Join("; ", under.Take(6)));
+            foreach (var pr in made) cvm.ChatProjects.Remove(pr);
+            cvm.GetType().GetMethod("OnPropertyChanged", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public, null, new[] { typeof(string) }, null)
+                ?.Invoke(cvm, new object[] { "HasChatProjects" });
+            MainWin.Width = W; MainWin.Height = H;
+            if (themes != null) { Invoke(themes, "Apply", "Midnight", false); await Idle(200); }
+        }
+
         // ── the chat list narrowed to its least: she shrinks so the title keeps its room ──
         var side = (FrameworkElement)MainWin.FindName("ChatSidebar");
         MainVm.NavigateToCommand.Execute("Chat");
@@ -389,6 +427,68 @@ internal static partial class Program
                 var full = Snapshot(root, (int)MainWin.ActualWidth, (int)MainWin.ActualHeight);
                 SavePng(new TransformedBitmap(new CroppedBitmap(full, new Int32Rect(0, 0, 440, 420)), new ScaleTransform(2, 2)),
                         Path.Combine(OutRoot, "renders", "hero", "corner-slides-2x.png"));
+            }
+            {
+                // Owner 2026-11-10: "รูปอวาต้าโหมดรูปสไลด์ ขอบมันเกินเมื่อรันไปสักพัก" — left running she fell asleep, her head's
+                // 6° nod turned the slide (inside Head then) out past her plate over the chat list. Run the slideshow for many
+                // turns through every mood (asleep, working, the hop on a click …) and measure, each time, where the picture
+                // can be seen: never outside her plate.
+                var plate = heroBtn.Template.FindName("BuddyPlate", heroBtn) as FrameworkElement;
+                var slideImgs = new[] { (System.Windows.Controls.Image)buddy.FindName("SlideA"), (System.Windows.Controls.Image)buddy.FindName("SlideB") };
+                var head = (FrameworkElement)buddy.FindName("Head");
+                Rect plateBox = plate == null ? Rect.Empty : plate.TransformToAncestor(heroBtn).TransformBounds(new Rect(plate.RenderSize));
+                plateBox.Inflate(1, 1);
+                // the part of an element that can show in the hero button: its box, cut by every clip above it
+                Rect Visible(FrameworkElement el)
+                {
+                    var r = el.TransformToAncestor(heroBtn).TransformBounds(new Rect(el.RenderSize));
+                    for (DependencyObject? a = el; a != null && a != heroBtn; a = VisualTreeHelper.GetParent(a))
+                        if (a is UIElement { Clip: { } clip } ue)
+                            r.Intersect(ue.TransformToAncestor(heroBtn).TransformBounds(clip.Bounds));
+                    return r;
+                }
+                string[] moods = { BuddyMood.Sleep, BuddyMood.Working, BuddyMood.Happy, BuddyMood.Sad, BuddyMood.Waiting, BuddyMood.Idle };
+                int outside = 0, samples = 0, maxSources = 0;
+                int asleep = 0;
+                string worst = "";
+                for (int i = 0; i < 48; i++)
+                {
+                    await Mood(moods[i % moods.Length]);
+                    if (i % 3 == 0) buddy.NextSlide();
+                    if (i % 5 == 2) buddy.Startle();
+                    for (int k = 0; k < 3; k++)
+                    {
+                        await Idle(k == 0 ? 60 : 250);
+                        if (buddy.Shown == BuddyMood.Sleep) asleep++;
+                        maxSources = Math.Max(maxSources, slideImgs.Count(im => im.Source != null));
+                        foreach (var im in slideImgs.Where(im => im.Source != null && im.Opacity > 0.01))
+                        {
+                            samples++;
+                            var v = Visible(im);
+                            if (!v.IsEmpty && !plateBox.Contains(v)) { outside++; worst = $"{buddy.Shown} {buddy.SlideShown}: {v} vs plate {plateBox}"; }
+                        }
+                    }
+                }
+                Check("slides: many turns through every mood (asleep, working, the hop) — the picture never leaves her plate",
+                      plate != null && samples > 40 && outside == 0, $"{outside}/{samples} outside; {worst}");
+                Check("slides: the slide is not under her head's motion (the asleep nod turns her, not the picture)",
+                      !IsUnder(slideImgs[0], head) && !IsUnder(slideImgs[1], head) && asleep > 0, $"asleep samples {asleep}");
+                Check("slides: never more than the two pictures held (the one showing and the one fading out)", maxSources <= 2, $"{maxSources}");
+                var clipGeo = (RectangleGeometry)buddy.FindName("SlideClip");
+                double scale = buddy.ActualWidth / 120;
+                Check("slides: the picture's corners as round as her plate's (14 px)", clipGeo.RadiusX * scale >= 12.5, $"{clipGeo.RadiusX * scale:0.0} px");
+                static bool IsUnder(DependencyObject el, DependencyObject parent)
+                {
+                    for (var a = VisualTreeHelper.GetParent(el); a != null; a = VisualTreeHelper.GetParent(a)) if (a == parent) return true;
+                    return false;
+                }
+                await Mood(BuddyMood.Sleep);
+                await Idle(400);
+                var root = (UIElement)RootVisual(MainWin);
+                var full = Snapshot(root, (int)MainWin.ActualWidth, (int)MainWin.ActualHeight);
+                SavePng(new TransformedBitmap(new CroppedBitmap(full, new Int32Rect(0, 0, 440, 420)), new ScaleTransform(2, 2)),
+                        Path.Combine(OutRoot, "renders", "hero", "corner-slides-asleep-2x.png"));
+                await Mood(BuddyMood.Idle);
             }
             Check("slides: a click makes her hop", buddy.Startle());
             Choose(CluadexBuddy.DisplayClips);

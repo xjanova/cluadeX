@@ -412,6 +412,16 @@ public partial class CluadexBuddy
     {
         if (!SystemParameters.ClientAreaAnimation || DateTime.UtcNow < _hopUntil) return false;
         _hopUntil = DateTime.UtcNow + TimeSpan.FromMilliseconds(600);
+        if (SlidesOn)
+        {
+            // the slide is a picture in her plate: moving it would show its edge, so it swells inside its clip instead
+            var pop = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(560) };
+            foreach (var (t, k) in new[] { (0.0, 1.0), (0.09, 1.06), (0.24, 1.0), (0.36, 1.025), (0.5, 1.0) })
+                pop.KeyFrames.Add(new EasingDoubleKeyFrame(k, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(t)), new QuadraticEase()));
+            SlideHop.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, pop);
+            SlideHop.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, pop);
+            return true;
+        }
         var up = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(560) };
         foreach (var (t, y) in new[] { (0.0, 0.0), (0.09, -16.0), (0.24, 0.0), (0.36, -6.0), (0.5, 0.0) })
             up.KeyFrames.Add(new EasingDoubleKeyFrame(y, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(t)), new QuadraticEase()));

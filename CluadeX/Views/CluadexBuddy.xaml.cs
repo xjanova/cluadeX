@@ -45,6 +45,7 @@ public partial class CluadexBuddy : UserControl
         Loaded += (_, _) => { HookWindow(); HookDisplay(); Apply(); StartAway(); };
         Unloaded += (_, _) => { StopAway(); UnhookDisplay(); Stop(); HideClips(); };
         IsVisibleChanged += (_, _) => SyncPause();
+        SizeChanged += (_, _) => UpdateSlideClip();
     }
 
     private void HookWindow()
@@ -100,6 +101,10 @@ public partial class CluadexBuddy : UserControl
         // Her clip for the mood, when there is one: then the clip moves her and the storyboard keeps only the glow, the
         // chips, the sparkle and the z's; without one the drawn motion (breathing, bobbing, tilting, blinking) runs as before.
         bool live = StartMoodClip(mood, previous);
+        // The slideshow is a picture in her plate, not her cut-out: her head's motion never reaches it (it used to tilt the
+        // slide 6° out of the plate when she fell asleep). It breathes inside its clip instead (SlideZoom, never below 1).
+        bool slides = SlidesOn;
+        bool drawn = !live && !slides;
         var sb = new Storyboard();
         // Distances are in her 120-unit canvas (the Viewbox scales them with her).
         switch (mood)
@@ -109,7 +114,7 @@ public partial class CluadexBuddy : UserControl
                 Glow.SetResourceReference(Shape.FillProperty, "Accent.1");
                 Forever(sb, Glow, OpacityProperty, 0.22, 0.48, 0.9);
                 Forever(sb, ArcSpin, RotateTransform.AngleProperty, 0, 360, 1.1, reverse: false);
-                if (!live)
+                if (drawn)
                 {
                     Forever(sb, Bob, TranslateTransform.YProperty, 0, -2.5, 0.45);
                     Forever(sb, Tilt, RotateTransform.AngleProperty, -2.5, 2.5, 1.7);
@@ -120,16 +125,17 @@ public partial class CluadexBuddy : UserControl
             case BuddyMood.Waiting:
                 Glow.SetResourceReference(Shape.FillProperty, "Status.Warning");
                 AskChip.Visibility = Visibility.Visible;
-                if (!live) Tilt.Angle = 5;   // head cocked: "yes?"
+                if (drawn) Tilt.Angle = 5;   // head cocked: "yes?"
                 Forever(sb, Glow, OpacityProperty, 0.2, 0.55, 0.8);
                 Forever(sb, AskHop, TranslateTransform.YProperty, 0, -6, 0.4);
-                if (!live) Blink(sb, 3.6);
+                if (drawn) Blink(sb, 3.6);
                 Timeline.SetDesiredFrameRate(sb, 20);
                 break;
             case BuddyMood.Happy:
                 Glow.SetResourceReference(Shape.FillProperty, "Status.Success");
                 Glow.Opacity = 0.5;
-                if (!live) Once(sb, Bob, TranslateTransform.YProperty, (0, 0), (0.15, -9), (0.3, 0), (0.45, -5), (0.6, 0));
+                if (drawn) Once(sb, Bob, TranslateTransform.YProperty, (0, 0), (0.15, -9), (0.3, 0), (0.45, -5), (0.6, 0));
+                if (slides) SlidePulse(sb, 1.04);
                 Once(sb, Sparkle, OpacityProperty, (0, 0), (0.2, 1), (0.9, 1), (1.3, 0));
                 Once(sb, SparkleScale, ScaleTransform.ScaleXProperty, (0, 0.3), (0.25, 1.2), (0.5, 0.9));
                 Once(sb, SparkleScale, ScaleTransform.ScaleYProperty, (0, 0.3), (0.25, 1.2), (0.5, 0.9));
@@ -139,30 +145,32 @@ public partial class CluadexBuddy : UserControl
                 Glow.SetResourceReference(Shape.FillProperty, "Status.Danger");
                 Glow.Opacity = 0.45;
                 SadChip.Visibility = Visibility.Visible;
-                if (!live) Once(sb, Tilt, RotateTransform.AngleProperty, (0, 0), (0.08, -5), (0.18, 5), (0.28, -3.5), (0.38, 3), (0.5, 0));
+                if (drawn) Once(sb, Tilt, RotateTransform.AngleProperty, (0, 0), (0.08, -5), (0.18, 5), (0.28, -3.5), (0.38, 3), (0.5, 0));
                 Timeline.SetDesiredFrameRate(sb, 30);
                 break;
             case BuddyMood.Sleep:
                 FaceAsleep.Opacity = 1;
                 FaceAwake.Opacity = 0;
                 Glow.Opacity = 0.16;
-                if (!live)
+                if (drawn)
                 {
                     Tilt.Angle = 6;   // nodding off
                     Forever(sb, Breathe, ScaleTransform.ScaleXProperty, 1, 1.02, 1.9);
                     Forever(sb, Breathe, ScaleTransform.ScaleYProperty, 1, 1.02, 1.9);
                 }
+                if (slides) SlideBreathe(sb, 1.02, 1.9);
                 FloatZ(sb, Z1, Z1Rise, 0);
                 FloatZ(sb, Z2, Z2Rise, 1.4);
                 Timeline.SetDesiredFrameRate(sb, 10);
                 break;
             default:   // idle
-                if (!live)
+                if (drawn)
                 {
                     Forever(sb, Breathe, ScaleTransform.ScaleXProperty, 1, 1.015, 1.6);
                     Forever(sb, Breathe, ScaleTransform.ScaleYProperty, 1, 1.015, 1.6);
                     IdleFidgets(sb);
                 }
+                if (slides) SlideBreathe(sb, 1.015, 1.6);
                 Forever(sb, GlowScale, ScaleTransform.ScaleXProperty, 0.96, 1.04, 2.4);
                 Forever(sb, GlowScale, ScaleTransform.ScaleYProperty, 0.96, 1.04, 2.4);
                 Timeline.SetDesiredFrameRate(sb, 12);
@@ -186,6 +194,22 @@ public partial class CluadexBuddy : UserControl
         Tilt.Angle = 0;
         Bob.Y = 0;
         Breathe.ScaleX = Breathe.ScaleY = 1;
+        SlideZoom.ScaleX = SlideZoom.ScaleY = 1;
+    }
+
+    /// <summary>The slide breathes: grows to <paramref name="to"/> and back, about the face, inside its clip (never below 1,
+    /// so its cut edges never come inside her plate).</summary>
+    private void SlideBreathe(Storyboard sb, double to, double seconds)
+    {
+        Forever(sb, SlideZoom, ScaleTransform.ScaleXProperty, 1, to, seconds);
+        Forever(sb, SlideZoom, ScaleTransform.ScaleYProperty, 1, to, seconds);
+    }
+
+    /// <summary>One small swell of the slide (a turn finished well), back to 1.</summary>
+    private void SlidePulse(Storyboard sb, double peak)
+    {
+        Once(sb, SlideZoom, ScaleTransform.ScaleXProperty, (0, 1), (0.18, peak), (0.6, 1));
+        Once(sb, SlideZoom, ScaleTransform.ScaleYProperty, (0, 1), (0.18, peak), (0.6, 1));
     }
 
     private static void Forever(Storyboard sb, DependencyObject target, DependencyProperty prop, double from, double to,
