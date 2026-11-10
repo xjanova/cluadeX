@@ -101,6 +101,26 @@ internal static class VoiceKeys
         ["voice.chat.toggleOn"] = L("Reading replies aloud — click to mute", "กำลังอ่านคำตอบออกเสียง — กดเพื่อปิดเสียง"),
         ["voice.chat.toggleOff"] = L("Replies are silent — click to have them read aloud", "ไม่ได้อ่านคำตอบออกเสียง — กดเพื่อให้น้องอ่านให้ฟัง"),
 
+        // the voice player box above the composer, and the ▶ on a reply (ReplyVoiceQueue)
+        ["voice.player.title"] = L("Voice player", "กล่องเล่นเสียง"),
+        ["voice.player.playing"] = L("reading", "กำลังอ่าน"),
+        ["voice.player.preparing"] = L("making the voice…", "กำลังเตรียมเสียง…"),
+        ["voice.player.paused"] = L("paused", "หยุดไว้"),
+        ["voice.player.idle"] = L("done", "อ่านจบแล้ว"),
+        ["voice.player.held"] = L("waiting for the live call to end", "รอสายสนทนาสดจบก่อน"),
+        ["voice.player.waiting"] = L("{0} waiting", "รอคิวอีก {0}"),
+        ["voice.player.play"] = L("Play", "เล่น"),
+        ["voice.player.pause"] = L("Pause", "หยุดชั่วคราว"),
+        ["voice.player.prev"] = L("Back to the previous reply", "ย้อนไปข้อความก่อนหน้า"),
+        ["voice.player.next"] = L("Skip to the next reply", "ข้ามไปข้อความถัดไป"),
+        ["voice.player.stop"] = L("Stop — and skip the replies waiting", "หยุด — และข้ามข้อความที่รอคิวอยู่"),
+        ["voice.player.close"] = L("Close the player", "ปิดกล่องเล่นเสียง"),
+        ["voice.player.goTo"] = L("Show this reply in the chat", "เลื่อนไปที่ข้อความนี้ในแชท"),
+        ["voice.player.listen"] = L("Listen to this reply", "ฟังเสียงข้อความนี้"),
+        ["voice.player.listenPause"] = L("Pause this reply", "หยุดเสียงข้อความนี้ชั่วคราว"),
+        ["voice.player.nothing"] = L("Nothing to read aloud in this reply (only code or links).", "ข้อความนี้ไม่มีอะไรให้อ่านออกเสียง (มีแต่โค้ดหรือลิงก์)"),
+        ["voice.player.micClosed"] = L("The mic window closed before this reply was read — press play again.", "หน้าต่างไมค์ปิดไปก่อนจะได้อ่านข้อความนี้ — กดเล่นอีกครั้ง"),
+
         // the page
         ["voice.ui.engine"] = L("Who reads the replies", "ใครเป็นคนอ่านคำตอบ"),
         ["voice.ui.persona"] = L("Each girl in her own voice", "สาวแต่ละคนพูดด้วยบุคลิกของตัวเอง"),

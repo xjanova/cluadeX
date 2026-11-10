@@ -118,6 +118,7 @@ internal static partial class Program
                 case "--buddy-clips": BuddyClipsOnly = true; break;   // her clips, voice, startle, sound button and bubble only (no renders)
                 case "--setup-wizard": SetupWizardOnly = true; break;   // the first-run setup wizard, every page and state (SetupWizardRenders.cs)
                 case "--titlebar": TitleBarOnly = true; break;
+                case "--voice-player": VoicePlayerOnly = true; break;   // reading replies aloud: the player box, the ▶ and a click on a bubble, every theme (VoicePlayerRenders.cs)
                 case "--chat-ref": ChatRefOnly = true; break;   // the chat's reference chip at the top of the chat, every theme (ChatRefRenders.cs)   // the main title bar in every theme and width (TitleBarRenders.cs)
                 case "--uninstall": UninstallOnly = true; break;   // the uninstall page, every page and state (UninstallRenders.cs)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
@@ -573,9 +574,12 @@ internal static partial class Program
             if (OutRoot.StartsWith("E:", StringComparison.OrdinalIgnoreCase)) { Log("FATAL --uninstall needs --out on D: (E: is the USB disk)"); return 2; }
             return await UninstallShots();
         }
-        if (TitleBarOnly)
+        if (TitleBarOnly || VoicePlayerOnly)
         {
-            if (OutRoot.StartsWith("E:", StringComparison.OrdinalIgnoreCase)) { Log("FATAL --titlebar needs --out on D: (E: is the USB disk)"); return 2; }
+            // Its own fixture under --out: it can run while another themetest uses the shared default folder.
+            if (OutRoot.StartsWith("E:", StringComparison.OrdinalIgnoreCase)) { Log("FATAL --titlebar / --voice-player need --out on D: (E: is the USB disk)"); return 2; }
+            if (VoicePlayerOnly && string.Equals(Path.GetFullPath(OutRoot).TrimEnd('\\'), Path.GetFullPath(FixtureRoot).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            { Log("FATAL --voice-player needs its own --out (not the shared fixture folder)"); return 2; }
             FixtureRoot = Path.Combine(OutRoot, "_fixture");
         }
 
@@ -660,6 +664,7 @@ internal static partial class Program
         if (HeroOnly) { await HeroShots(); return Finish(); }
         if (TitleBarOnly) { if (themes != null) await TitleBarShots(themes); else Log("FATAL no ThemeService"); return Finish(); }
         if (ChatRefOnly) { await ChatRefShots(themes); return Finish(); }
+        if (VoicePlayerOnly) { await VoicePlayerShots(themes); return Finish(); }
         if (BuddyClipsOnly) { CluadeX.Views.CluadexBuddy.ClipsAllowed = false; await ClipChecks(); await BubbleChecks(); return Finish(); }   // the chat's speech bubbles alone, for a quick look
 
         // 1. Midnight at startup vs the golden.

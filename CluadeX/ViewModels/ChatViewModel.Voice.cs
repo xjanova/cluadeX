@@ -30,7 +30,17 @@ public partial class ChatViewModel
     public bool IsLiveVoice
     {
         get => _isLiveVoice;
-        private set { if (SetProperty(ref _isLiveVoice, value)) OnPropertyChanged(nameof(ShowLiveButton)); }
+        private set
+        {
+            if (!SetProperty(ref _isLiveVoice, value)) return;
+            OnPropertyChanged(nameof(ShowLiveButton));
+            // GPT-Live talks in its own window: replies read aloud wait until the call ends, then play in order.
+            if (_voiceQueue != null)
+            {
+                if (value && _voiceQueue.IsActive) _voiceQueue.TogglePause();
+                _voiceQueue.Hold = value;
+            }
+        }
     }
 
     /// <summary>"0:42 · $0.035 · limit 10 min" while a call runs.</summary>
@@ -219,22 +229,35 @@ public partial class ChatViewModel
     }
 
     private VoiceSpeaker? _speaker;
-    private VoicePlayer? _replyPlayer;
-    private CancellationTokenSource? _speakCts;
+    private ReplyVoiceQueue? _voiceQueue;
+    private ChatVoiceOutput? _voiceOut;
 
-    /// <summary>Settings › Voice › Read replies aloud: the reply of the turn that just ended is read out (code and links
-    /// left out) by the girl who wrote it, in her own voice and mood (VoicePersona). The browser voice speaks in the mic
-    /// window; Edge, Windows, ElevenLabs and OpenAI make the audio here and play it in the mic window when it is open
-    /// (it stops listening while she talks), else in the app. Nothing is read for a turn that was stopped or failed.
+    /// <summary>The replies read aloud, in order — what the voice player box under the chat shows and steps through.
+    /// A new reply waits for the one being read (owner 2026-11-10: "ไม่ตัด ต่อให้มีของใหม่มาก็ให้รอคิว").</summary>
+    public ReplyVoiceQueue VoiceQueue
+    {
+        get
+        {
+            if (_voiceQueue != null) return _voiceQueue;
+            _voiceOut = new ChatVoiceOutput(this);
+            _voiceQueue = new ReplyVoiceQueue(_voiceOut) { Hold = IsLiveVoice };
+            _voiceQueue.Failed += (item, error) => { if (error != null) StatusText = error; };
+            return _voiceQueue;
+        }
+    }
+
+    /// <summary>Settings › Voice › Read replies aloud: the reply of the turn that just ended joins the voice queue (code
+    /// and links left out), read by the girl who wrote it in her own voice and mood (VoicePersona). It waits for the
+    /// one being read — a new reply never cuts the last. The browser voice speaks in the mic window; Edge, Windows,
+    /// ElevenLabs and OpenAI make the audio here and play it in the mic window when it is open (it stops listening while
+    /// she talks), else in the app. Nothing is read for a turn that was stopped or failed.
     /// <para>The free engines fall back to Edge's free voices when they cannot speak this reply: the browser voice with
     /// no mic window open, Windows with no voice for the reply's language (2026-11-09: most PCs have English voices
     /// only, and Zira reads a Thai reply as an empty WAV — the reply was silent without a word).</para></summary>
-    private async void SpeakReplyIfWanted(ChatMessage userMsg)
+    private void SpeakReplyIfWanted(ChatMessage userMsg)
     {
         var s = _settingsService.Settings;
         if (!s.VoiceSpeakReplies) return;
-        string engine = VoiceSpeaker.EngineOf(s);
-        bool micOpen = IsDictating && _dictation != null;
         var rows = TurnMessages.ToList();
         int userAt = rows.IndexOf(userMsg);
         // Only the reply bubble that ends the turn (SpokenReply): not a card, a tool row or the "no summary" note.
@@ -245,70 +268,169 @@ public partial class ChatViewModel
                 : "nothing read: the turn ended on " + SpokenReply.Describe(SpokenReply.LastRow(rows, userAt)));
             return;
         }
-        bool thai = reply.Content.Any(c => c >= '\u0e00' && c <= '\u0e7f');
-        int max = Math.Clamp(s.Voice?.MaxChars ?? 1200, 100, 10000);
+        var item = SpokenItemOf(reply);
+        if (item == null) { _debugLog?.Info("Voice", "nothing read: the reply is only code or links"); return; }
+        VoiceQueue.Enqueue(item);
+        if (!ReferenceEquals(VoiceQueue.Current, item))
+            _debugLog?.Info("Voice", $"reply queued behind the one being read ({VoiceQueue.Waiting} waiting)");
+    }
+
+    /// <summary>The words of a reply to read aloud (null = nothing to say: only code or links).</summary>
+    private SpokenItem? SpokenItemOf(ChatMessage reply)
+    {
+        bool thai = reply.Content.Any(c => c >= '฀' && c <= '๿');
+        int max = Math.Clamp(_settingsService.Settings.Voice?.MaxChars ?? 1200, 100, 10000);
         string text = SpeechText.ForSpeech(reply.Content, thai, max);
-        if (text.Length == 0) { _debugLog?.Info("Voice", "nothing read: the reply is only code or links"); return; }
-        string lang = thai ? "th-TH" : "en-US";
-        string girl = reply.Character.Own;
-        _speaker ??= new VoiceSpeaker(() => _settingsService.Settings);
+        return text.Length == 0 ? null : new SpokenItem(text, thai, reply.Character.Own, reply);
+    }
 
-        if (VoiceSpeaker.NeedsMicWindow(engine) && micOpen)
-        {
-            var b = _speaker.BrowserStyle(girl);
-            _dictation!.Speak(text, lang, b.Voice, b.Rate, b.Pitch);
-            return;
-        }
-        // The browser voice with no mic window, or Windows with no voice for this language: Edge's free voices.
-        bool edge = VoiceSpeaker.NeedsMicWindow(engine) || (engine == Models.VoiceSettings.Windows && !WindowsTts.Speaks(lang));
+    /// <summary>The ▶ on a reply's hover strip, or a click on the bubble: read this one now (it is the user's ask, so it
+    /// may cut the one playing); whatever was waiting plays after it. On the one playing it pauses.</summary>
+    public void PlayMessageVoice(ChatMessage message)
+    {
+        if (!message.CanReadAloud) return;
+        var item = VoiceQueue.ItemOf(message) ?? SpokenItemOf(message);
+        if (item == null) { StatusText = Loc("voice.player.nothing"); return; }
+        VoiceQueue.Play(item);
+    }
 
-        StopReplyVoice();
-        var cts = _speakCts = new CancellationTokenSource();
-        var took = System.Diagnostics.Stopwatch.StartNew();
-        string used = edge ? Models.VoiceSettings.Edge : engine;
-        try
+    /// <summary>
+    /// The voice queue's sound: the mic window when it is open (it stops listening while she talks; the browser voice
+    /// can only speak there), else the app's own player. Pausing holds the in-app sound where it is; the mic window
+    /// cannot pause, so there pause stops and play starts the reply again.
+    /// </summary>
+    private sealed class ChatVoiceOutput(ChatViewModel vm) : IReplyVoiceOutput
+    {
+        private VoicePlayer? _player;
+        private SpokenItem? _inApp, _inPage;
+        private long _pageSayId = -1;
+        private bool _stopping;
+
+        public event Action<SpokenItem, string?>? Ended;
+        public bool CanPause => _inApp != null;
+
+        private bool MicOpen => vm.IsDictating && vm._dictation != null;
+
+        public async Task PrepareAsync(SpokenItem item, CancellationToken ct)
         {
-            SpeechAudio audio;
+            if (item.Audio != null) return;
+            var s = vm._settingsService.Settings;
+            string engine = VoiceSpeaker.EngineOf(s);
+            if (VoiceSpeaker.NeedsMicWindow(engine) && MicOpen) return;   // the page speaks the text itself
+            // The browser voice with no mic window, or Windows with no voice for this language: Edge's free voices.
+            bool edge = VoiceSpeaker.NeedsMicWindow(engine) || (engine == Models.VoiceSettings.Windows && !WindowsTts.Speaks(item.Lang));
+            var speaker = vm._speaker ??= new VoiceSpeaker(() => vm._settingsService.Settings);
+            var took = System.Diagnostics.Stopwatch.StartNew();
+            string used = edge ? Models.VoiceSettings.Edge : engine;
             try
             {
-                audio = edge ? await _speaker.SynthesizeEdgeAsync(text, thai, girl, cts.Token)
-                             : await _speaker.SynthesizeAsync(text, thai, girl, cts.Token);
-            }
-            catch (WindowsVoiceMissingException)
-            {
-                // The Windows voice made no sound after all (a voice that claims the language but reads none of it).
-                used = Models.VoiceSettings.Edge;
-                audio = await _speaker.SynthesizeEdgeAsync(text, thai, girl, cts.Token);
-            }
-            _debugLog?.Info("Voice", $"reply read aloud · {used}{(used == Models.VoiceSettings.Edge ? " via " + EdgeTts.LastHost : "")}"
-                + $" · {text.Length} chars · {audio.Bytes.Length / 1024} KB in {took.ElapsedMilliseconds} ms");
-            OnUi(() =>
-            {
-                if (cts.IsCancellationRequested) return;
-                if (IsDictating && _dictation != null && _dictation.SpeakAudio(audio.Bytes, audio.Mime, text, lang)) return;
-                if (_replyPlayer == null)
+                SpeechAudio audio;
+                try
                 {
-                    _replyPlayer = new VoicePlayer(_settingsService.DataRoot);
-                    _replyPlayer.Finished += error => { if (error != null) _debugLog?.Warn("Voice", "the reply's audio did not play: " + error); };
+                    audio = edge ? await speaker.SynthesizeEdgeAsync(item.Text, item.Thai, item.Girl, ct)
+                                 : await speaker.SynthesizeAsync(item.Text, item.Thai, item.Girl, ct);
                 }
-                _replyPlayer.Play(audio);
-            });
+                catch (WindowsVoiceMissingException)
+                {
+                    // The Windows voice made no sound after all (a voice that claims the language but reads none of it).
+                    used = Models.VoiceSettings.Edge;
+                    audio = await speaker.SynthesizeEdgeAsync(item.Text, item.Thai, item.Girl, ct);
+                }
+                ct.ThrowIfCancellationRequested();
+                item.Audio = audio;
+                vm._debugLog?.Info("Voice", $"reply made · {used}{(used == Models.VoiceSettings.Edge ? " via " + EdgeTts.LastHost : "")}"
+                    + $" · {item.Text.Length} chars · {audio.Bytes.Length / 1024} KB in {took.ElapsedMilliseconds} ms");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (VoiceKeyMissingException ex)
+            {
+                vm._debugLog?.Warn("Voice", $"reply not read: no {ex.Engine} key");
+                throw new InvalidOperationException(Loc(ex.Engine == Models.VoiceSettings.OpenAI ? "voice.openai.noKey" : "voice.eleven.noKey"));
+            }
+            catch (EdgeTtsException ex)
+            {
+                vm._debugLog?.Warn("Voice", $"reply not read: Edge failed after {took.ElapsedMilliseconds} ms ({item.Text.Length} chars)", ex);
+                throw new InvalidOperationException(LocF(item.Thai && engine != Models.VoiceSettings.Edge ? "voice.chat.noThaiVoice" : "voice.chat.failed", ex.Message));
+            }
+            catch (Exception ex)
+            {
+                vm._debugLog?.Warn("Voice", $"reply not read: {used} failed", ex);
+                throw new InvalidOperationException(LocF("voice.chat.failed", ex.Message));
+            }
         }
-        catch (OperationCanceledException) { }
-        catch (VoiceKeyMissingException ex)
+
+        public bool Start(SpokenItem item)
         {
-            _debugLog?.Warn("Voice", $"reply not read: no {ex.Engine} key");
-            OnUi(() => StatusText = Loc(ex.Engine == Models.VoiceSettings.OpenAI ? "voice.openai.noKey" : "voice.eleven.noKey"));
+            _inApp = _inPage = null;
+            if (MicOpen)
+            {
+                var dictation = vm._dictation!;
+                if (item.Audio == null)
+                {
+                    var b = (vm._speaker ??= new VoiceSpeaker(() => vm._settingsService.Settings)).BrowserStyle(item.Girl);
+                    dictation.Speak(item.Text, item.Lang, b.Voice, b.Rate, b.Pitch);
+                    _inPage = item;
+                }
+                else if (dictation.SpeakAudio(item.Audio.Bytes, item.Audio.Mime, item.Text, item.Lang)) _inPage = item;
+                if (_inPage != null) { _pageSayId = dictation.SayId; return true; }
+            }
+            if (item.Audio == null)
+            {
+                // Made for the mic window, which closed before it played: made again (Edge) on the next press of play.
+                item.Error = Loc("voice.player.micClosed");
+                return false;
+            }
+            if (_player == null)
+            {
+                _player = new VoicePlayer(vm._settingsService.DataRoot);
+                _player.Finished += OnPlayerFinished;
+            }
+            _inApp = item;
+            _player.Play(item.Audio);
+            return true;
         }
-        catch (EdgeTtsException ex)
+
+        private void OnPlayerFinished(string? error)
         {
-            _debugLog?.Warn("Voice", $"reply not read: Edge failed after {took.ElapsedMilliseconds} ms ({text.Length} chars)", ex);
-            OnUi(() => StatusText = LocF(thai && engine != Models.VoiceSettings.Edge ? "voice.chat.noThaiVoice" : "voice.chat.failed", ex.Message));
+            if (_stopping || _inApp is not { } item) return;
+            _inApp = null;
+            if (error != null) vm._debugLog?.Warn("Voice", "the reply's audio did not play: " + error);
+            Ended?.Invoke(item, error == null ? null : LocF("voice.chat.failed", error));
         }
-        catch (Exception ex)
+
+        /// <summary>The mic window says a reply ended ("&lt;id&gt;", or "&lt;id&gt;:hush" when the user pressed its stop).</summary>
+        public void OnPageSpoke(string detail)
         {
-            _debugLog?.Warn("Voice", $"reply not read: {used} failed", ex);
-            OnUi(() => StatusText = LocF("voice.chat.failed", ex.Message));
+            if (_inPage is not { } item) return;
+            bool hushed = detail.EndsWith(":hush", StringComparison.Ordinal);
+            string id = hushed ? detail[..^5] : detail;
+            if (!long.TryParse(id, out long said) || said != _pageSayId) return;   // a reply stopped earlier: not this one
+            _inPage = null;
+            if (hushed) vm.VoiceQueue.Stop();   // her stop button in the mic window: silence, like Stop in the box
+            else Ended?.Invoke(item, null);
+        }
+
+        /// <summary>The mic window closed while it was speaking: that reply counts as read, the rest play in the app.</summary>
+        public void OnPageGone()
+        {
+            if (_inPage is not { } item) return;
+            _inPage = null;
+            Ended?.Invoke(item, null);
+        }
+
+        public void Pause() => _player?.Pause();
+        public void Resume() => _player?.Resume();
+
+        /// <summary>Silence (never raises <see cref="Ended"/>).</summary>
+        public void Stop()
+        {
+            _stopping = true;
+            try
+            {
+                if (_inApp != null) _player?.Stop();
+                if (_inPage != null) vm._dictation?.Hush();
+            }
+            finally { _stopping = false; _inApp = _inPage = null; }
         }
     }
 
@@ -331,13 +453,15 @@ public partial class ChatViewModel
     private ICommand? _toggleSpeakRepliesCommand;
     public ICommand ToggleSpeakRepliesCommand => _toggleSpeakRepliesCommand ??= new RelayCommand(() => SpeakReplies = !SpeakReplies);
 
-    /// <summary>A reply being made or played aloud stops (the user sent something new, or turned the voice off).</summary>
-    private void StopReplyVoice()
-    {
-        try { _speakCts?.Cancel(); } catch { }
-        _speakCts = null;
-        _replyPlayer?.Stop();
-    }
+    /// <summary>Reading aloud stops and what was waiting is dropped (the voice was turned off). Sending a new message
+    /// does not stop it any more: the reply plays on and the next one waits its turn.</summary>
+    private void StopReplyVoice() => _voiceQueue?.Stop();
+
+    /// <summary>The mic window's "spoke" event (a reply it was reading ended or was hushed).</summary>
+    private void OnPageSpoke(string detail) => _voiceOut?.OnPageSpoke(detail);
+
+    /// <summary>The mic window closed: a reply it was reading counts as read, the rest play in the app.</summary>
+    private void OnVoicePageGone() => _voiceOut?.OnPageGone();
 
     /// <summary>The mic window reported its browser's voices: remembered for the picker in Settings › Voice.</summary>
     private void RememberBrowserVoices(IReadOnlyList<string> names)

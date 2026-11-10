@@ -16,16 +16,20 @@ namespace VoiceTest;
 /// Settings › Voice, rendered for real: the panel with the app's own theme, once per engine (browser, Windows,
 /// ElevenLabs, OpenAI) in Thai, to PNGs in &lt;exe&gt;\voice-out. Fails on a XAML or binding exception, a blank
 /// picture, the wrong section showing, or a missing mascot. No network: portable.txt → &lt;exe&gt;\Data.
+/// Then the voice queue (QueueTests.cs) and the voice player box in every theme (PlayerRenders.cs) — both into a silent
+/// stand-in output, so nothing is heard. <c>--queue</c>: the queue and the player box only.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly StringBuilder Report = new();
     static readonly string Out = Path.Combine(AppContext.BaseDirectory, "voice-out");
+    static bool QueueOnly;
 
     [STAThread]
-    static int Main()
+    static int Main(string[] args)
     {
+        QueueOnly = args.Contains("--queue");
         var app = new CluadeX.App();
         app.InitializeComponent();
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -75,6 +79,8 @@ internal static class Program
         var loc = new LocalizationService();
         loc.SetLanguage("th");
         LocalizedResources.Instance.Initialize(loc);
+
+        if (QueueOnly) return await QueueAndPlayer(settings, loc, bindingErrors);
 
         var vm = new VoiceSettingsViewModel(settings, loc.T);
         var panel = new VoiceSettingsPanel { DataContext = vm };
@@ -151,6 +157,15 @@ internal static class Program
         Check("no binding errors", bindingErrors.Count == 0, string.Join(" | ", bindingErrors.Take(3)));
 
         win.Close();
+        bindingErrors.Clear();
+        return await QueueAndPlayer(settings, loc, bindingErrors);
+    }
+
+    static async Task<int> QueueAndPlayer(SettingsService settings, LocalizationService loc, List<string> bindingErrors)
+    {
+        await QueueTests();
+        await PlayerRenders(settings, loc);
+        Check("no binding errors (player box)", bindingErrors.Count == 0, string.Join(" | ", bindingErrors.Take(3)));
         File.WriteAllText(Path.Combine(Out, "voice-report.md"), Report.ToString(), new UTF8Encoding(false));
         return Fail == 0 ? 0 : 1;
     }
