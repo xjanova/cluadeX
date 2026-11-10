@@ -21,8 +21,29 @@ public partial class CluadexBuddy
 {
     /// <summary>A mood's clips. <paramref name="Intro"/>: one of these first (once); <paramref name="Loop"/>: then these, one
     /// after another; <paramref name="Extras"/>: one of these instead, when <paramref name="ExtraEvery"/> has passed;
-    /// <paramref name="ThenScene"/>: after the intro, that scene's loop and extras instead of this one's.</summary>
-    public sealed record Scene(string[] Intro, string[] Loop, string[] Extras, TimeSpan ExtraEvery, string? ThenScene = null);
+    /// <paramref name="ThenScene"/>: after the intro, that scene's loop and extras instead of this one's;
+    /// <paramref name="JitterSeconds"/>: up to this much more before each extra, so they do not come like clockwork.</summary>
+    public sealed record Scene(string[] Intro, string[] Loop, string[] Extras, TimeSpan ExtraEvery, string? ThenScene = null,
+                               int JitterSeconds = 15);
+
+    /// <summary>Idle, an extra every <see cref="IdleExtraEvery"/> plus up to <see cref="IdleExtraJitter"/> s, i.e. after one to
+    /// three of her 5 s breathing loops (owner 2026-11-10: "idle อวาต้า น้อยไป" — it was 28–43 s of the same loop).</summary>
+    public static readonly TimeSpan IdleExtraEvery = TimeSpan.FromSeconds(9);
+    public const int IdleExtraJitter = 8;
+
+    /// <summary>Everything she does to pass the time while idle: small moves (glances, her hair, her beanie, a stretch),
+    /// play (a wink, a heart, a peace sign, a giggle), and things she picked up (coffee, headphones, her phone, the iPad, a
+    /// book). None of them is spoken and none is a sleepy one — yawning and dozing belong to the night extras and to sleep.</summary>
+    public static readonly string[] IdleExtras =
+    {
+        "idle-look", "idle-lookaround", "idle-peek", "idle-hat", "idle-hair", "idle-ears", "idle-earring", "idle-nails",
+        "idle-stretch", "stretch-big", "idle-hum", "idle-sway", "idle-wiggle", "idle-wink", "idle-heart", "idle-bored",
+        "shy", "sneeze", "hiccup", "love", "blow-kiss", "laugh", "happy-giggle", "happy-peace", "nod-yes", "shrug", "meh",
+        "thinking-tap", "salute",
+        "coffee", "coffee-cozy", "coffee-cheers", "music-bob", "music-hum", "music-dance", "phone-check", "phone-buzz",
+        "ipad-read", "ipad-giggle", "book-read", "book-flip",
+        "bored-chin", "bored-slump", "yawn-small",
+    };
 
     /// <summary>A scene that is not one of <see cref="BuddyMood"/>: the owner typing in the chat box while she is idle.</summary>
     public const string ListeningScene = "listening";
@@ -40,14 +61,7 @@ public partial class CluadexBuddy
     /// (an iPad, a coffee mug, a book, headphones …): each was made from its own start picture, so they mix in freely.</summary>
     public static readonly IReadOnlyDictionary<string, Scene> Scenes = new Dictionary<string, Scene>
     {
-        [BuddyMood.Idle] = new(None, new[] { "idle" },
-            new[]
-            {
-                "idle-look", "idle-hat", "idle-hair", "idle-stretch", "idle-hum", "idle-wink", "idle-peek", "idle-sway", "idle-nails",
-                "idle-earring", "idle-bored", "idle-lookaround", "idle-ears", "idle-heart", "idle-wiggle", "stretch-big", "shy", "sneeze",
-                "hiccup", "love", "blow-kiss", "laugh", "coffee", "coffee-cozy", "coffee-cheers", "music-bob", "music-hum", "music-dance",
-                "phone-check", "phone-buzz", "bored-chin", "bored-slump", "meh", "yawn-small",
-            }, TimeSpan.FromSeconds(28)),
+        [BuddyMood.Idle] = new(None, new[] { "idle" }, IdleExtras, IdleExtraEvery, JitterSeconds: IdleExtraJitter),
         [BuddyMood.Working] = new(None, new[] { "working", "working-type", "thinking", "working-ipad", "ipad-read", "book-read" },
             new[]
             {
@@ -145,7 +159,9 @@ public partial class CluadexBuddy
     }
 
     public static readonly string[] LunchExtras = { "snack", "snack-offer", "snack-look" };
-    public static readonly string[] NightExtras = { "yawn-big", "yawn-stretch", "sleepy-blink", "pillow-hug" };
+    /// <summary>Late at night, idle, she gets sleepy now and then — but stays awake: no pillow here (hugging it read as
+    /// going to sleep, owner 2026-11-10: "เธอหลับบ่อยเกินไป"); the pillow belongs to the sleep scene.</summary>
+    public static readonly string[] NightExtras = { "yawn-big", "yawn-stretch", "sleepy-blink" };
 
     /// <summary>Every clip name, for the check that the files are there.</summary>
     public static IEnumerable<string> AllClipNames =>
@@ -177,6 +193,12 @@ public partial class CluadexBuddy
 
     private static readonly Dictionary<string, bool> Usable = new();
     private static readonly Random Dice = new();
+
+    /// <summary>Picks her extras with variety (<see cref="VariedPicker"/>); one per buddy, remembered across scenes.</summary>
+    private readonly VariedPicker _extraPicker = new(Dice);
+
+    /// <summary>The extras she did lately, oldest first (tests).</summary>
+    public IReadOnlyList<string> RecentExtras => _extraPicker.Recent;
 
     /// <summary>The clip is on disk and has not failed to play.</summary>
     public static bool HasClip(string name)
@@ -318,8 +340,10 @@ public partial class CluadexBuddy
         var extras = scene == Scenes[BuddyMood.Idle] ? ExtrasAt(BuddyMood.Idle, DateTime.Now.TimeOfDay) : scene.Extras;
         if (extras.Length > 0 && DateTime.UtcNow >= _nextExtraAt)
         {
-            _nextExtraAt = DateTime.UtcNow + scene.ExtraEvery + TimeSpan.FromSeconds(Dice.Next(0, 15));
-            string? extra = Pick(extras, ClipShown);
+            _nextExtraAt = DateTime.UtcNow + scene.ExtraEvery + TimeSpan.FromSeconds(Dice.Next(0, scene.JitterSeconds + 1));
+            // a different one each time, and none of the last dozen again (it only avoided the clip on screen — the loop —
+            // so the same extra could come back twice running)
+            string? extra = _extraPicker.Next(extras, HasClip, ClipShown);
             if (extra != null && PlayClip(extra, loop: false, () => { if (!ContinueScene()) HideClips(); })) return true;
         }
         var usable = scene.Loop.Where(HasClip).ToArray();
