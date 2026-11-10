@@ -20,7 +20,7 @@ public class LocalizationService
                                       Localization.SparkKeys.Keys, Localization.BrainKeys.Keys,
                                       Localization.BackgroundKeys.Keys, Localization.PreviewKeys.Keys, Localization.ChromeKeys.Keys,
                                       Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys, Localization.UsageKeys.Keys,
-                                      Localization.DispatchKeys.Keys, Localization.DesktopKeys.Keys,
+                                      Localization.DispatchKeys.Keys, Localization.FableKeys.Keys, Localization.DesktopKeys.Keys,
                                       Localization.StudioKeys.Keys, Localization.StudioPageKeys.Keys, Localization.SetupKeys.Keys,
                                       Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys,
                                       Localization.StarterKeys.Keys,

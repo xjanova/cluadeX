@@ -867,6 +867,10 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     /// <summary>What this chat was split off to do (the task the asking chat gave it), or "".</summary>
     public string SplitTask => CluadeX.Services.ChatLinkStore.Current?.Get(Id)?.Task ?? "";
 
+    /// <summary>The model this chat runs on when it has one of its own (a split chat opened on Fable); null = the app's
+    /// pick in the model button, as for every other chat. Picking a model in the button clears it.</summary>
+    public string? OwnModel => CluadeX.Services.ChatLinkStore.Current?.Get(Id)?.Model;
+
     /// <summary>It was split off another chat.</summary>
     public bool IsSplit => ParentId != null;
 
@@ -960,7 +964,7 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     /// <summary>The link store changed for this chat: re-read everything derived from it.</summary>
     public void RaiseSplitChanged()
     {
-        Raise(nameof(ParentId)); Raise(nameof(SplitTask)); Raise(nameof(IsSplit)); Raise(nameof(IsArchived));
+        Raise(nameof(ParentId)); Raise(nameof(SplitTask)); Raise(nameof(IsSplit)); Raise(nameof(IsArchived)); Raise(nameof(OwnModel));
     }
 
     /// <summary>Display-only: the sidebar's group — pinned, today, yesterday, this week, earlier (in the UI language).</summary>

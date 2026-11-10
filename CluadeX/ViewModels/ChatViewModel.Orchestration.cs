@@ -227,12 +227,12 @@ public partial class ChatViewModel
     }
 
     /// <summary>The gist of a finished split turn for its parent: the last thing it answered, short.</summary>
-    private static string GistOf(IEnumerable<ChatMessage>? messages)
+    private static string GistOf(IEnumerable<ChatMessage>? messages, int max = 240)
     {
         var last = messages?.LastOrDefault(m => m.Role == MessageRole.Assistant && !m.HasError && !string.IsNullOrWhiteSpace(m.Content));
         if (last == null) return "";
         string text = string.Join(" ", last.Content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return text.Length > 240 ? text[..240] + "…" : text;
+        return text.Length > max ? text[..max] + "…" : text;
     }
 
     // ─── the plan a turn carries on from ───
@@ -273,11 +273,14 @@ public partial class ChatViewModel
     /// for a workflow.</summary>
     private void OnNextStepPicked(ChatMessage row, string label)
     {
+        // CluadeX's own Fable card: its buttons act here, they are not a message to the model.
+        if (FableOfferOf(row) is { } offer) { OnFableOfferPicked(row, label, offer); return; }
         row.ToolSummary = label;   // saved with the chat: a reopened box shows what was picked, without buttons
         string draft = UserInput ?? "";
         if (CurrentSession is { } s)
         {
             WorkflowGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
+            FableGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);   // the model's label is not the owner asking for Fable
             // nor for a design: the model's label is no design words (a chat with its Design switch on still counts)
             DesignGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
         }

@@ -320,7 +320,8 @@ public static class DispatchPolicy
         {
             string? alias = l switch
             {
-                "opus" => "claude-opus-5-5", "sonnet" => "claude-sonnet-5-5", "haiku" => "claude-haiku-5-5", _ => null,
+                "opus" => "claude-opus-5-5", "sonnet" => "claude-sonnet-5-5", "haiku" => "claude-haiku-5-5",
+                "fable" => FableModel, _ => null,
             };
             return alias ?? (l.StartsWith("claude-", StringComparison.Ordinal) ? m : null);
         }
@@ -499,4 +500,235 @@ public static class DispatchPolicy
         var ok = new HashSet<string>(allowed.Select(NormalizePath), StringComparer.OrdinalIgnoreCase);
         return changed.Select(NormalizePath).Where(c => !ok.Contains(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
+
+    // ── very hard tasks → Claude Fable 5.2 (owner 2026-11-10: "งานยาก" = a task Opus 5.5 cannot crack, or one deep, many
+    //    layers, many repos, that must not go wrong). Fable never takes over by itself: CluadeX offers it with a price
+    //    (a card), the owner says yes — or asks for it in words — and then it goes to a focused brief, never the whole chat.
+
+    /// <summary>The Fable model a hard task goes to.</summary>
+    public const string FableModel = "claude-fable-5-2";
+
+    /// <summary>Fable runs at high, not max: gains above high are uneven, and its cost is output and thinking.</summary>
+    public const string FableEffort = "high";
+
+    /// <summary>Task budgets (beta <c>task-budgets-2026-03-13</c>): what a Fable run may generate and read back this turn
+    /// — advisory, the model paces itself and finishes instead of being cut off. The API's minimum is 20,000.</summary>
+    public const int FableChatTaskBudget = 160_000;
+    public const int FableSubAgentTaskBudget = 60_000;
+    public const int TaskBudgetMinimum = 20_000;
+
+    /// <summary>How long a Fable report may be (said in its brief: the report is what comes back, the rest stays there).</summary>
+    public const int FableReportWords = 300;
+
+    /// <summary>Fable 5.2's prices per million tokens: input, cache read, 5-minute cache write, output (thinking included).</summary>
+    public const decimal FableInputPerM = 8m, FableCacheReadPerM = 0.20m, FableCacheWritePerM = 10m, FableOutputPerM = 40m;
+
+    /// <summary>A Fable (or Mythos) model id or alias.</summary>
+    public static bool IsFable(string? model)
+    {
+        string m = (model ?? "").Trim().ToLowerInvariant();
+        return m.Contains("fable") || m.Contains("mythos");
+    }
+
+    /// <summary>"fable" / "fable 5.2" / a full Fable id as the id the API takes; anything else null.</summary>
+    public static string? FableIdOf(string? asked)
+    {
+        string m = (asked ?? "").Trim();
+        if (m.Length == 0 || !IsFable(m)) return null;
+        string l = m.ToLowerInvariant();
+        return l.StartsWith("claude-", StringComparison.Ordinal) ? m : FableModel;
+    }
+
+    /// <summary>What the owner's words ask Fable to do: nothing, think through one part (a sub-agent), or take the task
+    /// in a new chat.</summary>
+    public enum FableRoute { None, SubAgent, NewChat }
+
+    private static readonly System.Text.RegularExpressions.Regex FableWord = new(
+        @"\bfable\b|\bmythos\b|เฟ\s*เบิ้?ล", System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+
+    private static readonly System.Text.RegularExpressions.Regex NewChatWords = new(
+        @"\bnew\s+(chat|session|thread)\b|\bseparate\s+chat\b|\bown\s+chat\b|แชท\s*ใหม่|เซสชั?น\s*ใหม่|แยก\s*แชท|ห้อง\s*ใหม่",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(200));
+
+    /// <summary>Words that put Fable to work rather than mention it ("what is fable?" asks nothing).</summary>
+    private static readonly System.Text.RegularExpressions.Regex FableAskWords = new(
+        @"\b(use|let|ask|send|give|hand|route|switch|run|try|have)\b|\bthink\b|\bon\s+fable\b|\bwith\s+fable\b|\bto\s+fable\b|"
+        + @"ให้|ใช้|ส่ง|โยน|คิด|ลอง|ทำ",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(200));
+
+    /// <summary>
+    /// What the owner asked Fable to do, from their own words (Thai or English): "ส่วนนี้ให้ fable คิด" / "use fable for
+    /// this" → one part on a Fable sub-agent; "โยนไปแชทใหม่ใช้ fable" / "fable in a new chat" → the task in a new chat.
+    /// A question about Fable, or the word alone, asks for nothing. Pure.
+    /// </summary>
+    public static FableRoute ParseFableAsk(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return FableRoute.None;
+        try
+        {
+            if (!FableWord.IsMatch(text) || !FableAskWords.IsMatch(text)) return FableRoute.None;
+            return NewChatWords.IsMatch(text) ? FableRoute.NewChat : FableRoute.SubAgent;
+        }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return FableRoute.None; }
+    }
+
+    /// <summary>What a run went through that says Opus is stuck (CluadeX's own signals), and what the owner said about
+    /// the task (theirs).</summary>
+    public sealed record HardTaskSignals
+    {
+        /// <summary>The model's own fixes that left the same build red, in a row (0 once it went green).</summary>
+        public int FailedOwnFixes { get; init; }
+        /// <summary>Speculative fixers raced on that red build and none turned it green.</summary>
+        public bool SpeculativeFixFailed { get; init; }
+        /// <summary>The loop guard stopped the run (a cycle the model could not leave).</summary>
+        public bool LoopGuardStopped { get; init; }
+        /// <summary>Folders the task spans (the project plus related ones opened beside it).</summary>
+        public int Repos { get; init; } = 1;
+        /// <summary>The owner's words: it must not go wrong / it is many layers deep / it spans several repos.</summary>
+        public bool OwnerSaysCritical { get; init; }
+        public bool OwnerSaysLayered { get; init; }
+        public bool OwnerSaysMultiRepo { get; init; }
+    }
+
+    /// <summary>The verdict: hard (worth offering Fable) and why, in English (log / tool text) and Thai (the card).</summary>
+    public sealed record HardTaskVerdict(bool Hard, string Why, string WhyTh);
+
+    /// <summary>Own fixes in a row that left the build red, after which the task counts as stuck even without fixers.</summary>
+    public const int StuckOwnFixes = 3;
+
+    /// <summary>
+    /// Is this a "very hard" task — one for Fable? CluadeX's signal: Opus failed the same problem again and again (its own
+    /// fix left the build red and the speculative fixers failed too, or <see cref="StuckOwnFixes"/> own fixes in a row
+    /// failed, or the loop guard had to stop it). The owner's signal: the task is complex in layers or repos AND must not
+    /// go wrong (any two of the three). A run already on Fable is never offered Fable again. Pure.
+    /// </summary>
+    public static HardTaskVerdict AssessHardTask(HardTaskSignals s, string? runModel)
+    {
+        if (IsFable(runModel)) return new(false, "already on Fable", "ใช้ Fable อยู่แล้ว");
+        if (s.FailedOwnFixes >= 1 && s.SpeculativeFixFailed)
+            return new(true, $"the build stayed red after {s.FailedOwnFixes} own fix(es) and the speculative fixers failed too",
+                $"แก้เองแล้ว build ยังแดง {s.FailedOwnFixes} ครั้ง และตัวแก้แข่งกันก็แก้ไม่ได้");
+        if (s.FailedOwnFixes >= StuckOwnFixes)
+            return new(true, $"{s.FailedOwnFixes} own fixes in a row left the build red",
+                $"แก้เองติดกัน {s.FailedOwnFixes} ครั้งแล้ว build ยังแดง");
+        if (s.LoopGuardStopped)
+            return new(true, "the loop guard stopped the run (it went round in circles)", "loop guard ต้องหยุดรัน (วนอยู่ที่เดิม)");
+        bool multiRepo = s.OwnerSaysMultiRepo || s.Repos >= 2;
+        int owner = (s.OwnerSaysCritical ? 1 : 0) + (s.OwnerSaysLayered ? 1 : 0) + (multiRepo ? 1 : 0);
+        if (owner >= 2 && (s.OwnerSaysCritical || s.OwnerSaysLayered))
+        {
+            var en = new List<string>(); var th = new List<string>();
+            if (s.OwnerSaysLayered) { en.Add("many layers"); th.Add("ซับซ้อนหลายชั้น"); }
+            if (multiRepo) { en.Add(s.Repos >= 2 ? $"{s.Repos} repos" : "several repos"); th.Add(s.Repos >= 2 ? $"{s.Repos} repo" : "หลาย repo"); }
+            if (s.OwnerSaysCritical) { en.Add("must not go wrong"); th.Add("ต้องไม่ผิดพลาด"); }
+            return new(true, "the owner's task: " + string.Join(", ", en), "งานที่เจ้าของบอกว่า" + string.Join(" ", th));
+        }
+        return new(false, "", "");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex CriticalWords = new(
+        @"must\s+not\s+(fail|break|go\s+wrong)|no\s+mistakes?|zero\s+(mistakes?|errors?)|cannot\s+afford|mission[- ]critical|"
+        + @"ห้าม\s*(ผิด|พลาด|พัง)|ต้อง\s*ไม่\s*(ผิด|พลาด|พัง)|ผิด\s*ไม่\s*ได้|พลาด\s*ไม่\s*ได้|ห้ามผิดพลาด",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(200));
+
+    private static readonly System.Text.RegularExpressions.Regex LayeredWords = new(
+        @"many\s+layers|multi[- ]?layer|deep(ly)?\s+nested|several\s+layers|complex\s+and\s+(subtle|deep)|"
+        + @"หลาย\s*ชั้น|ซับซ้อน|ลึกลับ|ซ้อน\s*กัน\s*หลาย",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(200));
+
+    private static readonly System.Text.RegularExpressions.Regex MultiRepoWords = new(
+        @"(several|many|multiple|across|two|three)\s+(repos|repositories|projects)|multi[- ]?repo|cross[- ]repo|"
+        + @"หลาย\s*(repo|รีโป|โปรเจ[กค]ต์?)|ข้าม\s*(repo|รีโป|โปรเจ[กค]ต์?)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(200));
+
+    /// <summary>The owner's signal words in <paramref name="text"/>. Pure.</summary>
+    public static (bool Critical, bool Layered, bool MultiRepo) OwnerHardWords(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return (false, false, false);
+        try { return (CriticalWords.IsMatch(text), LayeredWords.IsMatch(text), MultiRepoWords.IsMatch(text)); }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return (false, false, false); }
+    }
+
+    /// <summary>A Fable run's likely cost: a low and a high case, in USD, and the tokens the estimate started from.</summary>
+    public sealed record FableEstimate(decimal LowUsd, decimal HighUsd, int StartTokens, int TaskBudget);
+
+    /// <summary>
+    /// What a Fable run on a <paramref name="briefTokens"/> brief will likely cost, on top of <paramref name="baseTokens"/>
+    /// of system prompt and tool definitions. Each step reads the cached prefix ($0.20/M), writes what it added to the
+    /// cache ($10/M) and generates its reply and thinking ($40/M) — the output is most of it, not the cache. The low case
+    /// is a short run (8 steps, 1.5K out each); the high case uses the whole task budget (each step 4K out + 4K read
+    /// back). Pure.
+    /// </summary>
+    public static FableEstimate EstimateFable(int briefTokens, int baseTokens, int taskBudget)
+    {
+        int start = Math.Max(0, briefTokens) + Math.Max(0, baseTokens);
+        decimal Case(int steps, int grow, int outPerStep)
+        {
+            decimal tokRead = 0, tokWrite = start, tokOut = 0;
+            for (int k = 0; k < steps; k++)
+            {
+                tokRead += start + (decimal)k * grow;
+                tokWrite += grow;
+                tokOut += outPerStep;
+            }
+            return (tokRead * FableCacheReadPerM + tokWrite * FableCacheWritePerM + tokOut * FableOutputPerM) / 1_000_000m;
+        }
+        int budget = Math.Max(TaskBudgetMinimum, taskBudget);
+        int highSteps = Math.Clamp(budget / 8000, 4, 60);
+        return new FableEstimate(Math.Round(Case(8, 2500, 1500), 2), Math.Round(Case(highSteps, 4000, 4000), 2), start, budget);
+    }
+
+    /// <summary>What it costs only to hand Fable <paramref name="historyTokens"/> of chat history (a fork): one cache write.</summary>
+    public static decimal ForkWriteUsd(int historyTokens) => Math.Round(Math.Max(0, historyTokens) * FableCacheWritePerM / 1_000_000m, 2);
+
+    /// <summary>
+    /// The spend guards for a Fable run of <paramref name="est"/>: null = go; otherwise why not (English, for the tool's
+    /// result and the log). A run it would start fresh (a new chat) has the whole per-run budget; a sub-agent shares its
+    /// run's. Refused when even the low case does not fit what is left; the high case past it only warns
+    /// (<see cref="FableBudgetWarning"/>). Pure.
+    /// </summary>
+    public static string? FableBudgetRefusal(FableEstimate est, decimal runBudgetUsd, decimal grantedUsd, decimal runSpentUsd,
+        decimal dailyBudgetUsd, decimal todaySpentUsd, bool freshRun)
+    {
+        if (runBudgetUsd > 0)
+        {
+            decimal left = runBudgetUsd + grantedUsd - (freshRun ? 0 : runSpentUsd);
+            if (left < est.LowUsd)
+                return $"Fable would cost about ${est.LowUsd:0.00}–${est.HighUsd:0.00}, more than the ${Math.Max(0, left):0.00} left of the per-run budget "
+                     + $"(${runBudgetUsd:0.00}, Settings ▸ Agent). Raise the budget or keep the work on this model.";
+        }
+        if (dailyBudgetUsd > 0)
+        {
+            decimal left = dailyBudgetUsd - todaySpentUsd;
+            if (left < est.LowUsd)
+                return $"Fable would cost about ${est.LowUsd:0.00}–${est.HighUsd:0.00}, more than the ${Math.Max(0, left):0.00} left of today's cap "
+                     + $"(${dailyBudgetUsd:0.00}). Raise the daily cap or keep the work on this model.";
+        }
+        return null;
+    }
+
+    /// <summary>The high case passes a guard (the run may be stopped on the way): the warning, or null.</summary>
+    public static string? FableBudgetWarning(FableEstimate est, decimal runBudgetUsd, decimal grantedUsd, decimal runSpentUsd,
+        decimal dailyBudgetUsd, decimal todaySpentUsd, bool freshRun)
+    {
+        decimal runLeft = runBudgetUsd > 0 ? runBudgetUsd + grantedUsd - (freshRun ? 0 : runSpentUsd) : decimal.MaxValue;
+        decimal dayLeft = dailyBudgetUsd > 0 ? dailyBudgetUsd - todaySpentUsd : decimal.MaxValue;
+        decimal left = Math.Min(runLeft, dayLeft);
+        return est.HighUsd > left
+            ? $"A long Fable run (about ${est.HighUsd:0.00}) would pass the ${left:0.00} left of the budget; the spend guard stops it there."
+            : null;
+    }
+
+    /// <summary>What a Fable brief ends with: the report is all that comes back, so it is short and says what matters.</summary>
+    public static string FableReportInstruction(bool newChat) =>
+        $"When you are done, end with a report of at most {FableReportWords} words: the cause you found, what you changed "
+        + "(files), how you checked it (the build / test and its result), and anything left open. "
+        + (newChat ? "Only that report goes back to the chat that sent this task; " : "Only that report goes back to the agent that asked; ")
+        + "the steps stay here. Work at the depth the problem needs, not more.";
 }

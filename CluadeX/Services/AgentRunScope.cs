@@ -178,6 +178,13 @@ public sealed class AgentRunScope
     /// ceiling. Read through <see cref="Models.EffortLevels.Effective"/>; the sub-agent's own loop never resets it.</summary>
     public string? EffortCap { get; set; }
 
+    /// <summary>Signs the model is stuck on this run's task (kept on the run's root scope; DispatchPolicy.AssessHardTask):
+    /// its own fixes in a row that left the build red (0 once it went green), speculative fixers that all failed on it,
+    /// and a stop by the loop guard. They decide whether CluadeX offers to send the task to Claude Fable 5.2.</summary>
+    public int FailedOwnFixes { get; set; }
+    public bool SpeculativeFixFailed { get; set; }
+    public bool LoopGuardStopped { get; set; }
+
     /// <summary>A sub-agent's tier ("cheap" / "mid" / "deep"; null = not a tiered sub-agent) and the model the run itself is
     /// on — the Billing page prices this flow's tokens on that model too, and shows the difference as the routing saving
     /// (<see cref="CostTrackingService.RecordUsage"/>).</summary>
