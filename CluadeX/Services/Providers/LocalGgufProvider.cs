@@ -274,7 +274,7 @@ public class LocalGgufProvider : IAiProvider
 
         // Does the user want GPU? (-1 = auto/all layers, >0 = N layers, 0 = CPU-only; GpuBackend "CPU" = no GPU.)
         // A GPU share of 0 % (status-bar slider) is CPU-only too.
-        bool wantGpu = Gpu.GpuShare.WantsGpu(settings.GpuLayerCount, settings.GpuBackend, settings.GpuUsagePercent);
+        bool wantGpu = CluadeX.Services.Gpu.GpuShare.WantsGpu(settings.GpuLayerCount, settings.GpuBackend, settings.GpuUsagePercent);
 
         // Pre-inspect the GGUF so we can pick the backend BEFORE doing any expensive work
         // (memory mapping, GPU upload, etc.). If inspection returns null we assume the file
