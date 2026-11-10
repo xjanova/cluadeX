@@ -25,6 +25,39 @@ public sealed record NextStep(string Recap, string? Ask, IReadOnlyList<string> A
         return new NextStep(recap, ask.Length > 0 ? ask : null, actions);
     }
 
+    /// <summary>
+    /// <see cref="FromArgs"/>, but a call whose fix is plain is repaired instead of refused: buttons with no question are
+    /// left out, more than <see cref="MaxActions"/> buttons keep the first ones. <paramref name="repairNote"/> says what
+    /// was changed (null when nothing was). A missing recap or an over-long question is still refused — those need words
+    /// only the model can write.
+    /// <para>Why (small-model bench 2026-11-08): the refusal "Buttons answer a question" came after the work was done;
+    /// the model took it as "something failed", read the file again and rewrote it — two steps and a needless whole-file
+    /// write, to fix a box under the answer.</para>
+    /// </summary>
+    public static NextStep? FromArgsRepaired(string recap, string ask, string actionsRaw, out string? error, out string? repairNote)
+    {
+        repairNote = null;
+        var step = FromArgs(recap, ask, actionsRaw, out error);
+        if (step != null) return step;
+        var actions = Labels(actionsRaw);
+        bool noAsk = string.IsNullOrWhiteSpace(ask);
+        string? note = null;
+        if (actions.Count > 0 && noAsk)
+        {
+            step = FromArgs(recap, "", "", out _);
+            note = "The buttons were left out: buttons answer a question, and no ask was given.";
+        }
+        else if (actions.Count > MaxActions && !noAsk)
+        {
+            step = FromArgs(recap, ask, JsonSerializer.Serialize(actions.Take(MaxActions)), out _);
+            note = $"Only the first {MaxActions} buttons were kept.";
+        }
+        if (step == null) return null;
+        error = null;
+        repairNote = note;
+        return step;
+    }
+
     /// <summary>["Yes, fix it","Not now"], [{"label":"Yes"}], "Yes, Not now" → labels (each cut to <see cref="MaxLabel"/>).</summary>
     public static List<string> Labels(string raw)
     {

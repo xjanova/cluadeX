@@ -609,6 +609,12 @@
 
     <!-- Code editor: white page, Visual Studio 2005-era syntax colours (the XP-period IDE look) -->
     <SolidColorBrush x:Key="Editor.Background" Color="#FFFFFF"/>
+    <!-- Embedded terminal: always a console, so it never reads as more editor (owner 2026-11-08) -->
+    <SolidColorBrush x:Key="Terminal.Background" Color="#FF1E1F2B"/>
+    <SolidColorBrush x:Key="Terminal.Foreground" Color="#FFE3E5EE"/>
+    <SolidColorBrush x:Key="Terminal.Prompt" Color="#FF5FD38A"/>
+    <SolidColorBrush x:Key="Terminal.Input" Color="#FF2A2C3B"/>
+    <SolidColorBrush x:Key="Terminal.Accent" Color="#FF5B5FC7"/>
     <SolidColorBrush x:Key="Editor.Foreground" Color="#1C1E33"/>
     <SolidColorBrush x:Key="Editor.LineNumber" Color="#2B91AF"/>
     <SolidColorBrush x:Key="Editor.Caret" Color="#000000"/>
@@ -621,6 +627,15 @@
     <SolidColorBrush x:Key="Editor.Minimap.ViewportBorder" Color="#99316AC5"/>
     <SolidColorBrush x:Key="Editor.Minimap.Hover" Color="#14316AC5"/>
     <SolidColorBrush x:Key="Editor.Minimap.Caret" Color="#CC1C1E33"/>
+    <!-- Change marks (CodeEditorView.AiChanges.cs): gutter bar + line tint for what the AI added / changed, its deleted-lines mark,
+         and the user's own hand edits in a second colour -->
+    <SolidColorBrush x:Key="Editor.Change.Added" Color="#1E8E3E"/>
+    <SolidColorBrush x:Key="Editor.Change.Added.Tint" Color="#2E1E8E3E"/>
+    <SolidColorBrush x:Key="Editor.Change.Modified" Color="#1F6FD1"/>
+    <SolidColorBrush x:Key="Editor.Change.Modified.Tint" Color="#261F6FD1"/>
+    <SolidColorBrush x:Key="Editor.Change.Removed" Color="#D0312D"/>
+    <SolidColorBrush x:Key="Editor.Change.User" Color="#C25E00"/>
+    <SolidColorBrush x:Key="Editor.Change.User.Tint" Color="#33E07B00"/>
     <SolidColorBrush x:Key="Editor.Minimap.Change" Color="#E02E8B2E"/>
     <SolidColorBrush x:Key="Editor.Breakpoint" Color="#C42B1C"/>
     <SolidColorBrush x:Key="Editor.Breakpoint.Halo" Color="#55C42B1C"/>

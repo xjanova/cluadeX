@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -1006,6 +1006,9 @@ internal static class ImageWire
             Check("loop", "plan-first control: the screenshot question above (not a work task) got no plan reminder",
                 bodies.Count >= 5 && !Plain(bodies[4]).Contains(planNote), "");
 
+            await SmallModelWire.LoopChecks((name, ok, detail) => Check("loop", name, ok, detail), anth, () => anth.Count,
+                () => anth.Bodies(), Plain, ToolUseSse, TextSse, fs, project, agent, Turn);
+
             // ── overflow: a prompt-too-long with images present drops the images before compacting ──
             k = 0;
             anth.Responder = _ => Interlocked.Increment(ref k) switch
@@ -1186,6 +1189,15 @@ internal static class ImageWire
                 $"sees={providers.ActiveProvider.SupportsToolResultImages("")} native={providers.ActiveProvider.SupportsNativeToolUse} final={Trunc(legacy.FinalResponse, 40)}");
             s.LocalNativeToolUseEnabled = true;
             fs.WorkingDirectory = "";
+
+            // ── Switching provider mid-run: out of credit → the same turn carries on elsewhere; a switch by hand (FailoverWire) ──
+            fs.WorkingDirectory = project;
+            await FailoverWire.Loop(Check, providers, settings, agent, anth, ollama, project,
+                (h, msg) => { agent.InvalidateSystemPromptCache(); return Turn(h, msg); }, executed);
+            fs.WorkingDirectory = "";
+
+            // ── Ultra on a Codex chat: a workflow agent in its own worktree runs as codex exec -C <worktree> (UltraWire) ──
+            await UltraWire.Loop(Check, providers, settings, agent, work);
 
             // ── Deleting the chat deletes its screenshots — only the store's own files, only that chat ──
             SQLitePCL.Batteries.Init();

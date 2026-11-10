@@ -550,6 +550,15 @@
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding AutoVerifyAfterEditEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.watchAutoContinue}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.watchAutoContinueDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding WatchAutoContinue}" VerticalAlignment="Center" Margin="16,0,0,0"
+                                              AutomationProperties.AutomationId="WatchAutoContinue"/>
+                                </Grid>
                                 <StackPanel Margin="0,0,0,16">
                                     <TextBlock Text="{services:Loc settings.verifyCommand}" Style="{StaticResource SettingLabel}"/>
                                     <TextBlock Text="{services:Loc settings.verifyCommandTip}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
@@ -653,6 +662,48 @@
                                 <StackPanel Margin="0,0,0,10">
                                     <TextBlock Text="{services:Loc settings.modelHardFix}" Style="{StaticResource SettingLabel}"/>
                                     <TextBox Text="{Binding HardFixModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <!-- sub-agent tiers: auto model picks cheap / mid / deep per sub-agent -->
+                                <TextBlock Text="{services:Loc settings.tiers}" Style="{StaticResource SettingLabel}" Margin="0,8,0,0"/>
+                                <TextBlock Text="{services:Loc settings.tiersDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,4"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.autoModel}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.autoModelDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SubAgentAutoModel}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.tierEscalate}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.tierEscalateDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SubAgentEscalate}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.tierLocalCheap}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.tierLocalCheapDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SubAgentLocalCheap}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <StackPanel Margin="0,0,0,10" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <TextBlock Text="{services:Loc settings.modelCheap}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding CheapModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,0,10" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <TextBlock Text="{services:Loc settings.modelMid}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding MidModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,0,10" IsEnabled="{Binding SubAgentAutoModel}">
+                                    <TextBlock Text="{services:Loc settings.modelDeep}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding DeepModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
                                              FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </StackPanel>
@@ -882,6 +933,10 @@
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding VoiceSpeakReplies}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
+                                <!-- who reads them, and how: engine, ElevenLabs / OpenAI / free voices, cloning, each girl's voice -->
+                                <Border BorderBrush="{DynamicResource Card.Border}" BorderThickness="0,1,0,1" Padding="0,12,0,4" Margin="0,0,0,16">
+                                    <settingsviews:VoiceSettingsPanel DataContext="{Binding Voice}"/>
+                                </Border>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
@@ -1070,6 +1125,15 @@
                                     <TextBox Grid.Column="1" Text="{Binding ThreadCount, UpdateSourceTrigger=PropertyChanged}"
                                              Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
                                 </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.kvCache}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.kvCacheDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding KvCacheOptions}" SelectedItem="{Binding LocalKvCacheType}"
+                                              Width="130" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
                                 <Grid Style="{StaticResource Row}" Margin="0">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
@@ -1111,8 +1175,10 @@
                                     <Grid>
                                         <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                         <TextBox Text="{Binding CustomLlamaCppBackendPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"/>
-                                        <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
-                                                Command="{Binding BrowseBackendDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}"/>
+                                        <Button Grid.Column="1" Style="{StaticResource IconButton}"
+                                                Command="{Binding BrowseBackendDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}">
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13"/>
+                                        </Button>
                                     </Grid>
                                 </StackPanel>
                             </StackPanel>
@@ -1196,11 +1262,15 @@
                                 <Grid Margin="0,0,0,16">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <TextBox Text="{Binding ModelDirectory, UpdateSourceTrigger=LostFocus}" Style="{StaticResource WideBox}"/>
-                                    <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
-                                            Command="{Binding BrowseModelDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}"/>
-                                    <Button Grid.Column="2" Content="&#xE838;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
+                                    <Button Grid.Column="1" Style="{StaticResource IconButton}"
+                                            Command="{Binding BrowseModelDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}">
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13"/>
+                                        </Button>
+                                    <Button Grid.Column="2" Style="{StaticResource IconButton}"
                                             Command="{Binding OpenDirectoryCommand}" CommandParameter="{Binding ModelDirectory}"
-                                            Margin="4,0,0,0" ToolTip="{services:Loc settings.openFolderTip}"/>
+                                            Margin="4,0,0,0" ToolTip="{services:Loc settings.openFolderTip}">
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13"/>
+                                        </Button>
                                 </Grid>
                                 <TextBlock Text="{services:Loc settings.hfToken}" Style="{StaticResource SettingLabel}"/>
                                 <TextBlock Text="{services:Loc settings.apiTokenDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
@@ -1242,6 +1312,130 @@
                             <StackPanel>
                                 <TextBlock Text="{services:Loc settings.card.appearance}" Style="{StaticResource CardTitle}"/>
                                 <settingsviews:ThemePicker/>
+                                <!-- The text sits beside the box, not in it: a CheckBox's content gets endless width and never wraps. -->
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <CheckBox x:Name="BuddyBubblesBox" IsChecked="{Binding BuddyBubbles}" VerticalAlignment="Top"
+                                              AutomationProperties.Name="{services:Loc buddy.bubbles}"/>
+                                    <TextBlock Grid.Column="1" Text="{services:Loc buddy.bubbles}" TextWrapping="Wrap" Margin="6,1,0,0"
+                                               Foreground="{DynamicResource Text.Primary}" Cursor="Hand"
+                                               MouseLeftButtonUp="BuddyBubblesText_Click"/>
+                                </Grid>
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <CheckBox x:Name="BuddySoundsBox" IsChecked="{Binding BuddySounds}" VerticalAlignment="Top"
+                                              AutomationProperties.Name="{services:Loc buddy.sounds}"/>
+                                    <TextBlock Grid.Column="1" Text="{services:Loc buddy.sounds}" TextWrapping="Wrap" Margin="6,1,0,0"
+                                               Foreground="{DynamicResource Text.Primary}" Cursor="Hand"
+                                               MouseLeftButtonUp="BuddySoundsText_Click"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Text size and font (owner 2026-11-08): a zoom of the whole window and the UI font, live and remembered
+                             (SettingsViewModel.Typography.cs → Services/TypographyService). -->
+                        <Border Style="{StaticResource Card}" x:Name="TypographyCard">
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc settings.card.typography}" Style="{StaticResource CardTitle}"/>
+
+                                <TextBlock Text="{services:Loc typo.size}" Style="{StaticResource SettingLabel}"/>
+                                <TextBlock Text="{services:Loc typo.sizeDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
+                                <WrapPanel Margin="0,0,0,8">
+                                    <Button Style="{StaticResource SecondaryButton}" Padding="10,6" Margin="0,0,6,6" Command="{Binding ZoomOutCommand}"
+                                            IsEnabled="{Binding CanZoomOut}" ToolTip="{services:Loc typo.smaller}"
+                                            AutomationProperties.Name="{services:Loc typo.smaller}">
+                                        <TextBlock Text="&#xE738;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                                    </Button>
+                                    <Border MinWidth="64" Margin="0,0,6,6" Padding="8,5" CornerRadius="6"
+                                            Background="{DynamicResource Surface.Input}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
+                                        <TextBlock x:Name="UiScaleText" Text="{Binding UiScalePercent}" FontSize="13" FontWeight="SemiBold"
+                                                   FontFamily="{DynamicResource Font.Mono}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource Text.Primary}"/>
+                                    </Border>
+                                    <Button Style="{StaticResource SecondaryButton}" Padding="10,6" Margin="0,0,12,6" Command="{Binding ZoomInCommand}"
+                                            IsEnabled="{Binding CanZoomIn}" ToolTip="{services:Loc typo.larger}"
+                                            AutomationProperties.Name="{services:Loc typo.larger}">
+                                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                                    </Button>
+                                    <ItemsControl ItemsSource="{Binding ScalePresets}">
+                                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Padding="10,6" Margin="0,0,6,6" ToolTip="{Binding Percent}"
+                                                        Command="{Binding DataContext.ZoomPresetCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" AutomationProperties.Name="{Binding Label}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                    <Setter Property="Background" Value="{DynamicResource State.Selected.Strong}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                    <TextBlock><Run Text="{Binding Label, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding Percent, Mode=OneWay}" Foreground="{DynamicResource Text.Muted}" FontSize="11"/></TextBlock>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </WrapPanel>
+
+                                <TextBlock Text="{services:Loc typo.font}" Style="{StaticResource SettingLabel}" Margin="0,8,0,2"/>
+                                <TextBlock Text="{services:Loc typo.fontDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
+                                <ComboBox x:Name="UiFontBox" ItemsSource="{Binding FontChoices}" SelectedItem="{Binding SelectedFontChoice, Mode=TwoWay}"
+                                          AutomationProperties.Name="{services:Loc typo.font}" MaxDropDownHeight="360"
+                                          VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+                                    <ComboBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ComboBox.ItemsPanel>
+                                    <ComboBox.ItemContainerStyle>
+                                        <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHeader}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ComboBox.ItemContainerStyle>
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Label}" FontFamily="{Binding Preview}" FontSize="13" TextTrimming="CharacterEllipsis">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsHeader}" Value="True">
+                                                                <Setter Property="FontSize" Value="11"/>
+                                                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                                                <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+                                                                <Setter Property="Margin" Value="0,6,0,0"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Id}" Value="bundled">
+                                                                <Setter Property="ToolTip" Value="{services:Loc typo.font.bundledTip}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+
+                                <!-- Preview: Thai vowels and tone marks stacked above and below, Latin, other scripts, bold -->
+                                <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="8" Background="{DynamicResource Surface.Input}"
+                                        BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
+                                    <StackPanel TextElement.FontFamily="{Binding PreviewFontFamily}">
+                                        <TextBlock Text="{services:Loc typo.preview}" FontSize="10.5" Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="TypoPreviewBig" Text="{services:Loc typo.previewText}" FontSize="17" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
+                                        <TextBlock Text="ปั๊มน้ำ กี่ปี ญี่ปุ่น ฎีกา · The quick brown fox · Ελληνικά · Кириллица · Tiếng Việt" FontSize="12"
+                                                   TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}"/>
+                                        <TextBlock FontSize="12" FontWeight="Bold" Foreground="{DynamicResource Text.Secondary}" Margin="0,2,0,0"
+                                                   Text="ตัวหนา น้ำใจ ปั๊ม · Bold 0123"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock Text="{services:Loc typo.font.claudeNote}" Style="{StaticResource SettingDesc}" Margin="0,10,0,4"/>
+                                <Button Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Padding="10,5" FontSize="11.5"
+                                        Command="{Binding OpenFontLicenceCommand}" ToolTip="{services:Loc typo.licenceTip}"
+                                        Content="{services:Loc typo.licence}"/>
                             </StackPanel>
                         </Border>
 
@@ -1336,9 +1530,11 @@
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <TextBox Text="{Binding DataRootDisplay, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource WideBox}"
                                              FontFamily="{DynamicResource Font.Mono.Display}"/>
-                                    <Button Grid.Column="1" Content="&#xE838;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
+                                    <Button Grid.Column="1" Style="{StaticResource IconButton}"
                                             Command="{Binding OpenDirectoryCommand}" CommandParameter="{Binding DataRootDisplay}"
-                                            Margin="6,0,0,0" ToolTip="{services:Loc settings.openFolderTip}"/>
+                                            Margin="6,0,0,0" ToolTip="{services:Loc settings.openFolderTip}">
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13"/>
+                                        </Button>
                                 </Grid>
                                 <TextBlock Foreground="{DynamicResource Accent.1}" FontSize="11" Margin="0,0,0,16"
                                            Text="{services:Loc settings.portableMode}"
@@ -1385,7 +1581,16 @@
                                         </StackPanel>
                                     </Button>
                                 </Grid>
-                                <Grid Style="{StaticResource Row}" Margin="0">
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{services:Loc settings.setupWizard.title}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.setupWizard.desc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Style="{StaticResource SecondaryButton}" Margin="16,0,0,0" VerticalAlignment="Center"
+                                            Content="{services:Loc settings.setupWizard.open}"
+                                            Command="{Binding DataContext.OpenSetupWizardCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                                </Grid>                                <Grid Style="{StaticResource Row}" Margin="0">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
                                         <TextBlock Text="{services:Loc settings.resetDefaults}" Style="{StaticResource SettingLabel}"/>

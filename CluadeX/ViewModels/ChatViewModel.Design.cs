@@ -17,6 +17,40 @@ public partial class ChatViewModel
         DesignGate.Load(_settingsService.DataRoot);
         DesignGate.Changed += _ => App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(IsDesignMode)));
         PropertyChanged += (_, e) => { if (e.PropertyName == nameof(CurrentSession)) OnPropertyChanged(nameof(IsDesignMode)); };
+        _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(RefreshLocalAgentsSwitch);
+        DesignGate.EnabledChanged += () => App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            OnPropertyChanged(nameof(DesignModeAvailable));
+            OnPropertyChanged(nameof(IsDesignMode));
+        });
+    }
+
+    /// <summary>Is design mode offered at all (<see cref="DesignGate.Enabled"/>, off for now): the switch shows only then.</summary>
+    public bool DesignModeAvailable => DesignGate.Enabled;
+
+    /// <summary>The composer's Colibri switch: read-only sub-agents on the model already up on this PC, or a cheap API
+    /// model (the same setting as Settings ▸ Agent and the Colibri card).</summary>
+    public bool SubAgentsOnLocal
+    {
+        get => _settingsService.Settings.SubAgentLocalCheap;
+        set
+        {
+            if (_settingsService.Settings.SubAgentLocalCheap == value) return;
+            _settingsService.Settings.SubAgentLocalCheap = value;
+            _settingsService.Save();
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>The Colibri switch shows once a local engine is installed (or it is already on, so it can be turned off).</summary>
+    public bool LocalAgentsSwitchVisible =>
+        _settingsService.Settings.SubAgentLocalCheap || Services.Colibri.ColibriService.IsPluginInstalled(_settingsService.DataRoot);
+
+    /// <summary>The setting changed elsewhere (Settings, the Colibri card): the switch follows.</summary>
+    private void RefreshLocalAgentsSwitch()
+    {
+        OnPropertyChanged(nameof(SubAgentsOnLocal));
+        OnPropertyChanged(nameof(LocalAgentsSwitchVisible));
     }
 
     /// <summary>The composer's Design switch, for the chat on screen.</summary>

@@ -39,6 +39,7 @@ internal static class EffortWire
         check("step-effort", "which models take effort-only messages",
             AnthropicProvider.Traits("claude-opus-5-5").PerMessageEffort && AnthropicProvider.Traits("claude-opus-5").PerMessageEffort
             && AnthropicProvider.Traits("claude-sonnet-5-5").PerMessageEffort && AnthropicProvider.Traits("claude-haiku-5-5").PerMessageEffort
+            && AnthropicProvider.Traits("claude-fable-5-2").PerMessageEffort
             && AnthropicProvider.Traits("claude-fable-5-1").PerMessageEffort && !AnthropicProvider.Traits("claude-fable-5").PerMessageEffort
             && !AnthropicProvider.Traits("claude-sonnet-5").PerMessageEffort && !AnthropicProvider.Traits("claude-opus-4-8").PerMessageEffort, "");
         check("step-effort", "Sonnet 5.5 with Think off (between_tools) does not take them",
@@ -197,6 +198,7 @@ internal static class EffortWire
         check("friendly", "model ids as people say them",
             LiveModelReport.FriendlyModel("claude-opus-5-5") == "Opus 5.5" && LiveModelReport.FriendlyModel("claude-sonnet-5-5-20261001") == "Sonnet 5.5"
             && LiveModelReport.FriendlyModel("claude-fable-5-1") == "Fable 5.1" && LiveModelReport.FriendlyModel("claude-opus-5") == "Opus 5"
+            && LiveModelReport.FriendlyModel("claude-fable-5-2") == "Fable 5.2"
             && LiveModelReport.FriendlyModel("claude-3-5-sonnet-20241022") == "Sonnet 3.5" && LiveModelReport.FriendlyModel("gpt-5.5") == "GPT-5.5"
             && LiveModelReport.FriendlyModel("gemini-3-pro-preview") == "Gemini 3 Pro Preview" && LiveModelReport.FriendlyModel("Qwen3-8B-Q4_K_M.gguf") == "Qwen3-8B-Q4_K_M.gguf",
             LiveModelReport.FriendlyModel("claude-sonnet-5-5-20261001") + " | " + LiveModelReport.FriendlyModel("claude-3-5-sonnet-20241022"));

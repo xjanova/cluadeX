@@ -531,6 +531,12 @@
 
     <!-- Code editor (AvalonEdit + minimap + breakpoint gutter) and syntax colours -->
     <SolidColorBrush x:Key="Editor.Background" Color="Transparent"/>
+    <!-- Embedded terminal: always a console, so it never reads as more editor (owner 2026-11-08) -->
+    <SolidColorBrush x:Key="Terminal.Background" Color="#F20C0512"/>
+    <SolidColorBrush x:Key="Terminal.Foreground" Color="#FFEAD8F5"/>
+    <SolidColorBrush x:Key="Terminal.Prompt" Color="#FF5CFFB0"/>
+    <SolidColorBrush x:Key="Terminal.Input" Color="#FF1C0F26"/>
+    <SolidColorBrush x:Key="Terminal.Accent" Color="#FFC77DFF"/>
     <SolidColorBrush x:Key="Editor.Foreground" Color="#F6E8FF"/>
     <SolidColorBrush x:Key="Editor.LineNumber" Color="#7F33AE"/>
     <SolidColorBrush x:Key="Editor.Caret" Color="#A44CFF"/>
@@ -543,6 +549,15 @@
     <SolidColorBrush x:Key="Editor.Minimap.ViewportBorder" Color="#99A44CFF"/>
     <SolidColorBrush x:Key="Editor.Minimap.Hover" Color="#14FFFFFF"/>
     <SolidColorBrush x:Key="Editor.Minimap.Caret" Color="#CCDF7EFF"/>
+    <!-- Change marks (CodeEditorView.AiChanges.cs): gutter bar + line tint for what the AI added / changed, its deleted-lines mark,
+         and the user's own hand edits in a second colour -->
+    <SolidColorBrush x:Key="Editor.Change.Added" Color="#3FE08F"/>
+    <SolidColorBrush x:Key="Editor.Change.Added.Tint" Color="#243FE08F"/>
+    <SolidColorBrush x:Key="Editor.Change.Modified" Color="#5C9DFF"/>
+    <SolidColorBrush x:Key="Editor.Change.Modified.Tint" Color="#245C9DFF"/>
+    <SolidColorBrush x:Key="Editor.Change.Removed" Color="#FF5F6D"/>
+    <SolidColorBrush x:Key="Editor.Change.User" Color="#FFA53D"/>
+    <SolidColorBrush x:Key="Editor.Change.User.Tint" Color="#2BFFA53D"/>
     <SolidColorBrush x:Key="Editor.Minimap.Change" Color="#E0985CFF"/>
     <SolidColorBrush x:Key="Editor.Breakpoint" Color="#FF53CB"/>
     <SolidColorBrush x:Key="Editor.Breakpoint.Halo" Color="#55FF53CB"/>

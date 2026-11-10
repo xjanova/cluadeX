@@ -334,7 +334,16 @@ public class LocalGgufProvider : IAiProvider
             }
         }
 
-        // In-process LLamaSharp. Fast on CPU; uses GPU only if a CUDA Toolkit is present.
+        // GPU asked for but no llama-server to give it: the in-process backend is CPU only (CluadeX no longer ships
+        // LLamaSharp's CUDA backend — see CluadeX.csproj), so say so and where the GPU build is, instead of a silent
+        // slow CPU run.
+        if (wantGpu && serverExe == null)
+        {
+            string lang = settings.Language == "th" ? "th" : "en";
+            progress?.Report(LocalizationService.Lookup("local.gpuNeedsServer", lang) ?? "local.gpuNeedsServer");
+        }
+
+        // In-process LLamaSharp: the CPU path.
         // If it throws our typed "unsupported architecture" exception (the inspector missed something),
         // fall back to llama-server transparently. Other failures propagate — the user needs the real error.
         try

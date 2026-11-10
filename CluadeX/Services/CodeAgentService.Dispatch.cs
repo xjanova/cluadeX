@@ -43,8 +43,14 @@ public partial class CodeAgentService
             SpeculativeFixCount = s.SpeculativeFixCount,
             CanEditProject = DecideWorkerGrant(_permissionService, folder)?.Edit == true,
             IsGitRepo = folder != null && HasGitFolder(folder),
+            Ultra = WorkflowGate.Allowed(WorkflowGate.CurrentChat),
         });
     }
+
+    /// <summary>One line for the log: the chat's Ultra state and what the policy decided for this step.</summary>
+    internal static string DescribeDispatch(DispatchDecision d, string? chat, string? why) =>
+        $"ultra={(why ?? "off")} · chat={chat ?? "-"} · sub-agents={(d.SubAgents ? (d.ReadOnlyOnly ? "read-only" : "edit") : "off")}"
+        + $" · workers={d.Workers} · speculative={d.SpeculativeFix} · max {d.MaxConcurrency} at once · {d.Reason}";
 
     private decimal TodayCliUsd() =>
         _costTrackingService?.TodayPackageUsd(_providerManager.ActiveProviderType.ToString()) ?? 0;
@@ -63,6 +69,54 @@ public partial class CodeAgentService
         }
         return left;
     }
+
+    /// <summary>
+    /// The spend guards for a Fable run of <paramref name="est"/> (owner 2026-11-10: asked in words = go, unless it passes
+    /// the per-run or daily budget). <paramref name="freshRun"/>: a new chat (its own run, the whole per-run budget); else
+    /// a sub-agent of the run in this flow. Refusal = do not start; warning = it may be stopped on the way.
+    /// </summary>
+    internal (string? Refusal, string? Warning) FableBudgetCheck(DispatchPolicy.FableEstimate est, bool freshRun)
+    {
+        var s = _settingsService.Settings;
+        var root = RootOf(AgentRunScope.Current);
+        bool cli = IsCliAgent(_providerManager.ActiveProviderType);
+        decimal run = cli ? s.CliRunBudgetUsd : s.RunBudgetUsd, day = cli ? s.CliDailyBudgetUsd : s.DailyBudgetUsd;
+        decimal granted = freshRun ? 0 : root?.BudgetGrantedUsd ?? 0, spent = root?.CostUsd ?? 0;
+        decimal today = cli ? TodayCliUsd() : _costTrackingService?.TodayCostUsd ?? 0;
+        return (DispatchPolicy.FableBudgetRefusal(est, run, granted, spent, day, today, freshRun),
+                DispatchPolicy.FableBudgetWarning(est, run, granted, spent, day, today, freshRun));
+    }
+
+    /// <summary>The prompt a run starts from besides its brief (system prompt and tool definitions), for a Fable estimate:
+    /// the CLI builds its own (~20K), the API loop here sends ~15K with tool search on.</summary>
+    internal int FableBaseTokens(bool subAgent) =>
+        IsCliAgent(_providerManager.ActiveProviderType) ? 20_000 : subAgent ? 8_000 : 15_000;
+
+    /// <summary>Fable can take the work on the provider this app is on: the Anthropic API, or Claude Dev (the CLI takes
+    /// --model claude-fable-5-2). Null = yes; otherwise why not.</summary>
+    internal string? FableUnavailable() => _providerManager.ActiveProviderType switch
+    {
+        AiProviderType.Anthropic or AiProviderType.ClaudeDev => null,
+        var t => $"Claude Fable 5.2 runs on the Anthropic API or Claude Dev; this chat is on {t}. Switch the provider, or keep the work here.",
+    };
+
+    /// <summary>What the run in this flow went through that says the model is stuck (DispatchPolicy.AssessHardTask).</summary>
+    internal DispatchPolicy.HardTaskSignals HardSignalsOf(AgentRunScope? scope, string? ownerWords)
+    {
+        var root = RootOf(scope);
+        var (critical, layered, multiRepo) = DispatchPolicy.OwnerHardWords(ownerWords);
+        return new DispatchPolicy.HardTaskSignals
+        {
+            FailedOwnFixes = root?.FailedOwnFixes ?? 0,
+            SpeculativeFixFailed = root?.SpeculativeFixFailed ?? false,
+            LoopGuardStopped = root?.LoopGuardStopped ?? false,
+            Repos = 1 + (root?.ExtraFolders.Count ?? 0),
+            OwnerSaysCritical = critical, OwnerSaysLayered = layered, OwnerSaysMultiRepo = multiRepo,
+        };
+    }
+
+    /// <summary>The run's model, for the Fable verdict (a chat already on Fable is never offered it).</summary>
+    internal string RunModelForVerdict() => RunModel();
 
     /// <summary>The run in this flow has spent its per-run budget (plus what the user allowed past it).</summary>
     private bool RunBudgetSpent()
@@ -102,9 +156,11 @@ public partial class CodeAgentService
         return false;
     }
 
-    /// <summary>The run's own model id (the provider's default when none is picked).</summary>
+    /// <summary>The run's own model id: the chat's own model when it has one (a Fable split chat), else the pick (the
+    /// provider's default when none is picked).</summary>
     private string RunModel()
     {
+        if (SubAgentModel.ChatModel is { Length: > 0 } own) return own;
         string m = ModelIdFor(_providerManager.ActiveProvider);
         if (m.Length > 0) return m;
         return _providerManager.ActiveProviderType switch
@@ -153,7 +209,8 @@ public partial class CodeAgentService
         var cd = _providerManager.GetProvider(AiProviderType.ClaudeDev);
         try { await cd.InitializeAsync(ct); } catch (OperationCanceledException) { throw; } catch { }
         if (!cd.IsReady) return null;
-        Providers.ClaudeDevProvider.Grant.Value = canEdit ? new Providers.ClaudeDevProvider.WorkerGrant(true, false, folder) : null;
+        // A folder pins the CLI there even when it only reads (a read-only workflow agent in its worktree).
+        Providers.ClaudeDevProvider.Grant.Value = canEdit || folder != null ? new Providers.ClaudeDevProvider.WorkerGrant(canEdit, false, folder) : null;
         try
         {
             var sb = new System.Text.StringBuilder();
@@ -162,6 +219,34 @@ public partial class CodeAgentService
         }
         finally { Providers.ClaudeDevProvider.Grant.Value = null; }
     }
+
+    /// <summary>One sub-agent's brief through Codex (the user's ChatGPT plan): <c>codex exec -C &lt;folder&gt;</c>, read-only
+    /// or workspace-write when <paramref name="canEdit"/>. <paramref name="folder"/>: the agent's git worktree — Codex runs
+    /// there and nowhere else. A fresh turn of its own: no chat tools, no sub-agents of its own, no rows on the calling
+    /// turn. Null when the CLI is not there.</summary>
+    private async Task<string?> RunSubAgentOnCodexAsync(string brief, bool canEdit, CancellationToken ct, string? folder = null)
+    {
+        var cx = _providerManager.GetProvider(AiProviderType.OpenAIDev);
+        if (cx == null) return null;
+        try { await cx.InitializeAsync(ct); } catch (OperationCanceledException) { throw; } catch { }
+        if (!cx.IsReady) return null;
+        Providers.ClaudeDevProvider.Grant.Value = canEdit || folder != null ? new Providers.ClaudeDevProvider.WorkerGrant(canEdit, false, folder) : null;
+        // What the calling turn set for itself must not leak into this one (its stream sink would swallow the report).
+        Providers.ClaudeDevProvider.StreamSink.Value = null;
+        Providers.ClaudeDevProvider.Extras.Value = null;
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            await foreach (var chunk in cx.ChatAsync(new List<ChatMessage>(), brief, null, ct)) sb.Append(chunk);
+            return sb.ToString().Trim();
+        }
+        finally { Providers.ClaudeDevProvider.Grant.Value = null; }
+    }
+
+    /// <summary>Which CLI runs a workflow agent for a CLI chat: the chat's own when it can run a brief in a given folder
+    /// (Claude Dev, Codex — so the work stays on the plan the user picked), else Claude Dev. Pure.</summary>
+    public static AiProviderType WorkflowCliFor(AiProviderType active) =>
+        active == AiProviderType.OpenAIDev ? AiProviderType.OpenAIDev : AiProviderType.ClaudeDev;
 
     // ─── warm start: the repo map and the run's brain recall, once ───
 
@@ -409,6 +494,7 @@ public partial class CodeAgentService
 
         var failed = _failedFixers.GetOrCreateValue(RootOf(parent) ?? new AgentRunScope("", null));
         if (!result.Fixed) failed.Count += result.All.Count(o => !o.Green);
+        if (!result.Fixed && result.All.Count > 0 && RootOf(parent) is { } stuck) stuck.SpeculativeFixFailed = true;
         _debugLog?.Info("Dispatch", $"speculative fix done · fixed={result.Fixed} · winner={(result.Winner?.Index + 1)?.ToString() ?? "-"} · {result.Took.TotalSeconds:0}s"
             + $" · cost {string.Join("/", scopes.Select(s => (s?.CostUsd ?? 0).ToString("0.000")))}");
         string note = result.Fixed

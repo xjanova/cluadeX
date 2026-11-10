@@ -1,0 +1,135 @@
+<!-- น้อง CluadeX in the top-left corner of the window (owner 2026-11-08: big, over the rail and the chat list, floating
+     with no frame; then "2:1 … ไร้ขอบ" — 1 wide, 2 tall; then "ขยายให้เห็นเธอทั้งคลิป" — nearly the whole clip, hat to skirt,
+     on a raised plate in MainWindow). Drawn on a 120×240 canvas inside a Viewbox, so
+     MainWindow can make her any size (MainWindow.Buddy.cs: big beside the chat list, rail-wide on the other pages). No
+     border: her cut-out has its edges faded into the picture's alpha (Assets/Buddy/cluadex-hero*.png; her clips get the same
+     fade from Effects/ChromaKey.fx), a soft glow in the mood's colour sits behind her and a soft shadow under her. DataContext: ChatViewModel (BuddyMoodState); the tooltip and the click to Home are on the
+     Button around her in MainWindow. The motion is code-behind (CluadexBuddy.xaml.cs). -->
+<UserControl x:Class="CluadeX.Views.CluadexBuddy"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:fx="clr-namespace:CluadeX.Effects"
+             Focusable="False">
+    <Viewbox Stretch="Uniform">
+        <Grid Width="120" Height="240">
+            <!-- the glow behind her: the theme's accent, amber while she waits, green when pleased, red after a failure -->
+            <Ellipse x:Name="Glow" Width="118" Height="200" Margin="0,10,0,0" VerticalAlignment="Top" Fill="{DynamicResource Accent.2}" Opacity="0.32"
+                     IsHitTestVisible="False" RenderTransformOrigin="0.5,0.5">
+                <Ellipse.OpacityMask>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#FF000000" Offset="0"/>
+                        <GradientStop Color="#99000000" Offset="0.45"/>
+                        <GradientStop Color="#00000000" Offset="1"/>
+                    </RadialGradientBrush>
+                </Ellipse.OpacityMask>
+                <Ellipse.RenderTransform><ScaleTransform x:Name="GlowScale"/></Ellipse.RenderTransform>
+            </Ellipse>
+
+            <!-- the slideshow (her right-click menu): the girls waist up, one after another, the next fading in over the
+                 last; their cut waist fades out at the bottom (CluadexBuddy.Slides.cs). NOT inside Head: a slide is a
+                 rectangle cut out of a picture, and Head's drawn motion (the 6° nod when she falls asleep, the sway while
+                 working, the hop) turned and moved that rectangle out past her plate — owner 2026-11-10: "รูปอวาต้าโหมดรูป
+                 สไลด์ ขอบมันเกินเมื่อรันไปสักพัก". Clipped to her plate's rounded corners (radius set from her size in
+                 CluadexBuddy.Slides.cs UpdateSlideClip); inside the clip it only ever grows a little (SlideZoom, SlideHop),
+                 so no edge ever shows. -->
+            <Grid x:Name="Slides" Visibility="Collapsed" IsHitTestVisible="False">
+                <Grid.Clip>
+                    <RectangleGeometry x:Name="SlideClip" Rect="0,0,120,240" RadiusX="11" RadiusY="11"/>
+                </Grid.Clip>
+                <Grid x:Name="SlideStage" RenderTransformOrigin="0.5,0.3">
+                    <Grid.RenderTransform>
+                        <TransformGroup>
+                            <ScaleTransform x:Name="SlideZoom"/>
+                            <ScaleTransform x:Name="SlideHop"/>
+                        </TransformGroup>
+                    </Grid.RenderTransform>
+                    <Grid.OpacityMask>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#FF000000" Offset="0"/>
+                            <GradientStop Color="#FF000000" Offset="0.8"/>
+                            <GradientStop Color="#00000000" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Grid.OpacityMask>
+                    <Image x:Name="SlideA" Stretch="Uniform" VerticalAlignment="Top" RenderOptions.BitmapScalingMode="HighQuality" Opacity="0"/>
+                    <Image x:Name="SlideB" Stretch="Uniform" VerticalAlignment="Top" RenderOptions.BitmapScalingMode="HighQuality" Opacity="0"/>
+                </Grid>
+            </Grid>
+
+            <!-- her head: bobs, tilts and breathes about the chin; one soft shadow for both faces -->
+            <Grid x:Name="Head" RenderTransformOrigin="0.5,0.6">
+                <Grid.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="Breathe"/>
+                        <RotateTransform x:Name="Tilt"/>
+                        <TranslateTransform x:Name="Bob"/>
+                        <!-- a startled hop when clicked and there is no clip to play (CluadexBuddy.Clips.cs Startle) -->
+                        <TranslateTransform x:Name="Jump"/>
+                    </TransformGroup>
+                </Grid.RenderTransform>
+                <Grid.Effect>
+                    <DropShadowEffect BlurRadius="10" ShadowDepth="2" Direction="270" Opacity="0.28" RenderingBias="Performance"/>
+                </Grid.Effect>
+                <Grid x:Name="Stills">
+                    <Image x:Name="FaceAwake" Source="/CluadeX;component/Assets/Buddy/cluadex-hero.png" Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <!-- eyes closed: a blink now and then, and asleep -->
+                    <Image x:Name="FaceAsleep" Source="/CluadeX;component/Assets/Buddy/cluadex-hero-sleep.png" Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality" Opacity="0"/>
+                </Grid>
+                <!-- her clips (Assets/Buddy/Clips, filmed on green and keyed here): two players so the next clip fades in over
+                     the one that is showing. When a clip shows, the stills fade out (CluadexBuddy.Clips.cs). -->
+                <MediaElement x:Name="ClipA" LoadedBehavior="Manual" UnloadedBehavior="Close" IsMuted="True" Stretch="Uniform"
+                              Opacity="0" IsHitTestVisible="False" RenderOptions.BitmapScalingMode="HighQuality">
+                    <MediaElement.Effect><fx:ChromaKeyEffect/></MediaElement.Effect>
+                </MediaElement>
+                <MediaElement x:Name="ClipB" LoadedBehavior="Manual" UnloadedBehavior="Close" IsMuted="True" Stretch="Uniform"
+                              Opacity="0" IsHitTestVisible="False" RenderOptions.BitmapScalingMode="HighQuality">
+                    <MediaElement.Effect><fx:ChromaKeyEffect/></MediaElement.Effect>
+                </MediaElement>
+            </Grid>
+
+            <!-- asleep: two z's float up -->
+            <TextBlock x:Name="Z1" Text="z" FontSize="20" FontWeight="Bold" Foreground="{DynamicResource Accent.2}" Opacity="0"
+                       HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,10,0" IsHitTestVisible="False">
+                <TextBlock.RenderTransform><TranslateTransform x:Name="Z1Rise"/></TextBlock.RenderTransform>
+            </TextBlock>
+            <TextBlock x:Name="Z2" Text="z" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource Accent.2}" Opacity="0"
+                       HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,24,22,0" IsHitTestVisible="False">
+                <TextBlock.RenderTransform><TranslateTransform x:Name="Z2Rise"/></TextBlock.RenderTransform>
+            </TextBlock>
+
+            <!-- working: a small neon spinner at her shoulder -->
+            <Grid x:Name="WorkChip" Width="24" Height="24" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,112,4,0"
+                  Visibility="Collapsed" IsHitTestVisible="False">
+                <Ellipse Fill="{DynamicResource ActivityBar.Background}" Opacity="0.85"/>
+                <Ellipse Margin="3" StrokeThickness="2.5" Stroke="{DynamicResource Accent.2}" Opacity="0.35"/>
+                <Ellipse Margin="3" StrokeThickness="2.5" StrokeDashArray="3 100" StrokeDashCap="Round"
+                         Stroke="{DynamicResource Accent.1}" RenderTransformOrigin="0.5,0.5">
+                    <Ellipse.RenderTransform><RotateTransform x:Name="ArcSpin"/></Ellipse.RenderTransform>
+                </Ellipse>
+            </Grid>
+
+            <!-- waiting: an amber "?" bubble bounces at her cheek -->
+            <Border x:Name="AskChip" Width="24" Height="24" CornerRadius="12" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,112,4,0" Background="{DynamicResource Status.Warning}" BorderBrush="{DynamicResource ActivityBar.Background}"
+                    BorderThickness="2" Visibility="Collapsed" IsHitTestVisible="False">
+                <Border.RenderTransform><TranslateTransform x:Name="AskHop"/></Border.RenderTransform>
+                <TextBlock Text="?" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource ActivityBar.Background}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-2,0,0"/>
+            </Border>
+            <!-- a failure: a red "!" -->
+            <Border x:Name="SadChip" Width="24" Height="24" CornerRadius="12" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,112,4,0" Background="{DynamicResource Status.Danger}" BorderBrush="{DynamicResource ActivityBar.Background}"
+                    BorderThickness="2" Visibility="Collapsed" IsHitTestVisible="False">
+                <TextBlock Text="!" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource ActivityBar.Background}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-2,0,0"/>
+            </Border>
+            <!-- a turn finished well: a sparkle pops -->
+            <TextBlock x:Name="Sparkle" Text="✦" FontSize="24" Foreground="{DynamicResource Status.Success}" Opacity="0"
+                       HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,6,8,0" IsHitTestVisible="False"
+                       RenderTransformOrigin="0.5,0.5">
+                <TextBlock.RenderTransform><ScaleTransform x:Name="SparkleScale" ScaleX="0.3" ScaleY="0.3"/></TextBlock.RenderTransform>
+            </TextBlock>
+        </Grid>
+    </Viewbox>
+</UserControl>

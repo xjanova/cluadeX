@@ -268,6 +268,7 @@ public partial class CodeEditorView
     private void OnToolsMenu(object sender, RoutedEventArgs e)
     {
         if (sender is not Button b || b.ContextMenu == null) return;
+        MiUserEditMarkers.IsChecked = _vm?.UserEditMarkers ?? true;
         b.ContextMenu.PlacementTarget = b;
         b.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         b.ContextMenu.IsOpen = true;

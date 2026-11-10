@@ -141,8 +141,13 @@ public class PluginManagerViewModel : ViewModelBase
     public ICommand InstallCatalogCommand { get; }
     public ICommand UninstallCatalogCommand { get; }
 
-    public PluginManagerViewModel(PluginService pluginService, LocalizationService loc, DebugLogService? log = null)
+    /// <summary>The built-in colibri plugin's card (on-PC AI for sub-agents).</summary>
+    public ColibriPluginViewModel? Colibri { get; }
+
+    public PluginManagerViewModel(PluginService pluginService, LocalizationService loc, DebugLogService? log = null,
+        ColibriPluginViewModel? colibri = null)
     {
+        Colibri = colibri;
         _pluginService = pluginService;
         _loc = loc;
         _log = log;

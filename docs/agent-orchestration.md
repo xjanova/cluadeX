@@ -125,6 +125,14 @@ Rule for every piece: **one source of truth that already exists, one more view o
   so its state is `RunStatus` (working / waiting / done) — no second state. Click → `GoToChatCommand`.
 - `TellParentSplitFinished` (already called at every split turn's end) now carries the split's last reply's
   first sentence, and the note is a `cx:notice` row the model also sees on its next turn.
+- `new_chat` with `isolation: "worktree"` (a split in the same project that edits files while its parent still runs):
+  `SplitWorktree.CreateAsync` makes a git worktree on a new branch `cluadex/split-<slug>-<id>`, cut from the asking
+  chat's HEAD, beside the repository (`WorktreeSandbox.HomeFor`). `ChatLinkStore` keeps it (`Worktrees` in
+  chat-links.json), `TaskFolderFor` runs every turn of that chat there, and each turn's input tells its agent where it
+  works. Its "ended a turn" notice names the branch, so the parent merges it or opens a PR. `close_chat` puts the chat
+  away and removes the worktree and branch only when `SplitWorktree.HeldWorkAsync` finds nothing unmerged (no
+  uncommitted change, no commit that another local branch lacks); otherwise it leaves both and says what is left. The
+  parent's uncommitted changes are not in the worktree. Tests: `chattest` SWT (`CHATTEST_ONLY=SWT`).
 
 ## 5. Background command notices
 

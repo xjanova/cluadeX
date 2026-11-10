@@ -462,6 +462,44 @@ public class FileSystemService
         if (HasFile("build.gradle") || HasFile("build.gradle.kts")) return "gradle build -x test";
         if (HasFile("Makefile") || HasFile("makefile")) return "make";
         if (HasFile("CMakeLists.txt")) return "cmake --build build";
+        return PythonCompileCommand(dir);
+    }
+
+    /// <summary>
+    /// The "build" of a Python project: byte-compile every file, which fails on a syntax error and names the file and
+    /// line. Only for a folder that IS Python (a .py file at its top, a package folder with __init__.py, pyproject.toml
+    /// or setup.py), and only when the <c>python</c> a shell would start is real Python — not the Store's stub, which
+    /// opens the Store and exits 9009 (that would be a red build that no edit can fix).
+    /// <para>Why (small-model bench 2026-11-08): on a Python repo run_build said "couldn't detect a build system", so
+    /// models guessed at commands instead of getting the one check that names the broken line.</para>
+    /// </summary>
+    public static string? PythonCompileCommand(string dir)
+    {
+        try
+        {
+            bool isPython = Directory.EnumerateFiles(dir, "*.py", SearchOption.TopDirectoryOnly).Any()
+                || File.Exists(Path.Combine(dir, "pyproject.toml")) || File.Exists(Path.Combine(dir, "setup.py"))
+                || Directory.EnumerateDirectories(dir).Any(d => File.Exists(Path.Combine(d, "__init__.py")));
+            if (!isPython) return null;
+        }
+        catch { return null; }
+        string? real = Problems.BuildProblemsService.FindPythonExe();
+        if (real == null || !string.Equals(FirstOnPath("python.exe"), real, StringComparison.OrdinalIgnoreCase)) return null;
+        return "python -m compileall -q -x \"venv|node_modules|site-packages|[.]git\" .";
+    }
+
+    /// <summary>The first <paramref name="exe"/> on PATH — what a shell would start for its bare name — or null.</summary>
+    private static string? FirstOnPath(string exe)
+    {
+        foreach (var raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                string p = Path.Combine(raw.Trim().Trim('"'), exe);
+                if (File.Exists(p)) return p;
+            }
+            catch { /* a malformed PATH entry */ }
+        }
         return null;
     }
 

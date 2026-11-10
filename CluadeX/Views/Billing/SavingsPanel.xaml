@@ -235,6 +235,31 @@
             </StackPanel>
         </Border>
 
+        <!-- Saved by AI on this PC (Colibri, llama.cpp, Ollama, LM Studio…): bars per day, the line is the running total -->
+        <Border Style="{StaticResource Card}" Margin="0,12,10,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Ellipse Grid.Column="0" Width="52" Height="52" VerticalAlignment="Top" Margin="0,2,14,0"
+                         Fill="{Binding LocalMascot.FaceBrush}" Stroke="{Binding LocalMascot.AccentBrush}" StrokeThickness="2"/>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{services:Loc usage.localTitle}" Style="{StaticResource CardTitle}"/>
+                    <TextBlock Text="{Binding LocalTotals}" FontSize="15" FontWeight="Bold" Margin="0,4,0,0"
+                               Foreground="{Binding LocalMascot.AccentBrush}"/>
+                    <TextBlock Text="{services:Loc usage.localDesc}" Style="{StaticResource Note}" FontSize="11" Margin="0,4,0,8" TextWrapping="Wrap"/>
+                    <Grid>
+                        <billing:SpendChart Height="150" Bars="{Binding LocalBars}" LineBrush="{Binding LocalMascot.AccentBrush}"
+                                            GridBrush="{DynamicResource Border.Subtle}" TextBrush="{DynamicResource Text.Muted}"/>
+                        <TextBlock Text="{services:Loc usage.localEmpty}" Style="{StaticResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="420" TextAlignment="Center"
+                                   Visibility="{Binding HasLocal, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- Where the savings came from | dispatch strategies -->
         <Grid Margin="0,12,0,0">
             <Grid.ColumnDefinitions>
@@ -299,6 +324,37 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <!-- Sub-agent tiers: paid, what the run's own model would have charged, the difference -->
+                    <StackPanel Margin="0,14,0,0" Visibility="{Binding HasTiers, Converter={StaticResource BoolVis}}">
+                        <TextBlock Text="{services:Loc usage.tierTitle}" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                        <TextBlock Text="{services:Loc usage.tierDesc}" Style="{StaticResource Note}" Margin="0,2,0,0"/>
+                        <ItemsControl ItemsSource="{Binding Tiers}" Margin="0,4,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,6,0,2">
+                                        <DockPanel>
+                                            <TextBlock Text="{Binding Saved}" FontSize="12.5" FontWeight="SemiBold" DockPanel.Dock="Right" Foreground="{DynamicResource Status.Success}"/>
+                                            <TextBlock Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                                        </DockPanel>
+                                        <Border Height="4" CornerRadius="2" Margin="0,5,0,4" Background="{DynamicResource State.Fill.Faint}">
+                                            <Border CornerRadius="2" Background="{DynamicResource Accent.2}" RenderTransformOrigin="0,0.5">
+                                                <Border.RenderTransform>
+                                                    <ScaleTransform ScaleX="{Binding Fraction}"/>
+                                                </Border.RenderTransform>
+                                            </Border>
+                                        </Border>
+                                        <TextBlock Style="{StaticResource Note}">
+                                            <Run Text="{services:Loc usage.tierRequests}"/><Run Text=" "/><Run Text="{Binding Requests, Mode=OneWay}"/><Run Text=" · "/><Run Text="{services:Loc usage.tierPaid}"/><Run Text=" "/><Run Text="{Binding Paid, Mode=OneWay}"/><Run Text=" · "/><Run Text="{services:Loc usage.tierOnRunModel}"/><Run Text=" "/><Run Text="{Binding OnRunModel, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Style="{StaticResource Note}" Foreground="{DynamicResource Status.Warning}"
+                                                   Visibility="{Binding HasClimbs, Converter={StaticResource BoolVis}}">
+                                            <Run Text="{services:Loc usage.tierClimbs}"/><Run Text=" "/><Run Text="{Binding Climbs, Mode=OneWay}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </Grid>

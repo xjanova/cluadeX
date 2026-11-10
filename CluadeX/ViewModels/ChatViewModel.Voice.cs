@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services.Voice;
+using CluadeX.Services.Voice.Tts;
 
 namespace CluadeX.ViewModels;
 
@@ -38,7 +39,7 @@ public partial class ChatViewModel
     /// <summary>The Live button shows only when Settings › Voice › Live voice is on.</summary>
     public bool ShowLiveButton => _settingsService.Settings.VoiceLiveEnabled && !IsLiveVoice;
 
-    private void RefreshVoiceButtons() => OnPropertyChanged(nameof(ShowLiveButton));
+    private void RefreshVoiceButtons() { OnPropertyChanged(nameof(ShowLiveButton)); OnPropertyChanged(nameof(SpeakReplies)); }
 
     private ICommand? _toggleLiveVoiceCommand;
     public ICommand ToggleLiveVoiceCommand => _toggleLiveVoiceCommand ??= new RelayCommand(ToggleLiveVoice);
@@ -217,18 +218,133 @@ public partial class ChatViewModel
         });
     }
 
-    /// <summary>Settings › Voice › Read replies aloud, with the mic window open: the reply of the turn that just ended
-    /// is read out (code and links left out). Nothing is read for a turn that was stopped or failed.</summary>
-    private void SpeakReplyIfWanted(ChatMessage userMsg)
+    private VoiceSpeaker? _speaker;
+    private VoicePlayer? _replyPlayer;
+    private CancellationTokenSource? _speakCts;
+
+    /// <summary>Settings › Voice › Read replies aloud: the reply of the turn that just ended is read out (code and links
+    /// left out) by the girl who wrote it, in her own voice and mood (VoicePersona). The browser voice speaks in the mic
+    /// window; Edge, Windows, ElevenLabs and OpenAI make the audio here and play it in the mic window when it is open
+    /// (it stops listening while she talks), else in the app. Nothing is read for a turn that was stopped or failed.
+    /// <para>The free engines fall back to Edge's free voices when they cannot speak this reply: the browser voice with
+    /// no mic window open, Windows with no voice for the reply's language (2026-11-09: most PCs have English voices
+    /// only, and Zira reads a Thai reply as an empty WAV — the reply was silent without a word).</para></summary>
+    private async void SpeakReplyIfWanted(ChatMessage userMsg)
     {
-        if (!_settingsService.Settings.VoiceSpeakReplies || !IsDictating || _dictation == null) return;
-        var rows = TurnMessages;
-        int at = rows.IndexOf(userMsg);
-        if (at < 0) return;
-        var reply = rows.Skip(at + 1).LastOrDefault(m => m.Role == MessageRole.Assistant);
-        if (reply == null || reply.HasError || reply.IsInterrupted || string.IsNullOrWhiteSpace(reply.Content)) return;
-        bool thai = reply.Content.Any(c => c >= '฀' && c <= '๿');
-        string text = SpeechText.ForSpeech(reply.Content, thai);
-        if (text.Length > 0) _dictation.Speak(text, thai ? "th-TH" : "en-US");
+        var s = _settingsService.Settings;
+        if (!s.VoiceSpeakReplies) return;
+        string engine = VoiceSpeaker.EngineOf(s);
+        bool micOpen = IsDictating && _dictation != null;
+        var rows = TurnMessages.ToList();
+        int userAt = rows.IndexOf(userMsg);
+        // Only the reply bubble that ends the turn (SpokenReply): not a card, a tool row or the "no summary" note.
+        var reply = SpokenReply.Of(rows, userAt);
+        if (reply == null)
+        {
+            _debugLog?.Info("Voice", userAt < 0 ? "nothing read: the turn's message is not in its chat"
+                : "nothing read: the turn ended on " + SpokenReply.Describe(SpokenReply.LastRow(rows, userAt)));
+            return;
+        }
+        bool thai = reply.Content.Any(c => c >= '\u0e00' && c <= '\u0e7f');
+        int max = Math.Clamp(s.Voice?.MaxChars ?? 1200, 100, 10000);
+        string text = SpeechText.ForSpeech(reply.Content, thai, max);
+        if (text.Length == 0) { _debugLog?.Info("Voice", "nothing read: the reply is only code or links"); return; }
+        string lang = thai ? "th-TH" : "en-US";
+        string girl = reply.Character.Own;
+        _speaker ??= new VoiceSpeaker(() => _settingsService.Settings);
+
+        if (VoiceSpeaker.NeedsMicWindow(engine) && micOpen)
+        {
+            var b = _speaker.BrowserStyle(girl);
+            _dictation!.Speak(text, lang, b.Voice, b.Rate, b.Pitch);
+            return;
+        }
+        // The browser voice with no mic window, or Windows with no voice for this language: Edge's free voices.
+        bool edge = VoiceSpeaker.NeedsMicWindow(engine) || (engine == Models.VoiceSettings.Windows && !WindowsTts.Speaks(lang));
+
+        StopReplyVoice();
+        var cts = _speakCts = new CancellationTokenSource();
+        var took = System.Diagnostics.Stopwatch.StartNew();
+        string used = edge ? Models.VoiceSettings.Edge : engine;
+        try
+        {
+            SpeechAudio audio;
+            try
+            {
+                audio = edge ? await _speaker.SynthesizeEdgeAsync(text, thai, girl, cts.Token)
+                             : await _speaker.SynthesizeAsync(text, thai, girl, cts.Token);
+            }
+            catch (WindowsVoiceMissingException)
+            {
+                // The Windows voice made no sound after all (a voice that claims the language but reads none of it).
+                used = Models.VoiceSettings.Edge;
+                audio = await _speaker.SynthesizeEdgeAsync(text, thai, girl, cts.Token);
+            }
+            _debugLog?.Info("Voice", $"reply read aloud · {used}{(used == Models.VoiceSettings.Edge ? " via " + EdgeTts.LastHost : "")}"
+                + $" · {text.Length} chars · {audio.Bytes.Length / 1024} KB in {took.ElapsedMilliseconds} ms");
+            OnUi(() =>
+            {
+                if (cts.IsCancellationRequested) return;
+                if (IsDictating && _dictation != null && _dictation.SpeakAudio(audio.Bytes, audio.Mime, text, lang)) return;
+                if (_replyPlayer == null)
+                {
+                    _replyPlayer = new VoicePlayer(_settingsService.DataRoot);
+                    _replyPlayer.Finished += error => { if (error != null) _debugLog?.Warn("Voice", "the reply's audio did not play: " + error); };
+                }
+                _replyPlayer.Play(audio);
+            });
+        }
+        catch (OperationCanceledException) { }
+        catch (VoiceKeyMissingException ex)
+        {
+            _debugLog?.Warn("Voice", $"reply not read: no {ex.Engine} key");
+            OnUi(() => StatusText = Loc(ex.Engine == Models.VoiceSettings.OpenAI ? "voice.openai.noKey" : "voice.eleven.noKey"));
+        }
+        catch (EdgeTtsException ex)
+        {
+            _debugLog?.Warn("Voice", $"reply not read: Edge failed after {took.ElapsedMilliseconds} ms ({text.Length} chars)", ex);
+            OnUi(() => StatusText = LocF(thai && engine != Models.VoiceSettings.Edge ? "voice.chat.noThaiVoice" : "voice.chat.failed", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _debugLog?.Warn("Voice", $"reply not read: {used} failed", ex);
+            OnUi(() => StatusText = LocF("voice.chat.failed", ex.Message));
+        }
+    }
+
+    // ─── the speaker button by the girls' faces in the chat ───
+
+    /// <summary>Read replies aloud — the same switch as Settings › Voice, by the girl's face on every reply.</summary>
+    public bool SpeakReplies
+    {
+        get => _settingsService.Settings.VoiceSpeakReplies;
+        set
+        {
+            if (value == _settingsService.Settings.VoiceSpeakReplies) return;
+            _settingsService.UpdateSettings(st => st.VoiceSpeakReplies = value);
+            if (!value) StopReplyVoice();
+            OnPropertyChanged();
+            StatusText = Loc(value ? "voice.chat.on" : "voice.chat.off");
+        }
+    }
+
+    private ICommand? _toggleSpeakRepliesCommand;
+    public ICommand ToggleSpeakRepliesCommand => _toggleSpeakRepliesCommand ??= new RelayCommand(() => SpeakReplies = !SpeakReplies);
+
+    /// <summary>A reply being made or played aloud stops (the user sent something new, or turned the voice off).</summary>
+    private void StopReplyVoice()
+    {
+        try { _speakCts?.Cancel(); } catch { }
+        _speakCts = null;
+        _replyPlayer?.Stop();
+    }
+
+    /// <summary>The mic window reported its browser's voices: remembered for the picker in Settings › Voice.</summary>
+    private void RememberBrowserVoices(IReadOnlyList<string> names)
+    {
+        if (names.Count == 0) return;
+        var v = _settingsService.Settings.Voice;
+        if (v != null && v.KnownBrowserVoices.SequenceEqual(names)) return;
+        _settingsService.UpdateSettings(st => (st.Voice ??= new Models.VoiceSettings()).KnownBrowserVoices = names.ToList());
     }
 }

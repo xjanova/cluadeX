@@ -154,9 +154,14 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             {
                 AppendTerminal($"— PowerShell · {_workspace.WorkingDirectory} —");
                 _terminal.Start(_workspace.WorkingDirectory);
+                OnPropertyChanged(nameof(IsTerminalRunning));
             }
         }
     }
+
+    /// <summary>The shell is alive (the header's green light). Raised on start, stop, a command that restarts it, and
+    /// exit — the exit comes from a pool thread, which WPF marshals for a plain property.</summary>
+    public bool IsTerminalRunning => _terminal.IsRunning;
 
     /// <summary>The whole terminal transcript, read once when the view binds. Never raised: new output reaches the
     /// view as <see cref="TerminalTextAppended"/> chunks instead of a fresh 200 K string 20 times a second.</summary>
@@ -183,6 +188,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         if (!_terminal.IsRunning) return;
         _terminal.Interrupt();
         AppendTerminal(T("ide.termStopped"));
+        OnPropertyChanged(nameof(IsTerminalRunning));
     });
     private ICommand? _interruptTerminalCommand;
 
@@ -190,10 +196,11 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     {
         string cmd = TerminalInput?.Trim() ?? "";
         if (cmd.Length == 0) return;
-        AppendTerminal($"> {cmd}");
+        AppendTerminal($"PS> {cmd}");
         NoteTerminalCommand(cmd);
         _terminal.Send(cmd);
         TerminalInput = "";
+        OnPropertyChanged(nameof(IsTerminalRunning));   // Send restarts a shell that had exited
     }
 
     private const int TerminalMaxChars = 200_000;
@@ -324,7 +331,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         HookGitPanel();
 
         _terminal.OutputReceived += AppendTerminal;
-        _terminal.Exited += () => AppendTerminal(T("ide.termExited"));
+        _terminal.Exited += () => { AppendTerminal(T("ide.termExited")); OnPropertyChanged(nameof(IsTerminalRunning)); };
     }
 
     // ═══════════════ Lifetime ═══════════════
@@ -519,6 +526,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             OnUi(() =>
             {
                 if (HasAutoCommentPreview) EndAutoCommentPreview();   // another diff replaces a pending preview
+                ResetDiffCaptions();
                 DiffRows = diff.Rows;
                 DiffTitle = item.Path;
                 DiffSummary = diff.HasChanges
@@ -548,6 +556,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         OnUi(() =>
         {
             if (HasAutoCommentPreview) EndAutoCommentPreview();
+            ResetDiffCaptions();
             DiffRows = diff.Rows;
             DiffTitle = tab.FileName;
             DiffSummary = T("ide.diffDiskVsEditor", diff.Added.ToString("N0"), diff.Removed.ToString("N0"));
@@ -580,6 +589,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         DiffRows = new List<DiffRow>();   // thousands of rows shouldn't sit in memory once dismissed
         DiffTitle = "";
         DiffSummary = "";
+        ResetDiffCaptions();
     });
     private ICommand? _closeDiffCommand;
 
@@ -1298,6 +1308,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     private async Task<bool> SaveTabInteractiveAsync(OpenFileTab tab)
     {
         if (tab is MediaFileTab media) return await SaveMediaInteractiveAsync(media);   // the page holds those edits
+        // The user's hand edits: [user-edit] comments first (setting), remembered once the save lands (ChangeMarks.cs).
+        var userEdit = PrepareUserEditSave(tab);
         var result = await _workspace.SaveTabCheckedAsync(tab, overwriteExternalChanges: false);
         if (result.Outcome == SaveOutcome.ChangedOnDisk)
         {
@@ -1334,6 +1346,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         {
             case SaveOutcome.Saved:
                 StatusMessage = T("ide.saved", tab.FileName);
+                CommitUserEditSave(userEdit, tab);
                 _ = _workspace.EnrichGitStatusAsync(Tree);
                 return true;
             case SaveOutcome.NotUtf8:
@@ -1400,6 +1413,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             // A media tab's edits are in its page, which cannot be asked synchronously from here: listed as not saved,
             // so the next question lets the user cancel and save it from its tab.
             if (tab is MediaFileTab) { failed.Add(tab.FileName); continue; }
+            var userEdit = PrepareUserEditSave(tab);
             var r = _workspace.SaveTabChecked(tab, overwriteExternalChanges: false);
             if (r.Outcome == SaveOutcome.ChangedOnDisk)
             {
@@ -1415,6 +1429,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
                 if (r.Outcome == SaveOutcome.Failed) _log?.Warn("Editor", $"Save on exit failed: {tab.FullPath} — {r.Error}");
                 failed.Add(tab.FileName);
             }
+            else CommitUserEditSave(userEdit, tab);
         }
         if (failed.Count == 0) return true;
 
@@ -2485,6 +2500,8 @@ public enum WorkbenchSearchMode
     Definitions,
     References,
     Rename,
+    /// <summary>Every place the user edited by hand (CodeEditorViewModel.ChangeMarks.cs).</summary>
+    UserEdits,
 }
 
 /// <summary>

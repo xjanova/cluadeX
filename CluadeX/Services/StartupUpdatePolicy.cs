@@ -44,7 +44,8 @@ public static class StartupUpdatePolicy
         if (phase is UpdatePhase.Downloading or UpdatePhase.Preparing) return Next.Wait;
         // Staged / Failed are the job's last statements (its task completes right after them): reading one before the
         // task is marked done must not open the app on a finished download ("slow network") instead of installing it.
-        if (phase is UpdatePhase.Staged or UpdatePhase.Failed) return Next.Wait;
+        // Available (found, not downloaded: this install does not update by itself) is one of them too.
+        if (phase is UpdatePhase.Staged or UpdatePhase.Failed or UpdatePhase.Available) return Next.Wait;
         return sinceCheckStarted >= CheckCap ? Next.CheckTooSlow : Next.Wait;
     }
 

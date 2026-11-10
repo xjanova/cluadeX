@@ -389,14 +389,28 @@ public partial class ChatViewModel
 
     // ─── search ───
 
-    /// <summary>The search's results: chats whose NAME (or project's name) matches come first — a chat renamed to find it
-    /// again is found by that name — then the message matches. With a project picked, only that project's chats.</summary>
+    /// <summary>The search's results: a chat whose REFERENCE was typed or pasted ("CX-8cf58c2a", with or without "CX-")
+    /// comes first, then chats whose NAME (or project's name) matches — a chat renamed to find it again is found by that
+    /// name — then the message matches. With a project picked, only that project's chats (a reference hit is kept: the
+    /// owner asked for that one chat).</summary>
     private List<SearchResult> WithTitleHits(string query, List<SearchResult> messageHits)
     {
         string q = query.Trim();
         var names = ChatProjects.ToDictionary(p => p.Id, p => p.Name, StringComparer.Ordinal);
         var list = new List<SearchResult>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var refHits = new HashSet<string>(StringComparer.Ordinal);
+        if (ChatRef.TryParse(q, out string wanted))
+            foreach (var s in Sessions)
+                if (ChatRef.Of(s.Id) == wanted && seen.Add(s.Id))
+                {
+                    refHits.Add(s.Id);
+                    list.Add(new SearchResult
+                    {
+                        SessionId = s.Id, SessionTitle = s.Title, UpdatedAt = s.UpdatedAt, MatchCount = 1,
+                        Snippet = LocF("sidebar.search.refHit", wanted),
+                    });
+                }
         foreach (var s in SidebarOrder(Sessions))
         {
             string project = names.GetValueOrDefault(ProjectOf(s)) ?? "";
@@ -417,7 +431,8 @@ public partial class ChatViewModel
                 list.Add(r);
             }
         if (_projectFilterId != null)
-            list = list.Where(r => Sessions.FirstOrDefault(s => s.Id == r.SessionId) is { } s && ProjectOf(s) == _projectFilterId).ToList();
+            list = list.Where(r => refHits.Contains(r.SessionId)
+                || Sessions.FirstOrDefault(s => s.Id == r.SessionId) is { } s && ProjectOf(s) == _projectFilterId).ToList();
         return list;
     }
 }

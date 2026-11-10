@@ -401,10 +401,19 @@ internal static class Program
         var bd = Backdrop;
         Check("the backdrop holds every girl the app ships", bd.Figures.Count == GirlArt.Names.Count && bd.Figures.Count >= 7, $"{bd.Figures.Count} of {GirlArt.Names.Count}");
         Check("the backdrop is never hit-tested", !bd.IsHitTestVisible);
+        // The owner's 2026-11-07 art: every girl ships in two poses, 1000 px tall, and Pose2\ adds no girl of its own.
+        var poseless = GirlArt.Names.Where(n => GirlArt.Image(n) is not BitmapSource p1 || p1.PixelHeight != 1000
+            || GirlArt.PoseImage(n, 2) is not BitmapSource p2 || p2.PixelHeight != 1000 || ReferenceEquals(p1, p2)).ToList();
+        Check("every girl ships in both poses, 1000 px tall", GirlArt.Names.Count == 8 && poseless.Count == 0,
+            $"{string.Join(",", GirlArt.Names)}; missing/odd: {string.Join(",", poseless)}");
+        Check("the backdrop alternates the poses (every other girl in her second)",
+            bd.Figures.Count > 1 && !ReferenceEquals(bd.Figures[1].Source, GirlArt.Image(bd.Figures[1].Tag as string, bd.DecodedHeight))
+            && ReferenceEquals(bd.Figures[1].Source, GirlArt.Image(bd.Figures[1].Tag as string, bd.DecodedHeight, pose: 2))
+            && ReferenceEquals(bd.Figures[0].Source, GirlArt.Image(bd.Figures[0].Tag as string, bd.DecodedHeight)));
         double dpi = VisualTreeHelper.GetDpi(bd).DpiScaleY;
-        int bound = Math.Min(820, (int)Math.Ceiling(GirlsBackdrop.MaxFigureHeight * dpi));
+        int bound = Math.Min(1000, (int)Math.Ceiling(GirlsBackdrop.MaxFigureHeight * dpi));
         var heights = bd.Figures.Select(f => (f.Source as BitmapSource)?.PixelHeight ?? 0).ToList();
-        Check("the pictures are decoded at display height, not the 820-px cut-outs", bd.DecodedHeight == bound && heights.All(h => h == bound),
+        Check("the pictures are decoded at display height, not the 1000-px cut-outs", bd.DecodedHeight == bound && heights.All(h => h == bound),
             $"decoded {string.Join("/", heights.Distinct())} px for at most {GirlsBackdrop.MaxFigureHeight} DIP × {dpi:0.##}");
         Check("…and they stand no taller than that on screen", bd.Figures.All(f => f.ActualHeight <= GirlsBackdrop.MaxFigureHeight + 0.5),
             string.Join("/", bd.Figures.Select(f => f.ActualHeight.ToString("0")).Distinct()));

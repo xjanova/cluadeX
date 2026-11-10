@@ -188,7 +188,7 @@
                                 </ControlTemplate>
                             </Button.Template>
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <ContentControl Style="{StaticResource FolderIconOpen}" Width="14" Height="11.4" VerticalAlignment="Center" Margin="0,0,6,0" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{services:Loc hooklib.bundleFolder}" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>

@@ -257,8 +257,42 @@ internal static class Program
             (".sh: the real rm", "a.sh", "#!/bin/sh\n" + homeDel),
             (".ps1: the real Remove-Item", "a.ps1", "Remove-" + "Item -Recurse -Force $env:" + "USERPROFILE"),
             ("a code block (no extension)", "(code)", homeDel),
+            // Owner 2026-11-09 ("ทำให้มันฉลาดหน่อย"): quotes are data only when the script runs no text and the line starts nothing.
+            (".ps1: a quoted delete beside Invoke-Expression", "a.ps1", "$c = '" + homeDel + "'\nInvoke-Expression $c"),
+            (".ps1: a quoted delete beside iex", "a.ps1", "$c = '" + homeDel + "'\niex $c"),
+            (".ps1: the call operator on a quoted rm", "a.ps1", "& 'rm' -rf " + Tilde),
+            (".ps1: Remove-Item with a quoted home", "a.ps1", "Remove-" + "Item -Recurse -Force \"$env:" + "USERPROFILE\""),
+            (".ps1: cmd /c with the delete in quotes", "a.ps1", "cmd /c \"" + RdSQ + Root + "\""),
+            (".sh: bash -c with the delete in quotes", "a.sh", "bash -c '" + homeDel + "'"),
+            (".sh: rm on a quoted $HOME", "a.sh", RmRf + "\"$HOME\""),
+            (".sh: a quoted delete run by eval", "a.sh", "c='" + homeDel + "'\neval \"$c\""),
+            (".sh: a quoted delete run as a bare variable", "a.sh", "c='" + homeDel + "'\n$c"),
+            (".bat: a quoted delete run as %var%", "a.bat", "set \"C=" + RdSQ + Root + "\"\r\n%C%\r\n"),
+            (".bat: rd on a quoted drive root", "a.bat", RdSQ + "\"" + Root + "\""),
         })
             Check($"code flags: {label}", DestructiveCodeScan.ScanText(text, file).Count > 0, text);
+
+        // Owner 2026-11-09: the red prompt came up on `dotnet build` for a warning hook copied into tmp/ — its table of
+        // patterns (@{ Name = 'rm -rf /'; Re = '…' }) is data. And deletes inside temp are not the root or a home.
+        string rootRm = RmRf + "/";
+        foreach (var (label, file, text) in new[]
+        {
+            (".ps1: a hashtable of patterns", "warn.ps1", "$rules = @(\n    @{ Name = '" + rootRm + "'; Re = 'rm\\s+-rf\\s+[/\\\\]\\s*$' },\n    @{ Name = '" + homeDel + "'; Re = 'rm\\s+-rf\\s+~' },\n    @{ Name = 'format c:'; Re = 'format\\s+c:' }\n)\nforeach ($r in $rules) { if ($cmd -match $r.Re) { Write-Warning $r.Name } }"),
+            (".ps1: a quoted message", "a.ps1", "$msg = \"never run " + RdSQ + Root + "\"\nWrite-Warning $msg"),
+            (".sh: a quoted pattern in a case", "a.sh", "case \"$1\" in\n  *'" + rootRm + "'*) echo blocked ;;\nesac"),
+            (".ps1: clean the temp folder", "a.ps1", "Remove-" + "Item -Recurse -Force \"$env:TEMP\\cluadex-*\""),
+            (".sh: clean tmp", "a.sh", RmRf + "/tmp/build-cache"),
+            (".bat: clean %TEMP%", "a.bat", RdSQ + "\"%TEMP%\\cx-test\""),
+            (".ps1: clean a profile's temp spelled out", "a.ps1", "Remove-" + "Item -Recurse -Force C:\\Users\\me\\AppData\\Local\\Temp\\x"),
+            (".sh: clean ~/tmp", "a.sh", RmRf + "~/tmp/cache"),
+        })
+            Check($"code passes: {label}", DestructiveCodeScan.ScanText(text, file).Count == 0, string.Join("; ", DestructiveCodeScan.ScanText(text, file).Select(f => f.Line + ": " + f.Why)));
+
+        // A build does not run what sits in a project's scratch / sandbox / build-output folders.
+        foreach (var p in new[] { "tmp/codex-recheck-65b/app-debug/Resources/HooksBundled/pretool-dangerous-cmd-warn.ps1", "temp/x.ps1", "src/bin/Debug/a.ps1", "node_modules/pkg/clean.sh", "tmp-2026/a.sh", "sandbox/try.ps1", "scratchpad\\a.bat" })
+            Check($"scratch folder skipped: {p}", DestructiveCodeScan.InScratchFolder(p));
+        foreach (var p in new[] { "scripts/clean.ps1", "tools/tmpl.sh", "temperature/a.ps1", "a.ps1", "../tmp/a.ps1" })
+            Check($"project file read: {p}", !DestructiveCodeScan.InScratchFolder(p));
     }
 
     static void Deletes(string work)
@@ -842,7 +876,9 @@ internal static class Program
                     Approve(54, new { questions = new object[] { new { question = "ข้อเดียว", options = new[] { new { label = "a", description = "" } } } } }),
                 });
                 string RS(int id) => rs.FirstOrDefault(r => r.Contains("\"id\":" + id + ",") || r.Contains("\"id\":" + id + "}")) ?? "";
-                var first = stepCards.FirstOrDefault();
+                // The calls are answered concurrently: find #51's card by its question, not by arrival order.
+                IReadOnlyList<CluadeX.Models.AskStep>? first;
+                lock (stepCards) first = stepCards.FirstOrDefault(s => s.Count > 0 && s[0].Question == "สีอะไรดีคะ?");
                 Check("steps: AskUserQuestion with two questions opens ONE card with two steps (labels, meanings, multi-select kept)",
                     first is { Count: 2 } && first[0].Question == "สีอะไรดีคะ?" && first[0].Options.SequenceEqual(new[] { "แดง", "ฟ้า" })
                     && first[0].Notes.Contains("แดง: สีเดิม") && !first[0].Multi && first[1].Multi && first[1].Options.SequenceEqual(new[] { "S", "L" }),

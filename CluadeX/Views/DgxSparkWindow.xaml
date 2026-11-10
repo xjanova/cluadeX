@@ -17,7 +17,8 @@
         </Style>
     </Window.Resources>
 
-    <!-- Brand.Spark: NVIDIA-style green, used as a colour only (no NVIDIA logo in the app). -->
+    <!-- Brand.Spark: NVIDIA-style green for the window's accents. The NVIDIA logo itself is NVIDIA's own file
+         (Assets/Logos/nvidia.png, see ATTRIBUTION.md there), on white, unaltered, never under 15 px tall. -->
     <Border Margin="18" CornerRadius="16" BorderThickness="1" BorderBrush="{DynamicResource Dialog.Border.Spark}"
             Background="{DynamicResource Dialog.Background.Spark}" Effect="{DynamicResource Shadow.Dialog}">
 
@@ -31,15 +32,47 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Border Width="48" Height="48" CornerRadius="12" VerticalAlignment="Top"
-                        Background="{DynamicResource Spark.Avatar.Background}" Effect="{DynamicResource Glow.Spark.Avatar}">
-                    <TextBlock Text="&#xE950;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="{DynamicResource Spark.Avatar.Foreground}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <!-- The NVIDIA logo (horizontal format) on white with clear space ≥ the height of its "n" all round. -->
+                <Border CornerRadius="10" Background="White" Padding="14" VerticalAlignment="Top"
+                        BorderThickness="1" BorderBrush="{DynamicResource Dialog.Card.Border}">
+                    <Image Source="/CluadeX;component/Assets/Logos/nvidia.png" Height="22" Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True"/>
                 </Border>
                 <StackPanel Grid.Column="1" Margin="14,2,10,0">
                     <TextBlock Text="{services:Loc spark.title}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap"/>
                     <TextBlock Text="{services:Loc spark.subtitle}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"
                                Foreground="{DynamicResource Text.Soft.Secondary}"/>
+                    <!-- Live status of the remembered Spark — the same reading as the title-bar chip. -->
+                    <Border Margin="0,8,0,0" HorizontalAlignment="Left" CornerRadius="11" Padding="9,3" BorderThickness="1"
+                            Background="{DynamicResource Spark.Chip.Background}" BorderBrush="{DynamicResource Spark.Chip.Border}"
+                            ToolTip="{Binding LinkTip}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="8" Height="8" Margin="0,0,7,0" VerticalAlignment="Center">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Fill" Value="{DynamicResource Spark.Chip.Dot}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding LinkState}" Value="Checking">
+                                                <Setter Property="Fill" Value="{DynamicResource Status.Warning}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LinkState}" Value="Online">
+                                                <Setter Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LinkState}" Value="InUse">
+                                                <Setter Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
+                                                <Setter Property="Effect" Value="{DynamicResource Glow.Spark.Active}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LinkState}" Value="Unreachable">
+                                                <Setter Property="Fill" Value="{DynamicResource Status.Danger}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <TextBlock Text="{Binding LinkText}" FontSize="11.5" FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Spark.Chip.Foreground}"/>
+                        </StackPanel>
+                    </Border>
                     <TextBlock Text="{Binding ActiveLine}" FontSize="11.5" Margin="0,6,0,0"
                                FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Brand.Spark}"
                                Visibility="{Binding HasActiveLine, Converter={StaticResource BoolVis}}"/>

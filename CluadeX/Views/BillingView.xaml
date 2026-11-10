@@ -44,6 +44,11 @@
                     <TextBlock Text="&#xE8C7;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="White"
                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
+                <!-- the provider's girl -->
+                <Ellipse Width="15" Height="15" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-5,-5"
+                         Fill="{Binding Mascot.FaceBrush}" Stroke="{Binding Mascot.AccentBrush}" StrokeThickness="1.2"
+                         ToolTip="{Binding Mascot.Name}"
+                         Visibility="{Binding Mascot, Converter={StaticResource NullToCollapsed}}"/>
             </Grid>
         </DataTemplate>
     </UserControl.Resources>

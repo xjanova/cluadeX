@@ -576,11 +576,11 @@
                     <WrapPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" MaxWidth="320">
                         <Button Style="{StaticResource ActionButton}" Command="{Binding OpenModelFolderCommand}"
                                 ToolTip="{services:Loc models.openFolderTip}" Padding="10,7">
-                            <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="13"/>
+                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13" HorizontalAlignment="Left"/>
                         </Button>
                         <Button Style="{StaticResource ActionPrimary}" Command="{Binding BrowseAndLoadModelCommand}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xED25;" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                <ContentControl Style="{StaticResource FolderIconOpen}" Width="14" Height="11.4" Margin="0,0,6,0" VerticalAlignment="Center" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{services:Loc models.loadGgufFile}"/>
                             </StackPanel>
                         </Button>
@@ -937,7 +937,7 @@
                             <WrapPanel Grid.Column="1" HorizontalAlignment="Right" MaxWidth="420">
                                 <Button Style="{StaticResource ActionButton}" Command="{Binding AddModelDirectoryCommand}" ToolTip="{services:Loc models.scanFolderTip}">
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE8F4;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                        <ContentControl Style="{StaticResource FolderIconNew}" Width="13" Height="10.6" Margin="0,0,6,0" VerticalAlignment="Center" HorizontalAlignment="Left"/>
                                         <TextBlock Text="{services:Loc models.addFolder}"/>
                                     </StackPanel>
                                 </Button>
@@ -1116,13 +1116,13 @@
                                 <WrapPanel HorizontalAlignment="Center">
                                     <Button Style="{StaticResource ActionPrimary}" Command="{Binding BrowseAndLoadModelCommand}">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xED25;" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="14" Height="11.4" Margin="0,0,6,0" VerticalAlignment="Center" HorizontalAlignment="Left"/>
                                             <TextBlock Text="{services:Loc models.browseGguf}"/>
                                         </StackPanel>
                                     </Button>
                                     <Button Style="{StaticResource ActionButton}" Command="{Binding AddModelDirectoryCommand}">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE8F4;" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                            <ContentControl Style="{StaticResource FolderIconNew}" Width="14" Height="11.4" Margin="0,0,6,0" VerticalAlignment="Center" HorizontalAlignment="Left"/>
                                             <TextBlock Text="{services:Loc models.addModelFolder}"/>
                                         </StackPanel>
                                     </Button>

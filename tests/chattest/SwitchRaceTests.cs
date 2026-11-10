@@ -145,7 +145,7 @@ internal static partial class Program
         var linksBefore = CluadeX.Services.ChatLinkStore.Current;
         CluadeX.Services.ChatLinkStore.Current = new CluadeX.Services.ChatLinkStore(Path.Combine(Settings.DataRoot, "sw-links-" + Guid.NewGuid().ToString("N")[..6]));
         string report;
-        try { report = (string)openForAgent.Invoke(Vm, new object[] { null, null, "sw agent split", null, false })!; }
+        try { report = (string)openForAgent.Invoke(Vm, new object[] { null, null, "sw agent split", null, false, null })!; }
         finally { CluadeX.Services.ChatLinkStore.Current = linksBefore; }
         var split = Vm.Sessions.FirstOrDefault(s => s.Title == "sw agent split");
         await WaitUntil(() => Vm.CurrentSession?.Id == b.Id, 5000);

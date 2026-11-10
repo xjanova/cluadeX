@@ -1,0 +1,149 @@
+<UserControl x:Class="CluadeX.Views.Plugins.ColibriCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
+             xmlns:vm="clr-namespace:CluadeX.ViewModels"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:ColibriPluginViewModel}"
+             Loaded="OnLoaded">
+    <!-- Colibri: the built-in plugin that installs colibri (big MoE models on a small GPU) and runs read-only
+         sub-agents on it. Everything here is bound to ColibriPluginViewModel. -->
+    <Border Padding="16,12" CornerRadius="12" BorderThickness="1"
+            Background="{DynamicResource Surface.Panel}" BorderBrush="{Binding Mascot.FrameBrush}"
+            Effect="{DynamicResource Shadow.Panel.Soft}">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- her face -->
+            <Ellipse Grid.Column="0" Width="58" Height="58" VerticalAlignment="Top"
+                     Fill="{Binding Mascot.FaceBrush}" Stroke="{Binding Mascot.AccentBrush}" StrokeThickness="2"/>
+
+            <StackPanel Grid.Column="1" Margin="14,0,12,0">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{services:Loc colibri.title}" FontSize="15" FontWeight="Bold"
+                               Foreground="{DynamicResource Text.Primary}"/>
+                    <Border Margin="10,2,0,0" Padding="7,1" CornerRadius="8" VerticalAlignment="Center"
+                            Background="{Binding Mascot.TintBrush}" BorderBrush="{Binding Mascot.AccentBrush}" BorderThickness="1">
+                        <TextBlock Text="{Binding Headline}" FontSize="10" FontFamily="{DynamicResource Font.Mono.Display}"
+                                   Foreground="{DynamicResource Text.Primary}"/>
+                    </Border>
+                </StackPanel>
+                <TextBlock Text="{services:Loc colibri.tagline}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Text.Muted}"/>
+
+                <!-- what she is doing now -->
+                <TextBlock Text="{Binding Detail}" FontSize="12" FontWeight="SemiBold" Margin="0,8,0,0" TextWrapping="Wrap"
+                           Foreground="{Binding Mascot.AccentBrush}"
+                           Visibility="{Binding Detail, Converter={StaticResource BoolVis}}"/>
+                <ProgressBar Height="5" Margin="0,6,0,0" Maximum="100" Value="{Binding ProgressValue, Mode=OneWay}"
+                             Foreground="{Binding Mascot.AccentBrush}" Background="{DynamicResource Border.Subtle}" BorderThickness="0"
+                             IsIndeterminate="{Binding ProgressUnknown, Mode=OneWay}"
+                             Visibility="{Binding IsBusy, Converter={StaticResource BoolVis}}"/>
+                <ProgressBar Height="5" Margin="0,6,0,0" Maximum="100" Value="{Binding ProgressValue, Mode=OneWay}"
+                             Foreground="{Binding Mascot.AccentBrush}" Background="{DynamicResource Border.Subtle}" BorderThickness="0"
+                             Visibility="{Binding InstallRunning, Converter={StaticResource BoolVis}}"/>
+                <TextBlock Text="{Binding Message}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Status.Warning}"
+                           Visibility="{Binding Message, Converter={StaticResource BoolVis}}"/>
+                <TextBlock Text="{Binding UpdateText}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource Text.Secondary}"
+                           Visibility="{Binding UpdateText, Converter={StaticResource BoolVis}}"/>
+
+                <!-- no Python -->
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0" Visibility="{Binding NoPython, Converter={StaticResource BoolVis}}">
+                    <TextBlock Text="{services:Loc colibri.noPython}" FontSize="11" TextWrapping="Wrap" MaxWidth="420"
+                               VerticalAlignment="Center" Foreground="{DynamicResource Status.Warning}"/>
+                    <Button Margin="10,0,0,0" Style="{StaticResource SecondaryButton}" Command="{Binding InstallPythonCommand}"
+                            Content="{services:Loc colibri.installPython}"/>
+                </StackPanel>
+
+                <!-- installed: models folder, models, sub-agent switch -->
+                <StackPanel Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}">
+                    <DockPanel Margin="0,10,0,0">
+                        <TextBlock DockPanel.Dock="Left" Text="{services:Loc colibri.modelsDir}" FontSize="11" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Text.Muted}"/>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource SecondaryButton}" Padding="10,3" Command="{Binding ChangeDirCommand}"
+                                Content="{services:Loc colibri.changeDir}"/>
+                        <TextBlock Text="{Binding ModelsDir}" Margin="8,0" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                   FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Primary}" ToolTip="{Binding ModelsDir}"/>
+                    </DockPanel>
+                    <TextBlock Text="{Binding DirWarning}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Status.Warning}" Visibility="{Binding HasDirWarning, Converter={StaticResource BoolVis}}"/>
+
+                    <TextBlock Text="{services:Loc colibri.noChatFits}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Status.Warning}" Visibility="{Binding NoChatFits, Converter={StaticResource BoolVis}}"/>
+                    <ListBox ItemsSource="{Binding Models}" SelectedItem="{Binding SelectedModel}" MaxHeight="170" Margin="0,8,0,0"
+                             Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             Visibility="{Binding HasModels, Converter={StaticResource BoolVis}}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:ColibriModelItem}">
+                                <StackPanel Margin="2,3">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                                        <TextBlock Text="{Binding Line}" FontSize="10" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource Text.Muted}"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Runs}" FontSize="10" Foreground="{DynamicResource Text.Secondary}"/>
+                                    <TextBlock Text="{Binding NoFit}" FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource Status.Danger}"
+                                               Visibility="{Binding NoFit, Converter={StaticResource BoolVis}}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <CheckBox Margin="0,10,0,0" IsChecked="{Binding UseForAgents}" Foreground="{DynamicResource Text.Primary}">
+                        <StackPanel>
+                            <TextBlock Text="{services:Loc colibri.useForAgents}" FontSize="12" FontWeight="SemiBold"/>
+                            <TextBlock Text="{services:Loc colibri.useForAgentsDesc}" FontSize="10" TextWrapping="Wrap" MaxWidth="560"
+                                       Foreground="{DynamicResource Text.Muted}"/>
+                        </StackPanel>
+                    </CheckBox>
+                    <TextBlock Text="{services:Loc colibri.updateHow}" FontSize="10" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Text.Faint}"/>
+                    <TextBlock Text="{services:Loc colibri.cudaNote}" FontSize="10" Margin="0,4,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Text.Faint}"/>
+                </StackPanel>
+                <TextBlock Text="{services:Loc colibri.license}" FontSize="9" Margin="0,6,0,0" Foreground="{DynamicResource Text.Faint}"/>
+            </StackPanel>
+
+            <!-- actions -->
+            <StackPanel Grid.Column="2" Width="190" VerticalAlignment="Top">
+                <StackPanel.Resources>
+                    <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                        <Setter Property="Margin" Value="0,0,0,6"/>
+                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                    </Style>
+                </StackPanel.Resources>
+                <Button Style="{StaticResource PrimaryButton}" Margin="0,0,0,6" Command="{Binding InstallCommand}" Content="{services:Loc colibri.install}"
+                        Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                <Button Style="{StaticResource PrimaryButton}" Margin="0,0,0,6" Command="{Binding StartCommand}" Content="{services:Loc colibri.start}"
+                        Visibility="{Binding CanStartShown, Converter={StaticResource BoolVis}}"/>
+                <Button Command="{Binding StopCommand}" Content="{services:Loc colibri.stop}"
+                        Visibility="{Binding IsRunning, Converter={StaticResource BoolVis}}"/>
+                <Button Command="{Binding LoadModelsCommand}" Content="{services:Loc colibri.loadModels}"
+                        Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}"/>
+                <Button Command="{Binding InstallModelCommand}" Content="{services:Loc colibri.installModel}"
+                        Visibility="{Binding HasModels, Converter={StaticResource BoolVis}}"/>
+                <Button Command="{Binding DashboardCommand}" Content="{services:Loc colibri.dashboard}"
+                        Visibility="{Binding IsReady, Converter={StaticResource BoolVis}}"/>
+                <Button Style="{StaticResource PrimaryButton}" Margin="0,0,0,6" Command="{Binding UpdateCommand}" Content="{Binding UpdateLabel}"
+                        Visibility="{Binding UpdateAvailable, Converter={StaticResource BoolVis}}"/>
+                <Button Command="{Binding CheckUpdateCommand}" Content="{services:Loc colibri.checkUpdate}"
+                        Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}"/>
+                <Button Command="{Binding RollbackCommand}" Content="{Binding RollbackLabel}"
+                        Visibility="{Binding CanRollback, Converter={StaticResource BoolVis}}"/>
+                <Button Command="{Binding RefreshCommand}" Content="{services:Loc colibri.refresh}"/>
+                <Button Command="{Binding CancelCommand}" Content="✕"
+                        Visibility="{Binding IsBusy, Converter={StaticResource BoolVis}}"/>
+                <Button Style="{StaticResource DangerButton}" Margin="0,6,0,0" Command="{Binding UninstallCommand}" Content="{services:Loc colibri.uninstall}"
+                        Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>

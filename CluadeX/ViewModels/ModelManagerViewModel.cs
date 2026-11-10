@@ -814,10 +814,11 @@ public class ModelManagerViewModel : ViewModelBase
 
     /// <summary>Installed and catalog models whose architecture no llama.cpp here knows.</summary>
     public int ModelsNeedingNewerLlama { get; private set; }
-    /// <summary>The card shows when a model needs it, while it runs, and with its last result.</summary>
-    public bool ShowLlamaCppCard => ModelsNeedingNewerLlama > 0 || IsInstallingLlamaCpp || LlamaCppStatus.Length > 0;
+    /// <summary>The card shows when a model needs it, when the GPU wants it, while it runs, and with its last result.</summary>
+    public bool ShowLlamaCppCard => ModelsNeedingNewerLlama > 0 || GpuNeedsServer || IsInstallingLlamaCpp || LlamaCppStatus.Length > 0;
     public string LlamaCppHeadline => LlamaCppStatus.Length > 0 ? LlamaCppStatus
         : ModelsNeedingNewerLlama > 0 ? _loc.T("llamacpp.banner", ModelsNeedingNewerLlama)
+        : GpuNeedsServer ? _loc.T("llamacpp.gpuBanner")
         : LlamaCppInstaller.ReadInstalled() is { } i ? _loc.T("llamacpp.installed", i.Tag, i.Variant) : "";
     public string LlamaCppButtonText => IsInstallingLlamaCpp ? _loc.T("llamacpp.confirm.cancel")
         : LlamaCppInstaller.ReadInstalled() != null ? _loc.T("llamacpp.update") : _loc.T("llamacpp.get");
@@ -838,10 +839,30 @@ public class ModelManagerViewModel : ViewModelBase
     private double _llamaCppProgress;
     public double LlamaCppProgress { get => _llamaCppProgress; private set => SetProperty(ref _llamaCppProgress, value); }
 
+    /// <summary>GPU is on in Settings and there is an NVIDIA card, but no llama-server: CluadeX no longer ships a CUDA
+    /// backend of its own (CluadeX.csproj), so the GPU build is downloaded when it is wanted — this card offers it.</summary>
+    public bool GpuNeedsServer { get; private set; }
+
+    /// <summary>Is there an NVIDIA card (nvidia-smi): asked once per run, off the UI thread.</summary>
+    private static Task<bool>? _nvidiaCheck;
+
+    private void RefreshGpuNeed()
+    {
+        var s = _settingsService.Settings;
+        bool wantGpu = s.GpuLayerCount != 0 && !string.Equals(s.GpuBackend, "CPU", StringComparison.OrdinalIgnoreCase);
+        if (!wantGpu || LlamaBackendInfo.FindServerExe(s.CustomLlamaCppBackendPath) != null) { GpuNeedsServer = false; return; }
+        _nvidiaCheck ??= Task.Run(() => { try { return GpuDetectionService.NvidiaComputeCapability() != null; } catch { return false; } });
+        if (_nvidiaCheck.IsCompleted) { GpuNeedsServer = _nvidiaCheck.Result; return; }
+        GpuNeedsServer = false;
+        _nvidiaCheck.ContinueWith(_ => System.Windows.Application.Current?.Dispatcher.BeginInvoke(RefreshLlamaCppCard), TaskScheduler.Default);
+    }
+
     private void RefreshLlamaCppCard()
     {
         ModelsNeedingNewerLlama = LocalModels.Count(m => m.NeedsNewerBackend)
             + _allRecommended.Count(m => m.NeedsNewerBackend && !m.IsInstalled);
+        RefreshGpuNeed();
+        OnPropertyChanged(nameof(GpuNeedsServer));
         OnPropertyChanged(nameof(ModelsNeedingNewerLlama));
         OnPropertyChanged(nameof(ShowLlamaCppCard));
         OnPropertyChanged(nameof(LlamaCppHeadline));

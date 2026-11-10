@@ -209,6 +209,7 @@ static partial class Program
 
         WizardSteps();
         WizardAssets();
+        UninstallChecks();
         await ConnectionTests();
 
         Console.WriteLine($"\n═══ {pass} pass · {fail} FAIL ═══");

@@ -25,8 +25,26 @@ internal static partial class Program
     /// <summary>The fake llama-server: FAKE_LLAMA_LOG gets one line per launch; --mmproj fails unless FAKE_LLAMA_MMPROJ=ok.</summary>
     static int FakeLlamaServer(string[] args)
     {
+        // The provider reads the build's flags from --help before a launch (LlamaServerArgs): not a launch. An empty
+        // help is a build with none of the new flags, so the launch line stays the one these cases check.
+        if (args.Length == 1 && args[0] == "--help")
+        {
+            // FAKE_LLAMA_HELP=new: the flag lines of a 2026 build (VP8).
+            if (Environment.GetEnvironmentVariable("FAKE_LLAMA_HELP") == "new")
+                Console.WriteLine("-fa,   --flash-attn [on|off|auto]\n-ctk,  --cache-type-k TYPE\n-ctv,  --cache-type-v TYPE\n"
+                                  + "-ncmoe, --n-cpu-moe N\n-fit,  --fit [on|off]\n--cache-reuse N");
+            return 0;
+        }
         string? log = Environment.GetEnvironmentVariable("FAKE_LLAMA_LOG");
         if (log != null) File.AppendAllText(log, string.Join(' ', args) + "\n");
+        // FAKE_LLAMA_REFUSE=<flag>: a build that stops at startup on that flag (VP8).
+        if (Environment.GetEnvironmentVariable("FAKE_LLAMA_REFUSE") is { Length: > 0 } refused && args.Contains(refused))
+        {
+            Console.Error.WriteLine($"error: invalid argument: {refused}");
+            Console.Error.Flush();
+            Thread.Sleep(300);
+            return 1;
+        }
         if (args.Contains("--mmproj") && Environment.GetEnvironmentVariable("FAKE_LLAMA_MMPROJ") != "ok")
         {
             Console.Error.WriteLine("clip_model_loader: unknown projector type: gemma4uv");
@@ -232,6 +250,68 @@ internal static partial class Program
                 Environment.SetEnvironmentVariable("FAKE_LLAMA_MMPROJ", null);
                 settings.UpdateSettings(s => { s.CustomLlamaCppBackendPath = backendBefore; s.GpuBackend = gpuBefore; });
                 VisionProjector.ResetFailures();
+                for (int i = 0; i < 10; i++)
+                {
+                    try { File.Delete(fake); break; } catch { await Task.Delay(300); }
+                }
+            }
+        });
+
+        await Case("VP8", async () =>
+        {
+            // The KV cache / cache-reuse flags (LlamaServerArgs) on a build that stops at one of them: the model must still
+            // load, with the launch line of before, and say why. The server provider itself (a text model goes to LLamaSharp
+            // through LocalGgufProvider), the fake server.
+            string exeDir = AppContext.BaseDirectory;
+            string fake = Path.Combine(exeDir, "llama-server.exe");
+            File.Copy(Environment.ProcessPath!, fake, overwrite: true);
+            string dir = NewDir("flags");
+            string model = Touch(dir, "Toy-Text-Q4_K_M.gguf", 1024);
+            string log = Path.Combine(dir, "launches.txt");
+            Environment.SetEnvironmentVariable("FAKE_LLAMA_LOG", log);
+            Environment.SetEnvironmentVariable("FAKE_LLAMA_HELP", "new");
+            Environment.SetEnvironmentVariable("FAKE_LLAMA_REFUSE", "-ctk");
+            var settings = Sp.GetRequiredService<SettingsService>();
+            string? backendBefore = settings.Settings.CustomLlamaCppBackendPath;
+            string gpuBefore = settings.Settings.GpuBackend, kvBefore = settings.Settings.LocalKvCacheType;
+            settings.UpdateSettings(s => { s.CustomLlamaCppBackendPath = exeDir; s.GpuBackend = "CPU"; s.LocalKvCacheType = "auto"; });
+            var server = Sp.GetRequiredService<LlamaServerProvider>();
+            LlamaServerProvider.ResetLaunchMemory();
+            try
+            {
+                // 1. The build refuses -ctk → started again with the line of before; the reason is kept.
+                await server.LoadModelAsync(model);
+                string[] l1 = File.ReadAllLines(log);
+                bool fellBack = server.IsReady && l1.Length == 2
+                                && l1[0].Contains("-fa on -ctk q8_0 -ctv q8_0") && l1[0].Contains("--cache-reuse 256")
+                                && !l1[1].Contains("-ctk") && !l1[1].Contains("-fa ") && !l1[1].Contains("--cache-reuse") && l1[1].Contains("-ngl 0")
+                                && server.NewFlagsFallbackReason.Contains("-ctk");
+                Check("VP8", "a build that refuses the KV cache flag: started again with the line of before — the model loads and says why",
+                    fellBack, $"ready={server.IsReady} reason='{server.NewFlagsFallbackReason}'\n{string.Join("\n", l1)}");
+
+                // 2. The next load of that model goes straight to the line of before.
+                await server.LoadModelAsync(model);
+                string[] l2 = File.ReadAllLines(log);
+                Check("VP8b", "…and the next load of that model goes straight to the line of before (one launch)",
+                    server.IsReady && l2.Length == 3 && !l2[2].Contains("-ctk") && server.NewFlagsFallbackReason != "", string.Join("\n", l2));
+
+                // 3. A build that takes them: one launch with the new flags, nothing to explain.
+                Environment.SetEnvironmentVariable("FAKE_LLAMA_REFUSE", null);
+                LlamaServerProvider.ResetLaunchMemory();
+                await server.LoadModelAsync(model);
+                string[] l3 = File.ReadAllLines(log);
+                Check("VP8c", "a build that takes them: one launch with KV q8_0 and --cache-reuse, nothing to explain",
+                    server.IsReady && l3.Length == 4 && l3[3].Contains("-ctk q8_0 -ctv q8_0") && l3[3].Contains("--cache-reuse 256")
+                    && server.NewFlagsFallbackReason == "" && server.LaunchPlan is { KvType: "q8_0" }, l3.LastOrDefault() ?? "");
+            }
+            finally
+            {
+                try { await server.StopServerAsync(); } catch { }
+                Environment.SetEnvironmentVariable("FAKE_LLAMA_LOG", null);
+                Environment.SetEnvironmentVariable("FAKE_LLAMA_HELP", null);
+                Environment.SetEnvironmentVariable("FAKE_LLAMA_REFUSE", null);
+                settings.UpdateSettings(s => { s.CustomLlamaCppBackendPath = backendBefore; s.GpuBackend = gpuBefore; s.LocalKvCacheType = kvBefore; });
+                LlamaServerProvider.ResetLaunchMemory();
                 for (int i = 0; i < 10; i++)
                 {
                     try { File.Delete(fake); break; } catch { await Task.Delay(300); }

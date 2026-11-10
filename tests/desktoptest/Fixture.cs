@@ -28,6 +28,8 @@ internal sealed class Fixture
     public RichTextBox Rich = null!;
     public StackPanel Panel = null!;
     public int Presses, GuardPresses, RowPresses;
+    private readonly List<Window> _extras = new();
+    private Thread? _thread;
 
     public static Fixture Start(int x = 120, int y = 120)
     {
@@ -40,6 +42,7 @@ internal sealed class Fixture
             Dispatcher.Run();
         }) { IsBackground = true, Name = "fixture-ui" };
         t.SetApartmentState(ApartmentState.STA);
+        f._thread = t;
         t.Start();
         if (!ready.Wait(TimeSpan.FromSeconds(20))) throw new Exception("fixture window did not start");
         return f;
@@ -107,9 +110,25 @@ internal sealed class Fixture
             var w = new Window { Title = title, Width = 300, Height = 160, Left = 700, Top = 120, Topmost = true, ShowActivated = false,
                 Content = new Button { Content = "Inside" } };
             w.Show();
+            _extras.Add(w);
             return w;
         });
     }
 
-    public void Close() { try { D.Invoke(() => Win.Close()); D.InvokeShutdown(); } catch { } }
+    // Every window on the fixture's thread is closed before its dispatcher stops: one left open (an Extra) made WPF's
+    // exit hook fail on a dead handle now and then (Win32Exception 1400 in ManagedWndProcTracker after the report).
+    public void Close()
+    {
+        try
+        {
+            D.Invoke(() =>
+            {
+                foreach (var w in _extras) try { if (w.IsLoaded) w.Close(); } catch { }
+                Win.Close();
+            });
+            D.InvokeShutdown();
+            _thread?.Join(5000);
+        }
+        catch { }
+    }
 }

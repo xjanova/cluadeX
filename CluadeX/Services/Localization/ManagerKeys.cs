@@ -307,10 +307,20 @@ internal static class ManagerKeys
             ["th"] = "โหลด {1} ไม่ได้: สถาปัตยกรรม '{0}' ของโมเดลนี้ใหม่กว่าทั้ง llama.cpp ที่มากับแอพ และ llama-server ที่ {2} (ตัวไฟล์ไม่ได้เสีย) ทางเลือก: หน้าโมเดล ▸ ดาวน์โหลด llama.cpp ล่าสุด (กดครั้งเดียว) · หรือใช้โมเดลผ่าน Ollama แทน · หรือไปที่ Settings ▸ โฟลเดอร์ llama.cpp ที่สร้างเอง → เลือก llama-server รุ่นใหม่ (หรือ Scripts/update-llama-backend.ps1 สำหรับ build ของนักพัฒนา)",
         },
         ["local.archUnsupportedShort"] = new() { ["en"] = "'{0}' needs a newer llama.cpp — get it on the Models page", ["th"] = "'{0}' ต้องใช้ llama.cpp ใหม่กว่า — กดดาวน์โหลดที่หน้าโมเดล" },
+        ["local.gpuNeedsServer"] = new()
+        {
+            ["en"] = "GPU is on, but the GPU build of llama.cpp is not downloaded yet — running on the CPU. Get it on the Models page (one click) to use your graphics card.",
+            ["th"] = "เปิดใช้ GPU ไว้ แต่ยังไม่ได้ดาวน์โหลด llama.cpp รุ่น GPU — ตอนนี้รันด้วย CPU กดดาวน์โหลดที่หน้าโมเดล (คลิกเดียว) เพื่อใช้การ์ดจอ",
+        },
         // ── llama.cpp download (LlamaCppInstaller) ──
         ["llamacpp.get"] = new() { ["en"] = "Get the latest llama.cpp", ["th"] = "ดาวน์โหลด llama.cpp ล่าสุด" },
         ["llamacpp.update"] = new() { ["en"] = "Update llama.cpp", ["th"] = "อัปเดต llama.cpp" },
         ["llamacpp.banner"] = new() { ["en"] = "{0} of your models need a newer llama.cpp than the one bundled with CluadeX. One click downloads llama-server from github.com/ggml-org/llama.cpp.", ["th"] = "โมเดลของคุณ {0} ตัวต้องใช้ llama.cpp ใหม่กว่าตัวที่มากับ CluadeX กดครั้งเดียวเพื่อดาวน์โหลด llama-server จาก github.com/ggml-org/llama.cpp" },
+        ["llamacpp.gpuBanner"] = new()
+        {
+            ["en"] = "Your NVIDIA card can run local models much faster. One click downloads the GPU build of llama.cpp (with its CUDA runtime) from github.com/ggml-org/llama.cpp — only needed for local models.",
+            ["th"] = "การ์ดจอ NVIDIA ของคุณรันโมเดลในเครื่องได้เร็วขึ้นมาก กดครั้งเดียวเพื่อดาวน์โหลด llama.cpp รุ่น GPU (พร้อม CUDA runtime) จาก github.com/ggml-org/llama.cpp — จำเป็นเฉพาะคนที่ใช้โมเดลในเครื่อง",
+        },
         ["llamacpp.installed"] = new() { ["en"] = "llama.cpp {0} ({1}) installed by CluadeX", ["th"] = "llama.cpp {0} ({1}) ที่ CluadeX ติดตั้งไว้" },
         ["llamacpp.confirm.title"] = new() { ["en"] = "Download llama.cpp", ["th"] = "ดาวน์โหลด llama.cpp" },
         ["llamacpp.confirm.body"] = new() { ["en"] = "Download llama.cpp {0} ({1} build, {2} MB) from github.com/ggml-org/llama.cpp into\n{3}\n\nEach file is checked against the sha256 GitHub publishes. Your current backend stays until the new one has started once.", ["th"] = "ดาวน์โหลด llama.cpp {0} (build {1} ขนาด {2} MB) จาก github.com/ggml-org/llama.cpp ไปไว้ที่\n{3}\n\nทุกไฟล์จะตรวจ sha256 ตามที่ GitHub ประกาศ และ backend ตัวเดิมจะยังอยู่จนกว่าตัวใหม่จะเปิดได้จริงหนึ่งครั้ง" },

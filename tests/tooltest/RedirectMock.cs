@@ -38,6 +38,17 @@ internal sealed class RedirectMock : IDisposable
 
     public void Clear() => Seen = new ConcurrentQueue<string>();
 
+    /// <summary>/long: 50,000 characters of numbered words ("w00001 ", 7 characters each), then a Thai line and an
+    /// emoji, then "END-OF-LONG" — longer than any one web_fetch part, so reading it needs offsets.</summary>
+    public static readonly string LongBody = BuildLongBody();
+
+    private static string BuildLongBody()
+    {
+        var sb = new StringBuilder();
+        for (int i = 1; sb.Length < 50_000; i++) sb.Append($"w{i:00000} ");
+        return sb.Append("ภาษาไทยท้ายหน้า \U0001F600 END-OF-LONG").ToString();
+    }
+
     /// <summary>How long each /slow/{n} hop takes before it answers.</summary>
     public const int SlowHopMs = 700;
 
@@ -138,6 +149,7 @@ internal sealed class RedirectMock : IDisposable
         if (path == "/same") return (302, "/final", "");
         if (path == "/final") return (200, null, "FINAL-SAME-HOST");
         if (path == "/thai") return (200, null, "สวัสดี-THAI");   // สวัสดี
+        if (path == "/long") return (200, null, LongBody);
         if (path == "/cross") return (302, $"http://localhost:{Port}/landing?d=secret", "");
         if (path.StartsWith("/landing")) return (200, null, "LANDED-OTHER-HOST");
         if (path.StartsWith("/loop/") && int.TryParse(path[6..], out int n)) return (302, $"/loop/{n + 1}", "");

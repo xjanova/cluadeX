@@ -60,6 +60,12 @@ public sealed class BillingSavingsViewModel : ViewModelBase
     /// <summary>One dispatch strategy over the selected dates (CostTrackingService.StrategyBreakdown): runs, success share,
     /// cost per run, time per run — the numbers DispatchPolicy's thresholds are tuned from.</summary>
     public sealed record StrategyRow(string Name, string Runs, string Success, string CostPerRun, string TimePerRun, string Total, double Fraction);
+    /// <summary>One sub-agent tier over the selected dates (CostTrackingService.TierBreakdown): what it cost, what the same
+    /// work would have cost on the run's own model, and the difference.</summary>
+    public sealed record TierLine(string Name, string Requests, string Paid, string OnRunModel, string Saved, double Fraction, string Climbs = "0")
+    {
+        public bool HasClimbs => Climbs != "0";
+    }
     public sealed record LinePoint(double X, double Y, string Tip, Brush? Color = null);
     public sealed record ProviderLine(string Label, Brush Color, PointCollection Points, IReadOnlyList<LinePoint> Dots);
     public sealed record RangeChoice(string Key, string Label, int? Days)
@@ -110,6 +116,8 @@ public sealed class BillingSavingsViewModel : ViewModelBase
     public ObservableCollection<SavingRow> Savings { get; } = new();
     public ObservableCollection<StrategyRow> Strategies { get; } = new();
     public bool HasStrategies => Strategies.Count > 0;
+    public ObservableCollection<TierLine> Tiers { get; } = new();
+    public bool HasTiers => Tiers.Count > 0;
     public ObservableCollection<ProviderChoice> Providers { get; } = new();
     public ObservableCollection<ProviderLine> ProviderLines { get; } = new();
     public ObservableCollection<MonthlyTotal> MonthlyTotals { get; } = new();
@@ -118,6 +126,18 @@ public sealed class BillingSavingsViewModel : ViewModelBase
     private IReadOnlyList<ChartBar> _dailyBars = Array.Empty<ChartBar>();
     /// <summary>Daily bars for the page's <c>SpendChart</c>: each selected provider's paid part, then the saved part on top.</summary>
     public IReadOnlyList<ChartBar> DailyBars { get => _dailyBars; private set => SetProperty(ref _dailyBars, value); }
+
+    // ── Saved by AI on this PC (owner 2026-11-08: "ทำประวัติกราฟชี้ชัดว่าประหยัดได้เท่าไหร่ด้วย") ──
+    private IReadOnlyList<ChartBar> _localBars = Array.Empty<ChartBar>();
+    /// <summary>Per day: what sub-agent work on a model on this PC would have cost on the run's model; the line is the running total.</summary>
+    public IReadOnlyList<ChartBar> LocalBars { get => _localBars; private set => SetProperty(ref _localBars, value); }
+    private string _localTotals = "";
+    public string LocalTotals { get => _localTotals; private set => SetProperty(ref _localTotals, value); }
+    private bool _hasLocal;
+    public bool HasLocal { get => _hasLocal; private set => SetProperty(ref _hasLocal, value); }
+    /// <summary>น้อง Colibri beside the chart: her face and her colour on the bars.</summary>
+    public ChatCharacter LocalMascot { get; } = ChatCharacter.ForProvider(Models.AiProviderType.Colibri);
+    private List<CostTrackingService.UsageDay> _localDays = new();
 
     private PointCollection _paidLine = new(), _baseLine = new(), _gapArea = new();
     public PointCollection PaidLine { get => _paidLine; private set => SetProperty(ref _paidLine, value); }
@@ -328,7 +348,8 @@ public sealed class BillingSavingsViewModel : ViewModelBase
         var a = values.ToList();
         return new(day, a.Sum(d => d.Usd), a.Sum(d => d.BaselineUsd), a.Sum(d => d.Requests), a.Sum(d => d.SavedCacheUsd),
             a.Sum(d => d.SavedToolSearchUsd), a.Sum(d => d.SavedCompactionUsd), a.Sum(d => d.SavedBatchUsd),
-            a.Sum(d => d.InputTokens), a.Sum(d => d.CacheReadTokens), a.Sum(d => d.OutputTokens));
+            a.Sum(d => d.InputTokens), a.Sum(d => d.CacheReadTokens), a.Sum(d => d.OutputTokens), a.Sum(d => d.SavedRoutingUsd),
+            a.Sum(d => d.SavedLocalUsd), a.Sum(d => d.LocalRequests), a.Sum(d => d.LocalTokens));
     }
 
     private Models.ProviderSpendSettings? Billing(string key) => _settings.Settings.ProviderSpending?.GetValueOrDefault(key);
@@ -356,6 +377,7 @@ public sealed class BillingSavingsViewModel : ViewModelBase
         var selected = data.Where(d => InScope(d.Provider)).ToList();
         _chartProviders = selected.Where(d => d.Provider.HasData).ToList();
         var dates = _cost.Between(_from, _to);
+        _localDays = dates.ToList();   // the local columns are kept for all providers only
         _chartDays = dates.Select((d, i) => SumDays(d.Day, selected.Select(p => p.Days[i]))).ToList();
         HasUsage = selected.Any(d => d.Provider.HasData);
         SelectionText = LF("usage.selectedCount", data.Count(d => d.Provider.IsSelected), Providers.Count);
@@ -373,7 +395,8 @@ public sealed class BillingSavingsViewModel : ViewModelBase
         BuildCharts();
 
         var parts = new[] { ("usage.byCache", _chartDays.Sum(d => d.SavedCacheUsd)), ("usage.byToolSearch", _chartDays.Sum(d => d.SavedToolSearchUsd)),
-            ("usage.byCompaction", _chartDays.Sum(d => d.SavedCompactionUsd)), ("usage.byBatch", _chartDays.Sum(d => d.SavedBatchUsd)) };
+            ("usage.byCompaction", _chartDays.Sum(d => d.SavedCompactionUsd)), ("usage.byBatch", _chartDays.Sum(d => d.SavedBatchUsd)),
+            ("usage.byRouting", _chartDays.Sum(d => d.SavedRoutingUsd)), ("usage.byLocal", _localDays.Sum(d => d.SavedLocalUsd)) };
         decimal top = parts.Max(p => Math.Max(0, p.Item2));
         Savings.Clear();
         foreach (var (key, usd) in parts) Savings.Add(new SavingRow(L(key), Usd(usd), top > 0 ? (double)(Math.Max(0, usd) / top) : 0));
@@ -390,6 +413,15 @@ public sealed class BillingSavingsViewModel : ViewModelBase
                 topPerRun > 0 ? (double)(r.UsdPerRun / topPerRun) : 0));
         }
         OnPropertyChanged(nameof(HasStrategies));
+
+        Tiers.Clear();
+        var tiers = _cost.TierBreakdown(_from, _to);
+        decimal topTier = tiers.Count == 0 ? 0 : tiers.Max(r => r.RunModelUsd);
+        foreach (var r in tiers)
+            Tiers.Add(new TierLine(L("usage.tier." + r.Tier), r.Requests.ToString("N0", CultureInfo.InvariantCulture),
+                Usd(r.Usd), Usd(r.RunModelUsd), Usd(r.SavedUsd), topTier > 0 ? (double)(r.Usd / topTier) : 0,
+                r.Climbs.ToString("N0", CultureInfo.InvariantCulture)));
+        OnPropertyChanged(nameof(HasTiers));
         BuildMonthlyTotals(selected.Select(p => p.Provider).ToList());
     }
 
@@ -425,6 +457,28 @@ public sealed class BillingSavingsViewModel : ViewModelBase
 
     private static readonly Brush SavedBrush = BillingViewModel.Brush("#22C55E", 0.45);
 
+    /// <summary>The on-PC chart: each bucket's saving in her colour, the running total as the line; tokens and requests in the tip.</summary>
+    private void BuildLocalChart(int bucketSize)
+    {
+        var days = _localDays.Chunk(bucketSize).Select(a => SumDays(a[0].Day, a)).ToList();
+        var brush = LocalMascot.AccentBrush;
+        decimal running = 0;
+        var bars = new List<ChartBar>(days.Count);
+        foreach (var d in days)
+        {
+            decimal saved = Math.Max(0, d.SavedLocalUsd);
+            running += saved;
+            var segs = saved > 0 ? new List<ChartPart> { new((double)saved, brush) } : new List<ChartPart>();
+            bars.Add(new ChartBar(d.Day, segs, (double)running, LF("usage.localTip", d.Day.ToString("d MMM yyyy", CultureInfo.CurrentUICulture),
+                Usd(saved), d.LocalRequests.ToString("N0", CultureInfo.InvariantCulture), Tok(d.LocalTokens), Usd(running))));
+        }
+        LocalBars = bars;
+        decimal total = Math.Max(0, _localDays.Sum(d => d.SavedLocalUsd));
+        int requests = _localDays.Sum(d => d.LocalRequests);
+        HasLocal = total > 0 || requests > 0;
+        LocalTotals = LF("usage.localTotals", Usd(total), requests.ToString("N0", CultureInfo.InvariantCulture), Tok(_localDays.Sum(d => d.LocalTokens)));
+    }
+
     private void BuildCharts()
     {
         // At most 90 points: a long range is grouped into buckets of whole days, every dollar still counted.
@@ -434,7 +488,7 @@ public sealed class BillingSavingsViewModel : ViewModelBase
         var providers = _chartProviders.Select(p => (p.Provider, Days: Bucket(p.Days))).ToList();
         BucketText = bucketSize > 1 ? LF("usage.bucketDays", bucketSize) : L("usage.dailyBuckets");
         ProviderLines.Clear();
-        if (days.Count == 0) { PaidLine = BaseLine = GapArea = new(); DailyBars = Array.Empty<ChartBar>(); return; }
+        if (days.Count == 0) { PaidLine = BaseLine = GapArea = new(); DailyBars = Array.Empty<ChartBar>(); BuildLocalChart(bucketSize); return; }
 
         // Daily bars: each provider's paid part in its colour, the saved part (without savings − paid) on top.
         var bars = new List<ChartBar>(days.Count);
@@ -451,6 +505,7 @@ public sealed class BillingSavingsViewModel : ViewModelBase
             bars.Add(new ChartBar(d.Day, segs, (double)running, tip));
         }
         DailyBars = bars;
+        BuildLocalChart(bucketSize);
 
         decimal[] Values(IEnumerable<CostTrackingService.UsageDay> source, bool baseline = false)
         {

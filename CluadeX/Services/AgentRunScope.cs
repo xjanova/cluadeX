@@ -92,6 +92,20 @@ public sealed class AgentRunScope
     /// over gets this as "the task": after a compaction the model's view holds only a summary that cuts it short.</summary>
     public string? TaskRequest { get; set; }
 
+    /// <summary>The owner's words of the turn this run is doing (before brain recall or a skill list was added), what a
+    /// skill that runs in it learns its words from (SkillService.LearnTerms).</summary>
+    public string? TurnText { get; set; }
+
+    /// <summary>The skills this turn offered the model (Skills/SkillPicker), or null when smart picking was off for it —
+    /// then the system prompt lists every switched-on skill, as before.</summary>
+    public Skills.SkillPick? SkillPick { get; set; }
+
+    /// <summary>This turn already runs a skill (/command): no pick.</summary>
+    public bool NoSkillPick { get; set; }
+
+    /// <summary>Told once the turn's skills were picked, before the model starts (the chat shows what was picked).</summary>
+    public Action<Skills.SkillPick>? SkillsPicked { get; set; }
+
     private readonly List<string> _extraFolders = new();
     /// <summary>Related project folders opened beside <see cref="WorkingDirectory"/> (open_project add=true, or the
     /// chat naming another project). Tools reach them by absolute path; relative paths stay in the main folder.</summary>
@@ -130,6 +144,13 @@ public sealed class AgentRunScope
     /// <summary>The run's plan checklist (todo_write).</summary>
     public List<TodoItem> Todos { get; } = new();
 
+    /// <summary>The plan's scope tag as the model last gave it (first_task / continuation / new_task), or null.</summary>
+    public string? PlanScope { get; set; }
+    /// <summary>The model wrote or moved the plan in this run (wrap_up checks off only a plan this run worked on).</summary>
+    public bool PlanTouched { get; set; }
+    /// <summary>The plan came over from the chat's last turn with work left (PlanRecord.CarryNote tells the model).</summary>
+    public bool PlanCarried { get; set; }
+
     private readonly object _costLock = new();
     private decimal _costUsd;
 
@@ -151,6 +172,36 @@ public sealed class AgentRunScope
     /// <summary>Effort "auto": the agent loop's pick for its next request (low / medium / high / xhigh), read by the
     /// providers through <see cref="Models.EffortLevels.Effective"/>. Null = none picked (the provider's default).</summary>
     public string? StepEffort { get; set; }
+
+    /// <summary>The most effort this flow's requests may go out with, whatever the setting or the loop's pick — a
+    /// sub-agent's tier ceiling (cheap → low, mid → medium; <see cref="Agents.DispatchPolicy.EffortCapFor"/>). Null = no
+    /// ceiling. Read through <see cref="Models.EffortLevels.Effective"/>; the sub-agent's own loop never resets it.</summary>
+    public string? EffortCap { get; set; }
+
+    /// <summary>Signs the model is stuck on this run's task (kept on the run's root scope; DispatchPolicy.AssessHardTask):
+    /// its own fixes in a row that left the build red (0 once it went green), speculative fixers that all failed on it,
+    /// and a stop by the loop guard. They decide whether CluadeX offers to send the task to Claude Fable 5.2.</summary>
+    public int FailedOwnFixes { get; set; }
+    public bool SpeculativeFixFailed { get; set; }
+    public bool LoopGuardStopped { get; set; }
+
+    /// <summary>A sub-agent's tier ("cheap" / "mid" / "deep"; null = not a tiered sub-agent) and the model the run itself is
+    /// on — the Billing page prices this flow's tokens on that model too, and shows the difference as the routing saving
+    /// (<see cref="CostTrackingService.RecordUsage"/>).</summary>
+    public string? SubAgentTier { get; set; }
+    public string? TierRunModel { get; set; }
+
+    private decimal _routingSaved, _routingBaseline;
+    /// <summary>Of this flow's requests: the routing saving booked so far, and what they would have cost on the run's
+    /// model — taken back when the attempt fell short and climbed (it saved nothing: it was paid for twice).</summary>
+    public decimal RoutingSavedUsd { get { lock (_costLock) return _routingSaved; } }
+    public decimal RoutingBaselineUsd { get { lock (_costLock) return _routingBaseline; } }
+    public void AddRouting(decimal saved, decimal onRunModel) { lock (_costLock) { _routingSaved += saved; _routingBaseline += onRunModel; } }
+
+    private decimal _localSaved;
+    /// <summary>The part of <see cref="RoutingSavedUsd"/> a model on this PC earned (it answered instead of the API).</summary>
+    public decimal LocalSavedUsd { get { lock (_costLock) return _localSaved; } }
+    public void AddLocalSaving(decimal saved) { lock (_costLock) _localSaved += saved; }
 
     /// <summary>This turn's id and the agent loop's current step — what a restore point is named by.</summary>
     public string TurnId { get; } = DateTime.UtcNow.ToString("yyyyMMddHHmmss") + "-" + Guid.NewGuid().ToString("N")[..6];
@@ -227,6 +278,9 @@ public sealed class AgentRunScope
             TaskRequest = TaskRequest,
             ActiveSkillAllowedTools = ActiveSkillAllowedTools,
             StepEffort = StepEffort,
+            EffortCap = EffortCap,
+            SubAgentTier = SubAgentTier,
+            TierRunModel = TierRunModel,
             EffortWhy = EffortWhy,
         };
         foreach (var f in ExtraFolders) child.AddExtraFolder(f);
@@ -294,8 +348,10 @@ public sealed class AgentRunScope
     /// showing them as waiting.</summary>
     public event Action<IReadOnlyList<object?>>? UserNotesTaken;
 
-    /// <summary>Everything typed since the agent last looked, as one block for the model; null when nothing waits.</summary>
-    public string? TakeUserNotes()
+    /// <summary>Everything typed since the agent last looked, as one block for the model; null when nothing waits.
+    /// <paramref name="planTool"/>: the plan tool this agent really has — a CLI reached through CluadeX's MCP server has
+    /// update_plan, not the native loop's todo_write (a Codex turn was told to call a tool it did not have, 2026-11-09).</summary>
+    public string? TakeUserNotes(string planTool = "todo_write")
     {
         bool urgent;
         lock (_callGate) { urgent = _interrupt; _interrupt = false; }
@@ -313,7 +369,7 @@ public sealed class AgentRunScope
                    : "[The user sent this while you were working. Decide which it is, ")
                + "say so in one short line, then carry on:\n"
                + "- It corrects the current work, or says stop/cancel: apply it now.\n"
-               + "- It adds to the current work: put it into your plan with todo_write where it belongs — next, when it "
+               + "- It adds to the current work: put it into your plan with " + planTool + " where it belongs — next, when it "
                + "changes what you were about to do; otherwise after the items already there — say in one line where you put "
                + "it, and do it in this turn.\n"
                + "- It is a NEW request that stands on its own (it does not need what you are doing and touches other files "

@@ -60,6 +60,8 @@ public partial class ChatViewModel
     {
         public PipeTurn(CancellationToken ct, int? maxSteps) { Ct = ct; MaxSteps = maxSteps; }
         public CancellationToken Ct { get; }
+        /// <summary>A watch's result starting the turn (ChatViewModel.Watch), not a program on the pipe: not marked FromPipe.</summary>
+        public bool FromWatch { get; init; }
         public int? MaxSteps { get; }
         /// <summary>The turn's run, once it started (UI thread). Null afterwards = the message started no turn.</summary>
         public ChatRun? Run;
@@ -308,7 +310,7 @@ public partial class ChatViewModel
     /// or did not finish, or was stopped / cancelled.
     /// </summary>
     public async Task<McpTaskOutcome> ContinueChatForPipeAsync(string? chatId, string? title, string message,
-        int? maxSteps, string? provider, string? model, CancellationToken ct, bool focus = false)
+        int? maxSteps, string? provider, string? model, CancellationToken ct, bool focus = false, bool fromWatch = false)
     {
         if (string.IsNullOrWhiteSpace(message))
             return new McpTaskOutcome("'message' is required", IsError: true);
@@ -335,7 +337,7 @@ public partial class ChatViewModel
         try
         {
             if (!focus && !await dispatcher.InvokeAsync(() => CurrentSession?.Id == chat.Id))
-                return await ContinueOffScreenAsync(chat, text, maxSteps, model, ct);
+                return await ContinueOffScreenAsync(chat, text, maxSteps, model, ct, fromWatch);
             return await await dispatcher.InvokeAsync(async () =>
             {
                 // 1. Open it, as a click in the sidebar does (that also opens the chat's project).
@@ -363,7 +365,7 @@ public partial class ChatViewModel
                 // 3. Send, as the Send button does — and wait for that turn.
                 var sentInto = Messages;
                 int rowsBefore = sentInto.Count;
-                var pipe = new PipeTurn(ct, maxSteps);
+                var pipe = new PipeTurn(ct, maxSteps) { FromWatch = fromWatch };
                 await SendMessageCore(text, pipe);
                 return PipeTurnOutcome(pipe, text, sentInto, rowsBefore);
             });
@@ -381,7 +383,8 @@ public partial class ChatViewModel
     /// the chat meanwhile shows the run. A slash command acts on the chat on screen, and a model pick on the model box the
     /// owner is using: both need the caller's focus.
     /// </summary>
-    private async Task<McpTaskOutcome> ContinueOffScreenAsync(ChatRow chat, string text, int? maxSteps, string? model, CancellationToken ct)
+    private async Task<McpTaskOutcome> ContinueOffScreenAsync(ChatRow chat, string text, int? maxSteps, string? model, CancellationToken ct,
+        bool fromWatch = false)
     {
         if (text.StartsWith('/'))
             return new McpTaskOutcome("A slash command acts on the chat on screen, nothing was sent: pass focus: true to open it.", IsError: true);
@@ -418,7 +421,7 @@ public partial class ChatViewModel
             turn = BeginTurnFor(session, rows, folder);
             run = RunOf(session);
             if (run == null) return "The turn did not start, nothing was sent.";
-            run.Scope.FromPipe = true;
+            run.Scope.FromPipe = !fromWatch;
             run.MaxSteps = maxSteps;
             linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
             run.Cts = linked;

@@ -282,6 +282,24 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=AC: just the activity card (ActivityCardTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "AC")
+        {
+            await TestActivityCard();
+            Log($"\n## Result (CHATTEST_ONLY=AC): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=RB: just the sidebar run badges on real runs and the buddy's mood (RunBadgeTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "RB")
+        {
+            await TestRunBadges();
+            Log($"\n## Result (CHATTEST_ONLY=RB): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=SW: just a chat still loading when the user moves on (New Chat, delete, pipe / agent chats).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SW")
         {
@@ -309,7 +327,34 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=WJ: just watch_process — the card, the turn a finished watch starts, its limits (WatchJobTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "WJ")
+        {
+            await TestWatchJobs();
+            Log(Environment.NewLine + $"## Result (CHATTEST_ONLY=WJ): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=SP: just smart skill picking (a turn gets the skills that fit it; the composer's switch).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SP")
+        {
+            await TestSkillPick();
+            Log($"{Environment.NewLine}## Result (CHATTEST_ONLY=SP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PC: just the plan card's clock and how it closes when the run ends.
+        // CHATTEST_ONLY=VB: just the vibe helpers — change card, error chip, explain simply, @-mentions, click-to-ask, gauge.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "VB")
+        {
+            await TestVibe();
+            Log($"\n## Result (CHATTEST_ONLY=VB): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PC")
         {
             await TestPlanCardClock();
@@ -323,6 +368,15 @@ internal static partial class Program
         {
             await TestCliOpenProject();
             Log($"\n## Result (CHATTEST_ONLY=COP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=SWT: just split chats in their own git worktree (new_chat isolation "worktree").
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SWT")
+        {
+            await TestSplitWorktrees();
+            Log($"\n## Result (CHATTEST_ONLY=SWT): {Pass} pass / {Fail} FAIL");
             foreach (var f in Failures) Log("  - " + f);
             return Fail == 0 ? 0 : 1;
         }
@@ -377,6 +431,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=SPK: just the speaker under her face on a reply (hover holds still, the click switches reading aloud).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SPK")
+        {
+            await TestSpeakerHover();
+            Log($"\n## Result (CHATTEST_ONLY=SPK): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=UX: just code boxes, the question card with steps, and media / web-picture attachments.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "UX")
         {
@@ -400,6 +463,7 @@ internal static partial class Program
         await TestAttachedFiles();            // XF: any file dropped into a message — read, unpacked, by path
         await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
         await TestVoiceMode();                // VM: replies read aloud + a GPT-Live call through the chat (mock API)
+        await TestSpeakerHover();             // SPK: the speaker under her face holds still on hover; its click switches reading aloud
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
         await TestScrollFollow();             // U6
@@ -424,6 +488,7 @@ internal static partial class Program
         await TestAgentGraph();               // AG: the agent map as a node canvas, each agent's own window
         await TestFloatingPlan();             // MF: the floating plan card comes and goes by the chat's own card
         await TestOrchestrationViews();       // OR: workflow card, split chips, notices, next-step box, Ultra
+        await TestSplitWorktrees();           // SWT: a split chat in its own git worktree — branch in the notice, close_chat keeps unmerged
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
@@ -435,9 +500,15 @@ internal static partial class Program
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
+        await TestChatRef();                  // CR: the chat's reference (CX-…): parsing, search, the model's line, the pinned chip
+        await TestRunBadges();                // RB: run badges on real runs (unread, failed, stopped, restart ledger), the buddy's mood
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
         await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card
+        await TestActivityCard();             // AC: the activity card — event → state, real turns, per chat, close / reopen
+        await TestVibe();                     // VB: change card, error chip, explain simply, @-mentions, click-to-ask, memory gauge
+        await TestWatchJobs();                // WJ: watch_process — the card, the turn a finished watch starts, its limits
+        await TestSkillPick();                // SP: each turn is given only the skills that fit it; the composer's switch
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestRenameAndProjects();        // PJ: rename a chat; projects that group chats (metadata only, migration v3)
         await TestSwitchRace();               // SW: a chat still loading never lands over New Chat / delete; pipe and agent chats don't cancel a pick
@@ -784,7 +855,7 @@ internal static partial class Program
         Check("L3 the turn finishes", await WaitIdle(30000));
         var calls = Fake.Calls.Skip(callsBefore).ToList();
         Check("L3 a 503 is retried once", calls.Count == 2, $"{calls.Count} calls");
-        Check("L3 the retry sends the same question", calls.All(c => c.Input == "q1"));
+        Check("L3 the retry sends the same question", calls.All(c => WithoutSkills(c.Input) == "q1"));
         Check("L3 the question is not duplicated on screen", Vm.Messages.Count(m => m.Role == MessageRole.User && m.Content == "q1") == 1);
         Check("L3 the retry's history equals the first attempt's (no duplicate, no error bubble)",
             calls.Count == 2 && calls[0].History.SequenceEqual(calls[1].History), calls.Count == 2 ? $"{calls[0].History.Count} vs {calls[1].History.Count}" : "");
@@ -859,7 +930,8 @@ internal static partial class Program
         int callsBefore = Fake.Calls.Count;
         Vm.RetryMessageCommand.Execute(err);
         await WaitIdle();
-        Check("L10 retrying the latest failure re-runs that question", Fake.Calls.Count == callsBefore + 1 && Fake.Calls.Last().Input == "first question");
+        Check("L10 retrying the latest failure re-runs that question", Fake.Calls.Count == callsBefore + 1 && WithoutSkills(Fake.Calls.Last().Input) == "first question",
+            Fake.Calls.LastOrDefault()?.Input);
         Check("L10 …without a duplicate question bubble", Vm.Messages.Count(m => m.Role == MessageRole.User && m.Content == "first question") == 1);
         Check("L10 …and the error bubble is replaced by the answer", !Vm.Messages.Contains(err) && Vm.Messages.Last(m => m.Role == MessageRole.Assistant).Content == "first answer");
 
@@ -874,7 +946,7 @@ internal static partial class Program
         Fake.Script.Enqueue(FakeStep.Reply("old answer"));
         Vm.RetryMessageCommand.Execute(oldErr);
         await WaitIdle();
-        Check("L10 retrying an older failure asks THAT question again", Fake.Calls.Last().Input == "old question", Fake.Calls.Last().Input);
+        Check("L10 retrying an older failure asks THAT question again", WithoutSkills(Fake.Calls.Last().Input) == "old question", Fake.Calls.Last().Input);
 
         // Tool rows: no Retry button
         var toolRow = new ChatMessage { Role = MessageRole.ToolAction, Content = "run_command failed", ToolName = "Ran npm test", HasError = true, ToolSuccess = false, IsHovered = true };
@@ -1771,10 +1843,10 @@ internal static partial class Program
 
             // close_chat, as the parent chat's agent calls it.
             var close = typeof(ChatViewModel).GetMethod("CloseChatsForAgent", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            string listed = (string)close.Invoke(vm, new object[] { parent.Id, "" })!;
+            string listed = (string)close.Invoke(vm, new object[] { parent.Id, "", null })!;
             Check("SC close_chat lists the split chats with what each does and how it stands",
                 listed.Contains("SC split A") && listed.Contains("finished"), listed);
-            string closed = (string)close.Invoke(vm, new object[] { parent.Id, "done" })!;
+            string closed = (string)close.Invoke(vm, new object[] { parent.Id, "done", null })!;
             Check("SC close_chat \"done\" puts the finished ones away — kept, not deleted",
                 a.IsArchived && vm.Sessions.Any(s => s.Id == aId) && !vm.VisibleSessions.Any(s => s.Id == aId), closed);
             Check("SC the parent's line counts it as put away", parent.SplitSummary.Contains("1") && !parent.HasFinishedSplits, parent.SplitSummary);
@@ -1783,7 +1855,7 @@ internal static partial class Program
             vm.ShowArchivedSplits = false;
             vm.UnarchiveSplitCommand.Execute(a.Id);
             Check("SC \"bring back\" returns it to the list", !a.IsArchived && vm.VisibleSessions.Any(s => s.Id == aId));
-            string none = (string)close.Invoke(vm, new object[] { a.Id, "done" })!;
+            string none = (string)close.Invoke(vm, new object[] { a.Id, "done", null })!;
             Check("SC close_chat from a chat that split nothing off says so", none.Contains("not split off"), none);
 
             // Owner 2026-10-18: "ระวัง … ผลิตออกมาไม่หยุด" — agent splits have a ceiling (SplitLimits).

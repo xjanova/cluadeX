@@ -13,13 +13,9 @@ public class SettingsService
     private static string EncryptString(string plainText)
     {
         if (string.IsNullOrEmpty(plainText)) return plainText;
-        try
-        {
-            byte[] data = Encoding.UTF8.GetBytes(plainText);
-            byte[] encrypted = ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
-            return "ENC:" + System.Convert.ToBase64String(encrypted);
-        }
-        catch { return plainText; }
+        byte[] data = Encoding.UTF8.GetBytes(plainText);
+        byte[] encrypted = ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
+        return "ENC:" + System.Convert.ToBase64String(encrypted);
     }
 
     /// <summary>Decrypt an "ENC:" value. <paramref name="failed"/> is true when it could not be decrypted here.</summary>
@@ -48,6 +44,7 @@ public class SettingsService
     // written back unchanged unless the user enters a new key.
     private readonly Dictionary<string, string> _undecryptable = new(StringComparer.Ordinal);
     private const string HfTokenSecretId = "HuggingFaceToken";
+    private const string ElevenLabsSecretId = "Voice:ElevenLabs";
     private static string ProviderSecretId(string provider) => "Provider:" + provider;
 
     /// <summary>Keys stored on disk that could not be decrypted here ("HuggingFaceToken", "Provider:Anthropic", …).
@@ -65,6 +62,12 @@ public class SettingsService
             settings.HuggingFaceToken = EncryptString(settings.HuggingFaceToken);
         else if (string.IsNullOrEmpty(settings.HuggingFaceToken) && _undecryptable.TryGetValue(HfTokenSecretId, out var hfBlob))
             settings.HuggingFaceToken = hfBlob;
+
+        settings.Voice ??= new VoiceSettings();
+        if (!string.IsNullOrEmpty(settings.Voice.ElevenLabsApiKey) && !settings.Voice.ElevenLabsApiKey.StartsWith("ENC:"))
+            settings.Voice.ElevenLabsApiKey = EncryptString(settings.Voice.ElevenLabsApiKey);
+        else if (string.IsNullOrEmpty(settings.Voice.ElevenLabsApiKey) && _undecryptable.TryGetValue(ElevenLabsSecretId, out var elBlob))
+            settings.Voice.ElevenLabsApiKey = elBlob;
 
         foreach (var kvp in settings.ProviderConfigs)
         {
@@ -86,6 +89,14 @@ public class SettingsService
             if (failed) _undecryptable[HfTokenSecretId] = blob;
         }
 
+        settings.Voice ??= new VoiceSettings();
+        if (!string.IsNullOrEmpty(settings.Voice.ElevenLabsApiKey))
+        {
+            string blob = settings.Voice.ElevenLabsApiKey;
+            settings.Voice.ElevenLabsApiKey = DecryptString(blob, out bool failed);
+            if (failed) _undecryptable[ElevenLabsSecretId] = blob;
+        }
+
         foreach (var kvp in settings.ProviderConfigs)
         {
             if (string.IsNullOrEmpty(kvp.Value.ApiKey)) continue;
@@ -99,6 +110,7 @@ public class SettingsService
     private void ForgetReplacedSecrets()
     {
         if (!string.IsNullOrEmpty(_settings.HuggingFaceToken)) _undecryptable.Remove(HfTokenSecretId);
+        if (!string.IsNullOrEmpty(_settings.Voice?.ElevenLabsApiKey)) _undecryptable.Remove(ElevenLabsSecretId);
         foreach (var kvp in _settings.ProviderConfigs)
             if (!string.IsNullOrEmpty(kvp.Value.ApiKey)) _undecryptable.Remove(ProviderSecretId(kvp.Key));
     }
@@ -122,6 +134,10 @@ public class SettingsService
     public string DataRoot => _dataRoot;
 
     public AppSettings Settings => _settings;
+
+    /// <summary>settings.json did not exist when this process started (a fresh install, or one whose data was wiped).
+    /// Read once, before anything could write the file.</summary>
+    public bool NoSettingsBeforeLaunch { get; }
 
     public event Action? SettingsChanged;
 
@@ -169,6 +185,8 @@ public class SettingsService
             MigrateLegacyDataRoot();
         }
 
+        // No settings.json before this launch (after the legacy move): a brand-new install — the setup wizard's cue.
+        try { NoSettingsBeforeLaunch = !File.Exists(_settingsPath); } catch { NoSettingsBeforeLaunch = false; }
         Load();
         ApplyDefaultDirectories();
         EnsureDirectoriesExist();

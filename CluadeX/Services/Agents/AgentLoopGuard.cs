@@ -291,7 +291,8 @@ public static class ModelCapability
     public sealed record Estimate(Tier Tier, double? Billions, string SummaryTh, string SummaryEn);
 
     // "3b", ":3b", "-7B-", "1.5b", "e4b" (gemma 3n), "8x7b" (MoE: experts × size). Not "v3", not "3.2" (a version).
-    private static readonly Regex Size = new(@"(?:(?<experts>\d+)x)?(?<!\d|\.)e?(?<n>\d{1,3}(?:\.\d+)?)b(?![a-z0-9])",
+    // Not "a3b" either: a MoE's ACTIVE size ("Qwen3.6-35B-A3B", colibri's "qwen36-35b-a3b") — the model is the 35B.
+    private static readonly Regex Size = new(@"(?:(?<experts>\d+)x)?(?<!\d|\.|[aA])e?(?<n>\d{1,3}(?:\.\d+)?)b(?![a-z0-9])",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>The model's size in billions of parameters, from its name; null when the name does not say.</summary>
@@ -319,9 +320,11 @@ public static class ModelCapability
     }
 
     /// <summary>The estimate for a model running on this machine. API models are never judged by name.</summary>
-    public static Estimate ForLocal(string? modelName)
+    public static Estimate ForLocal(string? modelName) => ForBillions(ParseBillions(modelName));
+
+    /// <summary>The estimate for a known size (a catalog's, when the name does not say it); null = unknown.</summary>
+    public static Estimate ForBillions(double? b)
     {
-        double? b = ParseBillions(modelName);
         string size = b is { } v ? v.ToString(v % 1 == 0 ? "0" : "0.#", System.Globalization.CultureInfo.InvariantCulture) + "B" : "";
         return b switch
         {

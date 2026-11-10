@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
@@ -111,6 +111,35 @@ internal static class Program
         var loc = new LocalizationService();
         loc.SetLanguage("en");
         LocalizedResources.Instance.Initialize(loc);
+
+        // --account: only the Xman Studio account sign-in + connection doctor wire (installer contract 1, 2.2–2.5).
+        // A one-off repair of a real folder (what CluadeX does before a Codex turn): --repair-sandbox <dir> [--dry].
+        if (Array.IndexOf(args, "--repair-sandbox") is int ri and >= 0 && ri + 1 < args.Length)
+        {
+            string target = Path.GetFullPath(args[ri + 1]);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var git = CluadeX.Services.Providers.CodexSandboxRepair.SandboxOwned(new[] { target });
+            long tGit = sw.ElapsedMilliseconds;
+            var quick = CluadeX.Services.Providers.CodexSandboxRepair.StaleEntries(target, allFiles: false);
+            long tQuick = sw.ElapsedMilliseconds - tGit;
+            sw.Restart();
+            var stale = CluadeX.Services.Providers.CodexSandboxRepair.StaleEntries(target);
+            Console.WriteLine($"scan {sw.ElapsedMilliseconds} ms (.git check {tGit} ms · before-a-turn look {tQuick} ms, {quick.Count} found · full look below) · sandbox-owned .git: {git.Count} · stale entries: {stale.Count}");
+            foreach (var x in git.Concat(stale)) Console.WriteLine("  " + x);
+            if (args.Contains("--dry")) return 0;
+            foreach (var o in CluadeX.Services.Providers.CodexSandboxRepair.RepairRoots(new[] { target }))
+                Console.WriteLine($"  {(o.Repaired ? "REBUILT" : "FAILED ")} {o.Path}{(o.Error != null ? "  (" + o.Error + ")" : "")}");
+            var left = CluadeX.Services.Providers.CodexSandboxRepair.StaleEntries(target);
+            Console.WriteLine($"after: {left.Count} stale");
+            return left.Count == 0 ? 0 : 1;
+        }
+        if (args.Contains("--llama-launch")) { await LlamaLaunchWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--buddy")) { await RunBadgeWire.Run(Check, Section); await BuddyIdleWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--voice")) { await VoiceWire.Run(Check, Section); await EdgeTtsWire.Run(Check, Section); await SpokenReplyWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--edge")) { await EdgeTtsWire.Run(Check, Section); await EdgeTtsWire.RunLive(Check, Section); return Finish(); }
+        if (args.Contains("--codex-sandbox")) { await CodexSandboxWire.Run(Check, Section); await CodexSandboxRepairWire.Run(Check, Section); return Finish(); }
 
         await Offline();
 
@@ -374,6 +403,8 @@ internal static class Program
         // (model, adaptive, alwaysThinks, explicitDisable, sampling, omitsThinkingText, forcedToolChoice)
         var expect = new (string, bool, bool, bool, bool, bool, bool)[]
         {
+            ("claude-fable-5-2",           true,  true,  false, false, true,  false),
+            ("claude-mythos-5-2",          true,  true,  false, false, true,  false),
             ("claude-fable-5-1",           true,  true,  false, false, true,  false),
             ("claude-fable-5",             true,  true,  false, false, true,  true),
             ("claude-mythos-5-1",          true,  true,  false, false, true,  false),
@@ -519,6 +550,7 @@ internal static class Program
 
         await MockProviders.Run(Check, Section);
         await MockLicense.Run(Check, Section);
+        await AccountWire.Run(Check, Section);
         await MockSpark.Run(Check, Section);
         await McpConfigSafety.Run(Check, Section);
         await BrainLaunchPath.Run(Check, Section);
@@ -548,18 +580,29 @@ internal static class Program
         await PromptCacheReuse.Run(Check, Section);
         await BatchWire.Run(Check, Section);
         await ToolSearchWire.Run(Check, Section);
+        SmallModelWire.Run(Check, Section);
+        await LlamaLaunchWire.Run(Check, Section);
         await PricingWire.Run(Check, Section);
+        await RunBadgeWire.Run(Check, Section);
+        await BuddyIdleWire.Run(Check, Section);
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);
         await Gpt6Wire.Run(Check, Section);
         await HandoffWire.Run(Check, Section);
+        await FableWire.Run(Check, Section);
         await ClaudeDevStreamWire.Run(Check, Section);
         await GeminiDevWire.Run(Check, Section);
         await AntigravityDevWire.Run(Check, Section);
         await OpenAIDevWire.Run(Check, Section);
+        await CodexSandboxWire.Run(Check, Section);
+        await CodexSandboxRepairWire.Run(Check, Section);
+        await VoiceWire.Run(Check, Section);
+        await EdgeTtsWire.Run(Check, Section);
+        await SpokenReplyWire.Run(Check, Section);
         await GrokDevWire.Run(Check, Section);
         await CliParityWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
+        await FailoverWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
         await UpdateDownloadWire.Run(Check, Section);
         await UpdateProgressWire.Run(Check, Section);
@@ -567,6 +610,11 @@ internal static class Program
         await SettingsSalvageWire.Run(Check, Section);
         await GitMultiRepoWire.Run(Check, Section);
         await AggregatorWire.Run(Check, Section);
+        await VibeWire.Run(Check, Section);
+        await PlanWire.Run(Check, Section);
+        await ColibriWire.Run(Check, Section);
+        await UltraWire.Run(Check, Section);
+        await NodeGraphBgWire.Run(Check, Section);
     }
 
     /// <summary>MD5 of a SQLite file after releasing pooled connections (they keep it open).</summary>

@@ -66,7 +66,7 @@ public static class CompatiblePresets
     // OpenRouter asks apps to identify themselves; X-OpenRouter-Title is the current name, X-Title the old one.
     private static readonly Dictionary<string, string> OpenRouterHeaders = new()
     {
-        ["HTTP-Referer"] = "https://github.com/xjanova/cluadeX",
+        ["HTTP-Referer"] = XmanLicenseService.DefaultPurchaseUrl,   // the product page, not the source repository
         ["X-OpenRouter-Title"] = "CluadeX",
         ["X-Title"] = "CluadeX",
     };
@@ -239,6 +239,14 @@ public static class CompatiblePresets
             Type = AiProviderType.Vllm, Name = "vLLM", Logo = "vllm.png", Badge = "v",
             BaseUrl = "http://localhost:8000/v1", KeyRequired = false, Local = true,
             KeysUrl = "https://docs.vllm.ai/en/latest/features/tool_calling/",
+        },
+        new()
+        {
+            // The engine the Plugins page installs and starts (ColibriService), which then writes the base URL and model
+            // id `coli status` reports into this preset's config. Its port moves on when 8000 is taken (vLLM's default).
+            Type = AiProviderType.Colibri, Name = "Colibri (local)", Logo = "colibri.png", Badge = "Co",
+            BaseUrl = "http://localhost:8000/v1", KeyRequired = false, Local = true, StreamUsage = true,
+            KeysUrl = "https://github.com/JustVugg/colibri",
         },
         new()
         {

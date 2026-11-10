@@ -54,32 +54,38 @@
 
     <Window.Resources>
         <conv:EqualsMultiConverter x:Key="EqualsMulti"/>
-        <!-- A small on/off icon in the chat list's header. The on state is set on the glyph itself: a Foreground on the
-             button is a local value, which a template trigger on that property can never beat. -->
-        <Style x:Key="SidebarToggle" TargetType="ToggleButton">
-            <Setter Property="Width" Value="24"/>
-            <Setter Property="Height" Value="24"/>
+        <!-- The chat list's filter buttons above its search box: a chip you can see (the bare 10 px glyph was too faint to
+             tell what it was — owner 2026-11-10); lit in the accent while on. The on state is set on the glyph itself: a
+             Foreground on the button is a local value, which a template trigger on that property can never beat. -->
+        <Style x:Key="SidebarChipToggle" TargetType="ToggleButton">
+            <Setter Property="Width" Value="32"/>
+            <Setter Property="Height" Value="28"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
-                        <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                            <TextBlock x:Name="glyph" Text="{TemplateBinding Content}" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                        <Border x:Name="bg" Background="{DynamicResource Surface.Chip}" CornerRadius="8" BorderThickness="1"
+                                BorderBrush="{DynamicResource Border.Default}">
+                            <TextBlock x:Name="glyph" Text="{TemplateBinding Content}" FontFamily="Segoe MDL2 Assets" FontSize="13"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource Text.Faint}"/>
+                                       Foreground="{DynamicResource Text.Secondary}"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
-                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Selected}"/>
-                            </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Accent.1.Border}"/>
+                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource Accent.1.Tint.Strong}"/>
+                                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Focus.Ring}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
-                                <Setter TargetName="glyph" Property="Opacity" Value="0.45"/>
-                                <Setter TargetName="bg" Property="Background" Value="Transparent"/>
+                                <Setter TargetName="bg" Property="Opacity" Value="0.4"/>
+                                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -205,7 +211,7 @@
                 </Ellipse>
             </Grid>
 
-            <Grid Panel.ZIndex="1">
+            <Grid x:Name="ShellGrid" Panel.ZIndex="1">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="42"/>
                     <RowDefinition Height="*"/>
@@ -228,6 +234,61 @@
                                RenderOptions.BitmapScalingMode="HighQuality"/>
                         <TextBlock FontSize="19" FontWeight="Black" FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"
                                    Margin="7,0,0,1"><Run Text="Cluade" Foreground="{DynamicResource Text.Primary}"/><Run Text="X" Foreground="{DynamicResource Accent.1}"/></TextBlock>
+                        <!-- License chip — right after the name (owner 2026-11-08) and outside the gliding row, so it is
+                             always in view: a glowing invitation when this PC has no key, a countdown during the free
+                             trial, a quiet "Pro" once bought. Opens the license dialog. -->
+                        <Button Height="26" Margin="12,0,0,0" VerticalAlignment="Center"
+                                Command="{Binding OpenLicenseCommand}" Cursor="Hand"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="{Binding LicenseChipTip}">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Foreground" Value="{DynamicResource License.Chip.Foreground}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Border}"/>
+                                    <Setter Property="Background" Value="{DynamicResource License.Chip.Background}"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                                        CornerRadius="13" Padding="12,0"
+                                                        Effect="{DynamicResource Glow.License.Chip}">
+                                                    <ContentPresenter VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
+                                                    </Trigger>
+                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
+                                                        <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.License.Trial}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
+                                                        <Setter TargetName="bd" Property="Effect" Value="{x:Null}"/>
+                                                    </DataTrigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
+                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Trial.Foreground}"/>
+                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Trial.Background}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
+                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Active.Foreground}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Active.Border}"/>
+                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Active.Background}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding LicenseChipText}" FontSize="11.5" FontWeight="SemiBold"
+                                           FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
                     <!-- Too narrow for everything: the row glides to show each item in turn, and follows the mouse -->
                     <views:MarqueeScroller Grid.Column="1">
@@ -240,7 +301,7 @@
                                  caption buttons on the right are never pushed off-screen (they were at 1280 px). -->
                             <ColumnDefinition Width="6*"/>    <!-- Cmd palette pill -->
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>  <!-- License chip -->
+                            <ColumnDefinition Width="Auto"/>  <!-- Today + DGX Spark chips -->
                             <ColumnDefinition Width="Auto"/>  <!-- New Chat -->
                             <ColumnDefinition Width="Auto"/>  <!-- Open folder -->
                             <ColumnDefinition Width="Auto"/>  <!-- Bell -->
@@ -266,9 +327,7 @@
                                        Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                                         Visibility="{Binding ChatVM.HasProject, Converter={StaticResource BoolVis}}">
-                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                           FontSize="13" Foreground="{DynamicResource Accent.1}"
-                                           VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                <ContentControl Style="{StaticResource FolderIcon}" Width="16" Height="13" VerticalAlignment="Center" Margin="0,0,7,0" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{Binding ChatVM.ProjectName}" FontFamily="{DynamicResource Font.Ui}"
                                            FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
                                            VerticalAlignment="Center" MaxWidth="180" TextTrimming="CharacterEllipsis"
@@ -321,8 +380,7 @@
                             </Grid>
                         </Button>
 
-                        <!-- License chip — always in view: a glowing invitation when this PC has no key, a countdown
-                             during the free trial, a quiet "Pro" once bought. Opens the license dialog. -->
+                        <!-- Today's spend and the DGX Spark chip (the license chip moved next to the name, owner 2026-11-08) -->
                         <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
 
                         <!-- Today: what CluadeX spent on paid APIs, against the daily budget when one is set. Click: set it. -->
@@ -358,19 +416,28 @@
                                 </Grid>
                             </StackPanel>
                         </Button>
-                        <!-- DGX Spark chip — opens the Spark window; solid green while CluadeX runs on a Spark -->
+                        <!-- DGX Spark chip — opens the Spark window. NVIDIA's own logo on white (never under its 15 px digital minimum),
+                             then the live status of the remembered Spark: grey = not set up, amber = connecting, green = online,
+                             glowing green = in use (with the model), red = not reachable (the tooltip says why and what to do). -->
                         <Button Height="26" Margin="4,0,2,0" Cursor="Hand"
                                 Command="{Binding OpenDgxSparkCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
-                                ToolTip="{services:Loc spark.chipTip}">
+                                AutomationProperties.Name="{Binding SparkChipText}"
+                                ToolTip="{Binding SparkChipTip}">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
-                                    <Border x:Name="bd" CornerRadius="13" Padding="10,0" BorderThickness="1"
+                                    <Border x:Name="bd" CornerRadius="13" BorderThickness="1"
                                             Background="{DynamicResource Spark.Chip.Background}" BorderBrush="{DynamicResource Spark.Chip.Border}">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="0,0,6,0" Fill="{DynamicResource Spark.Chip.Dot}"
+                                            <Border CornerRadius="12,0,0,12" Background="White" Padding="10,4,10,4" VerticalAlignment="Stretch">
+                                                <Image Source="/CluadeX;component/Assets/Logos/nvidia.png" Height="15" Stretch="Uniform"
+                                                       VerticalAlignment="Center"
+                                                       RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True"/>
+                                            </Border>
+                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="9,0,6,0" Fill="{DynamicResource Spark.Chip.Dot}"
                                                      VerticalAlignment="Center"/>
-                                            <TextBlock x:Name="txt" Text="{services:Loc spark.chip}" FontSize="11.5" FontWeight="SemiBold"
+                                            <TextBlock x:Name="txt" Text="{Binding SparkChipText}" FontSize="11.5" FontWeight="SemiBold"
+                                                       MaxWidth="190" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
                                                        Foreground="{DynamicResource Spark.Chip.Foreground}" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </Border>
@@ -378,65 +445,22 @@
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="bd" Property="Background" Value="{DynamicResource Spark.Chip.Hover.Background}"/>
                                         </Trigger>
-                                        <DataTrigger Binding="{Binding IsSparkActive}" Value="True">
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Checking">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Status.Warning}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Online">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="InUse">
                                             <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
                                             <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.Spark.Active}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SparkLinkState}" Value="Unreachable">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Status.Danger}"/>
                                         </DataTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Button.Template>
-                        </Button>
-                        <Button Height="26" Margin="4,0,2,0"
-                                Command="{Binding OpenLicenseCommand}" Cursor="Hand"
-                                WindowChrome.IsHitTestVisibleInChrome="True"
-                                ToolTip="{Binding LicenseChipTip}">
-                            <Button.Style>
-                                <Style TargetType="Button">
-                                    <Setter Property="Foreground" Value="{DynamicResource License.Chip.Foreground}"/>
-                                    <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Border}"/>
-                                    <Setter Property="Background" Value="{DynamicResource License.Chip.Background}"/>
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="Button">
-                                                <Border x:Name="bd" Background="{TemplateBinding Background}"
-                                                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                                                        CornerRadius="13" Padding="12,0"
-                                                        Effect="{DynamicResource Glow.License.Chip}">
-                                                    <ContentPresenter VerticalAlignment="Center"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
-                                                    </Trigger>
-                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
-                                                        <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.License.Trial}"/>
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
-                                                        <Setter TargetName="bd" Property="Effect" Value="{x:Null}"/>
-                                                    </DataTrigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
-                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Trial.Foreground}"/>
-                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Trial.Background}"/>
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
-                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Active.Foreground}"/>
-                                            <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Active.Border}"/>
-                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Active.Background}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                <TextBlock Text="{Binding LicenseChipText}" FontSize="11.5" FontWeight="SemiBold"
-                                           FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"/>
-                            </StackPanel>
                         </Button>
                         </StackPanel>
 
@@ -472,9 +496,7 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
                                         <!-- E8B7 Folder — E838 drew as a half-open bracket the owner read as a broken icon -->
-                                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="14" Foreground="{DynamicResource Status.Success}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <ContentControl Style="{StaticResource FolderIcon}" Width="17" Height="13.8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
@@ -573,7 +595,7 @@
                 <!-- ════════════════════════════════════════════════════════ -->
                 <!--                       MAIN CONTENT                       -->
                 <!-- ════════════════════════════════════════════════════════ -->
-                <Grid Grid.Row="1">
+                <Grid x:Name="MainContentGrid" Grid.Row="1">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="60"/>      <!-- Activity bar -->
                         <ColumnDefinition Width="Auto"/>    <!-- Contextual panel (240 when shown) -->
@@ -590,36 +612,11 @@
                                 <RowDefinition Height="Auto"/>  <!-- Bottom: settings -->
                             </Grid.RowDefinitions>
 
-                            <!-- Logo -->
-                            <StackPanel Grid.Row="0" Margin="0,12,0,8" HorizontalAlignment="Center">
-                                <Grid Width="36" Height="36">
-                                    <!-- Halo with conic-gradient feel via radial -->
-                                    <Ellipse views:AmbientAnimation.WhileActive="True" Width="48" Height="48" Margin="-6" Opacity="0.55"
-                                             Fill="{DynamicResource ActivityBar.Logo.Halo}">
-                                        <Ellipse.Effect><BlurEffect Radius="8"/></Ellipse.Effect>
-                                        <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
-                                        <Ellipse.RenderTransform><RotateTransform x:Name="LogoHalo"/></Ellipse.RenderTransform>
-                                        <Ellipse.Triggers>
-                                            <EventTrigger RoutedEvent="Ellipse.Loaded">
-                                                <BeginStoryboard x:Name="AmbientLogoHalo">
-                                                    <!-- 15 fps: a blurred ellipse redrawn at 60 fps kept the render thread
-                                                         at ~30% of a core with the app idle (2026-10-14). -->
-                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="15">
-                                                        <DoubleAnimation Storyboard.TargetName="LogoHalo"
-                                                                         Storyboard.TargetProperty="Angle"
-                                                                         From="0" To="360" Duration="0:0:8"/>
-                                                    </Storyboard>
-                                                </BeginStoryboard>
-                                            </EventTrigger>
-                                        </Ellipse.Triggers>
-                                    </Ellipse>
-                                    <Border Width="36" Height="36" CornerRadius="18"
-                                            Background="{DynamicResource ActivityBar.Logo.Background}">
-                                        <Image Source="Assets/logo.png" Width="32" Height="32"
-                                               RenderOptions.BitmapScalingMode="HighQuality"/>
-                                    </Border>
-                                </Grid>
-                                <Border Width="28" Height="1" Margin="0,10,0,0" Background="{DynamicResource ActivityBar.Logo.Divider}"/>
+                            <!-- น้อง CluadeX floats over the top of the rail (BuddyHero below, MainWindow.Buddy.cs); this keeps her square
+                                 free — its height follows her size. -->
+                            <StackPanel Grid.Row="0" HorizontalAlignment="Center">
+                                <Border x:Name="BuddyRailSpacer" Height="66"/>
+                                <Border Width="28" Height="1" Background="{DynamicResource ActivityBar.Logo.Divider}"/>
                             </StackPanel>
 
                             <!-- Activity icons -->
@@ -754,56 +751,135 @@
                         </Border.Style>
                         <Grid>
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>  <!-- Header -->
-                                <RowDefinition Height="Auto"/>  <!-- Search box -->
+                                <RowDefinition Height="Auto"/>  <!-- Beside her: title, buttons, search box -->
+                                <RowDefinition Height="Auto"/>  <!-- Projects -->
                                 <RowDefinition Height="*" MinHeight="80"/>     <!-- Sessions list -->
                                 <RowDefinition Height="Auto"/>  <!-- Drag line between the chats and the files -->
                                 <RowDefinition Height="*" MinHeight="60"/>     <!-- The project's files -->
                             </Grid.RowDefinitions>
 
-                            <!-- Panel header: EXPLORER-style strip -->
-                            <Border Grid.Row="0" Padding="14,12,14,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{services:Loc sidebar.conversations}" FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                    <Button Width="24" Height="24" Margin="0,0,2,0" Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                            Command="{Binding ChatVM.NewChatAndShowCommand}" ToolTip="{services:Loc nav.newChatTip}">
-                                        <Button.Template>
-                                            <ControlTemplate TargetType="Button">
-                                                <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                                                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                               HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Button.Template>
-                                    </Button>
-                                    <!-- Off when no project is open: every chat already shows, so a live button would answer nothing -->
-                                    <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE1A6;"
-                                                  IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
-                                                  IsEnabled="{Binding ChatVM.HasProject}"
-                                                  ToolTipService.ShowOnDisabled="True"
-                                                  ToolTip="{Binding ChatVM.AllProjectsTip}"/>
-                                    <!-- Split chats that were put away: show them (dimmed, with "bring back") -->
-                                    <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE7B8;"
-                                                  IsChecked="{Binding ChatVM.ShowArchivedSplits}"
-                                                  ToolTip="{services:Loc chat.split.showAwayTip}"/>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
+                            <!-- The top of the list sits beside น้อง CluadeX: the title, its buttons, the search box and the projects move
+                                 right of her (1 wide, 2 tall), so nothing is ever under her; the chats start below her feet
+                                 (MainWindow.Buddy.cs sets the margins and the height from her size). -->
+                            <Grid x:Name="SidebarTopZone" Grid.Row="0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <!-- Panel header: EXPLORER-style strip -->
+                                <!-- The title on its own line and the three buttons under it: beside น้อง CluadeX the strip is
+                                     narrow but tall, so the title is never cut ("Conversatio…") and the buttons keep their size. -->
+                                <Border Grid.Row="0" Padding="14,12,14,8">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <!-- the title (owner 2026-11-10: "ทำบริเวณนี้ให้มันดูดีเท่ห์มากขึ้น … ปุ่มเหนือกล่องค้นหาก็เล็กไม่รู้คือไร
+                                             ไม่ชัด"): bigger, with the accent's bar before it -->
+                                        <StackPanel Orientation="Horizontal">
+                                            <Border Width="3" Height="15" CornerRadius="2" Margin="0,1,8,0" VerticalAlignment="Center"
+                                                    Background="{DynamicResource Accent.Gradient}"/>
+                                            <TextBlock Text="{services:Loc sidebar.conversations}" FontSize="14" FontWeight="Bold"
+                                                       Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                        <!-- the three buttons as chips you can see at once: a new chat in the accent, then the two
+                                             filters, lit in the accent while on (SidebarChipToggle) -->
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,8,0,0">
+                                        <Button x:Name="SidebarNewChat" Width="32" Height="28" Margin="0,0,6,0" Cursor="Hand"
+                                                Command="{Binding ChatVM.NewChatAndShowCommand}" ToolTip="{services:Loc nav.newChatTip}"
+                                                AutomationProperties.Name="{services:Loc nav.newChatTip}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="bg" Background="{DynamicResource Accent.Gradient}" CornerRadius="8"
+                                                            BorderThickness="1" BorderBrush="#33FFFFFF">
+                                                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="13" FontWeight="Bold"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Text.OnAccent}"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="bg" Property="BorderBrush" Value="#99FFFFFF"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsKeyboardFocused" Value="True">
+                                                            <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Focus.Ring}"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsPressed" Value="True">
+                                                            <Setter TargetName="bg" Property="Opacity" Value="0.8"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                        <!-- Off when no project is open: every chat already shows, so a live button would answer nothing -->
+                                        <ToggleButton Style="{StaticResource SidebarChipToggle}" Content="&#xE71D;" Margin="0,0,6,0"
+                                                      IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
+                                                      IsEnabled="{Binding ChatVM.HasProject}"
+                                                      ToolTipService.ShowOnDisabled="True"
+                                                      ToolTip="{Binding ChatVM.AllProjectsTip}"
+                                                      AutomationProperties.Name="{Binding ChatVM.AllProjectsTip}"/>
+                                        <!-- Split chats that were put away: show them (dimmed, with "bring back") -->
+                                        <ToggleButton Style="{StaticResource SidebarChipToggle}" Content="&#xE7B8;"
+                                                      IsChecked="{Binding ChatVM.ShowArchivedSplits}"
+                                                      ToolTip="{services:Loc chat.split.showAwayTip}"
+                                                      AutomationProperties.Name="{services:Loc chat.split.showAwayTip}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                                <StackPanel Grid.Row="2">
+                                    <Border Margin="14,2,14,6" Padding="8,0"
+                                            Background="{DynamicResource Surface.Input}"
+                                            BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                            CornerRadius="6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBox Grid.Column="1"
+                                                     Text="{Binding ChatVM.HistorySearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                                                     Background="Transparent" BorderThickness="0"
+                                                     Foreground="{DynamicResource Text.Primary}"
+                                                     CaretBrush="{DynamicResource Accent.1}"
+                                                     FontSize="11" Padding="0,7" VerticalContentAlignment="Center"/>
+                                            <Button Grid.Column="2" Width="20" Height="20"
+                                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                    Command="{Binding ChatVM.ClearSearchCommand}"
+                                                    Visibility="{Binding ChatVM.IsSearchingHistory, Converter={StaticResource BoolVis}}"
+                                                    ToolTip="{services:Loc sidebar.clearSearch}">
+                                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
+                                                           Foreground="{DynamicResource Text.Faint}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                    <TextBlock Text="{Binding ChatVM.SidebarFilterText}" FontSize="10.5" Margin="16,0,14,6"
+                                               Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ChatVM.SidebarFilterText}" Value="">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Grid>
 
-                            <!-- Search box, then what the list holds: the top rows often stay the same when the filter changes,
-                                 so the count is what shows the button did something -->
-                            <StackPanel Grid.Row="1">
+                            <!-- The projects, beside her too when she is tall (MainWindow.Buddy.cs gives them the zone's left margin and
+                                 the height still needed to reach her feet); the search box and the line saying what the list holds are in
+                                 the zone above: the top rows often stay the same when the filter changes, so the count is what shows a
+                                 button did something -->
+                            <StackPanel x:Name="SidebarProjects" Grid.Row="1">
                             <!-- Projects: named groups of chats (owner 2026-11-01). A row shows only its chats (again = all); a chat
                                  dropped on it moves in; right-click for a new chat in it, rename, its folder, delete. -->
                             <StackPanel Margin="10,0,10,6">
@@ -873,8 +949,7 @@
                                                                 <ColumnDefinition Width="Auto"/>
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
-                                                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"
-                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                            <ContentControl Style="{StaticResource FolderIcon}" Margin="0,0,8,0"/>
                                                             <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" VerticalAlignment="Center"
                                                                        Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
                                                             <!-- a bound folder that is not there any more -->
@@ -934,50 +1009,6 @@
                                     </Button>
                                 </StackPanel>
                             </StackPanel>
-                            <Border Margin="14,2,14,6" Padding="8,0"
-                                    Background="{DynamicResource Surface.Input}"
-                                    BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
-                                    CornerRadius="6">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                               Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBox Grid.Column="1"
-                                             Text="{Binding ChatVM.HistorySearchQuery, UpdateSourceTrigger=PropertyChanged}"
-                                             Background="Transparent" BorderThickness="0"
-                                             Foreground="{DynamicResource Text.Primary}"
-                                             CaretBrush="{DynamicResource Accent.1}"
-                                             FontSize="11" Padding="0,7" VerticalContentAlignment="Center"/>
-                                    <Button Grid.Column="2" Width="20" Height="20"
-                                            Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                            Command="{Binding ChatVM.ClearSearchCommand}"
-                                            Visibility="{Binding ChatVM.IsSearchingHistory, Converter={StaticResource BoolVis}}"
-                                            ToolTip="{services:Loc sidebar.clearSearch}">
-                                        <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                   Foreground="{DynamicResource Text.Faint}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Button>
-                                </Grid>
-                            </Border>
-                            <TextBlock Text="{Binding ChatVM.SidebarFilterText}" FontSize="10.5" Margin="16,0,14,6"
-                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.SidebarFilterText}" Value="">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
                             </StackPanel>
 
                             <!-- Sessions list / search results -->
@@ -1181,6 +1212,8 @@
                                                                             <DataTrigger Binding="{Binding RunStatus}" Value="working"><Setter Property="Fill" Value="{DynamicResource Accent.1}"/></DataTrigger>
                                                                             <DataTrigger Binding="{Binding RunStatus}" Value="waiting"><Setter Property="Fill" Value="{DynamicResource Status.Warning}"/></DataTrigger>
                                                                             <DataTrigger Binding="{Binding RunStatus}" Value="done"><Setter Property="Fill" Value="{DynamicResource Status.Success}"/></DataTrigger>
+                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="failed"><Setter Property="Fill" Value="{DynamicResource Status.Danger}"/></DataTrigger>
+                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="stopped"><Setter Property="Fill" Value="{DynamicResource Status.Danger.Soft}"/></DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>
                                                                 </Ellipse.Style>
@@ -1241,93 +1274,10 @@
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <!-- The chat's icon tells how its run stands: idle = a chat bubble; working = a turning
-                                                             arc; waiting for the owner = a pulsing amber dot with a ripple; finished while the
-                                                             owner was elsewhere = a green check that pops in. -->
-                                                        <Grid Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top">
-                                                            <TextBlock Text="&#xE8BD;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Text.Muted}"
-                                                                       Visibility="{Binding HasRunStatus, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
-                                                            <!-- working -->
-                                                            <Path views:AmbientAnimation.WhileVisible="True" Stroke="{DynamicResource Accent.1}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                                                  Data="M7,1 A6,6 0 1 1 1,7" RenderTransformOrigin="0.5,0.5">
-                                                                <Path.RenderTransform><RotateTransform/></Path.RenderTransform>
-                                                                <Path.Style>
-                                                                    <Style TargetType="Path">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="working">
-                                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Path.Style>
-                                                                <Path.Triggers>
-                                                                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                        <BeginStoryboard x:Name="AmbientMain1">
-                                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
-                                                                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(RotateTransform.Angle)" From="0" To="360" Duration="0:0:1.1"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </EventTrigger>
-                                                                </Path.Triggers>
-                                                            </Path>
-                                                            <!-- waiting -->
-                                                            <Grid views:AmbientAnimation.WhileVisible="True">
-                                                                <Grid.Style>
-                                                                    <Style TargetType="Grid">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="waiting">
-                                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Grid.Style>
-                                                                <Ellipse x:Name="Ripple" Width="14" Height="14" Stroke="{DynamicResource Status.Warning}" StrokeThickness="1.5"
-                                                                         RenderTransformOrigin="0.5,0.5">
-                                                                    <Ellipse.RenderTransform><ScaleTransform ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
-                                                                </Ellipse>
-                                                                <Ellipse Width="7" Height="7" Fill="{DynamicResource Status.Warning}"/>
-                                                                <Grid.Triggers>
-                                                                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                        <BeginStoryboard x:Name="AmbientMain2">
-                                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
-                                                                                <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" From="0.4" To="1.1" Duration="0:0:1.2"/>
-                                                                                <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" From="0.4" To="1.1" Duration="0:0:1.2"/>
-                                                                                <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="Opacity" From="1" To="0" Duration="0:0:1.2"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </EventTrigger>
-                                                                </Grid.Triggers>
-                                                            </Grid>
-                                                            <!-- done -->
-                                                            <!-- The pop animates FontSize, not a RenderTransform: a chat that is already "done" when its row is built (a
-                                                                 Stop, a reload) starts this trigger while the template still holds a frozen transform, and
-                                                                 WPF threw "Cannot animate 'RenderTransform.(0)' on an immutable object instance" (owner 2026-10-18). -->
-                                                            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Status.Success}"
-                                                                       HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                                <TextBlock.Style>
-                                                                    <Style TargetType="TextBlock">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="done">
-                                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                                                <DataTrigger.EnterActions>
-                                                                                    <BeginStoryboard>
-                                                                                        <Storyboard>
-                                                                                            <DoubleAnimation Storyboard.TargetProperty="FontSize" From="3" To="12" Duration="0:0:0.45">
-                                                                                                <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
-                                                                                            </DoubleAnimation>
-                                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.25"/>
-                                                                                        </Storyboard>
-                                                                                    </BeginStoryboard>
-                                                                                </DataTrigger.EnterActions>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </TextBlock.Style>
-                                                            </TextBlock>
-                                                        </Grid>
+                                                        <!-- The chat's icon tells how its run stands: a grey node when idle, a turning neon arc while it
+                                                             works, an amber ripple while it waits for the owner, a green check with a pink dot for a
+                                                             result not opened yet, red when the turn failed or was stopped (Views/RunBadgeIcon.xaml). -->
+                                                        <views:RunBadgeIcon Margin="0,2,10,0" VerticalAlignment="Top"/>
                                                         <StackPanel Grid.Column="1">
                                                             <DockPanel LastChildFill="True">
                                                                 <!-- a chat that split work off: a git-branch badge with how many split chats are open (tooltip: how they stand) -->
@@ -1367,9 +1317,25 @@
                                                                                    Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center"/>
                                                                     </StackPanel>
                                                                 </Grid>
+                                                                <!-- the tip: the whole title and the chat's reference (CX-…), to quote to the team or the AI -->
                                                                 <TextBlock Text="{Binding Title}" FontSize="12"
                                                                            Foreground="{DynamicResource Text.Primary}"
-                                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
+                                                                           TextTrimming="CharacterEllipsis">
+                                                                    <TextBlock.ToolTip>
+                                                                        <TextBlock>
+                                                                            <Run Text="{Binding Title, Mode=OneWay}"/><LineBreak/>
+                                                                            <Run Text="{services:Loc sidebar.chat.refLabel}"/><Run Text="{Binding Ref, Mode=OneWay}" FontFamily="{DynamicResource Font.Mono}"/>
+                                                                        </TextBlock>
+                                                                    </TextBlock.ToolTip>
+                                                                    <!-- a result not opened yet reads bolder -->
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding RunStatus}" Value="done"><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
                                                             </DockPanel>
                                                             
 
@@ -1536,7 +1502,14 @@
                                                             </Grid.ColumnDefinitions>
                                                             <TextBlock Text="{Binding SessionTitle}" FontSize="11" FontWeight="SemiBold"
                                                                        Foreground="{DynamicResource Accent.2}"
-                                                                       TextTrimming="CharacterEllipsis" MaxWidth="160"/>
+                                                                       TextTrimming="CharacterEllipsis" MaxWidth="160">
+                                                                <TextBlock.ToolTip>
+                                                                    <TextBlock>
+                                                                        <Run Text="{Binding SessionTitle, Mode=OneWay}"/><LineBreak/>
+                                                                        <Run Text="{services:Loc sidebar.chat.refLabel}"/><Run Text="{Binding Ref, Mode=OneWay}" FontFamily="{DynamicResource Font.Mono}"/>
+                                                                    </TextBlock>
+                                                                </TextBlock.ToolTip>
+                                                            </TextBlock>
                                                             <Border Grid.Column="1" Background="{DynamicResource Surface.Badge}" CornerRadius="8" Padding="6,1">
                                                                 <TextBlock Text="{Binding MatchCount, StringFormat='{}{0} hits'}"
                                                                            FontSize="9" FontFamily="{DynamicResource Font.Mono.Display}"
@@ -1592,8 +1565,20 @@
                                 <TextBlock Text="&#xE777;" FontFamily="Segoe MDL2 Assets" FontSize="16"
                                            Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding UpdateMessage}" FontSize="12"
+                                    <TextBlock Text="{Binding UpdateMessage}" FontSize="12" TextWrapping="Wrap"
                                                Foreground="{DynamicResource Text.Primary}"/>
+                                    <!-- no paid/trial license and no linked account: it does not update by itself (installer contract 2.1) -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0"
+                                                Visibility="{Binding ShowLinkHint, Converter={StaticResource BoolVis}}">
+                                        <TextBlock Text="{Binding LinkHintText}" FontSize="11.5" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                        <Button Command="{Binding LinkAccountCommand}" Margin="10,0,0,0" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="0">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate>
+                                            </Button.Template>
+                                            <TextBlock Text="{services:Loc update.linkAccount}" FontSize="11.5" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Accent.1}" TextDecorations="Underline"/>
+                                        </Button>
+                                    </StackPanel>
                                     <ProgressBar Value="{Binding UpdateProgress}" Maximum="100" Height="4" Margin="0,4,0,0"
                                                  Foreground="{DynamicResource Accent.1}"
                                                  Visibility="{Binding IsUpdating, Converter={StaticResource BoolVis}}"/>
@@ -1613,6 +1598,21 @@
                                     </Button.Template>
                                     <TextBlock Text="{services:Loc nav.installRestart}"/>
                                 </Button>
+                                <Button Grid.Column="2" Command="{Binding UpdateNowCommand}"
+                                        Visibility="{Binding ShowUpdateNow, Converter={StaticResource BoolVis}}"
+                                        Padding="14,6" Margin="8,0" FontSize="11" Cursor="Hand"
+                                        Background="{DynamicResource Banner.Button.Background}" BorderThickness="0"
+                                        Foreground="{DynamicResource Text.OnAccent}">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="6"
+                                                    Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                    <TextBlock Text="{services:Loc update.updateNow}"/>
+                                </Button>
                                 <Button Grid.Column="3" Command="{Binding DismissUpdateCommand}" Width="28" Height="28"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand"
                                         ToolTip="{services:Loc nav.dismissTip}">
@@ -1627,6 +1627,138 @@
                              kept (switching between them used to rebuild both); see Views/PageHost. -->
                         <views:PageHost x:Name="PageArea" Grid.Row="1" Page="{Binding CurrentView}"/>
                     </Grid>
+
+                    <!-- ░░░ น้อง CluadeX (owner 2026-11-08: "ใหญ่ ๆ ลอยมุมซ้ายบน"): a square under the title bar over the rail and
+                         the chat list beside it. In a Canvas so her size never widens a column; on top of both. MainWindow.Buddy.cs
+                         sizes her (big beside the chat list, rail-sized on the other pages, smaller in a short window) and moves
+                         what would sit under her: the rail's first icon and the list's title, buttons and search box.
+                         A click (or Tab to her + Enter/Space) goes Home: the Chat page, an empty chat, no folder open; running
+                         chats carry on in the background. ░░░ -->
+                    <Canvas Grid.Column="0" Panel.ZIndex="20" HorizontalAlignment="Left" VerticalAlignment="Top" Width="0" Height="0">
+                        <Button x:Name="BuddyHero" Width="120" Height="240" Cursor="Hand" Click="BuddyHero_Click"
+                                Command="{Binding ChatVM.GoHomeCommand}" ToolTip="{Binding ChatVM.BuddyTip}"
+                                AutomationProperties.Name="{services:Loc buddy.goHomeName}"
+                                AutomationProperties.HelpText="{Binding ChatVM.BuddyMoodTip}">
+                            <!-- right-click (owner 2026-11-08: "ใช้การคลิ๊กขวา ปิดเปิดเสียง หรือ สั่งให้เป็นภาพนิ่งอย่างเดียว หรือให้สไลด์
+                                 บรรดา สาวๆ"): her sound, and how she shows — clips, stills, or the girls one after another
+                                 waist up. All kept in the settings (MainWindow.BuddyBubble.cs, Views/CluadexBuddy.Slides.cs). -->
+                            <Button.ContextMenu>
+                                <ContextMenu Opened="BuddyMenu_Opened">
+                                    <MenuItem x:Name="BuddyMenuSound" Header="{services:Loc buddy.menu.sound}" Click="BuddyMenuSound_Click"/>
+                                    <Separator/>
+                                    <MenuItem x:Name="BuddyMenuClips" Header="{services:Loc buddy.menu.clips}" Tag="clips" Click="BuddyMenuDisplay_Click"/>
+                                    <MenuItem x:Name="BuddyMenuStills" Header="{services:Loc buddy.menu.stills}" Tag="stills" Click="BuddyMenuDisplay_Click"/>
+                                    <MenuItem x:Name="BuddyMenuSlides" Header="{services:Loc buddy.menu.slides}" Tag="slides" Click="BuddyMenuDisplay_Click"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                            <!-- keyboard focus only (not after a mouse click): a soft ring round her square -->
+                            <Button.FocusVisualStyle>
+                                <Style>
+                                    <Setter Property="Control.Template">
+                                        <Setter.Value>
+                                            <ControlTemplate>
+                                                <Rectangle Margin="2" RadiusX="14" RadiusY="14" StrokeThickness="1.5" Stroke="{DynamicResource Accent.1}"/>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </Button.FocusVisualStyle>
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Grid Background="Transparent">
+                                        <!-- her plate (owner 2026-11-08: "ไม่ควรเห็นเส้นด้านหลังเธอ … ทำพื้นที่กรอบนูนก็ได้"): a raised
+                                             card in the theme's opaque raised colour (the list's own colour is see-through),
+                                             so the rail's edge and the two panels' colours never show through her faded
+                                             edges; light along the top, a soft shadow under it -->
+                                        <Border x:Name="BuddyPlate" Margin="3,2,1,2" CornerRadius="14" BorderThickness="1"
+                                                Background="{DynamicResource Bg.Elevated}" IsHitTestVisible="False">
+                                            <Border.BorderBrush>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="0.6,1">
+                                                    <GradientStop Color="#55FFFFFF" Offset="0"/>
+                                                    <GradientStop Color="#14FFFFFF" Offset="0.45"/>
+                                                    <GradientStop Color="#33000000" Offset="1"/>
+                                                </LinearGradientBrush>
+                                            </Border.BorderBrush>
+                                            <Border.Effect>
+                                                <DropShadowEffect BlurRadius="14" ShadowDepth="3" Direction="270" Opacity="0.30"
+                                                                  RenderingBias="Performance"/>
+                                            </Border.Effect>
+                                            <Border CornerRadius="13" IsHitTestVisible="False">
+                                                <Border.Background>
+                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                        <GradientStop Color="#16FFFFFF" Offset="0"/>
+                                                        <GradientStop Color="#00FFFFFF" Offset="0.35"/>
+                                                        <GradientStop Color="#00000000" Offset="0.7"/>
+                                                        <GradientStop Color="#14000000" Offset="1"/>
+                                                    </LinearGradientBrush>
+                                                </Border.Background>
+                                            </Border>
+                                        </Border>
+                                        <views:CluadexBuddy x:Name="Buddy" DataContext="{Binding ChatVM}" Margin="4,3,2,3"/>
+                                        <!-- her sound on/off (owner 2026-11-08: "ทำให้ปิดเปิดเสียง อวาต้า เธอได้"): a small speaker in
+                                             her plate's corner, shown while the pointer is on her or while she is muted; the
+                                             same setting as Settings › General › Appearance (AppSettings.BuddySounds, kept) -->
+                                        <Button x:Name="BuddySoundToggle" Click="BuddySoundToggle_Click" Opacity="0"
+                                                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,7,8"
+                                                Width="24" Height="24" Cursor="Hand"
+                                                ToolTip="{services:Loc buddy.sound.muteTip}"
+                                                AutomationProperties.Name="{services:Loc buddy.sound.muteTip}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="chip" CornerRadius="12" BorderThickness="1"
+                                                            Background="{DynamicResource Popup.Background}" BorderBrush="{DynamicResource Popup.Border}">
+                                                        <TextBlock x:Name="icon" Text="&#xE767;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource Text.Secondary}"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding SettingsVM.BuddySounds}" Value="False">
+                                                            <Setter TargetName="icon" Property="Text" Value="&#xE74F;"/>
+                                                        </DataTrigger>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="icon" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                            <Setter TargetName="chip" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </Grid>
+                                    <ControlTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding SettingsVM.BuddySounds}" Value="False">
+                                            <Setter TargetName="BuddySoundToggle" Property="Opacity" Value="0.85"/>
+                                            <Setter TargetName="BuddySoundToggle" Property="ToolTip" Value="{services:Loc buddy.sound.unmuteTip}"/>
+                                            <Setter TargetName="BuddySoundToggle" Property="AutomationProperties.Name" Value="{services:Loc buddy.sound.unmuteTip}"/>
+                                        </DataTrigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Buddy" Property="Margin" Value="3,2,1,2"/>
+                                            <Setter TargetName="BuddySoundToggle" Property="Opacity" Value="1"/>
+                                        </Trigger>
+                                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                            <Setter TargetName="BuddySoundToggle" Property="Opacity" Value="1"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <!-- Her speech bubble (owner 2026-11-08: "บางทีก็มีบับเบิ้ล แนะนำลอยออกมา"): a tip now and then, or a word when a
+                             turn ends or waits for you. It floats out from her cheek over the list for a few seconds; a click
+                             closes it. Placed, timed and filled by MainWindow.Buddy.cs; off with Settings › General ›
+                             Appearance. -->
+                        <Border x:Name="BuddyBubble" Visibility="Collapsed" MaxWidth="230" Padding="12,8,10,9" CornerRadius="14,14,14,4"
+                                Background="{DynamicResource Popup.Background}" BorderBrush="{DynamicResource Popup.Border}" BorderThickness="1"
+                                Effect="{DynamicResource Shadow.Popup}" Cursor="Hand" RenderTransformOrigin="0,1"
+                                AutomationProperties.LiveSetting="Polite" ToolTip="{services:Loc buddy.bubble.closeTip}">
+                            <Border.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform x:Name="BuddyBubbleScale" ScaleX="1" ScaleY="1"/>
+                                    <TranslateTransform x:Name="BuddyBubbleRise"/>
+                                </TransformGroup>
+                            </Border.RenderTransform>
+                            <TextBlock x:Name="BuddyBubbleText" TextWrapping="Wrap" FontSize="12.5" LineHeight="18"
+                                       Foreground="{DynamicResource Text.Primary}"/>
+                        </Border>
+                    </Canvas>
                 </Grid>
 
                 <!-- ════════════════════════════════════════════════════════ -->
@@ -1994,7 +2126,13 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets"
                                                    FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0"
-                                                   Foreground="{DynamicResource Text.Muted}"/>
+                                                   Foreground="{DynamicResource Text.Muted}"
+                                                   Visibility="{Binding HasLogo, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                        <!-- A brand row (DGX Spark): the vendor's own logo on white, at its minimum size or larger. -->
+                                        <Border CornerRadius="4" Background="White" Padding="5,3" Margin="0,0,10,0" VerticalAlignment="Center"
+                                                Visibility="{Binding HasLogo, Converter={StaticResource BoolVis}}">
+                                            <Image Source="{Binding Logo}" Height="15" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                        </Border>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" FontSize="13"
                                                        Foreground="{DynamicResource Text.Primary}"

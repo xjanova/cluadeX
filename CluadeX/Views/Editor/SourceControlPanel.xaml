@@ -387,7 +387,7 @@
                                     <MenuItem.Icon><TextBlock Text="&#xE898;" FontFamily="Segoe MDL2 Assets"/></MenuItem.Icon>
                                 </MenuItem>
                                 <MenuItem Header="{services:Loc scm.menu.openFolder}" Command="{Binding OpenRepoFolderCommand}">
-                                    <MenuItem.Icon><TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"/></MenuItem.Icon>
+                                    <MenuItem.Icon><ContentControl Style="{StaticResource FolderIconOpen}" Width="14" Height="11.4" HorizontalAlignment="Left"/></MenuItem.Icon>
                                 </MenuItem>
                             </ContextMenu>
                         </Button.ContextMenu>
@@ -448,8 +448,7 @@
                 <!-- a folder that is not a repository -->
                 <StackPanel x:Name="NotRepoState" Margin="16,8,16,8" VerticalAlignment="Top"
                             Visibility="{Binding IsNotGitRepo, Converter={StaticResource ScmVis}}">
-                    <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="22" HorizontalAlignment="Center"
-                               Foreground="{DynamicResource Text.Muted}"/>
+                    <ContentControl Style="{StaticResource FolderIcon}" Width="26" Height="21.1" HorizontalAlignment="Center"/>
                     <TextBlock Text="{services:Loc scm.notRepo.title}" FontSize="13" FontWeight="SemiBold" Margin="0,8,0,4"
                                HorizontalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
                     <TextBlock Text="{services:Loc scm.notRepo.body}" FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
@@ -457,7 +456,7 @@
                     <Button Style="{StaticResource ScmTextBtn}" Margin="0,12,0,0" HorizontalAlignment="Center"
                             Command="{Binding InitRepoCommand}" IsEnabled="{Binding IsGitIdle}" FontSize="12" Padding="14,6">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE8F4;" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <ContentControl Style="{StaticResource FolderIconNew}" Width="14" Height="11.4" Margin="0,0,6,0" VerticalAlignment="Center" HorizontalAlignment="Left"/>
                             <TextBlock Text="{services:Loc scm.notRepo.init}" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>

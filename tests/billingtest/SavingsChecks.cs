@@ -94,7 +94,7 @@ internal static partial class Program
         var vm = new BillingSavingsViewModel(tracker, settings);
         vm.SetVisible(true);   // as on screen: every change redraws at once
         vm.SelectedRange = vm.Ranges.First(r => r.Days == 14);
-        Check("SV1 three summary cards, 14 daily bars, four saving rows", vm.Summary.Count == 3 && vm.DailyBars.Count == 14 && vm.Savings.Count == 4,
+        Check("SV1 three summary cards, 14 daily bars, six saving rows (cache, tool search, compaction, batch, routing, of it on this PC)", vm.Summary.Count == 3 && vm.DailyBars.Count == 14 && vm.Savings.Count == 6,
             $"{vm.Summary.Count}/{vm.DailyBars.Count}/{vm.Savings.Count}");
         var ledgerDays = tracker.LastDays(14);
         bool barsMatch = vm.DailyBars.Select((b, i) => Math.Abs(b.Total - (double)ledgerDays[i].BaselineUsd) < 1e-9).All(x => x);

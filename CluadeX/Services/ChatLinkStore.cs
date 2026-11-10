@@ -4,8 +4,10 @@ using System.Text.Json;
 
 namespace CluadeX.Services;
 
-/// <summary>One chat that another chat split off (new_chat): who opened it, for what, and whether it was put away.</summary>
-public sealed record ChatLink(string ParentId, string Task, DateTime CreatedAt, DateTime? ArchivedAt);
+/// <summary>One chat that another chat split off (new_chat): who opened it, for what, and whether it was put away.
+/// <paramref name="Model"/>: the model it runs on when it has one of its own (new_chat model "fable"); null = the app's
+/// pick, like every other chat. Kept here, not in codex.db (which takes no schema changes).</summary>
+public sealed record ChatLink(string ParentId, string Task, DateTime CreatedAt, DateTime? ArchivedAt, string? Model = null);
 
 /// <summary>
 /// Which chat split off which (the agent's new_chat), and which finished side chats were put away — so the sidebar can
@@ -24,6 +26,7 @@ public sealed class ChatLinkStore
     private readonly string? _path;
     private readonly object _gate = new();
     private Dictionary<string, ChatLink> _links = new(StringComparer.Ordinal);
+    private Dictionary<string, Agents.ChatWorktree> _worktrees = new(StringComparer.Ordinal);
 
     /// <summary>Raised (any thread) with the chat id whose link or archive state changed.</summary>
     public event Action<string>? Changed;
@@ -38,6 +41,8 @@ public sealed class ChatLinkStore
     private sealed class FileShape
     {
         public Dictionary<string, ChatLink> Links { get; set; } = new();
+        /// <summary>Split chats that work in a git worktree of their own (new_chat isolation "worktree"), by chat id.</summary>
+        public Dictionary<string, Agents.ChatWorktree> Worktrees { get; set; } = new();
     }
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
@@ -50,6 +55,8 @@ public sealed class ChatLinkStore
             var shape = JsonSerializer.Deserialize<FileShape>(File.ReadAllText(_path), Json);
             if (shape?.Links != null)
                 lock (_gate) _links = new Dictionary<string, ChatLink>(shape.Links, StringComparer.Ordinal);
+            if (shape?.Worktrees != null)
+                lock (_gate) _worktrees = new Dictionary<string, Agents.ChatWorktree>(shape.Worktrees, StringComparer.Ordinal);
         }
         catch { /* unreadable: start empty — the chats themselves are untouched */ }
     }
@@ -60,7 +67,7 @@ public sealed class ChatLinkStore
         try
         {
             string json;
-            lock (_gate) json = JsonSerializer.Serialize(new FileShape { Links = new(_links) }, Json);
+            lock (_gate) json = JsonSerializer.Serialize(new FileShape { Links = new(_links), Worktrees = new(_worktrees) }, Json);
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             string tmp = _path + ".tmp";
             File.WriteAllText(tmp, json, new UTF8Encoding(false));
@@ -77,15 +84,31 @@ public sealed class ChatLinkStore
     }
 
     /// <summary>Record that <paramref name="childId"/> was split off <paramref name="parentId"/> to do <paramref name="task"/>.</summary>
-    public void Link(string childId, string parentId, string task)
+    public void Link(string childId, string parentId, string task, string? model = null)
     {
         if (string.IsNullOrEmpty(childId) || string.IsNullOrEmpty(parentId) || childId == parentId) return;
         // A chat never becomes its own ancestor (a loop would hang the tree).
         for (string? up = parentId; up != null; up = Get(up)?.ParentId)
             if (up == childId) return;
-        lock (_gate) _links[childId] = new ChatLink(parentId, (task ?? "").Trim(), DateTime.Now, null);
+        lock (_gate) _links[childId] = new ChatLink(parentId, (task ?? "").Trim(), DateTime.Now, null,
+            string.IsNullOrWhiteSpace(model) ? null : model.Trim());
         Save();
         Changed?.Invoke(childId);
+    }
+
+    /// <summary>The model a split chat runs on (null = the app's pick). Only split chats have a record; others: false.</summary>
+    public bool SetModel(string chatId, string? model)
+    {
+        string? m = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+        lock (_gate)
+        {
+            if (!_links.TryGetValue(chatId, out var l)) return false;
+            if (l.Model == m) return true;
+            _links[chatId] = l with { Model = m };
+        }
+        Save();
+        Changed?.Invoke(chatId);
+        return true;
     }
 
     /// <summary>Put a split chat away (true) or bring it back (false). Only split chats have a record; others: false.</summary>
@@ -100,6 +123,41 @@ public sealed class ChatLinkStore
         Save();
         Changed?.Invoke(chatId);
         return true;
+    }
+
+    /// <summary>The git worktree a split chat works in (new_chat isolation "worktree"), or null: it shares its parent's
+    /// checkout. Kept until close_chat removes the worktree, so a restart still runs the chat there.</summary>
+    public Agents.ChatWorktree? WorktreeOf(string? chatId)
+    {
+        if (string.IsNullOrEmpty(chatId)) return null;
+        lock (_gate) return _worktrees.TryGetValue(chatId, out var w) ? w : null;
+    }
+
+    /// <summary>Record (or, null, forget) the worktree <paramref name="chatId"/> works in.</summary>
+    public void SetWorktree(string chatId, Agents.ChatWorktree? worktree)
+    {
+        if (string.IsNullOrEmpty(chatId)) return;
+        lock (_gate)
+        {
+            if (worktree == null) { if (!_worktrees.Remove(chatId)) return; }
+            else _worktrees[chatId] = worktree;
+        }
+        Save();
+        Changed?.Invoke(chatId);
+    }
+
+    /// <summary>Every chat split off <paramref name="parentId"/>, and theirs in turn (a put-away chat takes its own
+    /// splits with it), nearest first.</summary>
+    public List<(string Id, ChatLink Link)> DescendantsOf(string parentId)
+    {
+        var found = new List<(string, ChatLink)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal) { parentId };
+        var queue = new Queue<string>();
+        queue.Enqueue(parentId);
+        while (queue.Count > 0)
+            foreach (var kid in ChildrenOf(queue.Dequeue()))
+                if (seen.Add(kid.Id)) { found.Add(kid); queue.Enqueue(kid.Id); }
+        return found;
     }
 
     /// <summary>How many splits up <paramref name="chatId"/> is from a chat nobody split off (0 = a top chat).</summary>

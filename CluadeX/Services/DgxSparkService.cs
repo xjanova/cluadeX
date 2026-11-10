@@ -10,8 +10,10 @@ using CluadeX.Services.Providers;
 
 namespace CluadeX.Services;
 
-/// <summary>What a DGX Spark (or any box on the LAN) is serving.</summary>
-public sealed record DgxSparkProbe(string Host, string? Backend, string? Version, int? Port, IReadOnlyList<string> Models, string? Error)
+/// <summary>What a DGX Spark (or any box on the LAN) is serving. <paramref name="Reason"/>: why Ollama didn't answer
+/// (no such name, port closed, no reply in time …) — <see cref="SparkFailure.None"/> when it did.</summary>
+public sealed record DgxSparkProbe(string Host, string? Backend, string? Version, int? Port, IReadOnlyList<string> Models, string? Error,
+    SparkFailure Reason = SparkFailure.None)
 {
     /// <summary><see cref="Error"/> when the server answered but its model list did not come (an error status, a
     /// reply that isn't the list, a dropped connection) — not the same as a list that came back empty.</summary>
@@ -53,6 +55,35 @@ public enum SparkFailure
     /// <summary>The switch happened but Ollama did not come up.</summary>
     NotReady,
     Unknown,
+    /// <summary>The name doesn't resolve on this network (a typo, or a .local name the PC can't see) — an IP works.</summary>
+    HostNotFound,
+    /// <summary>The box is there but nothing listens on Ollama's port (Ollama off, or bound to 127.0.0.1 only).</summary>
+    Refused,
+}
+
+/// <summary>Where CluadeX stands with the remembered DGX Spark — what the title-bar chip and the Spark window show.</summary>
+public enum SparkLinkState
+{
+    /// <summary>No Spark remembered yet (nothing has been used on one).</summary>
+    NotConfigured,
+    /// <summary>First check of this Spark is running (later re-checks of a known state don't show this — no flashing).</summary>
+    Checking,
+    /// <summary>Ollama on the Spark answers; CluadeX is using another model.</summary>
+    Online,
+    /// <summary>Ollama on the Spark answers and CluadeX is using it (<see cref="SparkLinkStatus.Model"/>).</summary>
+    InUse,
+    /// <summary>The Spark doesn't answer — <see cref="SparkLinkStatus.Reason"/> says why.</summary>
+    Unreachable,
+}
+
+/// <summary>One reading of the link to the remembered Spark.</summary>
+public sealed record SparkLinkStatus(SparkLinkState State, string? Host, string? Model, string? Version, SparkFailure Reason, DateTime AtUtc)
+{
+    public static SparkLinkStatus None { get; } = new(SparkLinkState.NotConfigured, null, null, null, SparkFailure.None, DateTime.MinValue);
+
+    /// <summary>The same reading apart from when it was taken (a re-check that changed nothing raises no event).</summary>
+    public bool SameAs(SparkLinkStatus? o) => o != null && State == o.State && Reason == o.Reason
+        && string.Equals(Host, o.Host, StringComparison.OrdinalIgnoreCase) && Model == o.Model && Version == o.Version;
 }
 
 /// <summary>Ollama's own error (the {"error": "…"} line of /api/pull). Its message is Ollama's text, meant for the user.</summary>
@@ -70,7 +101,7 @@ public sealed record SparkUseResult(SparkFailure Failure, string? ProviderStatus
 /// Ollama (port 11434, the setup NVIDIA's own Spark playbooks use), llama.cpp's llama-server (8080) or vLLM
 /// (8000). With 128 GB of memory the Spark runs 120B-class models that no 8–24 GB desktop GPU can hold.
 /// </summary>
-public class DgxSparkService
+public class DgxSparkService : IAppShutdownHook
 {
     /// <summary>The XMAN Studio campaign page — the only purchase link the app shows (owner rule).</summary>
     public const string CampaignUrl = "https://xman4289.com/dgx-spark";
@@ -115,6 +146,18 @@ public class DgxSparkService
 #endif
         TimeSpan.FromSeconds(10);
 
+    /// <summary>How long one link check (/api/version) may take (as long as <see cref="_probe"/> allows — see there why
+    /// 7 s). A debug build reads CLUADEX_SPARK_LINK_TIMEOUT_MS (per call) so the harness can prove a Spark that never
+    /// answers without waiting the full 7 s.</summary>
+    private static TimeSpan LinkTimeout =>
+#if DEBUG
+        int.TryParse(Environment.GetEnvironmentVariable("CLUADEX_SPARK_LINK_TIMEOUT_MS"), out int ms) && ms > 0 ? TimeSpan.FromMilliseconds(ms) :
+#endif
+        TimeSpan.FromSeconds(7);
+
+    /// <summary>How often the remembered Spark is checked while CluadeX runs (one tiny GET on the LAN).</summary>
+    public static readonly TimeSpan LinkPollInterval = TimeSpan.FromSeconds(30);
+
     /// <summary>Context window CluadeX asks a Spark-served model for. 128 GB leaves room for a long window.</summary>
     public const int SparkContextSize = 32768;
 
@@ -123,7 +166,10 @@ public class DgxSparkService
     private readonly SettingsService _settings;
     private readonly AiProviderManager _providers;
     private readonly DebugLogService? _log;
-    private readonly HttpClient _probe = new() { Timeout = TimeSpan.FromSeconds(4) };
+    /// <summary>Lookups of the Spark. 7 s, not less: Windows takes ~2 s per address to report a closed port (it retries
+    /// the connect), and a spark-xxxx.local name usually resolves to an IPv6 and an IPv4 address — ~4 s before
+    /// "refused", the answer that points at OLLAMA_HOST. A shorter limit turned that into a misleading "timeout".</summary>
+    private readonly HttpClient _probe = new() { Timeout = TimeSpan.FromSeconds(7) };
     private readonly HttpClient _pull = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     /// <summary>&gt; 0 while <see cref="UseOllamaModelAsync"/> is writing settings and switching. Its own write
@@ -136,6 +182,20 @@ public class DgxSparkService
 
     /// <summary>The last time the window was given back this run — the Spark window explains it when it opens later.</summary>
     public SparkContextRestore? LastContextRestore { get; private set; }
+
+    // ── Link status (the remembered Spark) ──
+    private readonly object _linkGate = new();
+    private SparkLinkStatus _link = SparkLinkStatus.None;
+    /// <summary>Number of the newest link check started. A check's result is kept only while it is still the newest, so
+    /// a slow answer for an old address (or a timed-out check) never overwrites a newer reading.</summary>
+    private long _linkSeq;
+    private CancellationTokenSource? _monitorCts;
+
+    /// <summary>The latest reading of the link to the remembered Spark.</summary>
+    public SparkLinkStatus LinkStatus { get { lock (_linkGate) return _link; } }
+
+    /// <summary>Raised (any thread) when <see cref="LinkStatus"/> changes — not for a re-check that found the same.</summary>
+    public event Action<SparkLinkStatus>? LinkStatusChanged;
 
     public DgxSparkService(SettingsService settings, AiProviderManager providers, DebugLogService? log = null)
     {
@@ -153,11 +213,223 @@ public class DgxSparkService
         //  • an address changed without a save, then re-initialised — caught when the provider stops loading.
         // Also checked once now, for a switch that happened while this service didn't exist.
         _providers.OnProviderChanged += p =>
+        {
             RestoreContextIfLeftSpark(evenWhileApplying: !ReferenceEquals(p, _providers.GetProvider(AiProviderType.Ollama)));
+            FollowSettings();
+        };
         _providers.OnLoadingChanged += loading => { if (!loading) RestoreContextIfLeftSpark(); };
-        _settings.SettingsChanged += () => RestoreContextIfLeftSpark();
+        _settings.SettingsChanged += () =>
+        {
+            RestoreContextIfLeftSpark();
+            FollowSettings();
+        };
         RestoreContextIfLeftSpark();
+        FollowSettings(check: false);   // the first network check is the monitor's (StartLinkMonitor), not the constructor's
     }
+
+    // ═══════════════════════ Link status ═══════════════════════
+
+    /// <summary>The remembered Spark's host, or null when none is remembered.</summary>
+    private string? RememberedHost => _settings.Settings.DgxSparkHost is { Length: > 0 } h ? NormalizeHost(h) : null;
+
+    private bool IsRemembered(string host) => string.Equals(RememberedHost, host, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The model CluadeX uses on the Spark when it is on the Spark, else null.</summary>
+    private string? ModelInUse(string host)
+    {
+        var s = _settings.Settings;
+        if (!IsSparkActive(s) || !string.Equals(NormalizeHost(s.DgxSparkHost), host, StringComparison.OrdinalIgnoreCase)) return null;
+        return s.ProviderConfigs.TryGetValue("Ollama", out var cfg) ? cfg?.EffectiveModelId : null;
+    }
+
+    /// <summary>"Ollama answered at <paramref name="host"/>": in use (with its model) or just online — read from the
+    /// settings at this moment.</summary>
+    private SparkLinkStatus Answered(string host, string? version)
+    {
+        string? model = ModelInUse(host);
+        return new SparkLinkStatus(model != null ? SparkLinkState.InUse : SparkLinkState.Online, host, model, version, SparkFailure.None, DateTime.UtcNow);
+    }
+
+    private static SparkLinkStatus Unanswered(string host, SparkFailure reason) =>
+        new(SparkLinkState.Unreachable, host, null, null, reason == SparkFailure.None ? SparkFailure.Network : reason, DateTime.UtcNow);
+
+    /// <summary>Start a link check: a new number, and "checking" on screen only when there is no reading of this host
+    /// yet (or <paramref name="showChecking"/>) — a periodic re-check of a known state must not flash.</summary>
+    private long BeginLinkCheck(string host, bool showChecking, out SparkLinkStatus before)
+    {
+        SparkLinkStatus? raise = null;
+        long seq;
+        lock (_linkGate)
+        {
+            seq = ++_linkSeq;
+            before = _link;
+            bool known = string.Equals(_link.Host, host, StringComparison.OrdinalIgnoreCase) && _link.State != SparkLinkState.NotConfigured;
+            if (showChecking || !known)
+            {
+                var checking = new SparkLinkStatus(SparkLinkState.Checking, host, null, null, SparkFailure.None, DateTime.UtcNow);
+                if (!checking.SameAs(_link)) raise = checking;
+                _link = checking;
+            }
+        }
+        if (raise != null) RaiseLink(raise);
+        return seq;
+    }
+
+    /// <summary>Keep <paramref name="status"/> when check <paramref name="seq"/> is still the newest one started.</summary>
+    private SparkLinkStatus EndLinkCheck(long seq, SparkLinkStatus status)
+    {
+        bool changed;
+        lock (_linkGate)
+        {
+            if (seq != _linkSeq) return _link;   // a newer check (or a new address) took over
+            changed = !status.SameAs(_link);
+            _link = status;
+        }
+        if (changed) RaiseLink(status);
+        return status;
+    }
+
+    /// <summary>A reading known without asking (the Spark just answered another request): it wins over any check in flight.</summary>
+    private void SetLinkNow(SparkLinkStatus status)
+    {
+        long seq;
+        lock (_linkGate) seq = ++_linkSeq;
+        EndLinkCheck(seq, status);
+    }
+
+    private void RaiseLink(SparkLinkStatus status)
+    {
+        try { LinkStatusChanged?.Invoke(status); }
+        catch (Exception ex) { _log?.Warn("DgxSpark", "a link-status listener failed", ex); }
+    }
+
+    /// <summary>
+    /// The settings moved (a provider switch, Ollama re-pointed, the remembered Spark changed or cleared): update the
+    /// reading without a request where the answer is already known — on/off the Spark flips InUse ⇄ Online — and check
+    /// again (when <paramref name="check"/>) only when the remembered address itself changed.
+    /// </summary>
+    private void FollowSettings(bool check = true)
+    {
+        string? host = RememberedHost;
+        // Read from the settings before taking the link lock (never the settings lock inside it).
+        string? model = host == null ? null : ModelInUse(host);
+        SparkLinkStatus? raise = null;
+        bool recheck = false;
+        lock (_linkGate)
+        {
+            if (host == null)
+            {
+                if (_link.State != SparkLinkState.NotConfigured)
+                {
+                    _linkSeq++;   // a check still running for the old address must not bring it back
+                    _link = SparkLinkStatus.None;
+                    raise = _link;
+                }
+            }
+            else if (!string.Equals(_link.Host, host, StringComparison.OrdinalIgnoreCase))
+                recheck = true;
+            else if (_link.State is SparkLinkState.Online or SparkLinkState.InUse)
+            {
+                var now = new SparkLinkStatus(model != null ? SparkLinkState.InUse : SparkLinkState.Online, host, model, _link.Version,
+                    SparkFailure.None, DateTime.UtcNow);
+                if (!now.SameAs(_link)) { _link = now; raise = now; }
+            }
+        }
+        if (raise != null) RaiseLink(raise);
+        if (recheck && check) _ = CheckLinkAsync();
+    }
+
+    /// <summary>
+    /// Ask the remembered Spark whether Ollama answers (GET /api/version, at most ~7 s) and update
+    /// <see cref="LinkStatus"/>. Never throws: a failure is a reading (Unreachable + why). Cancelled by the caller, the
+    /// reading it started from stays (a "checking" it put up is taken down again).
+    /// </summary>
+    public async Task<SparkLinkStatus> CheckLinkAsync(bool showChecking = false, CancellationToken ct = default)
+    {
+        string? host = RememberedHost;
+        if (host == null)
+        {
+            FollowSettings(check: false);
+            return LinkStatus;
+        }
+
+        long seq = BeginLinkCheck(host, showChecking, out var before);
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(LinkTimeout);
+            SparkLinkStatus result;
+            try
+            {
+                using var r = await _probe.GetAsync($"http://{host}:{OllamaPort}/api/version", limit.Token);
+                if (!r.IsSuccessStatusCode) result = Unanswered(host, SparkFailure.Server);
+                else
+                {
+                    using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync(limit.Token));
+                    string? version = doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("version", out var v)
+                        && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+                    result = version != null ? Answered(host, version) : Unanswered(host, SparkFailure.BadResponse);
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                result = Unanswered(host, SparkFailure.Timeout);   // our own ~7 s limit, not the caller
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log?.Debug("DgxSpark", $"{host}: link check missed — {ex.GetType().Name}: {ex.Message}");
+                result = Unanswered(host, ClassifyReach(ex));
+            }
+            if (result.State == SparkLinkState.Unreachable)
+                _log?.Info("DgxSpark", $"{host}: not answering ({result.Reason})");
+            return EndLinkCheck(seq, result);
+        }
+        catch (OperationCanceledException)
+        {
+            // The caller gave up (the app closing, the monitor stopping): put back what was there before this check —
+            // but never a "checking" nobody will finish (then: no reading, and the next check shows "checking" again).
+            return EndLinkCheck(seq, before.State == SparkLinkState.Checking ? SparkLinkStatus.None : before);
+        }
+    }
+
+    /// <summary>The window's lookup of the remembered Spark is also a link reading (the chip and window agree).</summary>
+    private void ReportProbe(long seq, string host, DgxSparkProbe ollama) =>
+        EndLinkCheck(seq, ollama.Backend == "Ollama" ? Answered(host, ollama.Version) : Unanswered(host, ollama.Reason));
+
+    /// <summary>Check the remembered Spark now and every <see cref="LinkPollInterval"/> while the app runs (once — a
+    /// second call does nothing). Only when a Spark is remembered does anything go on the network.</summary>
+    public void StartLinkMonitor(TimeSpan? interval = null)
+    {
+        CancellationTokenSource cts;
+        lock (_linkGate)
+        {
+            if (_monitorCts != null) return;
+            cts = _monitorCts = new CancellationTokenSource();
+        }
+        var every = interval ?? LinkPollInterval;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await CheckLinkAsync(ct: cts.Token);
+                using var timer = new PeriodicTimer(every);
+                while (await timer.WaitForNextTickAsync(cts.Token))
+                    if (RememberedHost != null) await CheckLinkAsync(ct: cts.Token);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { _log?.Warn("DgxSpark", "the link monitor stopped", ex); }
+        });
+    }
+
+    /// <summary>Stop the periodic check (app exit).</summary>
+    public void StopLinkMonitor()
+    {
+        CancellationTokenSource? cts;
+        lock (_linkGate) { cts = _monitorCts; _monitorCts = null; }
+        try { cts?.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
+    void IAppShutdownHook.OnAppShutdown() => StopLinkMonitor();
 
     /// <summary>"spark-1a2b.local", "192.168.1.50", "http://spark:11434/" → the bare host (no scheme, port or path),
     /// or null when it isn't a host name / IP at all.</summary>
@@ -180,16 +452,45 @@ public class DgxSparkService
         string? host = NormalizeHost(hostInput);
         if (host == null) return new DgxSparkProbe(hostInput, null, null, null, [], "invalid-host");
 
-        var ollama = ProbeOllamaAsync(host, ct);
-        var llama = ProbeOpenAiCompatibleAsync(host, 8080, "llama.cpp", ct);
-        var vllm = ProbeOpenAiCompatibleAsync(host, 8000, "vLLM", ct);
-        await Task.WhenAll(ollama, llama, vllm);
+        // Looking up the remembered Spark is a link reading too: the chip shows "connecting…" and then the answer.
+        bool remembered = IsRemembered(host);
+        long seq = remembered ? BeginLinkCheck(host, showChecking: true, out _) : 0;
+        try
+        {
+            var ollama = ProbeOllamaAsync(host, ct);
+            var llama = ProbeOpenAiCompatibleAsync(host, 8080, "llama.cpp", ct);
+            var vllm = ProbeOpenAiCompatibleAsync(host, 8000, "vLLM", ct);
+            await Task.WhenAll(ollama, llama, vllm);
+            if (remembered) ReportProbe(seq, host, ollama.Result);
 
-        var hit = new[] { ollama.Result, llama.Result, vllm.Result }.FirstOrDefault(p => p.Reachable);
-        _log?.Info("DgxSpark", hit != null
-            ? $"{host}: {hit.Backend} {hit.Version} · {hit.Models.Count} model(s)"
-            : $"{host}: nothing answered on 11434 / 8080 / 8000");
-        return hit ?? new DgxSparkProbe(host, null, null, null, [], "unreachable");
+            var hit = new[] { ollama.Result, llama.Result, vllm.Result }.FirstOrDefault(p => p.Reachable);
+            _log?.Info("DgxSpark", hit != null
+                ? $"{host}: {hit.Backend} {hit.Version} · {hit.Models.Count} model(s)"
+                : $"{host}: nothing answered on 11434 / 8080 / 8000 ({ollama.Result.Reason})");
+            // Why Ollama — the port CluadeX needs — didn't answer, for the window's sentence.
+            return hit ?? new DgxSparkProbe(host, null, null, null, [], "unreachable", ollama.Result.Reason);
+        }
+        catch (OperationCanceledException) when (remembered)
+        {
+            EndLinkCheck(seq, SparkLinkStatus.None);   // cancelled: no reading, not a "checking" left on screen
+            throw;
+        }
+    }
+
+    /// <summary>Why nothing answered, as finely as the exception tells: the name doesn't resolve, the port is closed,
+    /// no reply in time — else <see cref="Classify"/>'s kind. For the localized sentence; never the exception text.</summary>
+    public static SparkFailure ClassifyReach(Exception ex)
+    {
+        for (Exception? e = ex; e != null; e = e.InnerException)
+            if (e is SocketException se)
+                return se.SocketErrorCode switch
+                {
+                    SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain => SparkFailure.HostNotFound,
+                    SocketError.ConnectionRefused => SparkFailure.Refused,
+                    SocketError.TimedOut => SparkFailure.Timeout,
+                    _ => SparkFailure.Network,
+                };
+        return Classify(ex);
     }
 
     private async Task<DgxSparkProbe> ProbeOllamaAsync(string host, CancellationToken ct)
@@ -198,7 +499,7 @@ public class DgxSparkService
         {
             string root = $"http://{host}:{OllamaPort}";
             using var ver = await _probe.GetAsync(root + "/api/version", ct);
-            if (!ver.IsSuccessStatusCode) return Miss(host);
+            if (!ver.IsSuccessStatusCode) return Miss(host, SparkFailure.Server);
             string? version = null;
             using (var doc = JsonDocument.Parse(await ver.Content.ReadAsStringAsync(ct)))
                 if (doc.RootElement.TryGetProperty("version", out var v)) version = v.GetString();
@@ -213,7 +514,7 @@ public class DgxSparkService
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _log?.Debug("DgxSpark", $"{host}: Ollama probe missed — {ex.GetType().Name}: {ex.Message}");
-            return Miss(host);
+            return Miss(host, ClassifyReach(ex));
         }
     }
 
@@ -268,7 +569,7 @@ public class DgxSparkService
         }
     }
 
-    private static DgxSparkProbe Miss(string host) => new(host, null, null, null, [], null);
+    private static DgxSparkProbe Miss(string host, SparkFailure reason = SparkFailure.None) => new(host, null, null, null, [], null, reason);
 
     /// <summary>
     /// Download a model onto the Spark (Ollama /api/pull, streamed). Reports (status, fraction 0–1 or null).
@@ -439,6 +740,8 @@ public class DgxSparkService
             if (switched && ollama.IsReady)
             {
                 _log?.Info("DgxSpark", $"using {model} on {h} through Ollama");
+                // Ollama on the Spark just answered: the chip says "in use" now, not after the next poll.
+                SetLinkNow(Answered(h, probe.Version));
                 return new SparkUseResult(SparkFailure.None);
             }
 
