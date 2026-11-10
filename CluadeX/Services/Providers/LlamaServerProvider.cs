@@ -514,8 +514,10 @@ public class LlamaServerProvider : ApiProviderBase
 
         // Tuned for this model on this card (LoadTuner), or the candidate a tune is measuring: its -ngl / -c / -b / -t
         // replace the Settings page's, plus --n-cpu-moe, -ub, -fa, the KV cache type.
+        // A saved tune was measured with the whole card, so it is skipped while the GPU share slider holds the card
+        // below 100 % (or sends the model to the CPU) — its -ngl would undo the owner's cap.
         var tune = _benchOverride;
-        if (tune == null && settings.GpuBackend != "CPU")
+        if (tune == null && !cpuOnly && settings.GpuUsagePercent >= 100)
         {
             string gpuNow = "";
             try { gpuNow = await Task.Run(GpuFingerprint, ct); } catch (OperationCanceledException) { throw; } catch { }
