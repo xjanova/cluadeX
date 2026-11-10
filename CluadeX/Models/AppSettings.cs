@@ -327,6 +327,9 @@ public class AppSettings
     public decimal CliDailyBudgetUsd { get; set; }
     /// <summary>The chat page's right-hand panel (project files, latest image, latest run) is shown.</summary>
     public bool ChatSidePanel { get; set; } = true;
+    /// <summary>The activity card at the top of that panel: a live scene of what the run does now (closed with its ✕,
+    /// turned on again from the chat's "+" menu).</summary>
+    public bool ChatActivityCard { get; set; } = true;
     /// <summary>Widths the user dragged panels to, by <see cref="Views.ResizeGrip.Key"/> (px).</summary>
     public Dictionary<string, double> PanelWidths { get; set; } = new();
     /// <summary>Where each page's own window was (Node Graph, UI Studio, Code Editor popped out), by page key

@@ -39,18 +39,36 @@
             <TreeView.ItemTemplate>
                 <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                     <StackPanel Orientation="Horizontal" ToolTip="{Binding FullPath}">
-                        <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                            <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
+                        <!-- a directory: the app's drawn folder (Resources/Theme.xaml FolderIcon), open while expanded; a file: its glyph -->
+                        <Grid Width="16" Margin="0,0,6,0" VerticalAlignment="Center">
+                            <ContentControl Width="15" Height="12.2">
+                                <ContentControl.Style>
+                                    <Style TargetType="ContentControl" BasedOn="{StaticResource FolderIcon}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource Icon.FolderOpen}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ContentControl.Style>
+                            </ContentControl>
+                            <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" FontSize="12" HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
                         <TextBlock Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
                     </StackPanel>
                 </HierarchicalDataTemplate>

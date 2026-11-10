@@ -1550,6 +1550,7 @@ public partial class ChatViewModel : ViewModelBase
         InitControls(activation);
         InitSidePanel();
         InitVibe();
+        InitActivity();
         InitCharacter();
         InitStarters();
         HookPendingImages();
@@ -4403,6 +4404,7 @@ public partial class ChatViewModel : ViewModelBase
                     schedule = !thoughtQueued;
                     thoughtQueued = true;
                 }
+                if (schedule) { run.ActivityWriting = false; NoteActivityThinking(run.Session.Id); }
                 if (schedule)
                     App.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
                     {
@@ -4422,6 +4424,7 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
+            if (!run.ActivityWriting) { run.ActivityWriting = true; NoteActivityWriting(run.Session.Id); }
             agenticTokenCount++;
             bool needsNewBubble = step != lastStreamStep;
 
@@ -4509,6 +4512,7 @@ public partial class ChatViewModel : ViewModelBase
             if (!Mine() || string.IsNullOrWhiteSpace(text)) return;
             string streamedNow = streamSb.ToString();   // same thread as the token appends
             bool alreadyShown = LooksAlreadyStreamed(text, streamedNow);
+            if (!alreadyShown) { run.ActivityWriting = false; NoteActivityThinking(run.Session.Id); }
             App.Current?.Dispatcher.Invoke(() =>
             {
                 // Stop the streaming cursor on the current text bubble, but KEEP the reference so the
@@ -4740,6 +4744,8 @@ public partial class ChatViewModel : ViewModelBase
     {
         var run = Cur;   // the run whose tool is starting, captured at event time (its chat may not be on screen)
         if (run == null) return;
+        run.ActivityWriting = false;
+        NoteActivityTool(run.Session.Id, toolName, statusMessage);
         if (toolName != "agent") run.ToolStarts.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp());
         // For a supervisor on the pipe: the tool's name only — its arguments (paths, commands) stay in the chat.
         if (toolName != "agent") run.LastTool = toolName;
@@ -4939,6 +4945,7 @@ public partial class ChatViewModel : ViewModelBase
         var run = Cur;
         run?.Touch();
         ChatSession? target = run?.Session;
+        NoteActivityDone(target?.Id ?? CurrentSession?.Id, toolResult);
         App.Current?.Dispatcher.BeginInvoke(() =>
         {
             var list = run?.Messages ?? (target == null || ReferenceEquals(target, CurrentSession) ? Messages : null);

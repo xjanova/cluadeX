@@ -282,6 +282,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=AC: just the activity card (ActivityCardTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "AC")
+        {
+            await TestActivityCard();
+            Log($"\n## Result (CHATTEST_ONLY=AC): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=RB: just the sidebar run badges on real runs and the buddy's mood (RunBadgeTests.cs).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "RB")
         {
@@ -413,6 +422,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=SPK: just the speaker under her face on a reply (hover holds still, the click switches reading aloud).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SPK")
+        {
+            await TestSpeakerHover();
+            Log($"\n## Result (CHATTEST_ONLY=SPK): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=UX: just code boxes, the question card with steps, and media / web-picture attachments.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "UX")
         {
@@ -436,6 +454,7 @@ internal static partial class Program
         await TestAttachedFiles();            // XF: any file dropped into a message — read, unpacked, by path
         await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
         await TestVoiceMode();                // VM: replies read aloud + a GPT-Live call through the chat (mock API)
+        await TestSpeakerHover();             // SPK: the speaker under her face holds still on hover; its click switches reading aloud
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
         await TestScrollFollow();             // U6
@@ -476,6 +495,7 @@ internal static partial class Program
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
         await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card
+        await TestActivityCard();             // AC: the activity card — event → state, real turns, per chat, close / reopen
         await TestVibe();                     // VB: change card, error chip, explain simply, @-mentions, click-to-ask, memory gauge
         await TestWatchJobs();                // WJ: watch_process — the card, the turn a finished watch starts, its limits
         await TestSkillPick();                // SP: each turn is given only the skills that fit it; the composer's switch

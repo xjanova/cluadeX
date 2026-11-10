@@ -87,7 +87,7 @@ public partial class ChatViewModel
     /// <summary>Shown when switched on AND there is something to show: an image or a run. The project's files moved to
     /// the left sidebar (ProjectFilesPanel), so a chat with neither gets the full width.</summary>
     public bool SidePanelVisible => _showSidePanel
-        && (!string.IsNullOrEmpty(_latestImagePath) || !string.IsNullOrEmpty(_latestRunOutput));
+        && (!string.IsNullOrEmpty(_latestImagePath) || !string.IsNullOrEmpty(_latestRunOutput) || ActivityCardVisible);
 
     private string? _latestImagePath;
     private string _latestRunTitle = "", _latestRunOutput = "";

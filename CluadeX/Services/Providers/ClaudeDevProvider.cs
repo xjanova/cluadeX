@@ -44,7 +44,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>What the chat's model box offers for Claude Dev: the CLI's own default (no --model flag) and the CLI's
     /// aliases for the latest of each family. All four ran on the owner's subscription login with no credit error
     /// (CLI 2.1.296, 2026-10-20: haiku→claude-haiku-5-5, sonnet→claude-sonnet-5-5, opus→claude-opus-5-5,
-    /// fable→claude-fable-5-1). Aliases, not full ids, so a new model generation needs no CluadeX release.</summary>
+    /// fable→claude-fable-5-1; Claude Fable 5.2 shipped 2026-11-09 and the alias follows the CLI's own releases).
+    /// Aliases, not full ids, so a new model generation needs no CluadeX release.</summary>
     public static readonly string[] KnownModels = ["default", "fable", "opus", "sonnet", "haiku"];
 
     /// <summary>Spawns sub-agents of its own; the dispatch policy reaches them through the CLI (Agents.CliAgentGate).</summary>

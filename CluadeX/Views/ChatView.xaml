@@ -518,7 +518,9 @@
                                  so on a permission prompt it was drawn on top with an opaque background and took
                                  every click meant for Allow / Deny: no "Ask" could be answered with the mouse.) -->
                             <!-- The reading column: at most 1000 px wide, centred (Stretch + MaxWidth centres in WPF). -->
-                            <Grid Margin="24,1,24,1" MaxWidth="1000"
+                            <!-- Background="Transparent": the whole row is hit-testable, so the pointer in a gap (between the bubble
+                                 and her face, beside the speaker) still counts as on the row and its hover strip stays. -->
+                            <Grid Margin="24,1,24,1" MaxWidth="1000" Background="Transparent"
                                   MouseEnter="MessageBubble_MouseEnter"
                                   MouseLeave="MessageBubble_MouseLeave">
                                 <Grid.RowDefinitions>
@@ -1720,8 +1722,7 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                             <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Accent.1}"
-                                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <ContentControl Style="{StaticResource FolderIcon}" Width="16" Height="13" VerticalAlignment="Center" Margin="0,0,8,0" HorizontalAlignment="Left"/>
                                                 <TextBlock Text="{Binding AgentMapHeader}" FontSize="13" FontWeight="SemiBold"
                                                            Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
                                             </StackPanel>
@@ -2212,49 +2213,73 @@
                                             <TextBlock Text="{Binding ToolElapsedTime}" Foreground="{DynamicResource Text.Muted}"
                                                        FontSize="11" FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,4,0"
                                                        Visibility="{Binding ToolElapsedTime, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                            <StackPanel Orientation="Horizontal"
-                                                        Visibility="{Binding IsHovered, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                                <!-- Copy message -->
-                                                <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
-                                                        Style="{StaticResource IconButton}"
-                                                        FontSize="10" Padding="4,2" Margin="2,0"
-                                                        ToolTip="{services:Loc chat.copyMessageTip}"
-                                                        Click="CopyMessage_Click"
-                                                        Tag="{Binding Content}"/>
-                                                <!-- Explain simply: the reply again in plain words (a finished reply only) -->
-                                                <Button Content="{services:Loc vibe.explain.button}"
-                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
-                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
-                                                        FontSize="11" Padding="6,2" Margin="2,0"
-                                                        ToolTip="{services:Loc vibe.explain.tip}"
-                                                        Click="ExplainMessage_Click"
-                                                        AutomationProperties.AutomationId="CxChat.ExplainSimply"
-                                                        Visibility="{Binding CanExplainSimply, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                                <!-- Go back to this point of the chat, here or in a new chat. These two are words on an
-                                                     IconButton: without their own font and size its icon font draws squares and its 36 px clips them. -->
-                                                <Button Content="{services:Loc chat.rewindHere}"
-                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
-                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
-                                                        FontSize="11" Padding="6,2" Margin="2,0"
-                                                        ToolTip="{services:Loc chat.rewindHereTip}"
-                                                        Click="RewindMessage_Click"
-                                                        Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                                <Button Content="{services:Loc chat.forkHere}"
-                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
-                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
-                                                        FontSize="11" Padding="6,2" Margin="2,0"
-                                                        ToolTip="{services:Loc chat.forkHereTip}"
-                                                        Click="ForkMessage_Click"
-                                                        Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                                <!-- Retry: only on a failed REPLY (CanRetry), never on a tool row —
-                                                     retrying one re-ran the whole agent turn. -->
-                                                <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
-                                                        Style="{StaticResource IconButton}"
-                                                        FontSize="10" Padding="4,2" Margin="2,0"
-                                                        ToolTip="{services:Loc chat.retryTip}"
-                                                        Click="RetryMessage_Click"
-                                                        Visibility="{Binding CanRetry, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                            </StackPanel>
+                                            <!-- The hover strip (Copy, Explain, Rewind, Fork, Retry) floats on the header line and takes no height (owner
+                                                 2026-11-10: "เม้าชี้รูปลำโพง ตรงอวาต้า เพื่อปิดเสียง มันกระพริบไม่หยุด"). It used to add ~34 px to the row: a chat
+                                                 that follows its end scrolled up by that, the speaker under her face slid out from under the pointer, the row
+                                                 lost the hover, shrank, scrolled back — a loop. Its 20 px are cancelled by the -10 / -10 margins (desired height
+                                                 0), centred on a tool row's label line; a question and a reply show no label line, so there it sits across the
+                                                 bubble's top edge.
+                                                 tests/chattest SpeakerHoverTests (SPK). -->
+                                            <Border Height="20" CornerRadius="10" Padding="2,0" BorderThickness="1" VerticalAlignment="Center"
+                                                    Background="{DynamicResource Popup.Background}" BorderBrush="{DynamicResource Popup.Border}"
+                                                    Visibility="{Binding IsHovered, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Margin" Value="8,-10,0,-10"/>
+                                                        <Style.Triggers>
+                                                            <!-- across the bubble's top edge: its top padding (8 / 10) + half the strip -->
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.User}">
+                                                                <Setter Property="Margin" Value="8,-18,0,-2"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Assistant}">
+                                                                <Setter Property="Margin" Value="8,-20,0,0"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <!-- Copy message -->
+                                                    <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
+                                                            Style="{StaticResource IconButton}"
+                                                            Width="24" Height="18" FontSize="10" Padding="0" Margin="1,0"
+                                                            ToolTip="{services:Loc chat.copyMessageTip}"
+                                                            Click="CopyMessage_Click"
+                                                            Tag="{Binding Content}"/>
+                                                    <!-- Explain simply: the reply again in plain words (a finished reply only) -->
+                                                    <Button Content="{services:Loc vibe.explain.button}"
+                                                            Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                            Width="Auto" Height="18" VerticalAlignment="Center"
+                                                            FontSize="11" Padding="6,0" Margin="1,0"
+                                                            ToolTip="{services:Loc vibe.explain.tip}"
+                                                            Click="ExplainMessage_Click"
+                                                            AutomationProperties.AutomationId="CxChat.ExplainSimply"
+                                                            Visibility="{Binding CanExplainSimply, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                    <!-- Go back to this point of the chat, here or in a new chat. These two are words on an
+                                                         IconButton: without their own font and size its icon font draws squares and its 36 px clips them. -->
+                                                    <Button Content="{services:Loc chat.rewindHere}"
+                                                            Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                            Width="Auto" Height="18" VerticalAlignment="Center"
+                                                            FontSize="11" Padding="6,0" Margin="1,0"
+                                                            ToolTip="{services:Loc chat.rewindHereTip}"
+                                                            Click="RewindMessage_Click"
+                                                            Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                    <Button Content="{services:Loc chat.forkHere}"
+                                                            Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                            Width="Auto" Height="18" VerticalAlignment="Center"
+                                                            FontSize="11" Padding="6,0" Margin="1,0"
+                                                            ToolTip="{services:Loc chat.forkHereTip}"
+                                                            Click="ForkMessage_Click"
+                                                            Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                    <!-- Retry: only on a failed REPLY (CanRetry), never on a tool row —
+                                                         retrying one re-ran the whole agent turn. -->
+                                                    <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
+                                                            Style="{StaticResource IconButton}"
+                                                            Width="24" Height="18" FontSize="10" Padding="0" Margin="1,0"
+                                                            ToolTip="{services:Loc chat.retryTip}"
+                                                            Click="RetryMessage_Click"
+                                                            Visibility="{Binding CanRetry, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                </StackPanel>
+                                            </Border>
                                             </StackPanel>
                                         </Grid>
 
@@ -2361,7 +2386,7 @@
                                                             <ControlTemplate TargetType="Button">
                                                                 <Border CornerRadius="8" BorderThickness="1" ClipToBounds="True"
                                                                         BorderBrush="{DynamicResource Border.Default}">
-                                                                    <Image Source="{Binding Converter={StaticResource ThumbSource}}"
+                                                                    <views:ThumbImage Source="{Binding Converter={StaticResource ThumbSource}}"
                                                                            MaxHeight="180" MaxWidth="260" Stretch="Uniform"
                                                                            RenderOptions.BitmapScalingMode="HighQuality"/>
                                                                 </Border>
@@ -2461,7 +2486,7 @@
                                                 </ControlTemplate>
                                             </Button.Template>
                                             <Grid>
-                                                <Image Source="{Binding ThumbnailPath, Converter={StaticResource ThumbSource}}"
+                                                <views:ThumbImage Source="{Binding ThumbnailPath, Converter={StaticResource ThumbSource}}"
                                                        MaxHeight="120" MaxWidth="240" Stretch="Uniform"
                                                        RenderOptions.BitmapScalingMode="HighQuality"/>
                                             </Grid>
@@ -2902,8 +2927,7 @@
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center"
-                                                       Foreground="{DynamicResource Accent.2}" Margin="0,0,10,0"/>
+                                            <ContentControl Style="{StaticResource FolderIcon}" Width="19" Height="15.4" VerticalAlignment="Center" Margin="0,0,10,0" HorizontalAlignment="Left"/>
                                             <StackPanel Grid.Column="1">
                                                 <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                                                            Foreground="{DynamicResource Text.Primary}"/>
@@ -2929,7 +2953,7 @@
                             <Button x:Name="StarterBrowseButton" Style="{StaticResource PrimaryButton}" Padding="14,8" Margin="0,4,8,0"
                                     Command="{Binding BrowseStarterProjectCommand}">
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13" VerticalAlignment="Center" Margin="0,0,8,0" HorizontalAlignment="Left"/>
                                     <TextBlock Text="{services:Loc starter.project.browse}" FontSize="12.5" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
@@ -2951,9 +2975,7 @@
                             Command="{Binding OpenFolderCommand}"
                             Padding="14,8" Margin="0,0,8,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                                       FontSize="14" VerticalAlignment="Center"
-                                       Margin="0,0,8,0"/>
+                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="17" Height="13.8" VerticalAlignment="Center" Margin="0,0,8,0" HorizontalAlignment="Left"/>
                             <TextBlock Text="{services:Loc chat.openProjectFolder}" FontFamily="{DynamicResource Font.Ui.Display}"
                                        FontSize="12.5" VerticalAlignment="Center"/>
                         </StackPanel>
@@ -3268,7 +3290,7 @@
                                     <Grid Margin="0,6,10,0">
                                         <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource Border.Default}"
                                                 Background="{DynamicResource Surface.Sunken}" ClipToBounds="True">
-                                            <Image Source="{Binding Converter={StaticResource ThumbSource}}" Height="60" MaxWidth="110"
+                                            <views:ThumbImage Source="{Binding Converter={StaticResource ThumbSource}}" Height="60" MaxWidth="110"
                                                    Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality"/>
                                         </Border>
                                         <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-6,0" Cursor="Hand"
@@ -3460,6 +3482,8 @@
                                             <MenuItem Header="{services:Loc chat.stepsLabel}" IsCheckable="True" IsChecked="{Binding ShowAgentInternals}" ToolTip="{services:Loc chat.stepsTip}"/>
                                             <MenuItem Header="{services:Loc chat.autoRunLabel}" IsCheckable="True" IsChecked="{Binding AutoExecute}" ToolTip="{services:Loc chat.autoRunWarnTip}"/>
                                             <MenuItem Header="{services:Loc chat.side.toggle}" IsCheckable="True" IsChecked="{Binding ShowSidePanel}"/>
+                                            <MenuItem Header="{services:Loc activity.toggle}" IsCheckable="True" IsChecked="{Binding ShowActivityCard}"
+                                                      AutomationProperties.AutomationId="CxChat.ActivityToggle"/>
                                             <Separator/>
                                             <MenuItem Header="{services:Loc chat.reviewTip}" Command="{Binding ReviewCodeCommand}"
                                                       Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}"/>
@@ -3832,12 +3856,17 @@
                 BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,0,0,0"
                 Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}">
             <Grid>
-                <!-- Row 0 held the project's files; they live in the left sidebar under the chats now (ProjectFilesPanel). -->
+                <!-- Row 0 held the project's files (they live in the left sidebar under the chats now, ProjectFilesPanel); it
+                     holds the activity card now: what the run does, live (ChatViewModel.Activity, Views/ActivityCardView). -->
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="0"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
+
+                <views:ActivityCardView x:Name="ActivityCard" Grid.Row="0" Margin="10,10,10,8"
+                                        DataContext="{Binding Activity}" CloseCommand="{Binding DataContext.CloseActivityCardCommand, ElementName=SidePanel}"
+                                        Visibility="{Binding DataContext.ActivityCardVisible, ElementName=SidePanel, Converter={StaticResource BoolVis}}"/>
 
                 <!-- The last image the agent looked at (a game screenshot, a page it opened) -->
                 <Border Grid.Row="1" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="14,8,14,10"
@@ -3854,7 +3883,7 @@
                         <!-- A click on the picture circles that spot, attaches it and starts the question in the box -->
                         <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Bg.Window}"
                                 Padding="2" Cursor="Cross" ToolTip="{services:Loc vibe.ask.hint}">
-                            <Image x:Name="SidePicture" Source="{Binding LatestImagePath, Converter={StaticResource ThumbSource}}" MaxHeight="160" Stretch="Uniform"
+                            <views:ThumbImage x:Name="SidePicture" Source="{Binding LatestImagePath, Converter={StaticResource ThumbSource}}" MaxHeight="160" Stretch="Uniform"
                                    RenderOptions.BitmapScalingMode="HighQuality" Tag="{Binding LatestImagePath}"
                                    MouseLeftButtonUp="SidePicture_Click" AutomationProperties.AutomationId="CxChat.SidePicture"/>
                         </Border>

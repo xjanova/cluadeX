@@ -53,7 +53,7 @@ internal static class RunBadgeWire
         check("mood", "sad right after a failure", BuddyMood.Decide(0, 0, RunBadge.Failed, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2)) == BuddyMood.Sad, "");
         check("mood", "a stop is neither pleased nor sad", BuddyMood.Decide(0, 0, RunBadge.Stopped, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2)) == BuddyMood.Idle, "");
         check("mood", "the afterglow ends: idle", BuddyMood.Decide(0, 0, RunBadge.Done, BuddyMood.AfterglowFor, BuddyMood.AfterglowFor) == BuddyMood.Idle, "");
-        check("mood", "nothing for a minute: asleep", BuddyMood.Decide(0, 0, RunBadge.Done, BuddyMood.SleepAfter, BuddyMood.SleepAfter) == BuddyMood.Sleep
+        check("mood", "nothing for SleepAfter: asleep", BuddyMood.Decide(0, 0, RunBadge.Done, BuddyMood.SleepAfter, BuddyMood.SleepAfter) == BuddyMood.Sleep
             && BuddyMood.Decide(0, 0, null, never, never) == BuddyMood.Sleep, "");
         check("mood", "a chat that works wakes her at once", BuddyMood.Decide(1, 0, null, never, never) == BuddyMood.Working, "");
 

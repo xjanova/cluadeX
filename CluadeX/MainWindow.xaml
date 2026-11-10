@@ -54,32 +54,38 @@
 
     <Window.Resources>
         <conv:EqualsMultiConverter x:Key="EqualsMulti"/>
-        <!-- A small on/off icon in the chat list's header. The on state is set on the glyph itself: a Foreground on the
-             button is a local value, which a template trigger on that property can never beat. -->
-        <Style x:Key="SidebarToggle" TargetType="ToggleButton">
-            <Setter Property="Width" Value="24"/>
-            <Setter Property="Height" Value="24"/>
+        <!-- The chat list's filter buttons above its search box: a chip you can see (the bare 10 px glyph was too faint to
+             tell what it was — owner 2026-11-10); lit in the accent while on. The on state is set on the glyph itself: a
+             Foreground on the button is a local value, which a template trigger on that property can never beat. -->
+        <Style x:Key="SidebarChipToggle" TargetType="ToggleButton">
+            <Setter Property="Width" Value="32"/>
+            <Setter Property="Height" Value="28"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
-                        <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                            <TextBlock x:Name="glyph" Text="{TemplateBinding Content}" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                        <Border x:Name="bg" Background="{DynamicResource Surface.Chip}" CornerRadius="8" BorderThickness="1"
+                                BorderBrush="{DynamicResource Border.Default}">
+                            <TextBlock x:Name="glyph" Text="{TemplateBinding Content}" FontFamily="Segoe MDL2 Assets" FontSize="13"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource Text.Faint}"/>
+                                       Foreground="{DynamicResource Text.Secondary}"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
-                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Selected}"/>
-                            </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Accent.1.Border}"/>
+                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource Accent.1.Tint.Strong}"/>
+                                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Focus.Ring}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
-                                <Setter TargetName="glyph" Property="Opacity" Value="0.45"/>
-                                <Setter TargetName="bg" Property="Background" Value="Transparent"/>
+                                <Setter TargetName="bg" Property="Opacity" Value="0.4"/>
+                                <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -321,9 +327,7 @@
                                        Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                                         Visibility="{Binding ChatVM.HasProject, Converter={StaticResource BoolVis}}">
-                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                           FontSize="13" Foreground="{DynamicResource Accent.1}"
-                                           VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                <ContentControl Style="{StaticResource FolderIcon}" Width="16" Height="13" VerticalAlignment="Center" Margin="0,0,7,0" HorizontalAlignment="Left"/>
                                 <TextBlock Text="{Binding ChatVM.ProjectName}" FontFamily="{DynamicResource Font.Ui}"
                                            FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
                                            VerticalAlignment="Center" MaxWidth="180" TextTrimming="CharacterEllipsis"
@@ -492,9 +496,7 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
                                         <!-- E8B7 Folder — E838 drew as a half-open bracket the owner read as a broken icon -->
-                                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="14" Foreground="{DynamicResource Status.Success}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <ContentControl Style="{StaticResource FolderIcon}" Width="17" Height="13.8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
@@ -774,36 +776,54 @@
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
-                                        <TextBlock Text="{services:Loc sidebar.conversations}" FontSize="13" FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis"/>
-                                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="-6,6,0,0">
-                                        <Button Width="24" Height="24" Margin="0,0,2,0" Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                Command="{Binding ChatVM.NewChatAndShowCommand}" ToolTip="{services:Loc nav.newChatTip}">
+                                        <!-- the title (owner 2026-11-10: "ทำบริเวณนี้ให้มันดูดีเท่ห์มากขึ้น … ปุ่มเหนือกล่องค้นหาก็เล็กไม่รู้คือไร
+                                             ไม่ชัด"): bigger, with the accent's bar before it -->
+                                        <StackPanel Orientation="Horizontal">
+                                            <Border Width="3" Height="15" CornerRadius="2" Margin="0,1,8,0" VerticalAlignment="Center"
+                                                    Background="{DynamicResource Accent.Gradient}"/>
+                                            <TextBlock Text="{services:Loc sidebar.conversations}" FontSize="14" FontWeight="Bold"
+                                                       Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                        <!-- the three buttons as chips you can see at once: a new chat in the accent, then the two
+                                             filters, lit in the accent while on (SidebarChipToggle) -->
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,8,0,0">
+                                        <Button x:Name="SidebarNewChat" Width="32" Height="28" Margin="0,0,6,0" Cursor="Hand"
+                                                Command="{Binding ChatVM.NewChatAndShowCommand}" ToolTip="{services:Loc nav.newChatTip}"
+                                                AutomationProperties.Name="{services:Loc nav.newChatTip}">
                                             <Button.Template>
                                                 <ControlTemplate TargetType="Button">
-                                                    <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                                                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}"/>
+                                                    <Border x:Name="bg" Background="{DynamicResource Accent.Gradient}" CornerRadius="8"
+                                                            BorderThickness="1" BorderBrush="#33FFFFFF">
+                                                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="13" FontWeight="Bold"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Text.OnAccent}"/>
                                                     </Border>
                                                     <ControlTemplate.Triggers>
                                                         <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                                            <Setter TargetName="bg" Property="BorderBrush" Value="#99FFFFFF"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsKeyboardFocused" Value="True">
+                                                            <Setter TargetName="bg" Property="BorderBrush" Value="{DynamicResource Focus.Ring}"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsPressed" Value="True">
+                                                            <Setter TargetName="bg" Property="Opacity" Value="0.8"/>
                                                         </Trigger>
                                                     </ControlTemplate.Triggers>
                                                 </ControlTemplate>
                                             </Button.Template>
                                         </Button>
                                         <!-- Off when no project is open: every chat already shows, so a live button would answer nothing -->
-                                        <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE1A6;"
+                                        <ToggleButton Style="{StaticResource SidebarChipToggle}" Content="&#xE71D;" Margin="0,0,6,0"
                                                       IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
                                                       IsEnabled="{Binding ChatVM.HasProject}"
                                                       ToolTipService.ShowOnDisabled="True"
-                                                      ToolTip="{Binding ChatVM.AllProjectsTip}"/>
+                                                      ToolTip="{Binding ChatVM.AllProjectsTip}"
+                                                      AutomationProperties.Name="{Binding ChatVM.AllProjectsTip}"/>
                                         <!-- Split chats that were put away: show them (dimmed, with "bring back") -->
-                                        <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE7B8;"
+                                        <ToggleButton Style="{StaticResource SidebarChipToggle}" Content="&#xE7B8;"
                                                       IsChecked="{Binding ChatVM.ShowArchivedSplits}"
-                                                      ToolTip="{services:Loc chat.split.showAwayTip}"/>
+                                                      ToolTip="{services:Loc chat.split.showAwayTip}"
+                                                      AutomationProperties.Name="{services:Loc chat.split.showAwayTip}"/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
@@ -929,8 +949,7 @@
                                                                 <ColumnDefinition Width="Auto"/>
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
-                                                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"
-                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                            <ContentControl Style="{StaticResource FolderIcon}" Margin="0,0,8,0"/>
                                                             <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" VerticalAlignment="Center"
                                                                        Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
                                                             <!-- a bound folder that is not there any more -->

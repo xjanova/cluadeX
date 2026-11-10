@@ -25,7 +25,7 @@ public class LocalizationService
                                       Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys,
                                       Localization.StarterKeys.Keys,
                                       Localization.AutoCommentKeys.Keys,
-                                      Localization.RunBadgeKeys.Keys, Localization.VoiceKeys.Keys,
+                                      Localization.RunBadgeKeys.Keys, Localization.ActivityKeys.Keys, Localization.VoiceKeys.Keys,
                                       Localization.GitPanelKeys.Keys,
                                       Localization.OrchestrationKeys.Keys,
                                       Localization.DesignKeys.Keys, Localization.SkillPickKeys.Keys,

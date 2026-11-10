@@ -67,15 +67,20 @@ public static class BuddyMood
 
     /// <summary>How long a finished turn keeps her pleased (or a failed one sad).</summary>
     public static readonly TimeSpan AfterglowFor = TimeSpan.FromSeconds(6);
-    /// <summary>Nothing ran for this long: she dozes off.</summary>
-    public static readonly TimeSpan SleepAfter = TimeSpan.FromSeconds(60);
+    /// <summary>Nothing ran AND nobody touched the mouse or keyboard for this long: she dozes off. It was one minute of no
+    /// AI run, mouse or not — the owner reading a reply for a minute found her asleep (owner 2026-11-10: "เธอหลับบ่อยเกินไป").
+    /// Any input, any run, typing in the chat box or clicking her wakes her (ChatViewModel.Badges.cs, CluadexBuddy).</summary>
+    public static readonly TimeSpan SleepAfter = TimeSpan.FromMinutes(8);
 
     /// <param name="working">Chats with a run that goes on.</param>
     /// <param name="waiting">Of those, the ones that wait for the owner.</param>
     /// <param name="lastEnd">How the latest turn ended (a <see cref="RunBadge"/> value), null when none has.</param>
     /// <param name="sinceLastEnd">Time since that turn ended.</param>
     /// <param name="sinceActivity">Time since anything ran or ended (or since start-up).</param>
-    public static string Decide(int working, int waiting, string? lastEnd, TimeSpan sinceLastEnd, TimeSpan sinceActivity)
+    /// <param name="sinceInput">Time since the last mouse or keyboard input on the PC (<see cref="UserInputClock"/>);
+    /// null when not known, and then only <paramref name="sinceActivity"/> counts.</param>
+    public static string Decide(int working, int waiting, string? lastEnd, TimeSpan sinceLastEnd, TimeSpan sinceActivity,
+                                TimeSpan? sinceInput = null)
     {
         if (waiting > 0) return Waiting;
         if (working > 0) return Working;
@@ -84,7 +89,8 @@ public static class BuddyMood
             if (lastEnd == RunBadge.Failed) return Sad;
             if (lastEnd is RunBadge.Done or RunBadge.Idle) return Happy;
         }
-        return sinceActivity >= SleepAfter ? Sleep : Idle;
+        bool quiet = sinceActivity >= SleepAfter && (sinceInput ?? SleepAfter) >= SleepAfter;
+        return quiet ? Sleep : Idle;
     }
 }
 

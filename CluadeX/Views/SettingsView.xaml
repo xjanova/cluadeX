@@ -1175,8 +1175,10 @@
                                     <Grid>
                                         <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                         <TextBox Text="{Binding CustomLlamaCppBackendPath, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"/>
-                                        <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
-                                                Command="{Binding BrowseBackendDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}"/>
+                                        <Button Grid.Column="1" Style="{StaticResource IconButton}"
+                                                Command="{Binding BrowseBackendDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}">
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13"/>
+                                        </Button>
                                     </Grid>
                                 </StackPanel>
                             </StackPanel>
@@ -1260,11 +1262,15 @@
                                 <Grid Margin="0,0,0,16">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <TextBox Text="{Binding ModelDirectory, UpdateSourceTrigger=LostFocus}" Style="{StaticResource WideBox}"/>
-                                    <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
-                                            Command="{Binding BrowseModelDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}"/>
-                                    <Button Grid.Column="2" Content="&#xE838;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
+                                    <Button Grid.Column="1" Style="{StaticResource IconButton}"
+                                            Command="{Binding BrowseModelDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}">
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13"/>
+                                        </Button>
+                                    <Button Grid.Column="2" Style="{StaticResource IconButton}"
                                             Command="{Binding OpenDirectoryCommand}" CommandParameter="{Binding ModelDirectory}"
-                                            Margin="4,0,0,0" ToolTip="{services:Loc settings.openFolderTip}"/>
+                                            Margin="4,0,0,0" ToolTip="{services:Loc settings.openFolderTip}">
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13"/>
+                                        </Button>
                                 </Grid>
                                 <TextBlock Text="{services:Loc settings.hfToken}" Style="{StaticResource SettingLabel}"/>
                                 <TextBlock Text="{services:Loc settings.apiTokenDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
@@ -1524,9 +1530,11 @@
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <TextBox Text="{Binding DataRootDisplay, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource WideBox}"
                                              FontFamily="{DynamicResource Font.Mono.Display}"/>
-                                    <Button Grid.Column="1" Content="&#xE838;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
+                                    <Button Grid.Column="1" Style="{StaticResource IconButton}"
                                             Command="{Binding OpenDirectoryCommand}" CommandParameter="{Binding DataRootDisplay}"
-                                            Margin="6,0,0,0" ToolTip="{services:Loc settings.openFolderTip}"/>
+                                            Margin="6,0,0,0" ToolTip="{services:Loc settings.openFolderTip}">
+                                            <ContentControl Style="{StaticResource FolderIconOpen}" Width="16" Height="13"/>
+                                        </Button>
                                 </Grid>
                                 <TextBlock Foreground="{DynamicResource Accent.1}" FontSize="11" Margin="0,0,0,16"
                                            Text="{services:Loc settings.portableMode}"
