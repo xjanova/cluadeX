@@ -51,6 +51,10 @@ public class AppSettings
     public string GpuBackend { get; set; } = "Auto";
     public int BatchSize { get; set; } = 512;
     public int ThreadCount { get; set; } = 0;
+    /// <summary>llama-server's KV cache type: "auto" (q8_0 when the build has flash attention on/off, else f16),
+    /// "f16", "q8_0", "q4_0". q8_0 is about half of f16 with no visible loss; K and V always get the same type
+    /// (see LlamaServerArgs). "f16" turns it off.</summary>
+    public string LocalKvCacheType { get; set; } = "auto";
 
     /// <summary>
     /// Path to a custom llama.cpp backend directory containing llama.dll, ggml.dll, etc.

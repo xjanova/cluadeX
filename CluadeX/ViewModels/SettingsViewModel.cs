@@ -107,6 +107,7 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(GpuLayerCount)] = (vm, s) => s.GpuLayerCount = Math.Clamp(vm.GpuLayerCount, -1, 1000),
         [nameof(BatchSize)] = (vm, s) => s.BatchSize = vm.BatchSize,
         [nameof(ThreadCount)] = (vm, s) => s.ThreadCount = Math.Clamp(vm.ThreadCount, 0, 512),
+        [nameof(LocalKvCacheType)] = (vm, s) => s.LocalKvCacheType = KvCacheChoices.Contains(vm.LocalKvCacheType) ? vm.LocalKvCacheType : "auto",
         [nameof(ContextSize)] = (vm, s) => s.ContextSize = vm.ContextSize,
         [nameof(RepeatPenalty)] = (vm, s) => s.RepeatPenalty = Math.Clamp(vm.RepeatPenalty, 1f, 2f),
         [nameof(LocalNativeToolUseEnabled)] = (vm, s) => s.LocalNativeToolUseEnabled = vm.LocalNativeToolUseEnabled,
@@ -267,6 +268,8 @@ public partial class SettingsViewModel : ViewModelBase
     public int GpuLayerCount { get => _gpuLayerCount; set => SetProperty(ref _gpuLayerCount, value); }
     public int BatchSize { get => _batchSize; set => SetProperty(ref _batchSize, value); }
     public int ThreadCount { get => _threadCount; set => SetProperty(ref _threadCount, value); }
+    private string _localKvCacheType = "auto";
+    public string LocalKvCacheType { get => _localKvCacheType; set => SetProperty(ref _localKvCacheType, value); }
     public uint ContextSize { get => _contextSize; set => SetProperty(ref _contextSize, value); }
     public float RepeatPenalty { get => _repeatPenalty; set => SetProperty(ref _repeatPenalty, value); }
     public bool LocalNativeToolUseEnabled { get => _localNativeToolUse; set => SetProperty(ref _localNativeToolUse, value); }
@@ -343,6 +346,9 @@ public partial class SettingsViewModel : ViewModelBase
 
     public List<string> BackendOptions { get; } = ["Auto", "CUDA12", "CPU"];
     public List<int> BatchSizeOptions { get; } = [128, 256, 512, 1024, 2048];
+    /// <summary>llama-server's KV cache type (LlamaServerArgs.ResolveKvType); "f16" = off.</summary>
+    public static readonly List<string> KvCacheChoices = ["auto", "f16", "q8_0", "q4_0"];
+    public List<string> KvCacheOptions => KvCacheChoices;
     /// <summary>12K is the floor: the agent's prompt + tool schemas alone are ~8.2K tokens.</summary>
     public ObservableCollection<uint> ContextSizeOptions { get; } = [12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072];
 
@@ -770,6 +776,7 @@ public partial class SettingsViewModel : ViewModelBase
         GpuLayerCount = src.GpuLayerCount;
         BatchSize = src.BatchSize;
         ThreadCount = src.ThreadCount;
+        LocalKvCacheType = KvCacheChoices.Contains(src.LocalKvCacheType) ? src.LocalKvCacheType : "auto";
         if (!ContextSizeOptions.Contains(src.ContextSize))   // a hand-picked size still shows in the box
         {
             int at = 0;
