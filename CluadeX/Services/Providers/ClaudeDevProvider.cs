@@ -585,10 +585,15 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         // big prompt would just be noise on top — send a short wrapper instead (BuildArgs).
         bool worker = grant is { Edit: true } || grant is { Run: true };
         var sink = worker ? StreamSink.Value : null;
-        string model = _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
-            && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
+        // A chat with a model of its own (a Fable split chat) runs on it; every other chat on the pick.
+        string model = Agents.SubAgentModel.ChatModel is { Length: > 0 } own ? own
+            : _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
+              && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
         var effortScope = AgentRunScope.Current;
         var (effort, whyKey) = ResolveEffort(_settingsService.Settings.ReasoningEffort, userMessage, effortScope?.UserImages?.Count ?? 0, history);
+        // The run's ceiling (a Fable chat runs at high, not max): "auto" under it is the ceiling itself.
+        // Only on Fable: other Claude Dev runs keep reading the setting as before.
+        if (Agents.DispatchPolicy.IsFable(model) && effortScope?.EffortCap is { } cap) effort = Models.EffortLevels.Capped(effort, cap);
         if (effortScope != null) effortScope.EffortWhy = whyKey != null ? LocalizedResources.Instance["auto.why." + whyKey] : null;
         var extras = Extras.Value;
         // The policy reads the level this turn really runs at, resolved above.

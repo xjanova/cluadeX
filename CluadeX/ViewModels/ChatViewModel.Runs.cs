@@ -473,7 +473,8 @@ public partial class ChatViewModel
         }
         string? taskFolder = TaskFolderFor(session);
         string? folder = taskFolder ?? _fileSystemService.AppWorkingDirectory;
-        if (taskFolder != null)
+        // A split chat in its own worktree said where it works when it opened (its 🌿 notice): no row every turn.
+        if (taskFolder != null && WorktreeFolderOf(session) == null)
         {
             Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "📁 " + LocF("chat.resume.inTaskFolder", taskFolder) });
             _debugLog?.Info("Chat", $"turn runs in the chat's own folder {taskFolder} (window: {_fileSystemService.AppWorkingDirectory})");
@@ -492,6 +493,7 @@ public partial class ChatViewModel
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
+        ApplyChatModel(run, session, messages);
         run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
         run.Scope.PromptSized = tokens => OnPromptSized(run, tokens);
         run.Scope.SkillsPicked = pick => OnSkillsPicked(run, pick);
@@ -521,6 +523,7 @@ public partial class ChatViewModel
             RememberRunStats(run);
             AddTurnChangesCard(run);
             AddNextStepBox(run);
+            MaybeOfferFable(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
                 open.CloseQuestion(Loc("chat.ask.cancelled"));
@@ -542,7 +545,14 @@ public partial class ChatViewModel
             run.Session.RunStep = "";
             // Its chat is not on screen: the live list is that chat now — store it.
             if (!ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
-            if (ReferenceEquals(AgentRunScope.Current, run.Scope)) AgentRunScope.Enter(null);
+            if (ReferenceEquals(AgentRunScope.Current, run.Scope))
+            {
+                AgentRunScope.Enter(null);
+                // ...and a Fable chat's model and task budget end with its run: a later request on this flow (a title,
+                // a summary) goes out on the app's pick.
+                Services.Agents.SubAgentModel.UseChat(null);
+                Services.Agents.SubAgentModel.UseTaskBudget(null);
+            }
         }
         done.TrySetResult();
         RaiseRunStateChanged();
@@ -564,10 +574,20 @@ public partial class ChatViewModel
         if (child.ParentId is not { } pid) return;
         if (Sessions.Any(s => s.Id == pid))
         {
+            // A Fable chat's report is what the work was for: it comes back whole (it was asked to keep it short).
+            if (Services.Agents.DispatchPolicy.IsFable(child.OwnModel) && GistOf(childMessages, FableReportChars) is { Length: > 0 } report)
+            {
+                AddNotice(pid, "🧠 " + LocF("fable.report", child.Title, report),
+                    $"Claude Fable 5.2 in split chat \"{child.Title}\" (id {child.Id}) ended a turn. Its report: " + report);
+                RebuildVisibleSessions();
+                return;
+            }
             string gist = GistOf(childMessages);
+            // In its own worktree: the notice names the branch, so the parent can merge it or open a PR from it.
+            var (treeShown, treeForModel) = WorktreeNoticeOf(child);
             AddNotice(pid,
-                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)),
-                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : ""));
+                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)) + treeShown,
+                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : "") + treeForModel);
         }
         RebuildVisibleSessions();
     }

@@ -48,7 +48,15 @@ public partial class ChatViewModel
         get => _selectedChatModel;
         set
         {
-            if (_syncingModelChoice || value == null || Equals(value, _selectedChatModel)) return;
+            if (_syncingModelChoice || value == null) return;
+            // The owner's pick: a chat on a model of its own (a Fable chat) goes back to it, even to the same pick.
+            bool hadOwn = CurrentSession?.OwnModel != null;
+            DropOwnModelOnPick();
+            if (Equals(value, _selectedChatModel))
+            {
+                if (hadOwn) OnPropertyChanged(nameof(SelectedChatModel));   // the button names the pick again
+                return;
+            }
             _ = SwitchChatModelAsync(value, carryOnNow: true);
         }
     }

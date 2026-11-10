@@ -718,6 +718,16 @@ public class AgentToolService : IDisposable
         return Math.Clamp(ctx, 6_000, 100_000);
     }
 
+    /// <summary>How much of a page one web_fetch returns: (by default, at most when the model asks for more). A cloud
+    /// model gets 20,000 characters (≈ 5k tokens) and may ask for up to 30,000 — the module output budget. A local
+    /// model gets half its read budget (which follows its context window), never under 4,000.</summary>
+    public (int Default, int Most) WebFetchReadBudget()
+    {
+        if (!IsLocalProvider) return (20_000, 30_000);
+        int most = Math.Max(4_000, ReadCharBudget());
+        return (Math.Clamp(most / 2, 4_000, 20_000), most);
+    }
+
     /// <summary>Largest command output returned to the model.</summary>
     private int ShellOutputBudget() => IsLocalProvider ? Math.Clamp(ReadCharBudget() / 2, 4_000, 12_000) : 30_000;
 
@@ -1293,7 +1303,7 @@ public class AgentToolService : IDisposable
         // Web tools
         if (features.WebFetch && _activationService.IsFeatureUnlocked("feature.webFetch"))
         {
-            schemas.Add(new() { Name = "web_fetch", Description = "Fetch a web page or file by URL (http/https) and return its text — docs, an API reference, a README, a JSON endpoint. Use it to check facts that may have changed since your training.", InputSchema = MakeSchema(("url", "string", "Full URL to fetch, starting with https://", true)) });
+            schemas.Add(new() { Name = "web_fetch", Description = "Fetch a web page or file by URL (http/https) and return its text — docs, an API reference, a README, a JSON endpoint. Use it to check facts that may have changed since your training. A long page comes back in parts: the reply says which characters you got and the offset to pass to read on. No JavaScript runs — for a page that builds itself in the browser, or one behind your sign-in, use the browser tools.", InputSchema = MakeSchema(("url", "string", "Full URL to fetch, starting with https://", true), ("offset", "integer", "Character to start from, to read on in a long page (default 0)", false), ("max_chars", "integer", "Most characters to return (default 20000)", false)) });
             schemas.Add(new() { Name = "web_search", Description = "Search the web; returns titles, links and snippets. Use it for current versions, error messages, recent news or anything you are not sure of, then web_fetch the best link.", InputSchema = MakeSchema(("query", "string", "What to search for, in a few keywords", true)) });
         }
 
@@ -1318,7 +1328,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
-        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself. tier picks its model and effort to save tokens: \"cheap\" (the provider's smallest model, low effort) for lookups, listing, reading and summarising; \"mid\" (a middle model, medium effort) for a scoped edit, a test or a review with clear instructions; \"deep\" (your own model and effort) only for hard reasoning, design or a fix that already failed. When unsure, pick mid: a cheap attempt that falls short is redone one tier up, so it is paid for twice. Leave it out and read-only work runs cheap, editing work deep.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "array", "workers only: [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false), ("continue_agent", "string", "The number from a sub-agent's report: carry on with that one in this run, keeping what it already read, instead of starting fresh. task is then your next message to it", false), ("tier", "string", "cheap, mid or deep — how hard the sub-task is (cheap = small model + low effort; deep = your own model)", false)) });
+        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself. tier picks its model and effort to save tokens: \"cheap\" (the provider's smallest model, low effort) for lookups, listing, reading and summarising; \"mid\" (a middle model, medium effort) for a scoped edit, a test or a review with clear instructions; \"deep\" (your own model and effort) only for hard reasoning, design or a fix that already failed. When unsure, pick mid: a cheap attempt that falls short is redone one tier up, so it is paid for twice. Leave it out and read-only work runs cheap, editing work deep.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "array", "workers only: [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false), ("continue_agent", "string", "The number from a sub-agent's report: carry on with that one in this run, keeping what it already read, instead of starting fresh. task is then your next message to it", false), ("tier", "string", "cheap, mid or deep — how hard the sub-task is (cheap = small model + low effort; deep = your own model)", false), ("model", "string", "\"fable\" = run this part on Claude Fable 5.2, the most capable model, at several times the cost — ONLY when the user asked for Fable in their own words this turn (\"use fable for this\", \"ส่วนนี้ให้ fable คิด\") or said yes on CluadeX's Fable card; otherwise the call is refused. Give it the part's brief alone (the problem, the files, what was tried and failed, what done looks like); its short report comes back. Leave it out otherwise.", false)) });
         schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
 
         // Subagent system — specialised single-purpose agents (code-reviewer, security-reviewer, architect, etc.)
@@ -1657,7 +1667,7 @@ public class AgentToolService : IDisposable
 
             WEB TOOLS:
 
-            26. web_fetch - Fetch a URL and get text content
+            26. web_fetch - Fetch a URL and get text content (a long page comes in parts; add offset: N to read on)
                 [ACTION: web_fetch]
                 url: https://example.com/api/data
                 [/ACTION]
@@ -3685,10 +3695,18 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(url))
             return Fail(call, "Missing 'url' argument");
 
+        // Read a long page in parts: offset = where this part starts, max_chars = how long it may be. The model used
+        // to get the first 4,000 characters and nothing after them — an article, a changelog or an API page was
+        // cut a few paragraphs in, with no way to read on.
+        int offset = int.TryParse(call.GetArg("offset"), out var off) && off > 0 ? off : 0;
+        var (defaultChars, mostChars) = WebFetchReadBudget();
+        int maxChars = int.TryParse(call.GetArg("max_chars"), out var mc) && mc > 0 ? Math.Clamp(mc, 500, mostChars) : defaultChars;
+
         WebFetchPage page;
         try
         {
-            page = await _webFetchService.FetchAsync(url, (from, to) => AllowRedirectAsync(call.ToolName, from, to), ct);
+            page = await _webFetchService.FetchForReadingAsync(url, reuse: offset > 0,
+                (from, to) => AllowRedirectAsync(call.ToolName, from, to), ct);
         }
         catch (OperationCanceledException)
         {
@@ -3700,14 +3718,24 @@ public class AgentToolService : IDisposable
         switch (page.Outcome)
         {
             case WebFetchOutcome.Ok:
-                string content = page.Content;
+                var part = WebFetchService.Slice(page.Content, offset, maxChars);
+                if (part.Total > 0 && part.Start >= part.Total)
+                    return Fail(call, string.Format(L("chat.web.offsetPastEnd"), offset, shownUrl, part.Total));
+                var body = new StringBuilder();
+                body.Append($"{shownUrl} — characters {part.Start:N0}–{part.End:N0} of {part.Total:N0}\n");
+                // Page text is data, not instructions — the same envelope the browser tools put around a page.
+                body.Append(Browser.UrlPolicy.Envelope(part.Text.Length > 0 ? part.Text : "(the page has no text)"));
+                if (part.End < part.Total)
+                    body.Append($"\n({part.Total - part.End:N0} more characters — call web_fetch again with the same url and offset={part.End} to read on)");
                 return new ToolResult
                 {
                     Type = call.Type,
                     ToolName = call.ToolName,
                     Success = true,
-                    Output = content.Length > 4000 ? content[..4000] + "\n... (truncated)" : content,
-                    Summary = $"Fetched {shownUrl} ({content.Length} chars)",
+                    Output = body.ToString(),
+                    Summary = part.Start == 0 && part.End >= part.Total
+                        ? $"Fetched {shownUrl} ({part.Total:N0} chars)"
+                        : $"Fetched {shownUrl} (chars {part.Start:N0}–{part.End:N0} of {part.Total:N0})",
                 };
             case WebFetchOutcome.InvalidUrl:
                 return Fail(call, string.Format(L("chat.web.invalidUrl"), url));
@@ -4149,7 +4177,9 @@ public class AgentToolService : IDisposable
                 string? result = await OnAgentSpawnRequested.Invoke(new SubAgentRequest(task, context, call.GetArg("type", "explore"),
                     Pieces: call.GetArg("pieces", ""),
                     ContinueId: int.TryParse(call.GetArg("continue_agent"), out int carryOn) ? carryOn : null,
-                    Tier: call.GetArg("tier", "") is { Length: > 0 } tier ? tier : null), ct);
+                    Tier: call.GetArg("tier", "") is { Length: > 0 } tier ? tier : null,
+                    // Only Fable is taken from the model's call: other models stay the tier routing's choice.
+                    Model: Agents.DispatchPolicy.FableIdOf(call.GetArg("model", ""))), ct);
                 if (result != null)
                     return new ToolResult
                     {

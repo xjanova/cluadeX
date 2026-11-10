@@ -13,9 +13,12 @@ namespace CluadeX.ViewModels;
 public partial class ChatViewModel
 {
     /// <summary>The folder a turn in <paramref name="session"/> works in when it is not the window's: the chat's own
-    /// project, for a pipe task's chat or a chat whose last reply was a pause. Null = the window's project.</summary>
+    /// project, for a pipe task's chat or a chat whose last reply was a pause — or its own worktree, for a split chat
+    /// opened with isolation "worktree". Null = the window's project.</summary>
     private string? TaskFolderFor(ChatSession session)
     {
+        // A split chat in a git worktree of its own (new_chat isolation "worktree") always works there.
+        if (WorktreeFolderOf(session) is { } ownTree) return ownTree;
         string own = session.ProjectPath ?? "";
         string window = _fileSystemService.AppWorkingDirectory ?? "";
         bool paused = Messages.LastOrDefault(m => m.Role == MessageRole.Assistant) is { } last

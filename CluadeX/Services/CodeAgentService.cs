@@ -3375,6 +3375,7 @@ public partial class CodeAgentService
                     IsLocalProvider(p) ? Agents.ModelCapability.ForLocal(LocalModelNameFor(p)) : null, false,
                     result.Steps.Count, isThai);
                 _debugLog?.Warn("Agent", $"text loop stopped by the loop guard at step {iteration + 1} · {textVerdict.Kind} · {textVerdict.Tool} ×{textVerdict.Repeats}");
+                if (RootOf(AgentRunScope.Current) is { } stuckRoot) stuckRoot.LoopGuardStopped = true;
                 break;
             }
 
@@ -5310,6 +5311,12 @@ public partial class CodeAgentService
                 bool nowFailing = !last.Success;
                 if (nowFailing && redSeen && (editedSinceRed || mutatedThisStep)) mainFixFailures++;
                 else if (!nowFailing) mainFixFailures = 0;
+                // The hard-task verdict reads it at the turn's end (a build that went green again is no longer stuck).
+                if (RootOf(AgentRunScope.Current) is { } hardRoot)
+                {
+                    hardRoot.FailedOwnFixes = mainFixFailures;
+                    if (!nowFailing) hardRoot.SpeculativeFixFailed = false;
+                }
                 redSeen = nowFailing;
                 editedSinceRed = false;
                 if (nowFailing && lastBuildFailed && !mutatedThisStep) repeatedBuildNoEdit++;
@@ -5555,6 +5562,7 @@ public partial class CodeAgentService
             // spinning until the user notices (no step limit and a free local model = nothing else ever ends it).
             if (loopGuardStop is { } looped)
             {
+                if (RootOf(AgentRunScope.Current) is { } stuckRoot) stuckRoot.LoopGuardStopped = true;
                 result.StopReason = "loop";
                 result.Success = false;
                 result.FinalResponse = Agents.AgentLoopGuard.StopMessage(looped, ModelLabelFor(loopProvider),

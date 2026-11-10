@@ -46,6 +46,9 @@ public partial class ChatViewModel
     {
         get
         {
+            // A chat on a model of its own (a Fable chat) names that model, not the app's pick.
+            if (ShownOwnModel is { } own)
+                return LiveSnapshot()?.Model is { Length: > 0 } ran ? LiveModelReport.FriendlyModel(ran) : LiveModelReport.FriendlyModel(own);
             if (_selectedChatModel is { } c)
             {
                 if (LiveSnapshot()?.Model is { Length: > 0 } real) return LiveModelReport.FriendlyModel(real);
@@ -69,10 +72,10 @@ public partial class ChatViewModel
     public Color ModelButtonGlow => ModelButtonGirl.Accent;
 
     /// <summary>"$2 / $10" for a priced model, "" otherwise.</summary>
-    public string ModelButtonPrice => _selectedChatModel?.PriceLabel ?? "";
+    public string ModelButtonPrice => ShownOwnModel is { } own ? PriceLabelOf(own) : _selectedChatModel?.PriceLabel ?? "";
 
     /// <summary>True while this chat's run works: the button glows and does not open the picker.</summary>
     public bool IsModelButtonLocked => IsGenerating;
 
-    public string ModelButtonTip => IsGenerating ? Loc("picker.lockedTip") : Loc("picker.open");
+    public string ModelButtonTip => IsGenerating ? Loc("picker.lockedTip") : ShownOwnModel != null ? Loc("fable.model.tip") : Loc("picker.open");
 }

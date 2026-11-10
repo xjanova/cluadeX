@@ -822,7 +822,9 @@ public static class ChatToolBridge
         var sb = new StringBuilder("CluadeX's chat tools" + server + ": ");
         if (splitChats)
             sb.Append($"{T(ProjectToolModule.NewChatToolName)} opens a new chat that runs beside this one — for a separate task, ")
-              .Append("or a new, independent request that arrives mid-task; give it the whole brief, it does not see this chat — ")
+              .Append("or a new, independent request that arrives mid-task; give it the whole brief, it does not see this chat; ")
+              .Append("in THIS project, when it will edit files while this chat still works here, pass isolation \"worktree\" so it ")
+              .Append("works on its own branch — ")
               .Append($"and {T(ProjectToolModule.CloseChatToolName)} lists the chats you split off and puts finished ones away. ")
               .Append("Never answer that you cannot open a chat. ");
         if (plan)
