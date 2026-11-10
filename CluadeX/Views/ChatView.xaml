@@ -2361,7 +2361,7 @@
                                                             <ControlTemplate TargetType="Button">
                                                                 <Border CornerRadius="8" BorderThickness="1" ClipToBounds="True"
                                                                         BorderBrush="{DynamicResource Border.Default}">
-                                                                    <Image Source="{Binding Converter={StaticResource ThumbSource}}"
+                                                                    <views:ThumbImage Source="{Binding Converter={StaticResource ThumbSource}}"
                                                                            MaxHeight="180" MaxWidth="260" Stretch="Uniform"
                                                                            RenderOptions.BitmapScalingMode="HighQuality"/>
                                                                 </Border>
@@ -2461,7 +2461,7 @@
                                                 </ControlTemplate>
                                             </Button.Template>
                                             <Grid>
-                                                <Image Source="{Binding ThumbnailPath, Converter={StaticResource ThumbSource}}"
+                                                <views:ThumbImage Source="{Binding ThumbnailPath, Converter={StaticResource ThumbSource}}"
                                                        MaxHeight="120" MaxWidth="240" Stretch="Uniform"
                                                        RenderOptions.BitmapScalingMode="HighQuality"/>
                                             </Grid>
@@ -3268,7 +3268,7 @@
                                     <Grid Margin="0,6,10,0">
                                         <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource Border.Default}"
                                                 Background="{DynamicResource Surface.Sunken}" ClipToBounds="True">
-                                            <Image Source="{Binding Converter={StaticResource ThumbSource}}" Height="60" MaxWidth="110"
+                                            <views:ThumbImage Source="{Binding Converter={StaticResource ThumbSource}}" Height="60" MaxWidth="110"
                                                    Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality"/>
                                         </Border>
                                         <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-6,0" Cursor="Hand"
@@ -3460,6 +3460,8 @@
                                             <MenuItem Header="{services:Loc chat.stepsLabel}" IsCheckable="True" IsChecked="{Binding ShowAgentInternals}" ToolTip="{services:Loc chat.stepsTip}"/>
                                             <MenuItem Header="{services:Loc chat.autoRunLabel}" IsCheckable="True" IsChecked="{Binding AutoExecute}" ToolTip="{services:Loc chat.autoRunWarnTip}"/>
                                             <MenuItem Header="{services:Loc chat.side.toggle}" IsCheckable="True" IsChecked="{Binding ShowSidePanel}"/>
+                                            <MenuItem Header="{services:Loc activity.toggle}" IsCheckable="True" IsChecked="{Binding ShowActivityCard}"
+                                                      AutomationProperties.AutomationId="CxChat.ActivityToggle"/>
                                             <Separator/>
                                             <MenuItem Header="{services:Loc chat.reviewTip}" Command="{Binding ReviewCodeCommand}"
                                                       Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}"/>
@@ -3832,12 +3834,17 @@
                 BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,0,0,0"
                 Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}">
             <Grid>
-                <!-- Row 0 held the project's files; they live in the left sidebar under the chats now (ProjectFilesPanel). -->
+                <!-- Row 0 held the project's files (they live in the left sidebar under the chats now, ProjectFilesPanel); it
+                     holds the activity card now: what the run does, live (ChatViewModel.Activity, Views/ActivityCardView). -->
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="0"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
+
+                <views:ActivityCardView x:Name="ActivityCard" Grid.Row="0" Margin="10,10,10,8"
+                                        DataContext="{Binding Activity}" CloseCommand="{Binding DataContext.CloseActivityCardCommand, ElementName=SidePanel}"
+                                        Visibility="{Binding DataContext.ActivityCardVisible, ElementName=SidePanel, Converter={StaticResource BoolVis}}"/>
 
                 <!-- The last image the agent looked at (a game screenshot, a page it opened) -->
                 <Border Grid.Row="1" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="14,8,14,10"
@@ -3854,7 +3861,7 @@
                         <!-- A click on the picture circles that spot, attaches it and starts the question in the box -->
                         <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Bg.Window}"
                                 Padding="2" Cursor="Cross" ToolTip="{services:Loc vibe.ask.hint}">
-                            <Image x:Name="SidePicture" Source="{Binding LatestImagePath, Converter={StaticResource ThumbSource}}" MaxHeight="160" Stretch="Uniform"
+                            <views:ThumbImage x:Name="SidePicture" Source="{Binding LatestImagePath, Converter={StaticResource ThumbSource}}" MaxHeight="160" Stretch="Uniform"
                                    RenderOptions.BitmapScalingMode="HighQuality" Tag="{Binding LatestImagePath}"
                                    MouseLeftButtonUp="SidePicture_Click" AutomationProperties.AutomationId="CxChat.SidePicture"/>
                         </Border>

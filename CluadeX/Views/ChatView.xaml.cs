@@ -195,6 +195,7 @@ public partial class ChatView : UserControl
                 SidePanelHeightGrip.Visibility = Visibility.Collapsed;
             }
             _panelStacked = stack;
+            ActivityCard.Compact = stack;
         }
         finally { _fittingPanel = false; }
     }
@@ -927,6 +928,28 @@ public sealed class FileGlyphConverter : System.Windows.Data.IValueConverter
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
         => throw new NotSupportedException();
+}
+
+/// <summary>
+/// An <see cref="Image"/> for <see cref="ThumbnailSourceConverter"/>: that converter hands back an empty picture that
+/// fills in when the decode is done, and a plain Image measured it at 0 × 0 and kept that size until something else
+/// re-laid the row out (2026-11-10: with the right-hand panel already open for the activity card, nothing did, and
+/// the thumbnail stayed invisible). This one measures again when its picture changes inside.
+/// </summary>
+public sealed class ThumbImage : Image
+{
+    private Freezable? _watched;
+
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.Property != SourceProperty) return;
+        if (_watched != null) _watched.Changed -= OnSourceChanged;
+        _watched = e.NewValue is Freezable { IsFrozen: false } f ? f : null;
+        if (_watched != null) _watched.Changed += OnSourceChanged;
+    }
+
+    private void OnSourceChanged(object? sender, EventArgs e) => InvalidateMeasure();
 }
 
 /// <summary>
