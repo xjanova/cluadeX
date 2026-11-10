@@ -518,7 +518,9 @@
                                  so on a permission prompt it was drawn on top with an opaque background and took
                                  every click meant for Allow / Deny: no "Ask" could be answered with the mouse.) -->
                             <!-- The reading column: at most 1000 px wide, centred (Stretch + MaxWidth centres in WPF). -->
-                            <Grid Margin="24,1,24,1" MaxWidth="1000"
+                            <!-- Background="Transparent": the whole row is hit-testable, so the pointer in a gap (between the bubble
+                                 and her face, beside the speaker) still counts as on the row and its hover strip stays. -->
+                            <Grid Margin="24,1,24,1" MaxWidth="1000" Background="Transparent"
                                   MouseEnter="MessageBubble_MouseEnter"
                                   MouseLeave="MessageBubble_MouseLeave">
                                 <Grid.RowDefinitions>
@@ -2212,49 +2214,73 @@
                                             <TextBlock Text="{Binding ToolElapsedTime}" Foreground="{DynamicResource Text.Muted}"
                                                        FontSize="11" FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,4,0"
                                                        Visibility="{Binding ToolElapsedTime, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                            <StackPanel Orientation="Horizontal"
-                                                        Visibility="{Binding IsHovered, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                                <!-- Copy message -->
-                                                <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
-                                                        Style="{StaticResource IconButton}"
-                                                        FontSize="10" Padding="4,2" Margin="2,0"
-                                                        ToolTip="{services:Loc chat.copyMessageTip}"
-                                                        Click="CopyMessage_Click"
-                                                        Tag="{Binding Content}"/>
-                                                <!-- Explain simply: the reply again in plain words (a finished reply only) -->
-                                                <Button Content="{services:Loc vibe.explain.button}"
-                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
-                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
-                                                        FontSize="11" Padding="6,2" Margin="2,0"
-                                                        ToolTip="{services:Loc vibe.explain.tip}"
-                                                        Click="ExplainMessage_Click"
-                                                        AutomationProperties.AutomationId="CxChat.ExplainSimply"
-                                                        Visibility="{Binding CanExplainSimply, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                                <!-- Go back to this point of the chat, here or in a new chat. These two are words on an
-                                                     IconButton: without their own font and size its icon font draws squares and its 36 px clips them. -->
-                                                <Button Content="{services:Loc chat.rewindHere}"
-                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
-                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
-                                                        FontSize="11" Padding="6,2" Margin="2,0"
-                                                        ToolTip="{services:Loc chat.rewindHereTip}"
-                                                        Click="RewindMessage_Click"
-                                                        Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                                <Button Content="{services:Loc chat.forkHere}"
-                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
-                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
-                                                        FontSize="11" Padding="6,2" Margin="2,0"
-                                                        ToolTip="{services:Loc chat.forkHereTip}"
-                                                        Click="ForkMessage_Click"
-                                                        Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                                <!-- Retry: only on a failed REPLY (CanRetry), never on a tool row —
-                                                     retrying one re-ran the whole agent turn. -->
-                                                <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
-                                                        Style="{StaticResource IconButton}"
-                                                        FontSize="10" Padding="4,2" Margin="2,0"
-                                                        ToolTip="{services:Loc chat.retryTip}"
-                                                        Click="RetryMessage_Click"
-                                                        Visibility="{Binding CanRetry, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                            </StackPanel>
+                                            <!-- The hover strip (Copy, Explain, Rewind, Fork, Retry) floats on the header line and takes no height (owner
+                                                 2026-11-10: "เม้าชี้รูปลำโพง ตรงอวาต้า เพื่อปิดเสียง มันกระพริบไม่หยุด"). It used to add ~34 px to the row: a chat
+                                                 that follows its end scrolled up by that, the speaker under her face slid out from under the pointer, the row
+                                                 lost the hover, shrank, scrolled back — a loop. Its 20 px are cancelled by the -10 / -10 margins (desired height
+                                                 0), centred on a tool row's label line; a question and a reply show no label line, so there it sits across the
+                                                 bubble's top edge.
+                                                 tests/chattest SpeakerHoverTests (SPK). -->
+                                            <Border Height="20" CornerRadius="10" Padding="2,0" BorderThickness="1" VerticalAlignment="Center"
+                                                    Background="{DynamicResource Popup.Background}" BorderBrush="{DynamicResource Popup.Border}"
+                                                    Visibility="{Binding IsHovered, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Margin" Value="8,-10,0,-10"/>
+                                                        <Style.Triggers>
+                                                            <!-- across the bubble's top edge: its top padding (8 / 10) + half the strip -->
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.User}">
+                                                                <Setter Property="Margin" Value="8,-18,0,-2"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Assistant}">
+                                                                <Setter Property="Margin" Value="8,-20,0,0"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <!-- Copy message -->
+                                                    <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
+                                                            Style="{StaticResource IconButton}"
+                                                            Width="24" Height="18" FontSize="10" Padding="0" Margin="1,0"
+                                                            ToolTip="{services:Loc chat.copyMessageTip}"
+                                                            Click="CopyMessage_Click"
+                                                            Tag="{Binding Content}"/>
+                                                    <!-- Explain simply: the reply again in plain words (a finished reply only) -->
+                                                    <Button Content="{services:Loc vibe.explain.button}"
+                                                            Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                            Width="Auto" Height="18" VerticalAlignment="Center"
+                                                            FontSize="11" Padding="6,0" Margin="1,0"
+                                                            ToolTip="{services:Loc vibe.explain.tip}"
+                                                            Click="ExplainMessage_Click"
+                                                            AutomationProperties.AutomationId="CxChat.ExplainSimply"
+                                                            Visibility="{Binding CanExplainSimply, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                    <!-- Go back to this point of the chat, here or in a new chat. These two are words on an
+                                                         IconButton: without their own font and size its icon font draws squares and its 36 px clips them. -->
+                                                    <Button Content="{services:Loc chat.rewindHere}"
+                                                            Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                            Width="Auto" Height="18" VerticalAlignment="Center"
+                                                            FontSize="11" Padding="6,0" Margin="1,0"
+                                                            ToolTip="{services:Loc chat.rewindHereTip}"
+                                                            Click="RewindMessage_Click"
+                                                            Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                    <Button Content="{services:Loc chat.forkHere}"
+                                                            Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                            Width="Auto" Height="18" VerticalAlignment="Center"
+                                                            FontSize="11" Padding="6,0" Margin="1,0"
+                                                            ToolTip="{services:Loc chat.forkHereTip}"
+                                                            Click="ForkMessage_Click"
+                                                            Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                    <!-- Retry: only on a failed REPLY (CanRetry), never on a tool row —
+                                                         retrying one re-ran the whole agent turn. -->
+                                                    <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
+                                                            Style="{StaticResource IconButton}"
+                                                            Width="24" Height="18" FontSize="10" Padding="0" Margin="1,0"
+                                                            ToolTip="{services:Loc chat.retryTip}"
+                                                            Click="RetryMessage_Click"
+                                                            Visibility="{Binding CanRetry, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                </StackPanel>
+                                            </Border>
                                             </StackPanel>
                                         </Grid>
 
