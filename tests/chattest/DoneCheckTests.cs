@@ -89,6 +89,70 @@ internal static partial class Program
                 provider.Texts.Count == 2 && !provider.Texts[1].Contains("[file-check]"), $"calls={provider.Texts.Count}");
             Settings.UpdateSettings(s => s.AutoVerifyAfterEditEnabled = true);
 
+            // ── DC11–DC14: a page that parses must also open (PageLoadCheck, the real headless browser) ──
+            if (CluadeX.Services.Voice.ChromeDictationService.FindBrowser() == null) Log("SKIP DC11-DC14 (no Chrome or Edge on this PC)");
+            else
+            {
+                const string throwsOnLoad = "<!doctype html><html><body><div id=board></div><script>\nfunction start() {\n  undefinedThing.go();\n}\nstart();\n</script></body></html>";
+                const string fixedPage = "<!doctype html><html><body><div id=board></div><script>\nfunction start() {\n  document.getElementById('board').textContent = 'ready';\n}\nstart();\n</script></body></html>";
+
+                // DC11: an error on load refuses the "done" (at its line); the fix finishes.
+                provider.Texts.Clear(); provider.Choices.Clear(); provider.Prompts.Clear();
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Write("p1", "index.html", throwsOnLoad)));
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Say("Done. The page is ready.")));
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Write("p2", "index.html", fixedPage)));
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Say("Fixed: the page loads now.")));
+                var p1 = await agent.ExecuteAgenticAsync(new List<ChatMessage>(), "[DC11] make the board page", null, CancellationToken.None);
+                Check("DC11 a page that throws on load: its \"done\" is refused with the error at the page's line, and the next step must be a tool call",
+                    provider.Texts.Count >= 3 && provider.Texts[2].Contains("STOP — do not summarise") && provider.Texts[2].Contains("[page-check] ✗")
+                    && provider.Texts[2].Contains("index.html:3") && provider.Texts[2].Contains("undefinedThing")
+                    && provider.Choices.Count >= 3 && provider.Choices[2] == "required",
+                    provider.Texts.Count >= 3 ? provider.Texts[2] : $"{provider.Texts.Count} calls");
+                Check("DC11 …once the page is fixed it is opened again and the finish stands with the model's own answer",
+                    p1.Success && p1.FinalResponse == "Fixed: the page loads now." && provider.Texts.Count == 4,
+                    $"success={p1.Success} calls={provider.Texts.Count} final={p1.FinalResponse}");
+
+                // DC12: the Sudoku freeze — a page that never finishes loading; a model that ignores it is refused twice, then told.
+                provider.Texts.Clear(); provider.Choices.Clear(); provider.Prompts.Clear();
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Write("p3", "sudoku.html",
+                    "<!doctype html><html><body><script>\nfunction solve(i) { while (true) { i++; } }\nsolve(0);\n</script></body></html>")));
+                for (int i = 0; i < 3; i++) provider.Steps.Enqueue((_, _) => Task.FromResult(Say("All done, the sudoku works.")));
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var p2 = await agent.ExecuteAgenticAsync(new List<ChatMessage>(), "[DC12] make a sudoku page", null, CancellationToken.None);
+                int pageStops = provider.Texts.Count(t => t.StartsWith("STOP — do not summarise", StringComparison.Ordinal) && t.Contains("[page-check]"));
+                Check("DC12 a page that never loads (an endless loop) is refused twice, opened once (no re-check without an edit), then the run ends",
+                    pageStops == 2 && provider.Texts.Count == 4 && provider.Texts[2].Contains("did not finish loading") && sw.Elapsed < TimeSpan.FromSeconds(40),
+                    $"stops={pageStops} calls={provider.Texts.Count} {sw.Elapsed.TotalSeconds:N0} s");
+                Check("DC12 …and the user is told by CluadeX that it is not really done, naming the page",
+                    p2.FinalResponse.StartsWith("All done, the sudoku works.") && p2.FinalResponse.Contains("⚠️ CluadeX")
+                    && p2.FinalResponse.Contains("`sudoku.html`") && p2.FinalResponse.Contains("did not finish loading"), p2.FinalResponse);
+
+                // DC13: only the script was written — the page that loads it is the one opened, and the error is in the script.
+                File.WriteAllText(Path.Combine(proj, "game.html"), "<!doctype html><html><body><script src=\"js/game.js\"></script></body></html>");
+                provider.Texts.Clear(); provider.Choices.Clear(); provider.Prompts.Clear();
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Write("p4", "js/game.js", "const board = null;\n\nboard.cells.push(1);\n")));
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Say("game.js written.")));
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Write("p5", "js/game.js", "const board = { cells: [] };\n\nboard.cells.push(1);\n")));
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Say("game.js fixed.")));
+                var p3 = await agent.ExecuteAgenticAsync(new List<ChatMessage>(), "[DC13] write the game script", null, CancellationToken.None);
+                Check("DC13 a written script opens the page that loads it; the error is named in the script, at its line",
+                    provider.Texts.Count == 4 && provider.Texts[2].Contains("[page-check] ✗") && provider.Texts[2].Contains("js/game.js:3")
+                    && p3.Success && p3.FinalResponse == "game.js fixed.",
+                    provider.Texts.Count >= 3 ? provider.Texts[2] : $"{provider.Texts.Count} calls");
+
+                // DC14: a working game page (an animation loop) says nothing and finishes at once.
+                provider.Texts.Clear(); provider.Choices.Clear(); provider.Prompts.Clear();
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Write("p6", "loop.html",
+                    "<!doctype html><html><body><canvas id=c></canvas><script>\nlet n = 0;\nfunction frame() { n++; requestAnimationFrame(frame); }\nrequestAnimationFrame(frame);\n</script></body></html>")));
+                provider.Steps.Enqueue((_, _) => Task.FromResult(Say("loop.html written.")));
+                var p4 = await agent.ExecuteAgenticAsync(new List<ChatMessage>(), "[DC14] write the animation page", null, CancellationToken.None);
+                Check("DC14 a page with an animation loop opens fine: no note, the finish stands at once",
+                    p4.Success && provider.Texts.Count == 2 && p4.FinalResponse == "loop.html written." && !provider.Texts.Any(t => t.Contains("[page-check]")),
+                    $"calls={provider.Texts.Count} final={p4.FinalResponse}");
+                Check("DC14 …no browser profile is left in %TEMP%",
+                    !Directory.EnumerateDirectories(Path.GetTempPath(), "cluadex-pagecheck-*").Any());
+            }
+
             // ── DC8–DC9: the track record — what this model got wrong is in its next prompt ──
             string label = (string)typeof(CodeAgentService).GetMethod("ModelLabelFor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
                 .Invoke(agent, [provider])!;
