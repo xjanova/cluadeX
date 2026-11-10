@@ -80,6 +80,9 @@ public class InstinctsViewModel : ViewModelBase
     // ─── Brain bridge state (UI bindings) ────────────────────────────
     public bool BrainAvailable => _brainSync.IsBrainAvailable;
     public string BrainStatusText => _brainSync.StatusText;
+    /// <summary>BrainX is this PC's memory, so instinct learning stands down — the page says why.</summary>
+    public bool LearningPausedForBrain => InstinctService.PausedForBrain;
+    private bool _lastPaused;
 
     public InstinctsViewModel(InstinctService service, BrainSyncService brainSync, SkillService skillService,
         LocalizationService loc, DebugLogService log)
@@ -102,6 +105,8 @@ public class InstinctsViewModel : ViewModelBase
         {
             bool nowAvailable = _brainSync.IsBrainAvailable;
             string nowText = _brainSync.StatusText;
+            bool nowPaused = InstinctService.PausedForBrain;
+            if (nowPaused != _lastPaused) { _lastPaused = nowPaused; OnPropertyChanged(nameof(LearningPausedForBrain)); }
             if (nowAvailable == _lastBrainAvailable && nowText == _lastBrainText) return;
             _lastBrainAvailable = nowAvailable;
             _lastBrainText = nowText;

@@ -76,7 +76,7 @@ public partial class ChatViewModel
     private void OnInstinctsLearned(string? sessionId, IReadOnlyList<InstinctService.SightingResult> results)
     {
         var store = InstinctService.Current;
-        if (store == null) return;
+        if (store == null || InstinctService.PausedForBrain) return;   // BrainX is the memory: nothing to ask
         var ids = results
             .Where(r => r.Counted && !r.Instinct.IsVoted)
             .Select(r => r.Instinct.Id)
@@ -97,7 +97,7 @@ public partial class ChatViewModel
     {
         if (_pendingInstinctCards.Count == 0 || CurrentSession == null || Messages.Count == 0 || RunOf(CurrentSession) != null) return;
         var store = InstinctService.Current;
-        if (store == null) { _pendingInstinctCards.Clear(); return; }
+        if (store == null || InstinctService.PausedForBrain) { _pendingInstinctCards.Clear(); return; }
         bool added = false;
         foreach (var (from, ids) in _pendingInstinctCards.ToList())
         {

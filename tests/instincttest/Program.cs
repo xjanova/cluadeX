@@ -40,6 +40,9 @@ Directory.CreateDirectory(work);
 Check("H0 the data root is next to this exe (portable.txt), never ~/.cluadex",
     SettingsService.ResolveDataRoot(out bool portable).StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase) && portable,
     SettingsService.ResolveDataRoot(out _));
+// The owner's own ~/.claude/CLAUDE.md must not decide what these checks see: no global rule files, and no brain.
+WrittenRules.GlobalFiles = Array.Empty<string>();
+InstinctService.BrainIsMemory = () => false;
 
 Instinct Inst(int seen = 1, int yes = 0, int no = 0, int corrections = 0, double daysOld = 0) => new()
 {
@@ -332,9 +335,129 @@ Directory.CreateDirectory(Path.Combine(web, ".git"));
         && InstinctCardView.FromRow(new ChatMessage { ToolName = "cx:other", ToolOutput = row.ToolOutput }, store, Loc, LocF) == null);
     var loc = new LocalizationService();
     var missing = new[] { "instinct.card.title", "instinct.card.from", "instinct.card.yes", "instinct.card.no", "instinct.card.yesTip",
-            "instinct.card.noTip", "instinct.card.accepted", "instinct.card.rejected", "instinct.card.gone", "instinct.card.scopeGlobal", "instinct.card.scopeProject" }
+            "instinct.card.noTip", "instinct.card.accepted", "instinct.card.rejected", "instinct.card.gone", "instinct.card.scopeGlobal", "instinct.card.scopeProject",
+            "instincts.paused.title", "instincts.paused.body", "settings.learnInstinctsPaused" }
         .Where(k => { loc.SetLanguage("th"); string th = loc.T(k); loc.SetLanguage("en"); string en = loc.T(k); return th == k || en == k || th == en; }).ToList();
-    Check("K5 every card text is in Thai and English", missing.Count == 0, string.Join(", ", missing));
+    Check("K5 every card text (and why learning is off) is in Thai and English", missing.Count == 0, string.Join(", ", missing));
+}
+
+// ─── R: a rule already written down is not learned twice ───
+SessionMemoryService NewSms(InstinctService store, ScriptedProvider fake, out SettingsService settings)
+{
+    settings = new SettingsService();
+    settings.Settings.ActiveProvider = AiProviderType.Ollama;
+    settings.Settings.SessionMemoryEnabled = false;
+    settings.Settings.InstinctLearningEnabled = true;
+    settings.Settings.BatchBackgroundWork = false;
+    var server = new LlamaServerProvider(settings);
+    var mgr = new AiProviderManager(settings, new LocalGgufProvider(new LlamaInferenceService(settings), server, settings), server,
+        new CostTrackingService(), new FileSystemService());
+    typeof(AiProviderManager).GetField("_activeProvider", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(mgr, fake);
+    var fs = new FileSystemService();
+    return new SessionMemoryService(new MemoryService(fs), mgr, settings, new LocalizationService(), store, fileSystem: fs);
+}
+{
+    string proj = Path.Combine(work, "rules-proj");
+    Directory.CreateDirectory(Path.Combine(proj, ".git"));
+    Directory.CreateDirectory(Path.Combine(proj, ".claude"));
+    File.WriteAllText(Path.Combine(proj, "CLAUDE.md"), """
+        # Project rules
+        - **Never push to main** without an explicit order from the owner.
+        | Trap | Rule |
+        |---|---|
+        | Migrations | Keep every migration idempotent: check the column before adding it |
+        ```bash
+        npm run build   # build the frontend assets before deploying
+        ```
+        """);
+    File.WriteAllText(Path.Combine(proj, ".claude", "CLAUDE.md"), "ตอบเป็นภาษาไทยเสมอ\n");
+    string global = Path.Combine(work, "global-CLAUDE.md");
+    File.WriteAllText(global, "Never use the E: drive; all work happens on D:\n");
+    WrittenRules.GlobalFiles = new[] { global };
+    WrittenRules.ClearCache();
+    try
+    {
+        Check("R1 a lesson that restates a written line is a repeat (project file, a table cell, the .claude/ file, the global file)",
+            WrittenRules.Repeats("Never push to main without an explicit order", proj)
+            && WrittenRules.Repeats("Keep migrations idempotent and check the column first", proj)
+            && WrittenRules.Repeats("ตอบเป็นภาษาไทยเสมอ", proj)
+            && WrittenRules.Repeats("Never use the E: drive, work on D:", null));
+        Check("R2 …the opposite rule, an unrelated one, a code block line, another project's rules are not",
+            !WrittenRules.Repeats("Always push to main without an explicit order", proj)
+            && !WrittenRules.Repeats("Screenshot a UI redesign before deleting the preview images", proj)
+            && !WrittenRules.Repeats("Build the frontend assets before deploying", proj)
+            && !WrittenRules.Repeats("Never push to main without an explicit order", web));
+        string prompt = WrittenRules.ForPrompt(proj);
+        Check("R3 the extractor is shown the written rules (markdown marks gone, code left out)",
+            prompt.Contains("- Never push to main without an explicit order from the owner.") && prompt.Contains("ตอบเป็นภาษาไทยเสมอ")
+            && prompt.Contains("Never use the E: drive") && !prompt.Contains("npm run build") && !prompt.Contains("**"), prompt);
+        string full = SessionMemoryService.BuildInstinctPrompt("USER: x", new List<Instinct>(), prompt);
+        Check("R4 …in its prompt, ahead of the instincts, the transcript marker unchanged",
+            full.StartsWith("RULES THE USER ALREADY WROTE DOWN") && full.Contains("TRANSCRIPT:\n---\n") && !full.Contains('\r'));
+
+        var store = new InstinctService(Path.Combine(work, "rules-store"));
+        var dup = store.RecordSighting(new("Never push to main without an explicit order", SessionId: "r"))!.Instinct;
+        var fresh = store.RecordSighting(new("Screenshot a UI redesign before deleting the preview images", SessionId: "r"))!.Instinct;
+        store.Accept(dup.Id); store.Accept(fresh.Id);
+        var block = store.HabitsBlock(proj) ?? "";
+        Check("R5 an instinct already in CLAUDE.md stays out of the prompt (one copy is enough); a new lesson goes in",
+            !block.Contains("Never push to main") && block.Contains("Screenshot a UI redesign")
+            && (store.HabitsBlock(web) ?? "").Contains("Never push to main"), block);
+
+        var fake = new ScriptedProvider
+        {
+            Answer = """[{"pattern":"Keep every migration idempotent","scope":"project"},{"pattern":"Ask before deleting a user's preview images","scope":"global"}]""",
+        };
+        var learnStore = new InstinctService(Path.Combine(work, "rules-learn"));
+        var sms = NewSms(learnStore, fake, out _);
+        await sms.ExtractInstinctsAsync(Enumerable.Range(0, 8).Select(i => new ChatMessage
+            { Role = i % 2 == 0 ? MessageRole.User : MessageRole.Assistant, Content = "m" + i }).ToList(), CancellationToken.None, "rc", proj);
+        Check("R6 the extractor's answer: the written rule is not recorded, the new one is; its prompt carried the rules",
+            learnStore.GetAll().Count == 1 && learnStore.GetAll()[0].Pattern.StartsWith("Ask before deleting")
+            && fake.Calls.Count == 1 && fake.Calls[0].Contains("RULES THE USER ALREADY WROTE DOWN") && fake.Calls[0].Contains("idempotent"),
+            string.Join(" | ", learnStore.GetAll().Select(i => i.Pattern)));
+        File.WriteAllText(Path.Combine(proj, ".claude", "CLAUDE.md"), "Ask before deleting a user's preview images\n");
+        File.SetLastWriteTimeUtc(Path.Combine(proj, ".claude", "CLAUDE.md"), DateTime.UtcNow.AddMinutes(1));
+        Check("R7 a rules file edited later is read again", WrittenRules.Repeats("Ask before deleting a user's preview images", proj)
+            && !WrittenRules.Repeats("ตอบเป็นภาษาไทยเสมอ", proj));
+    }
+    finally { WrittenRules.GlobalFiles = Array.Empty<string>(); WrittenRules.ClearCache(); }
+}
+
+// ─── B: BrainX set up on this PC is the one memory ───
+{
+    var store = new InstinctService(Path.Combine(work, "brain"));
+    var r = store.RecordSighting(new("Build before claiming a fix is done", SessionId: "b"))!.Instinct;
+    store.Accept(r.Id);
+    var fake = new ScriptedProvider { Answer = """[{"pattern":"Something new","scope":"global","correction":true,"evidence":"m0"}]""" };
+    var sms = NewSms(store, fake, out var settings);
+    try { File.Delete(Path.Combine(settings.DataRoot, "learned-chats.json")); } catch (IOException) { }
+    var chat = Enumerable.Range(0, 8).Select(i => new ChatMessage { Role = i % 2 == 0 ? MessageRole.User : MessageRole.Assistant, Content = "m" + i }).ToList();
+    Check("B0 control: without a brain the accepted instinct is in the prompt", LearnedHabits.For(null, store).Contains("Build before claiming"));
+    InstinctService.BrainIsMemory = () => true;
+    try
+    {
+        Check("B1 with BrainX: no learned habits in any prompt (the CLI instruction is left as it was)",
+            store.HabitsBlock(null) == null && LearnedHabits.For(null, store) == "" && LearnedHabits.Append("do it", null) == "do it");
+        Check("B2 …no chat is read for instincts (no model call)", !sms.ExtractInBackground("b-chat", chat, null) && fake.Calls.Count == 0);
+        var late = await sms.ApplyInstinctsAsync(SessionMemoryService.ParseInstinctCandidates(fake.Answer), "b-chat", null, "m0", CancellationToken.None);
+        Check("B3 …a batch answer that arrives afterwards records nothing", late.Count == 0 && store.GetAll().Count == 1);
+        Check("B4 …the store is kept as it was (nothing deleted, the vote kept)", store.GetById(r.Id) is { AcceptCount: 1 });
+    }
+    finally { InstinctService.BrainIsMemory = () => false; }
+    Check("B5 the brain removed: it all comes back by itself", LearnedHabits.For(null, store).Contains("Build before claiming")
+        && sms.ExtractInBackground("b-chat", chat, null));
+    string? view = FindSource("CluadeX", "Views");
+    if (!string.IsNullOrEmpty(view))
+    {
+        string page = File.ReadAllText(Path.Combine(view, "InstinctsView.xaml"));
+        string set = File.ReadAllText(Path.Combine(view, "SettingsView.xaml"));
+        string brain = File.ReadAllText(Path.Combine(view, "..", "Services", "BrainSyncService.cs"));
+        Check("B6 the Instincts page and Settings say why it is off; the app's brain bridge is what switches it",
+            page.Contains("instincts.paused.body") && page.Contains("LearningPausedForBrain")
+            && set.Contains("settings.learnInstinctsPaused") && set.Contains("InstinctsPausedForBrain")
+            && brain.Contains("InstinctService.BrainIsMemory ??= () => HasBrainConfigured"));
+    }
 }
 
 // ─── I: the inbox, and the hook that filled it ───

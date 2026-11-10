@@ -87,7 +87,9 @@ public class SessionMemoryService
     public bool ExtractInBackground(string? sessionId, IReadOnlyList<ChatMessage> messages, string? projectFolder)
     {
         bool wantMemory = _settingsService.Settings.SessionMemoryEnabled;
-        bool wantInstincts = _settingsService.Settings.InstinctLearningEnabled && _instinctService != null;
+        // BrainX set up on this PC is the one memory: CluadeX learns no instincts of its own (InstinctService.PausedForBrain).
+        bool wantInstincts = _settingsService.Settings.InstinctLearningEnabled && _instinctService != null
+                             && !InstinctService.PausedForBrain;
         if (!wantMemory && !wantInstincts) return false;
 
         var relevant = RelevantMessages(messages);   // a copy: the chat's list can keep changing after we return
@@ -189,7 +191,7 @@ public class SessionMemoryService
             requests.Add(new(MemoryRequestId, SystemPromptForMemoryExtraction, [], BuildExtractionPrompt(transcript)));
         if (wantInstincts && _instinctService != null)
             requests.Add(new(InstinctCustomId(sessionId), SystemPromptForInstinctExtraction, [],
-                BuildInstinctPrompt(transcript, ExistingFor(projectPath))));
+                BuildInstinctPrompt(transcript, ExistingFor(projectPath), WrittenRules.ForPrompt(projectPath))));
         if (requests.Count == 0) return true;
         try
         {
@@ -289,11 +291,14 @@ public class SessionMemoryService
     private List<Instinct> ExistingFor(string? projectFolder) =>
         _instinctService?.ForExtraction(InstinctService.ProjectKey(projectFolder), MaxExistingShown) ?? new();
 
-    internal static string BuildInstinctPrompt(string transcript, IReadOnlyList<Instinct> existing)
+    internal static string BuildInstinctPrompt(string transcript, IReadOnlyList<Instinct> existing, string writtenRules = "")
     {
         // "\n", never AppendLine: the text is the same on every OS, and "TRANSCRIPT:\n---" is how test providers
         // tell this background request from a chat turn.
         var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(writtenRules))
+            sb.Append("RULES THE USER ALREADY WROTE DOWN (CLAUDE.md / AGENTS.md — never learn these again):\n")
+              .Append(writtenRules.Replace("\r", "").Trim()).Append("\n\n");
         sb.Append("EXISTING INSTINCTS (id | pattern):\n");
         if (existing.Count == 0) sb.Append("(none yet)\n");
         foreach (var i in existing)
@@ -329,7 +334,7 @@ public class SessionMemoryService
         {
             response = await provider.GenerateAsync(
                 history: new List<ChatMessage>(),
-                userMessage: BuildInstinctPrompt(transcript, ExistingFor(projectFolder)),
+                userMessage: BuildInstinctPrompt(transcript, ExistingFor(projectFolder), WrittenRules.ForPrompt(projectFolder)),
                 systemPrompt: SystemPromptForInstinctExtraction,
                 ct: ct);
         }
@@ -347,7 +352,8 @@ public class SessionMemoryService
         string? sessionId, string? projectFolder, string? userText, CancellationToken ct)
     {
         var results = new List<InstinctService.SightingResult>();
-        if (_instinctService == null || candidates.Count == 0) return results;
+        // A batch that comes back after BrainX was set up: the brain is the memory now, nothing is recorded here.
+        if (_instinctService == null || candidates.Count == 0 || InstinctService.PausedForBrain) return results;
 
         string? key = InstinctService.ProjectKey(projectFolder);
         string? name = InstinctService.ProjectNameOf(key);
@@ -355,6 +361,8 @@ public class SessionMemoryService
         {
             try
             {
+                // Already in CLAUDE.md / AGENTS.md: a second copy of a written rule is not learned.
+                if (WrittenRules.Repeats(c.Pattern, projectFolder)) continue;
                 bool correction = c.Correction && userText != null && QuoteFound(c.Evidence, userText);
                 var r = _instinctService.RecordSighting(new InstinctService.Sighting(c.Pattern, c.Trigger, c.Action,
                     SameAsId: c.SameAs, SessionId: sessionId, ProjectKey: key, ProjectName: name,
@@ -417,6 +425,8 @@ public class SessionMemoryService
         You are given the EXISTING instincts. When what you found is the same rule as an existing one —
         even worded differently — set "same_as" to that id (still write your pattern). Only leave it null
         for a rule that is not in the list. Never re-learn an instinct marked REJECTED: skip it.
+        You may also be given the RULES THE USER ALREADY WROTE DOWN: a rule that says the same as one of
+        them is already known — skip it, even if this transcript shows it again.
 
         "scope": "project" when the rule only makes sense in this project (its files, build, device,
         deploy target, repository); "global" when it is about how this user works anywhere.

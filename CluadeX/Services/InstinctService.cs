@@ -368,17 +368,41 @@ public class InstinctService
     public List<Instinct> ForPrompt(string? projectFolder, int max = 5)
     {
         string? key = ProjectKey(projectFolder);
+        var written = WrittenRules.PiecesFor(projectFolder);   // read once for all of them
         return GetAll()
             .Where(i => VisibleIn(i, key) && !i.IsRejected && !string.IsNullOrWhiteSpace(i.Pattern)
-                        && i.Confidence >= Instinct.InjectThreshold)
+                        && i.Confidence >= Instinct.InjectThreshold
+                        && !WrittenRules.RepeatsIn(i.Pattern, written))   // already in CLAUDE.md: one copy is enough
             .Take(Math.Max(0, max))
             .ToList();
     }
 
-    /// <summary>"- pattern → action" lines for the prompt, or null when none qualifies. Each one line, at most
-    /// <see cref="MaxPromptLineChars"/> characters.</summary>
+    // ─── BrainX is the memory ────────────────────────────────────────
+
+    /// <summary>Set by <see cref="BrainSyncService"/>: true when a BrainX brain is set up on this PC. Tests set it.</summary>
+    public static Func<bool>? BrainIsMemory { get; set; }
+
+    /// <summary>
+    /// Instinct learning stands down while BrainX is this PC's memory (owner 2026-11-10: "เราควรให้ใช้อันเดียว เพราะ
+    /// brainx ดีกว่าอยู่แล้ว"). Two memories meant the same rule twice — in the brain and in instincts.json — two
+    /// copies in every prompt, an extra model call per chat, and two places that can disagree. While paused nothing is
+    /// learned, nothing goes into a prompt and no card asks; the store is kept untouched, and it all comes back by
+    /// itself when the brain is removed. The Instincts page and Settings say so (<c>instincts.paused.*</c>).
+    /// </summary>
+    public static bool PausedForBrain
+    {
+        get
+        {
+            try { return BrainIsMemory?.Invoke() == true; }
+            catch { return false; }
+        }
+    }
+
+    /// <summary>"- pattern → action" lines for the prompt, or null when none qualifies (or BrainX is the memory).
+    /// Each one line, at most <see cref="MaxPromptLineChars"/> characters.</summary>
     public string? HabitsBlock(string? projectFolder, int max = 5)
     {
+        if (PausedForBrain) return null;
         var top = ForPrompt(projectFolder, max);
         if (top.Count == 0) return null;
         var sb = new StringBuilder();
@@ -493,7 +517,7 @@ public class InstinctService
         return jaccard >= 0.6 || (overlap >= 0.85 && min >= 4);
     }
 
-    private static List<string> RawWords(string s)
+    internal static List<string> RawWords(string s)
     {
         var words = new List<string>();
         var cur = new StringBuilder();
@@ -510,7 +534,7 @@ public class InstinctService
         return words;
     }
 
-    private static HashSet<string> Stems(List<string> words)
+    internal static HashSet<string> Stems(List<string> words)
     {
         var set = new HashSet<string>(StringComparer.Ordinal);
         foreach (var w0 in words)
@@ -526,10 +550,10 @@ public class InstinctService
         return set;
     }
 
-    private static string Compact(string s) =>
+    internal static string Compact(string s) =>
         new string(s.ToLowerInvariant().Where(c => !char.IsWhiteSpace(c) && !char.IsPunctuation(c)).ToArray());
 
-    private static double Dice(string a, string b)
+    internal static double Dice(string a, string b)
     {
         if (a.Length < 2 || b.Length < 2) return a == b ? 1 : 0;
         var pa = new Dictionary<string, int>();
