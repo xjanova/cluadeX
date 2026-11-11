@@ -83,9 +83,19 @@ public sealed class ProjectToolModule : IAgentToolModule
     /// </summary>
     public static Func<string, string, Task<string>>? MessageChatHandler;
 
+    public const string ScheduleTaskToolName = "schedule_task";
+
+    /// <summary>What schedule_task asks for (Services/Routines). <see cref="Action"/>: list | add | remove | pause | resume | run_now.</summary>
+    public sealed record ScheduleRequest(string Action, string? Id, string? Name, string? Prompt, string? Schedule, string? Project,
+        bool SameChat, bool CatchUp);
+
+    /// <summary>schedule_task (set by the chat page). Returns what the tool reports, or throws to fail it. Null in harnesses.</summary>
+    public static Func<ScheduleRequest, Task<string>>? ScheduleTaskHandler;
+
     public string Id => "project";
 
-    public IReadOnlyCollection<ToolType> ToolTypes { get; } = new[] { ToolType.OpenProject, ToolType.NewChat, ToolType.CloseChat, ToolType.MessageChat };
+    public IReadOnlyCollection<ToolType> ToolTypes { get; } = new[] { ToolType.OpenProject, ToolType.NewChat, ToolType.CloseChat, ToolType.MessageChat,
+        ToolType.ScheduleTask };
 
     public bool WorksWithoutProject => true;
 
@@ -95,6 +105,7 @@ public sealed class ProjectToolModule : IAgentToolModule
         "new_chat" or "open_new_chat" or "start_chat" or "new_session" or "create_chat" => ToolType.NewChat,
         "close_chat" or "archive_chat" or "finish_chat" or "close_chats" or "cleanup_chats" or "list_split_chats" => ToolType.CloseChat,
         "message_chat" or "send_to_chat" or "tell_chat" or "message_parent" or "chat_message" or "send_message_to_chat" => ToolType.MessageChat,
+        "schedule_task" or "schedule" or "routine" or "routines" or "cron" or "scheduled_task" => ToolType.ScheduleTask,
         _ => null,
     };
 
@@ -297,6 +308,31 @@ public sealed class ProjectToolModule : IAgentToolModule
                 + "reports (your final answer goes back by itself), and not to chats outside this split.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(messageSchema)).RootElement.Clone(),
         };
+        yield return new ToolSchema
+        {
+            Name = ScheduleTaskToolName,
+            Description = "Scheduled tasks: work CluadeX starts by itself at a time, while it is open — at each run it opens a "
+                + "chat in the task's project (or carries on in the same chat) and sends the prompt, as if the user typed it. "
+                + "Use it when the user asks for something to happen later or again and again (\"every night run the tests and "
+                + "summarise\", \"each Monday check the open PRs\", \"remind me at 17:00\"). The user approves each add / remove "
+                + "/ run on a card. Write the prompt complete on its own: the run's chat has none of this conversation.",
+            InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["action"] = new Dictionary<string, object> { ["type"] = "string", ["enum"] = new[] { "list", "add", "remove", "pause", "resume", "run_now" } },
+                    ["name"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: a short name the user recognises" },
+                    ["prompt"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: what the run's chat is told, complete on its own" },
+                    ["schedule"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: \"daily 02:00\", \"weekdays 09:00\", \"weekend 10:00\", \"mon,wed,fri 08:30\", \"every 2h\" (at least 1 hour), or \"once 2026-11-12 14:00\" — local time" },
+                    ["project"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: the project folder (absolute path); default the one open now" },
+                    ["same_chat"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: \"true\" = every run carries on in one chat (it sees the earlier runs); default a new chat each run" },
+                    ["catch_up"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: \"false\" = skip a time missed while CluadeX was closed; default run it once when CluadeX is back" },
+                    ["id"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "remove / pause / resume / run_now: the task's id (or exact name) from list" },
+                },
+                ["required"] = new[] { "action" },
+            })).RootElement.Clone(),
+        };
     }
 
     public string? GetRefusal(ToolType type) => null;
@@ -312,6 +348,7 @@ public sealed class ProjectToolModule : IAgentToolModule
     /// </summary>
     public ToolPermission DescribePermission(ToolCall call, ToolModuleContext context)
     {
+        if (call.Type == ToolType.ScheduleTask) return SchedulePermission(call);
         string path = call.GetArg("path");
         var target = Target(call);
         string? full = target.Path;
@@ -354,6 +391,50 @@ public sealed class ProjectToolModule : IAgentToolModule
                 _settings!.Save();
             },
         };
+    }
+
+    /// <summary>schedule_task: listing is free; anything that adds, removes or starts work asks the user every time (a
+    /// scheduled task works later, with nobody watching the chat that made it).</summary>
+    private static ToolPermission SchedulePermission(ToolCall call)
+    {
+        string action = call.GetArg("action").Trim().ToLowerInvariant();
+        if (action is "" or "list") return ToolPermission.Free("read", ScheduleTaskToolName);
+        string what = action == "add"
+            ? string.Format(L("routine.perm.add"), call.GetArg("name").Trim(), call.GetArg("schedule").Trim(), Clip(call.GetArg("prompt"), 300))
+            : string.Format(L("routine.perm.change"), action, call.GetArg("id").Trim());
+        return new ToolPermission
+        {
+            Scope = "execute",
+            Resource = ScheduleTaskToolName + " " + action,
+            Detail = what,
+            // Every time — even under an "allow execute" rule or with the permission system off (as workflow does).
+            AlwaysAsk = true,
+        };
+    }
+
+    private static string Clip(string? s, int n)
+    {
+        s = (s ?? "").Trim();
+        return s.Length > n ? s[..n] + "…" : s;
+    }
+
+    /// <summary>schedule_task: list / add / remove / pause / resume / run_now (Services/Routines, through the chat page).</summary>
+    private static async Task<ToolResult> ExecuteScheduleTaskAsync(ToolCall call, ToolModuleContext context)
+    {
+        ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
+        if (ScheduleTaskHandler == null) return Fail("No chat page is running here, so nothing can be scheduled.");
+        string action = call.GetArg("action").Trim().ToLowerInvariant();
+        if (action.Length == 0) action = "list";
+        bool Flag(string k, bool dflt) => call.GetArg(k).Trim().ToLowerInvariant() switch { "true" or "yes" or "1" => true, "false" or "no" or "0" => false, _ => dflt };
+        string project = call.GetArg("project").Trim().Trim('"', '\'');
+        if (action == "add" && project.Length == 0) project = AgentRunScope.Current?.WorkingDirectory ?? context.WorkingDirectory ?? "";
+        try
+        {
+            string said = await ScheduleTaskHandler(new ScheduleRequest(action, call.GetArg("id").Trim(), call.GetArg("name").Trim(),
+                call.GetArg("prompt"), call.GetArg("schedule"), project, Flag("same_chat", false), Flag("catch_up", true)));
+            return new ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true, Output = said, Summary = "⏰ " + action };
+        }
+        catch (Exception ex) { return Fail(ex.Message); }
     }
 
     /// <summary>The open split chat of <paramref name="asking"/> — or a sibling of it — that already has
@@ -559,6 +640,7 @@ public sealed class ProjectToolModule : IAgentToolModule
         if (call.Type == ToolType.NewChat) return ExecuteNewChatAsync(call, context);
         if (call.Type == ToolType.CloseChat) return ExecuteCloseChatAsync(call);
         if (call.Type == ToolType.MessageChat) return ExecuteMessageChatAsync(call);
+        if (call.Type == ToolType.ScheduleTask) return ExecuteScheduleTaskAsync(call, context);
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
 
         string raw = call.GetArg("path").Trim().Trim('"', '\'');

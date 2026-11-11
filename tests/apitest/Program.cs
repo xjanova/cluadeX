@@ -138,6 +138,7 @@ internal static class Program
         if (args.Contains("--recover")) { await RunRecoveryWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--buddy")) { await RunBadgeWire.Run(Check, Section); await BuddyIdleWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--routines")) { await RoutinesWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--voice")) { await VoiceWire.Run(Check, Section); await EdgeTtsWire.Run(Check, Section); await SpokenReplyWire.Run(Check, Section); await ChimeWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--edge")) { await EdgeTtsWire.Run(Check, Section); await EdgeTtsWire.RunLive(Check, Section); return Finish(); }
         if (args.Contains("--codex-sandbox-live")) { await CodexSandboxLive.Run(Check, Section); return Finish(); }
@@ -584,6 +585,7 @@ internal static class Program
         Check("turn", "providers without blocks: text then tool_use",
             plain.Content.Select(b => b.Type).SequenceEqual(new[] { "text", "tool_use" }), string.Join(",", plain.Content.Select(b => b.Type)));
 
+        await RoutinesWire.Run(Check, Section);
         await ImageWire.Run(Check, Section);
         await StreamKeepAlive.Run(Check, Section);
         await PromptCacheReuse.Run(Check, Section);

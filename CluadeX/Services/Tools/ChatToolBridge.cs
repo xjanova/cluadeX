@@ -41,7 +41,7 @@ public static class ChatToolBridge
     public static readonly string[] QualifiedToolNames = new[]
         {
             ProjectToolModule.NewChatToolName, ProjectToolModule.ToolName, ProjectToolModule.CloseChatToolName, AskToolName,
-            PlanToolName, ProjectToolModule.MessageChatToolName,
+            PlanToolName, ProjectToolModule.MessageChatToolName, ProjectToolModule.ScheduleTaskToolName,
         }
         .Concat(OrchestrationToolModule.ToolNames)
         .Concat(BrowserToolModule.ToolNames)
@@ -390,10 +390,10 @@ public static class ChatToolBridge
             : tool == PlanToolName ? ToolType.TodoWrite
             : tool == AutoComment.AutoCommentToolModule.ToolName ? ToolType.AddCodeComments
             : OrchestrationToolModule.TypeOf(tool) ?? new ProjectToolModule().ResolveToolType(tool);
-        if (type == null || (!browser && !desktop && !engineering && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat or ToolType.MessageChat
+        if (type == null || (!browser && !desktop && !engineering && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat or ToolType.MessageChat or ToolType.ScheduleTask
                                                                  or ToolType.TodoWrite or ToolType.Workflow or ToolType.WrapUp
                                                                  or ToolType.AddCodeComments)))
-            return (false, $"CluadeX: '{tool}' is not one of its tools for CLI agents (open_project, new_chat, close_chat, message_chat, "
+            return (false, $"CluadeX: '{tool}' is not one of its tools for CLI agents (open_project, new_chat, close_chat, message_chat, schedule_task, "
                            + "ask_user, update_plan, workflow, wrap_up, browser_open … browser_close, desktop_windows … desktop_wait, "
                            + "verify_change, find_references, rename_symbol, impact_of, checkpoint_list/diff/restore, gh_pr_view, "
                            + "gh_pr_checks, gh_run_log, git_blame, git_show, debug, add_code_comments).");
