@@ -1528,6 +1528,7 @@ public partial class ChatViewModel : ViewModelBase
             {
                 (askRun?.Messages ?? Messages).Add(prompt);
                 RaiseRunStateChanged();   // "waiting for you" on the other-chats bar
+                ChimeForBox(prompt.IsPermissionDanger ? Services.Voice.ChimeKind.Danger : Services.Voice.ChimeKind.Ask);
                 ScrollToBottom?.Invoke();
             });
             return tcs.Task;

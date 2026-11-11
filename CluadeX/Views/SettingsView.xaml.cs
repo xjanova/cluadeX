@@ -18,6 +18,12 @@ public partial class SettingsView : UserControl
         e.Handled = true;
     }
 
+    private void AttentionChimeText_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        AttentionChimeBox.IsChecked = AttentionChimeBox.IsChecked != true;
+        e.Handled = true;
+    }
+
     private void BuddyBubblesText_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         BuddyBubblesBox.IsChecked = BuddyBubblesBox.IsChecked != true;
