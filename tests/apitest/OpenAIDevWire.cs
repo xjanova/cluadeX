@@ -147,6 +147,10 @@ internal static class OpenAIDevWire
             readBrain.Contains("brain_search") && readBrain.Contains("task_queue") && !readBrain.Contains("brain_remember")
             && !readBrain.Any(t => t.StartsWith("ssh") || t.StartsWith("chrome")), string.Join(",", readBrain));
         check("od-brain", "edit grant adds the brain's write tools (brain_remember…)", editBrain.Contains("brain_remember") && editBrain.Contains("brain_append_note"), string.Join(",", editBrain));
+        var runBrain = Approved(OpenAIDevProvider.BuildArgs(Folder, new ClaudeDevProvider.WorkerGrant(true, true), "default", "auto", null, null, brainInCodexConfig: true));
+        check("od-brain", "run grant adds the server reads (ssh_profiles_list, ssh_tail) — never ssh_run; without it they stay out",
+            runBrain.Contains("ssh_profiles_list") && runBrain.Contains("ssh_tail") && !runBrain.Contains("ssh_run")
+            && !editBrain.Contains("ssh_tail") && !editBrain.Contains("ssh_profiles_list"), string.Join(",", runBrain));
         check("od-brain", "brain not in Codex's config → no override at all (a key under an undefined server breaks config loading)",
             Approved(OpenAIDevProvider.BuildArgs(Folder, null, "default", "auto", null)).Count == 0, "");
         check("od-brain", "config.toml check: [mcp_servers.brainx-brain] yes, its .env sub-table alone no, another server no",

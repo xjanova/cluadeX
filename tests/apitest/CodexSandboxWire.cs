@@ -83,6 +83,97 @@ internal static class CodexSandboxWire
             && CodexSandbox.CauseKey("Access to the path 'C:\\Users\\xman2\\a.txt' is denied.", Folder, Profile) == null, "");
         check("cx-sandbox", "ordinary output → nothing", CodexSandbox.CauseKey("error CS1002: ; expected", Folder, Profile) == null
             && CodexSandbox.CauseKey("", Folder, Profile) == null, "");
+        // Seen in the thaiprompt chat of 2026-11-11 and reproduced with `codex sandbox` on this machine.
+        check("cx-sandbox", "curl.exe's schannel SEC_E_NO_CREDENTIALS → tls (the server is not down)",
+            CodexSandbox.CauseKey("curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e) - No credentials are available in the security package", Folder, Profile) == "codex.sandbox.why.tls"
+            && CodexSandbox.Notice("curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS", Folder, Profile) is { } tls && tls.Contains("Node"), "");
+        check("cx-sandbox", "adb's \"Cannot mkdir '\\.android'\" → adb",
+            CodexSandbox.CauseKey("11-11 10:16:04.247 29864 21316 F adb.exe : adb_utils.cpp:315 Cannot mkdir '\\.android': Permission denied", Folder, Profile) == "codex.sandbox.why.adb", "");
+        check("cx-sandbox", "gh that cannot read its config → gh",
+            CodexSandbox.CauseKey("failed to create root command: failed to read configuration: open C:\\Users\\xman\\AppData\\Roaming\\GitHub CLI\\config.yml: Access is denied.", Folder, Profile) == "codex.sandbox.why.gh"
+            && CodexSandbox.CauseKey("gh: Not Found (HTTP 404)", Folder, Profile) == null, "");
+
+        // ─── the full survey of 2026-11-11: the real outputs `codex sandbox` printed on this machine ───
+        check("cx-sandbox", "git that writes .git (index.lock, FETCH_HEAD, a file in .git) → git",
+            CodexSandbox.CauseKey("fatal: Unable to create 'D:/Code/App/videogirl/.git/index.lock': Permission denied", Folder, Profile) == "codex.sandbox.why.git"
+            && CodexSandbox.CauseKey("error: cannot open '.git/FETCH_HEAD': Permission denied", Folder, Profile) == "codex.sandbox.why.git"
+            && CodexSandbox.CauseKey("Set-Content : Access to the path 'D:\\w\\ws\\.git\\probe.txt' is denied.", @"D:\w\ws", Profile) == "codex.sandbox.why.git", "");
+        check("cx-sandbox", "the Store python (WindowsApps alias) → python",
+            CodexSandbox.CauseKey("Program 'python.exe' failed to run: The file cannot be accessed by the systemAt line:1 char:1", Folder, Profile) == "codex.sandbox.why.python"
+            && CodexSandbox.CauseKey("Program 'python3.12.exe' failed to run: Access is deniedAt C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12\\python3.12.exe", Folder, Profile) is "codex.sandbox.why.python", "");
+        check("cx-sandbox", "Get-CimInstance / tasklist \"Access denied\" → wmi",
+            CodexSandbox.CauseKey("Get-CimInstance : Access denied \r\nAt line:1 char:2", Folder, Profile) == "codex.sandbox.why.wmi"
+            && CodexSandbox.CauseKey("ERROR: Access denied\r\n", Folder, Profile) == "codex.sandbox.why.wmi", "");
+        check("cx-sandbox", "a symlink (New-Item, mklink) → symlink; a junction is not refused",
+            CodexSandbox.CauseKey("New-Item : Administrator privilege required for this operation.", Folder, Profile) == "codex.sandbox.why.symlink"
+            && CodexSandbox.CauseKey("You do not have sufficient privilege to perform this operation.", Folder, Profile) == "codex.sandbox.why.symlink", "");
+        check("cx-sandbox", "~/.ssh unreadable → ssh",
+            CodexSandbox.CauseKey("Load key \"C:\\Users\\x\\.ssh\\id_ed25519\": Permission denied", Folder, Profile) == "codex.sandbox.why.ssh", "");
+        check("cx-sandbox", "a new package that cannot download → nugetNet; the same text as a warning in a real compile failure → not the sandbox",
+            CodexSandbox.CauseKey("C:\\p\\a.csproj : error NU1301: Unable to load the service index for source https://api.nuget.org/v3/index.json.", Folder, Profile) == "codex.sandbox.why.nugetNet"
+            && CodexSandbox.CauseKey("a.csproj : warning NU1900: Error occurred while getting package vulnerability data: Unable to load the service index for source https://api.nuget.org/v3/index.json.\r\nProgram.cs(3,1): error CS1002: ; expected", Folder, Profile) == null, "");
+        check("cx-sandbox", "every limit has its notice in English and Thai, and a sentence in the wrapper with and without the chat tools",
+            CodexSandbox.Limits.All(l => LocalizationService.Lookup("codex.sandbox.why." + l.Id, "en") is { Length: > 0 }
+                && LocalizationService.Lookup("codex.sandbox.why." + l.Id, "th") is { Length: > 0 }
+                && CodexSandbox.PromptSection(true, true).Contains(l.Prompt(true))
+                && CodexSandbox.PromptSection(false, false).Contains(l.Prompt(false)))
+            && LocalizationService.Lookup("codex.sandbox.why.profile", "th") is { Length: > 0 }
+            && CodexSandbox.Limits.Select(l => l.Id).Distinct().Count() == CodexSandbox.Limits.Count,
+            string.Join(",", CodexSandbox.Limits.Where(l => LocalizationService.Lookup("codex.sandbox.why." + l.Id, "th") is not { Length: > 0 }).Select(l => l.Id)));
+        check("cx-sandbox", "without the chat tools no limit promises verify_change or gh_* tools",
+            !CodexSandbox.PromptSection(false, true).Contains("verify_change") && !CodexSandbox.PromptSection(false, true).Contains("gh_pr_view"), "");
+
+        // ─── the sandboxed shell's own environment (CodexSandboxEnv) ───
+        var noEnv = new Dictionary<string, string?>();
+        var vars = CodexSandboxEnv.Vars(@"D:\T\cluadex-codex-home", Profile, noEnv).ToDictionary(v => v.Key, v => v.Value);
+        check("cx-env", "git: OpenSSL for https and safe.directory=*, through GIT_CONFIG_COUNT",
+            vars.GetValueOrDefault("GIT_CONFIG_COUNT") == "2" && vars.GetValueOrDefault("GIT_CONFIG_KEY_0") == "http.sslBackend"
+            && vars.GetValueOrDefault("GIT_CONFIG_VALUE_0") == "openssl" && vars.GetValueOrDefault("GIT_CONFIG_KEY_1") == "safe.directory"
+            && vars.GetValueOrDefault("GIT_CONFIG_VALUE_1") == "*", string.Join(";", vars));
+        check("cx-env", "NuGet: APPDATA and packages in the home, the user's packages as the fallback; Gradle, pip, UTF-8, no MSBuild node reuse",
+            vars.GetValueOrDefault("APPDATA") == @"D:\T\cluadex-codex-home\Roaming" && vars.GetValueOrDefault("NUGET_PACKAGES") == @"D:\T\cluadex-codex-home\nuget\packages"
+            && vars.GetValueOrDefault("RestoreFallbackFolders") == @"C:\Users\x\.nuget\packages" && vars.GetValueOrDefault("GRADLE_USER_HOME") == @"D:\T\cluadex-codex-home\gradle"
+            && vars.GetValueOrDefault("PIP_CACHE_DIR") == @"D:\T\cluadex-codex-home\pip" && vars.GetValueOrDefault("PYTHONUTF8") == "1"
+            && vars.GetValueOrDefault("MSBUILDDISABLENODEREUSE") == "1", string.Join(";", vars));
+        var own = CodexSandboxEnv.Vars(@"D:\T\h", Profile, new Dictionary<string, string?> { ["GIT_CONFIG_COUNT"] = "1", ["NUGET_PACKAGES"] = @"E:\pkgs" })
+            .ToDictionary(v => v.Key, v => v.Value);
+        check("cx-env", "the user's own GIT_CONFIG_COUNT is left alone; their NUGET_PACKAGES becomes the fallback",
+            !own.ContainsKey("GIT_CONFIG_COUNT") && !own.ContainsKey("GIT_CONFIG_KEY_0") && own.GetValueOrDefault("RestoreFallbackFolders") == @"E:\pkgs", string.Join(";", own));
+        var noHome = CodexSandboxEnv.Vars(null, Profile, noEnv).Select(v => v.Key).ToList();
+        check("cx-env", "no home (it could not be made): git and UTF-8 only, no APPDATA pointing nowhere",
+            noHome.Contains("GIT_CONFIG_COUNT") && noHome.Contains("PYTHONUTF8") && !noHome.Contains("APPDATA") && !noHome.Contains("NUGET_PACKAGES"), string.Join(",", noHome));
+        var overrides = CodexSandboxEnv.ConfigOverrides(new KeyValuePair<string, string>[] { new("APPDATA", @"D:\T\h\Roaming"), new("BAD", "it's"), new("bad-name", "x"), new("NL", "a\nb") });
+        check("cx-env", "overrides are TOML literal strings; a value with a quote or a line break, or a bad name, is left out",
+            overrides.Count == 1 && overrides[0] == @"shell_environment_policy.set.APPDATA='D:\T\h\Roaming'", string.Join(" | ", overrides));
+        const string userConfig = "<?xml version=\"1.0\" encoding=\"utf-8\"?><configuration><packageSources><add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" /><add key=\"corp\" value=\"https://corp/nuget\" /></packageSources>"
+            + "<packageSourceCredentials><corp><add key=\"Username\" value=\"u\" /><add key=\"ClearTextPassword\" value=\"hunter2\" /></corp></packageSourceCredentials>"
+            + "<apikeys><add key=\"https://corp\" value=\"KEY123\" /></apikeys><config><add key=\"http_proxy\" value=\"http://p:8080\" /><add key=\"http_proxy.password\" value=\"pw9\" /></config></configuration>";
+        string clean = CodexSandboxEnv.SanitizeNuGetConfig(userConfig);
+        check("cx-env", "the sandbox's NuGet.Config keeps the sources and the proxy, never a password, token or API key",
+            clean.Contains("https://corp/nuget") && clean.Contains("http://p:8080") && !clean.Contains("hunter2") && !clean.Contains("KEY123")
+            && !clean.Contains("pw9") && !clean.Contains("packageSourceCredentials"), clean);
+        check("cx-env", "no config or broken XML → plain nuget.org",
+            CodexSandboxEnv.SanitizeNuGetConfig(null).Contains("api.nuget.org") && CodexSandboxEnv.SanitizeNuGetConfig("<config").Contains("api.nuget.org"), "");
+        string envHome = Path.Combine(Path.GetTempPath(), "cx-env-" + Guid.NewGuid().ToString("N")[..8]);
+        string fakeAppData = Path.Combine(envHome, "userAppData");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(fakeAppData, "NuGet"));
+            File.WriteAllText(Path.Combine(fakeAppData, "NuGet", "NuGet.Config"), userConfig);
+            bool made = CodexSandboxEnv.Prepare(Path.Combine(envHome, "home"), fakeAppData);
+            string written = File.ReadAllText(Path.Combine(envHome, "home", "Roaming", "NuGet", "NuGet.Config"));
+            check("cx-env", "Prepare writes the cleaned copy into the home", made && written.Contains("https://corp/nuget") && !written.Contains("hunter2"), written);
+        }
+        finally { try { Directory.Delete(envHome, true); } catch { } }
+        var envArgs = OpenAIDevProvider.BuildArgs(Folder, new ClaudeDevProvider.WorkerGrant(true, true), "default", "auto", null,
+            sandboxEnv: CodexSandboxEnv.ConfigOverrides(CodexSandboxEnv.Vars(@"D:\T\h", Profile, noEnv)));
+        int appIdx = envArgs.IndexOf(@"shell_environment_policy.set.APPDATA='D:\T\h\Roaming'");
+        check("cx-env", "BuildArgs: each variable is a -c override before the stdin \"-\"",
+            appIdx > 0 && envArgs[appIdx - 1] == "-c" && envArgs[^1] == "-" && envArgs.Contains("shell_environment_policy.set.GIT_CONFIG_VALUE_0='openssl'"), string.Join(" ", envArgs));
+        string homePrompt = CodexSandbox.PromptSection(true, true, @"D:\T\cluadex-codex-home");
+        check("cx-env", "the wrapper names the sandbox's home and says .git is read-only, py for python, Get-Process for tasklist",
+            homePrompt.Contains(@"D:\T\cluadex-codex-home") && homePrompt.Contains("`.git` read-only") && homePrompt.Contains("`py`")
+            && homePrompt.Contains("Get-Process") && !CodexSandbox.PromptSection(true, true).Contains("cluadex-codex-home"), homePrompt);
 
         // ─── the wrapper: what the sandbox blocks, where builds go, how to search ───
         var worker = new ClaudeDevProvider.WorkerGrant(true, true);
@@ -90,6 +181,9 @@ internal static class CodexSandboxWire
         check("cx-prompt", "worker turn with the chat tools: the sandbox's limits, verify_change for builds/tests, background for long runs, rg on PATH",
             withTools.Contains("Codex's Windows sandbox") && withTools.Contains("NuGet.Config") && withTools.Contains("verify_change")
             && withTools.Contains("tests_background") && withTools.Contains("timeout_minutes") && withTools.Contains("`rg` is on PATH"), withTools);
+        check("cx-prompt", "…HTTPS through node (never \"the server is down\" from curl), adb and gh need the user, rg globs on Windows",
+            withTools.Contains("node file.js") && withTools.Contains("SEC_E_NO_CREDENTIALS") && withTools.Contains("Cannot mkdir '\\.android'")
+            && withTools.Contains("gh_pr_view") && withTools.Contains("os error 123"), withTools);
         string noTools = OpenAIDevProvider.BuildPrompt(Folder, worker, null, "", "go", chatTools: false, hasRipgrep: false);
         check("cx-prompt", "no chat tools: no verify_change promise; no rg: git grep / Select-String",
             noTools.Contains("Codex's Windows sandbox") && !noTools.Contains("verify_change") && noTools.Contains("git grep")

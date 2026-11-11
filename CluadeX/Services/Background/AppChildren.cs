@@ -19,6 +19,8 @@ public static class AppChildren
     public static bool Adopt(Process? process)
     {
         if (process == null) return false;
+        // Written down too, with its start time: one the job could not take is ended at the next start (LeftoverSweep).
+        try { LeftoverSweep.Note(process); } catch { }
         try { return Job.Value?.Assign(process) == true; }
         catch { return false; }
     }

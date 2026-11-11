@@ -19,6 +19,8 @@ public sealed class OrchestrationToolModule : IAgentToolModule
 
     /// <summary>wrap_up was called in chat (key, may be null outside a run). The chat page shows the box when the turn ends.</summary>
     public static event Action<string?, NextStep>? NextStepRequested;
+    /// <summary>wrap_up named tests it left out as out of scope (chat key, the items): the turn's test card lists them.</summary>
+    public static event Action<string?, IReadOnlyList<string>>? TestsSkippedNoted;
 
     public string Id => "orchestration";
 
@@ -72,7 +74,8 @@ public sealed class OrchestrationToolModule : IAgentToolModule
     {"type":"object","properties":{
       "recap":{"type":"string","description":"Two or three short sentences (max 300 chars): what is now true or changed, then what is not done or not verified."},
       "ask":{"type":"string","description":"Optional: the ONE decision left to the user, one short sentence (max 100 chars), no options listed."},
-      "actions":{"type":"array","items":{"type":"string"},"description":"1-2 button labels answering ask (1-3 words each, your recommendation first). A click sends the label as the user's message."}},
+      "actions":{"type":"array","items":{"type":"string"},"description":"1-2 button labels answering ask (1-3 words each, your recommendation first). A click sends the label as the user's message."},
+      "tests_skipped":{"type":"array","items":{"type":"string"},"description":"Test suites you deliberately did NOT run because the change cannot affect them, one per item with the reason (e.g. \"desktoptest — Services/Desktop unchanged\"). The turn's test card lists them under the suites that ran."}},
      "required":["recap"]}
     """;
 
@@ -99,7 +102,9 @@ public sealed class OrchestrationToolModule : IAgentToolModule
             Description = "End a turn that did multi-step work with the next-step box under your reply: a 2-3 sentence recap (what is "
                 + "now true, what is not done or verified) and, only when the next move is the user's call, ONE short question with "
                 + "1-2 answer buttons (your pick first). A click sends the label to you as the user's message. Call it once, last, "
-                + "then write your closing message. Skip it for a short answer or pure conversation.",
+                + "then write your closing message. Skip it for a short answer or pure conversation. After a turn that ran tests, "
+                + "pass tests_skipped for the suites you left out as out of scope; CluadeX draws a test card from the runs themselves, "
+                + "and your closing message names the same suites that ran and those skipped.",
             InputSchema = JsonDocument.Parse(WrapUpSchemaJson).RootElement.Clone(),
         };
     }
@@ -184,6 +189,7 @@ public sealed class OrchestrationToolModule : IAgentToolModule
             var step = NextStep.FromArgsRepaired(call.GetArg("recap"), call.GetArg("ask"), call.GetArg("actions"), out var err, out var repaired);
             if (step == null) return Fail(err!);
             NextStepRequested?.Invoke(Chat, step);
+            if (TurnTests.SkippedFromArg(call.GetArg("tests_skipped")) is { Count: > 0 } skipped) TestsSkippedNoted?.Invoke(Chat, skipped);
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,

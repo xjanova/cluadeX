@@ -236,6 +236,30 @@ internal static partial class Program
         Fs.WorkingDirectory = Root;
         Console.WriteLine($"project   : {Root}\n");
 
+        // TOOLTEST_ONLY=ENG: just the engineering tools (verify_change, its test counts, references, checkpoints …), for a
+        // change that touched only them — the owner's rule: test what changed, not the whole sweep.
+        if (Environment.GetEnvironmentVariable("TOOLTEST_ONLY") == "ENG")
+        {
+            LocalizedResources.Instance.Initialize(provider.GetRequiredService<LocalizationService>());
+            var engPerms = provider.GetRequiredService<PermissionService>();
+            var engKept = engPerms.Rules.ToList();
+            foreach (var kept in engKept) engPerms.RemoveRule(kept);
+            try
+            {
+                Console.WriteLine("── engineering tools: verify_change, locked builds, references/rename/impact, checkpoints, gh/git, debug ──");
+                await EngineeringTools(provider, settings);
+            }
+            finally
+            {
+                foreach (var leftover in engPerms.Rules.ToList()) engPerms.RemoveRule(leftover);
+                foreach (var kept in engKept) engPerms.AddRule(kept);
+            }
+            Console.WriteLine($"\n═══ {Pass} pass · {Fail} FAIL · {Gap} GAP ═══ (TOOLTEST_ONLY=ENG)");
+            foreach (var p in Problems) Console.WriteLine("   " + p);
+            ForceDelete(Root);
+            return Fail == 0 ? 0 : 1;
+        }
+
         var schemas = Svc.BuildNativeToolSchemas().Where(s => s.Name is "multi_edit").ToList();
         foreach (var s in schemas)
             Report.AppendLine($"## schema {s.Name}\n```\n{System.Text.Json.JsonSerializer.Serialize(s.InputSchema)}\n```");
@@ -273,6 +297,22 @@ internal static partial class Program
                     && reg.PromptList().Contains(root), reg?.PromptList() ?? "no registry");
                 Check("OP10", "a project's memory lives outside the project (~/.cluadex/projects/<slug>/memory)",
                     MemoryService.ProjectSlug(@"D:\Code\Atmos") == "D--Code-Atmos", MemoryService.ProjectSlug(@"D:\Code\Atmos"));
+                // An empty folder of the project's name, while the code sits in a folder of that name inside a known
+                // project (the thaiprompt chat, 2026-11-11): the result says so and names the right one.
+                string side = Path.Combine(Path.GetTempPath(), "cx-op11-" + Guid.NewGuid().ToString("N")[..6]);
+                string emptyApp = Path.Combine(side, "App", "mobileapp");
+                string realApp = Path.Combine(side, "Shop", "mobileapp");
+                Directory.CreateDirectory(emptyApp);
+                Directory.CreateDirectory(realApp);
+                File.WriteAllText(Path.Combine(realApp, "package.json"), "{}");
+                reg?.Record(Path.Combine(side, "Shop"));
+                var empty = await T("open_project", ("path", emptyApp));
+                Check("OP15", "an empty folder opens, but the result says it is EMPTY and names the folder of that name with code in it",
+                    empty.Success && Seen(empty).Contains("EMPTY") && Seen(empty).Contains(realApp), Seen(empty));
+                var full = await T("open_project", ("path", realApp));
+                Check("OP15", "…a folder with files gets no such note", full.Success && !Seen(full).Contains("EMPTY"), Seen(full));
+                try { Directory.Delete(side, true); } catch { }
+                await T("open_project", ("path", root));
 
                 // Owner 2026-10-20: open the related folder by itself; when there is none, make a new one sensibly.
                 string leaf = Path.GetFileName(root);

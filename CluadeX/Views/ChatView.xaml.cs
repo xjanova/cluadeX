@@ -698,6 +698,44 @@ public partial class ChatView : UserControl
             msg.ResolvePermission(PermissionOutcome.Denied);
     }
 
+    // ─── Strict approval card: only what the owner types here (or their terminal) approves ───
+
+    private void StrictApprove_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg) msg.SubmitStrictCode();
+    }
+
+    private void StrictCode_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter || sender is not FrameworkElement fe || fe.DataContext is not ChatMessage msg) return;
+        msg.SubmitStrictCode();
+        e.Handled = true;
+    }
+
+    private void StrictDeny_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg) msg.DenyStrict();
+    }
+
+    private void StrictCopy_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg && msg.StrictTerminalCommand.Length > 0)
+            try { Clipboard.SetText(msg.StrictTerminalCommand); } catch { /* the clipboard is busy: the tooltip still shows it */ }
+    }
+
+    // ─── BrainX's own approval: its terminal opens only on this click ───
+
+    private void BrainxOpen_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage { PermissionBrainx: { } brainx }) brainx.OpenApproveTerminal();
+    }
+
+    private void BrainxCopy_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage { PermissionBrainx: { } brainx })
+            try { Clipboard.SetText(brainx.ApproveCommand); } catch { }
+    }
+
     // ─── Attaching images: Ctrl+V, drop, "+" ───
 
     /// <summary>

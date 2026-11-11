@@ -69,5 +69,11 @@ internal static class BuddyBubbleKeys
             ["en"] = "น้อง CluadeX's voice — little sounds as she moves, and a short word (in English) when a chat finishes, needs you, or you have been away a while",
             ["th"] = "เสียงน้อง CluadeX — เสียงเล็ก ๆ ตอนขยับ และพูดสั้น ๆ (ภาษาอังกฤษ) เมื่อแชทเสร็จ ต้องให้คุณตัดสินใจ หรือคุณไม่อยู่หน้าจอนาน",
         },
+        // Services/Voice/AttentionChime.cs — beside her sound on the Appearance card.
+        ["attention.chime"] = new()
+        {
+            ["en"] = "A \"ting\" when a box waits for your answer — her question or a permission prompt; a sharper alert for the red prompt",
+            ["th"] = "เสียง \"ติ๊ง\" เมื่อมีกล่องรอคุณตอบ — คำถามของน้องหรือกล่องขออนุญาต และเสียงเตือนที่ชัดกว่าสำหรับกล่องแดง",
+        },
     };
 }

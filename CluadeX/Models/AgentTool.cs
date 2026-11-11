@@ -194,6 +194,8 @@ public enum ToolType
     WatchCancel,         // Stop one of this chat's watches (or all)
     // Media transcripts (Services/Tools/MediaTranscriptToolModule) — appended last: a ToolType is stored by number
     MediaTranscript,     // What a video / audio says: its subtitles (yt-dlp, free) or speech-to-text (Whisper, paid, asks)
+    // Chats talking to each other (Services/Tools/ProjectToolModule) — appended last: a ToolType is stored by number
+    MessageChat,         // Send a message to the chat that opened this one, or to a chat this one split off
 }
 
 /// <summary>
@@ -312,6 +314,11 @@ public class PermissionRequestInfo
     /// <summary>Non-null = the red prompt (Safety.DangerApproval): this would delete a drive, a home or a system folder,
     /// and here is why. Always asks; never answered by a rule, the chat's "allow everything" or "Allow in this chat".</summary>
     public string? Danger { get; set; }
+    /// <summary>Non-null = the strict-approval card (Safety.StrictApproval): only the owner's one-time code (or "yes")
+    /// typed into the card, or their terminal, answers it. Never a rule, "allow everything" or "Allow in this chat".</summary>
+    public Services.Safety.StrictTicket? Strict { get; set; }
+    /// <summary>Non-null = BrainX's own needs_confirmation, shown as a card: the owner approves in BrainX's terminal.</summary>
+    public Services.Safety.BrainxConfirmation? Brainx { get; set; }
     /// <summary>Set when the prompt may be answered "Allow in this chat": the tool's identity (server + tool). One
     /// ChatGPT session through a third-party MCP server asked 18 times for the same javascript_tool (Reverse X run,
     /// 2026-10-13), and the only way out was the chat's "allow everything", which lets every shell command through

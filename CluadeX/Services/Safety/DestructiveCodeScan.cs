@@ -31,7 +31,7 @@ public static class DestructiveCodeScan
     private const RegexOptions Opt = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
     /// <summary>Shell and API deletes. cmd takes its switches in any order: rd /q /s is rd /s /q.</summary>
-    private static readonly Regex DeleteVerb = new(
+    internal static readonly Regex DeleteVerb = new(
         @"\b(rd|rmdir)\s+(/[a-z]\s*)*/s\b|\bdel\s+(/[a-z]\s*)*/s\b|\berase\s+(/[a-z]\s*)*/s\b|(?<!\bgit\s+)\brm\s+-[a-z]*(rf|fr|r)[a-z]*\b|\bRemove-Item\b[^\r\n]*-(Recurse|r)\b|\brimraf\b|\bshutil\.rmtree\b|\brmtree\(|\bfs(\.promises)?\.(rm|rmdir)(Sync)?\(|\bDirectory\.Delete\(|\bFileSystem\.DeleteDirectory\(|\bos\.RemoveAll\(|\bremove_dir_all\(|\bRemove-Item\b",
         Opt);
 
@@ -77,13 +77,13 @@ public static class DestructiveCodeScan
         Opt);
 
     /// <summary>Wiping a whole drive, whatever the command points at.</summary>
-    private static readonly Regex DriveWipe = new(
+    internal static readonly Regex DriveWipe = new(
         @"\bformat\s+[a-z]:|\bdiskpart\b|\bFormat-Volume\b|\bClear-Disk\b|\bRemove-Partition\b|\binitialize-disk\b|\bmkfs(\.\w+)?\s|\bdd\s+if=[^\r\n]*of=/dev/",
         Opt);
 
     /// <summary>Deleting the backups Windows keeps (shadow copies, system-image backups) or rewriting how it boots — the
     /// way back after a wipe (owner 2026-10-28, kept with the home folder). Reading them (bcdedit /enum) is not.</summary>
-    private static readonly Regex BackupOrBootWipe = new(
+    internal static readonly Regex BackupOrBootWipe = new(
         @"\bvssadmin(\.exe)?\s+(delete\s+shadows|resize\s+shadowstorage)\b|\bwmic(\.exe)?\s+shadowcopy\s+delete\b|\bwbadmin(\.exe)?\s+delete\b" +
         @"|\bbcdedit(\.exe)?\s+/(set|delete|deletevalue|create|copy|import|default|displayorder|bootsequence|timeout|store)\b",
         Opt);
@@ -91,7 +91,7 @@ public static class DestructiveCodeScan
     /// <summary>Wiping a database: SQL's drop of a database or schema (with a name after it), the Postgres and Mongo drop
     /// commands, Redis's flush of everything, and the framework commands that drop every table (Laravel, Rails, Prisma,
     /// EF Core, Django). Not a single table, not a delete of rows.</summary>
-    private static readonly Regex DatabaseWipe = new(
+    internal static readonly Regex DatabaseWipe = new(
         @"\bdrop\s+(database|schema)\s+(if\s+exists\s+)?[\[`""']?[A-Za-z_]" +
         @"|\bdropdb\b|\bdropDatabase\s*\(|\bflushall\b|\bflushdb\b" +
         @"|\bdb:(wipe|drop|reset)\b|\bmigrate:(fresh|reset|refresh)\b|\bprisma\s+(migrate\s+reset|db\s+push\b[^\r\n]*--force-reset)" +
@@ -134,11 +134,11 @@ public static class DestructiveCodeScan
     }
 
     /// <summary>Where one statement of a command ends: a new line, ; &amp;&amp; || or a lone &amp; (not 2&gt;&amp;1 or &amp;&gt;).</summary>
-    private static readonly Regex StatementBreak = new(@"\r?\n|&&|\|\||;|(?<![>&|])&(?![>&])", Opt);
+    internal static readonly Regex StatementBreak = new(@"\r?\n|&&|\|\||;|(?<![>&|])&(?![>&])", Opt);
 
     /// <summary>A statement that only prints, searches or records text: echo, printf, Write-Output / -Host, grep, rg,
     /// findstr, Select-String, a git commit / log / grep / show / diff / tag message, a gh issue or PR text.</summary>
-    private static readonly Regex TextOnlyStart = new(
+    internal static readonly Regex TextOnlyStart = new(
         @"^\s*(@?echo\b|printf\b|Write-(Output|Host|Information|Verbose|Warning)\b|e?grep\b|fgrep\b|rg\b|ag\b|ack\b|findstr(\.exe)?\b|Select-String\b|sls\b" +
         @"|git(\.exe)?\s+((?-i:-C)\s+(""[^""]*""|\S+)\s+)?(commit|log|grep|show|diff|tag|notes|blame)\b|gh\s+(pr|issue|release)\s+(create|comment|edit)\b)",
         Opt);
@@ -147,7 +147,7 @@ public static class DestructiveCodeScan
     /// written out (a script made and run in the same command line would never be read before it runs), or a part of it
     /// is run on the way: $( ), backticks, &lt;( ), a PowerShell ( ) expression, a pager or preprocessor flag
     /// (rg --pre, git grep -O, ack / ag --pager, git diff --ext-diff).</summary>
-    private static readonly Regex HandsTextOn = new(
+    internal static readonly Regex HandsTextOn = new(
         @"[|>(`]|\btee\b|\bOut-File\b|\bSet-Content\b|\bAdd-Content\b" +
         @"|--pre\b|--pager\b|--open-files-in-pager\b|(?-i:\s-O)|--ext-diff\b",
         Opt);

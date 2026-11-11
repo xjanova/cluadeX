@@ -103,6 +103,11 @@ public partial class App : Application
         var housekeepingRoot = _serviceProvider.GetRequiredService<SettingsService>().DataRoot;
         var housekeepingDb = _serviceProvider.GetService<DatabaseService>();
         var housekeepingLog = _serviceProvider.GetService<DebugLogService>();
+        // What the last run left when it was closed or crashed mid-turn: helpers still running, per-turn sign-in copies.
+        // Right away (a leftover CLI may still hold a port or a file), off the UI thread; the ledger is read before
+        // this run's first helper writes to it.
+        Services.Background.LeftoverSweep.LedgerPath = System.IO.Path.Combine(housekeepingRoot, "app-children.json");
+        _ = Task.Run(() => Services.Background.LeftoverSweep.Run(log: line => housekeepingLog?.Info("Recover", line)));
         _ = Task.Run(async () =>
         {
             await Task.Delay(TimeSpan.FromMinutes(1));
@@ -1411,6 +1416,7 @@ public partial class App : Application
             try { Services.Agents.ToolTrackRecord.Shared.Save(); } catch { /* advice only: never block exit */ }
 
             var chatVm = _serviceProvider?.GetService<ChatViewModel>();
+            chatVm?.NoteAppClosing();   // closed some other way than the window (it ran already when the window closed)
             chatVm?.SaveNow();
             // The autosave tick writes in the background: what it queued reaches the disk before the process ends.
             _serviceProvider?.GetService<ChatPersistenceService>()?.Flush(TimeSpan.FromSeconds(5));

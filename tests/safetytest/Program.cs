@@ -45,6 +45,20 @@ internal static class Program
         DangerApprovalPipe.StartServer();
         try
         {
+            if (args.Contains("--strict"))
+            {
+                // Strict approval and the guard code it changed (owner's rule: test only what changed): the hook decisions,
+                // the real hook process, Gemini / Antigravity's guards, the run gates — not the real-CLI sections.
+                Hook(work);
+                HookProcess();
+                GeminiDevGuard();
+                AntigravityGuardChecks(work);
+                RunGates(work);
+                DangerGate();
+                StrictApprovalChecks.Run(work, Check, MatchingExe);
+                Console.WriteLine($"\n{Pass} passed, {Fail} failed");
+                return Fail == 0 ? 0 : 1;
+            }
             Protected();
             Scanner();
             Deletes(work);
@@ -62,6 +76,7 @@ internal static class Program
             DayApprovalChecks(work);
             DangerGate();
             PlainWords(work);
+            StrictApprovalChecks.Run(work, Check, MatchingExe);
             Cleanup(work);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }

@@ -409,6 +409,7 @@ public class ActivationService
             "feature.plugins" => true,
             "feature.permissions" => true,
             "feature.commandBlock" => true,
+            "feature.strictApproval" => true,
             // These require activation (the same list as FeaturesViewModel.GatedFeatures):
             "feature.openai" => false,
             "feature.anthropic" => false,

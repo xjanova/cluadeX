@@ -284,6 +284,11 @@ public class AppSettings
     /// there with the result. Off = a notice row only, and the owner sends when they want.</summary>
     public bool WatchAutoContinue { get; set; } = true;
 
+    /// <summary>A split chat the AI opened (new_chat) that ends its turn while its parent chat sits idle starts a turn in the
+    /// parent with its report, once the last of the parent's split chats is done — as a Claude Code session is woken by
+    /// its side sessions. Off = the report waits in the parent as a notice row until the owner sends.</summary>
+    public bool SplitAutoContinue { get; set; } = true;
+
     // ─── Model-escalation ladder (local → stronger API model) ───
     /// <summary>
     /// Escalate to a stronger API model when the LOCAL model stalls (hits max iterations OR repeats the same
@@ -482,6 +487,12 @@ public class AppSettings
     /// "Hello? Is anyone there?"). Views/CluadexBuddy.Clips.cs; Settings › General › Appearance.</summary>
     public bool BuddySounds { get; set; } = true;
 
+    /// <summary>A short sound when a box in a chat waits for the owner's answer (owner 2026-11-11: "มีเอฟเฟคเสียง ติ๊ง เมื่อต้อง
+    /// ตอบคำถามจากกล่อง หรือกล่องแดง"): a soft "ting" for her question card and a permission prompt, a sharper two-tone
+    /// alert for the red prompt (a delete aimed at a drive, the root or a home folder). Services/Voice/AttentionChime.cs;
+    /// Settings › General › Appearance.</summary>
+    public bool AttentionChime { get; set; } = true;
+
     /// <summary>How น้อง CluadeX shows (her right-click menu, owner 2026-11-08): "clips" (her video clips, the default),
     /// "stills" (her still pictures only, no clips) or "slides" (the girls one after another, waist up). Views/CluadexBuddy.Slides.cs.</summary>
     public string BuddyDisplay { get; set; } = "clips";
@@ -591,6 +602,12 @@ public class FeatureToggles
     // Security
     public bool PermissionSystem { get; set; } = true;
     public bool DangerousCommandBlocking { get; set; } = true;
+    /// <summary>Strict approval (owner 2026-11-11): a hard-to-undo command (Safety.HardToUndo) runs only after the owner
+    /// types its one-time code on the chat's card or approves it from their own terminal. Off by default = nothing
+    /// changes; Safety.StrictApproval.Publish carries it to the CLIs' guard hooks.</summary>
+    public bool StrictApproval { get; set; }
+    /// <summary>Which strict-approval scopes are on: "local,remote,git" (all), "remote,git" or "remote".</summary>
+    public string StrictApprovalScopes { get; set; } = "local,remote,git";
     // NOTE: there are deliberately no PathTraversalProtection / DpapiEncryption toggles here.
     // Both protections are unconditional — FileSystemService.ResolveSafePath always enforces
     // containment and SettingsService always encrypts with DPAPI. Fields for them used to exist,

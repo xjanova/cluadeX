@@ -58,6 +58,8 @@ internal static partial class Program
         // This harness checks real command output, so it opts out of the default dry-run on purpose (ProcessLaunchPolicy).
         // A new harness must not copy this line unless real runs are its point; the guards still check every command.
         CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = false;
+        // No chime from the speakers while the chat is driven: the boxes it opens ring into a list (ChimeTests.cs).
+        CluadeX.Services.Voice.AttentionChime.Sink = kind => Chimes.Add(kind);
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
 
@@ -291,6 +293,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=RR: just a turn cut off by the app closing or crashing, after the restart (RestartRecoveryTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "RR")
+        {
+            await TestRestartRecovery();
+            Log($"\n## Result (CHATTEST_ONLY=RR): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=RB: just the sidebar run badges on real runs and the buddy's mood (RunBadgeTests.cs).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "RB")
         {
@@ -347,6 +358,15 @@ internal static partial class Program
 
         // CHATTEST_ONLY=PC: just the plan card's clock and how it closes when the run ends.
         // CHATTEST_ONLY=VB: just the vibe helpers — change card, error chip, explain simply, @-mentions, click-to-ask, gauge.
+        // CHATTEST_ONLY=TT: just the test card a turn ends with (suites, failures read, skipped) and its pictures.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "TT")
+        {
+            await TestTurnTests();
+            Log($"\n## Result (CHATTEST_ONLY=TT): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "VB")
         {
             await TestVibe();
@@ -381,6 +401,20 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=SPLIT: split chats end to end — new_chat / close_chat on the chat page (NC/SC), the orchestration
+        // views that show them, their worktrees, pipe chats, and the report back + message_chat (SplitReportTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SPLIT")
+        {
+            await TestContextWindow();
+            await TestOrchestrationViews();
+            await TestSplitWorktrees();
+            await TestPipeChats();
+            await TestSplitReports();
+            Log($"\n## Result (CHATTEST_ONLY=SPLIT): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=ORCH: just the orchestration views (docs/agent-orchestration.md), and the narrow composer the
         // Ultra switch joined.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "ORCH")
@@ -398,6 +432,15 @@ internal static partial class Program
             await TestPlanAgentMotion();
             await TestFloatingPlan();
             Log($"\n## Result (CHATTEST_ONLY=MOTION): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=STRICT: just the strict-approval card and BrainX's approval card (StrictCardTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "STRICT")
+        {
+            await TestStrictCards();
+            Log($"\n## Result (CHATTEST_ONLY=STRICT): {Pass} pass / {Fail} FAIL");
             foreach (var f in Failures) Log("  - " + f);
             return Fail == 0 ? 0 : 1;
         }
@@ -427,6 +470,25 @@ internal static partial class Program
         {
             await TestRenameAndProjects();
             Log($"\n## Result (CHATTEST_ONLY=PROJ): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=VOICE: just reading replies aloud — the mic window path (VM), every bubble of a turn (VB).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "VOICE")
+        {
+            await TestVoiceMode();
+            await TestVoiceEveryBubble();
+            Log($"\n## Result (CHATTEST_ONLY=VOICE): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
+        // CHATTEST_ONLY=CHIME: just the chime when a box waits for the owner's answer.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "CHIME")
+        {
+            await TestAttentionChime();
+            Log($"\n## Result (CHATTEST_ONLY=CHIME): {Pass} pass / {Fail} FAIL");
             foreach (var f in Failures) Log("  - " + f);
             return Fail == 0 ? 0 : 1;
         }
@@ -463,6 +525,8 @@ internal static partial class Program
         await TestAttachedFiles();            // XF: any file dropped into a message — read, unpacked, by path
         await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
         await TestVoiceMode();                // VM: replies read aloud + a GPT-Live call through the chat (mock API)
+        await TestVoiceEveryBubble();         // VB: every reply bubble of a turn read aloud, in order, once
+        await TestAttentionChime();           // CH: a chime when a box waits for the owner's answer
         await TestSpeakerHover();             // SPK: the speaker under her face holds still on hover; its click switches reading aloud
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
@@ -489,6 +553,7 @@ internal static partial class Program
         await TestFloatingPlan();             // MF: the floating plan card comes and goes by the chat's own card
         await TestOrchestrationViews();       // OR: workflow card, split chips, notices, next-step box, Ultra
         await TestSplitWorktrees();           // SWT: a split chat in its own git worktree — branch in the notice, close_chat keeps unmerged
+        await TestSplitReports();             // SR: a split reports back to its parent (woken when idle), message_chat both ways
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
@@ -502,11 +567,13 @@ internal static partial class Program
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
         await TestChatRef();                  // CR: the chat's reference (CX-…): parsing, search, the model's line, the pinned chip
         await TestRunBadges();                // RB: run badges on real runs (unread, failed, stopped, restart ledger), the buddy's mood
+        await TestRestartRecovery();          // RR: a turn cut off by the app closing or crashing, after the restart
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
         await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card
         await TestActivityCard();             // AC: the activity card — event → state, real turns, per chat, close / reopen
         await TestVibe();                     // VB: change card, error chip, explain simply, @-mentions, click-to-ask, memory gauge
+        await TestTurnTests();                // TT: the test card a turn ends with
         await TestWatchJobs();                // WJ: watch_process — the card, the turn a finished watch starts, its limits
         await TestSkillPick();                // SP: each turn is given only the skills that fit it; the composer's switch
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
@@ -3175,7 +3242,10 @@ internal class FakeProvider : IAiProvider
         lock (Script)
         {
             // The marker in the new message first; else the newest one in the conversation that still has steps.
-            var key = ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k))
+            // A marker that still has steps wins over one used up: a split chat's message carries its parent's title
+            // (SplitInstruction), and the parent's used-up marker used to hide the split's own (RR5).
+            var key = ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k) && ScriptFor[k].Count > 0)
+                ?? ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k))
                 ?? history.AsEnumerable().Reverse().SelectMany(h => ScriptFor.Keys.Where(k => h.Content?.Contains(k) == true))
                           .FirstOrDefault(k => ScriptFor[k].Count > 0);
             // The memory/instinct extraction a finished chat starts in the background never takes a scripted step: it

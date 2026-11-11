@@ -106,6 +106,9 @@ public class ChatMessage : INotifyPropertyChanged
     public bool IsVoiceCurrent { get => _isVoiceCurrent; set { if (_isVoiceCurrent != value) { _isVoiceCurrent = value; OnPropertyChanged(); } } }
     /// <summary>This bubble is being read aloud right now (its ▶ shows pause).</summary>
     public bool IsVoicePlaying { get => _isVoicePlaying; set { if (_isVoicePlaying != value) { _isVoicePlaying = value; OnPropertyChanged(); } } }
+    /// <summary>The bubble's text when it went to the voice queue (read aloud by itself, or ▶ pressed); null = not yet.
+    /// Read-aloud never queues the same words again — only words written after them, when the bubble grew. Not saved.</summary>
+    public string? VoiceReadText { get; set; }
 
     public List<CodeBlock> CodeBlocks { get; set; } = new();
     public string? ExecutionResult { get; set; }
@@ -362,7 +365,7 @@ public class ChatMessage : INotifyPropertyChanged
     //     shows is built on first use by the chat page (it holds the services), from the row's own data. ───
 
     public const string WorkflowTag = "cx:workflow", SplitsTag = "cx:splits", NextStepTag = "cx:nextstep", NoticeTag = "cx:notice",
-        WatchTag = "cx:watch", TurnChangesTag = "cx:changes", InstinctTag = "cx:instinct";
+        WatchTag = "cx:watch", TurnChangesTag = "cx:changes", InstinctTag = "cx:instinct", TurnTestsTag = "cx:tests";
 
     /// <summary>Builds a row's view (set by the chat page). Null result = the row shows its text.</summary>
     public static Func<ChatMessage, ViewModels.WorkflowCard?>? WorkflowCardFor;
@@ -370,6 +373,7 @@ public class ChatMessage : INotifyPropertyChanged
     public static Func<ChatMessage, ViewModels.NextStepView?>? NextStepFor;
     public static Func<ChatMessage, ViewModels.WatchCardView?>? WatchCardFor;
     public static Func<ChatMessage, ViewModels.TurnChangesView?>? TurnChangesFor;
+    public static Func<ChatMessage, ViewModels.TurnTestsView?>? TurnTestsFor;
     public static Func<ChatMessage, ViewModels.InstinctCardView?>? InstinctCardFor;
 
     private ViewModels.WorkflowCard? _workflow;
@@ -402,6 +406,13 @@ public class ChatMessage : INotifyPropertyChanged
     public bool IsTurnChanges => ToolName == TurnChangesTag;
     public bool ShowsTurnChanges => IsTurnChanges && TurnChanges != null;
 
+    private ViewModels.TurnTestsView? _turnTests;
+    /// <summary>The tests a turn ran (ToolOutput = TurnTestSummary as JSON): built on first use, so a row that is not
+    /// one costs nothing; the card is a ContentControl that only draws when this is not null.</summary>
+    public ViewModels.TurnTestsView? TurnTests => _turnTests ??= ToolName == TurnTestsTag ? TurnTestsFor?.Invoke(this) : null;
+    public bool IsTurnTests => ToolName == TurnTestsTag;
+    public bool ShowsTurnTests => IsTurnTests && TurnTests != null;
+
     private ViewModels.InstinctCardView? _instinctCard;
     /// <summary>"Remember this next time?" (ToolOutput = {"ids":[…],"from":title}) — instincts a finished chat taught.</summary>
     public ViewModels.InstinctCardView? InstinctCard => _instinctCard ??= ToolName == InstinctTag ? InstinctCardFor?.Invoke(this) : null;
@@ -420,7 +431,7 @@ public class ChatMessage : INotifyPropertyChanged
 
     /// <summary>A row with its own card instead of the chat bubble.</summary>
     public bool IsOrchestrationCard => ShowsWorkflowCard || IsSplitChips || ShowsNextStep || ShowsWatchCard || ShowsTurnChanges
-                                       || ShowsInstinctCard;
+                                       || ShowsTurnTests || ShowsInstinctCard;
     /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:
     /// a reloaded group shows its merged output instead).</summary>
     public System.Collections.ObjectModel.ObservableCollection<ToolStepView> GroupSteps { get; } = new();
@@ -511,6 +522,27 @@ public class ChatMessage : INotifyPropertyChanged
         OnPropertyChanged(nameof(QuestionAnswered));
         try { QuestionCallback?.Invoke(answer); } catch { /* already resolved */ }
         return true;
+    }
+
+    /// <summary>A card read back after a restart, open again (RunRecovery): its options and who hears the answer. A card
+    /// with steps is reopened with <see cref="SetSteps"/> instead.</summary>
+    public void ReopenQuestion(List<string> options, Action<string> answered)
+    {
+        _questionAnswered = false;
+        QuestionOptions = options;
+        QuestionCallback = answered;
+        OnPropertyChanged(nameof(QuestionOptions));
+        OnPropertyChanged(nameof(QuestionAnswered));
+        RaiseSteps();
+    }
+
+    /// <summary><see cref="ReopenQuestion"/> for a card with steps.</summary>
+    public void ReopenSteps(IReadOnlyList<AskStep> steps, Action<IReadOnlyList<string>> answered)
+    {
+        _questionAnswered = false;
+        SetSteps(steps, answered);
+        OnPropertyChanged(nameof(UsesSteps));
+        OnPropertyChanged(nameof(QuestionAnswered));
     }
 
     /// <summary>Nobody will answer it any more (the run was stopped): say so under the question.</summary>
@@ -679,11 +711,112 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>The prompt is the red dangerous-action kind.</summary>
     public bool IsPermissionDanger => !string.IsNullOrEmpty(PermissionDanger);
 
+    // ─── Strict approval (Safety.StrictApproval): the one-time code the owner types ───
+    private Services.Safety.StrictTicket? _strict;
+    /// <summary>Non-null = the strict-approval card. The card follows the ticket: an approval from the owner's terminal,
+    /// an expiry or a lock answers it here too.</summary>
+    public Services.Safety.StrictTicket? PermissionStrict
+    {
+        get => _strict;
+        set
+        {
+            if (_strict != null) _strict.Changed -= OnStrictChanged;
+            _strict = value;
+            if (_strict != null) _strict.Changed += OnStrictChanged;
+        }
+    }
+
+    public bool IsStrict => _strict != null;
+    public string StrictCommand => _strict?.Request.Command ?? "";
+    public string StrictWhere => _strict?.Request.Where ?? "";
+    public string StrictTool => _strict?.Request.Tool ?? "";
+    public string StrictKind => _strict == null ? "" : Services.LocalizedResources.Instance["strict.kind." + _strict.Request.Finding.Kind] is { } k
+        && !k.StartsWith("strict.kind.", StringComparison.Ordinal) ? k + " — " + _strict.Request.Finding.Matched : _strict.Request.Finding.Matched;
+    public string StrictCode => _strict?.DisplayCode ?? "";
+    public string StrictExpires => _strict == null ? "" : _strict.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
+    public string StrictDanger => _strict?.Request.Danger ?? "";
+    public bool HasStrictDanger => !string.IsNullOrEmpty(_strict?.Request.Danger);
+    /// <summary>For the owner's own terminal.</summary>
+    public string StrictTerminalCommand => _strict == null ? "" : Services.Safety.StrictApproval.TerminalCommand(_strict.DisplayCode);
+
+    private string _strictDraft = "";
+    /// <summary>What the owner typed into the card's box.</summary>
+    public string StrictCodeDraft { get => _strictDraft; set { _strictDraft = value ?? ""; OnPropertyChanged(); } }
+
+    private string _strictNote = "";
+    /// <summary>Why the last try did not approve (wrong code, expired …), localized. Empty = nothing to say.</summary>
+    public string StrictNote { get => _strictNote; private set { _strictNote = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasStrictNote)); } }
+    public bool HasStrictNote => _strictNote.Length > 0;
+
+    /// <summary>The card's Approve button / Enter: hands what was typed to the ledger (the only authority). True = approved.</summary>
+    public bool SubmitStrictCode()
+    {
+        if (_strict == null || PermissionAnswered) return false;
+        var answer = Services.Safety.StrictApproval.Ledger.Approve(_strict.Id, _strictDraft, Services.Safety.StrictSource.Card);
+        if (answer == Services.Safety.StrictAnswer.Approved) { StrictNote = ""; return true; }
+        StrictNote = Services.LocalizedResources.Instance["strict.answer." + answer];
+        if (answer == Services.Safety.StrictAnswer.WrongCode)
+            StrictNote = string.Format(StrictNote, Services.Safety.StrictApprovalLedger.MaxWrongTries - _strict.WrongTries);
+        return false;
+    }
+
+    /// <summary>The card's Deny.</summary>
+    public void DenyStrict()
+    {
+        if (_strict == null || PermissionAnswered) return;
+        Services.Safety.StrictApproval.Ledger.Deny(_strict.Id);
+        ResolvePermission(PermissionOutcome.Denied);
+    }
+
+    private void OnStrictChanged(Services.Safety.StrictTicket t)
+    {
+        void Apply()
+        {
+            switch (t.State)
+            {
+                case Services.Safety.StrictState.Approved:
+                case Services.Safety.StrictState.Consumed:
+                    StrictNote = t.AnsweredBy == Services.Safety.StrictSource.Terminal ? Services.LocalizedResources.Instance["strict.byTerminal"] : "";
+                    ResolvePermission(PermissionOutcome.Allowed);
+                    break;
+                case Services.Safety.StrictState.Expired:
+                    StrictNote = Services.LocalizedResources.Instance["strict.answer.Expired"];
+                    ResolvePermission(PermissionOutcome.Cancelled);
+                    break;
+                case Services.Safety.StrictState.Locked:
+                    StrictNote = Services.LocalizedResources.Instance["strict.answer.Locked"];
+                    ResolvePermission(PermissionOutcome.Denied);
+                    break;
+                case Services.Safety.StrictState.Denied:
+                    ResolvePermission(PermissionOutcome.Denied);
+                    break;
+            }
+        }
+        var d = System.Windows.Application.Current?.Dispatcher;
+        if (d == null || d.CheckAccess()) Apply(); else d.InvokeAsync(Apply);
+    }
+
+    // ─── BrainX's own approval (its ssh_run needs_confirmation) ───
+    public Services.Safety.BrainxConfirmation? PermissionBrainx { get; set; }
+    public bool IsBrainxConfirm => PermissionBrainx != null;
+    public string BrainxCommand => PermissionBrainx?.Command ?? "";
+    public string BrainxProfile => PermissionBrainx?.Profile ?? "";
+    public string BrainxReasons => PermissionBrainx == null ? "" : string.Join("\n", PermissionBrainx.Reasons.Select(r => "• " + r));
+    public bool HasBrainxReasons => PermissionBrainx is { Reasons.Count: > 0 };
+    public string BrainxApproveCommand => PermissionBrainx?.ApproveCommand ?? "";
+    public bool BrainxCanOpenTerminal => Services.Safety.BrainxConfirmation.BrainxExe() != null;
+
+    /// <summary>Neither strict nor BrainX: the ordinary Allow / Deny row.</summary>
+    public bool ShowsDefaultPermissionButtons => !PermissionAnswered && !IsStrict && !IsBrainxConfirm;
+    public bool ShowsStrictButtons => !PermissionAnswered && IsStrict;
+    public bool ShowsBrainxButtons => !PermissionAnswered && IsBrainxConfirm;
+
     /// <summary>The request in people's words (what, where, the result, the risk, the dangerous parts) with the real
     /// command for the folded technical details. Null = only <see cref="Content"/> (the old one-line prompt).</summary>
     public Services.Safety.PlainPermission? PermissionPlain { get; set; }
 
-    public bool HasPermissionPlain => PermissionPlain != null;
+    // The strict and BrainX cards carry their own where / what / why; the generic "medium risk" lines would contradict them.
+    public bool HasPermissionPlain => PermissionPlain != null && !IsStrict && !IsBrainxConfirm;
     /// <summary>The prompt's bold first line: the plain headline, or the old one-line prompt.</summary>
     public string PermissionHeadlineText => PermissionPlain?.Headline ?? Content;
     public bool HasPermissionNote => PermissionPlain is { Note.Length: > 0 };
@@ -746,6 +879,9 @@ public class ChatMessage : INotifyPropertyChanged
             _permissionOutcome = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PermissionAnswered));
+            OnPropertyChanged(nameof(ShowsDefaultPermissionButtons));
+            OnPropertyChanged(nameof(ShowsStrictButtons));
+            OnPropertyChanged(nameof(ShowsBrainxButtons));
         }
     }
 

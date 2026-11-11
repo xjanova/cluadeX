@@ -49,6 +49,8 @@ public partial class ChatViewModel
         public ChatMessage? SplitsMsg;
         /// <summary>The files this turn wrote and its pictures: the change card at its end (ChatViewModel.Vibe).</summary>
         public readonly Services.Agents.TurnChanges Changes = new();
+        /// <summary>The tests this turn ran and what the model said it skipped: the test card at its end (TurnTests).</summary>
+        public readonly Services.Agents.TurnTests Tests = new();
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
@@ -67,6 +69,10 @@ public partial class ChatViewModel
         public int FirstRow;
         /// <summary>The activity card already knows the model is writing its answer (reset when a tool starts).</summary>
         public volatile bool ActivityWriting;
+        /// <summary>Puts all the text the open reply bubble has streamed into it — the screen shows it a few tokens late,
+        /// and with no next token nothing catches it up. Read-aloud calls it before it reads a bubble. Set by the agent
+        /// loop while it runs; UI thread.</summary>
+        public Action? FlushReplyText;
 
         /// <summary>Who started the turn, for a supervisor: "pipe" (a program over the pipe), "split_parent" (new_chat from
         /// another chat's agent) or "user". The pipe flag is read live: it is set right after the run begins.</summary>
@@ -205,6 +211,7 @@ public partial class ChatViewModel
                                                  || m.Role == MessageRole.Question && !m.QuestionAnswered);
             run.Session.RunStatus = waiting ? "waiting" : "working";
             ActivityWaiting(run.Session.Id, waiting);
+            NoteRunWaiting(run, waiting);
             run.Session.RunStep = waiting ? Loc("chat.runs.waitingForYou") : (run.ActiveStatus?.Content ?? "").TrimStart('⏵', ' ');
         }
         if (CurrentSession is { } open) open.RunStatus = RunBadge.OnOpen(open.RunStatus);
@@ -414,6 +421,8 @@ public partial class ChatViewModel
             Role = MessageRole.Question,
             Content = "❓ " + question.Trim(),
             QuestionOptions = options,
+            // kept with the row: a card the app closed on can be answered again after the restart (RunRecovery)
+            ToolOutput = RunRecovery.QuestionJson(options, null),
             QuestionGirl = who.Girl,
             Character = who,
             QuestionCallback = answer => tcs.TrySetResult(answer),
@@ -421,13 +430,15 @@ public partial class ChatViewModel
         var token = run?.Cts?.Token ?? CancellationToken.None;
         var reg = token.Register(() =>
         {
-            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
+            // (not while the app closes: the card stays open in the saved chat for the restart to offer again)
+            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { if (!_appClosing) msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
         });
         _ = tcs.Task.ContinueWith(_ => { reg.Dispose(); dispatcher.InvokeAsync(RaiseRunStateChanged); }, TaskScheduler.Default);
         dispatcher.InvokeAsync(() =>
         {
             (run?.Messages ?? Messages).Add(msg);
             RaiseRunStateChanged();   // "waiting for you" on the other-chats bar when it is not on screen
+            ChimeForBox(Services.Voice.ChimeKind.Ask);
             ScrollToBottom?.Invoke();
         });
         return tcs.Task;
@@ -444,19 +455,31 @@ public partial class ChatViewModel
         var who = CharacterForBox(run);
         var msg = new ChatMessage { Role = MessageRole.Question, QuestionGirl = who.Girl, Character = who };
         msg.SetSteps(steps, answers => tcs.TrySetResult(answers));
+        msg.ToolOutput = RunRecovery.QuestionJson(null, steps);
         var token = run?.Cts?.Token ?? CancellationToken.None;
         var reg = token.Register(() =>
         {
-            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
+            // (not while the app closes: the card stays open in the saved chat for the restart to offer again)
+            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { if (!_appClosing) msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
         });
         _ = tcs.Task.ContinueWith(_ => { reg.Dispose(); dispatcher.InvokeAsync(RaiseRunStateChanged); }, TaskScheduler.Default);
         dispatcher.InvokeAsync(() =>
         {
             (run?.Messages ?? Messages).Add(msg);
             RaiseRunStateChanged();
+            ChimeForBox(Services.Voice.ChimeKind.Ask);
             ScrollToBottom?.Invoke();
         });
         return tcs.Task;
+    }
+
+    /// <summary>A box now waits for the owner's answer — her question, a permission prompt, the red prompt: the chime
+    /// (AppSettings.AttentionChime), so a turn waiting in the background or behind another window is heard.</summary>
+    private void ChimeForBox(Services.Voice.ChimeKind kind)
+    {
+        if (!_settingsService.Settings.AttentionChime) return;
+        if (Services.Voice.AttentionChime.Play(kind))
+            _debugLog?.Info("Chime", kind == Services.Voice.ChimeKind.Danger ? "the red prompt waits for the owner" : "a box waits for the owner's answer");
     }
 
     // ─── start / end ───
@@ -486,11 +509,17 @@ public partial class ChatViewModel
     /// screen or not), working in <paramref name="folder"/>. Enters the run's scope for the calling flow.</summary>
     private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
     {
+        SettleRecoveryCards(messages);   // a recovery card not used: a new message took its place
         var run = new ChatRun { Session = session, Messages = messages, FirstRow = messages.Count };
         NoteRunBegan(session);
         ActivityBegan(session);
         CancelLearning(session);   // it is working again: read it when it is quiet
         if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
+        // A turn CluadeX starts for another chat's agent (a message_chat, a split's report waking it, a split opened in
+        // the background) counts as the agent's: its report goes up and may wake the chat above it.
+        if (_agentDrivenNext.Remove(session.Id)) run.StartedBySplit = true;
+        // Reports waiting for this chat are in its rows: this turn reads them, no later wake needs to.
+        _splitWaiting.Remove(session.Id);
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
@@ -517,17 +546,21 @@ public partial class ChatViewModel
     {
         var run = _runs.FirstOrDefault(r => ReferenceEquals(r.Done, done));
         List<(string Text, object? Tag)>? leftover = null;
+        bool stopped = false, failed = false;
         if (run != null)
         {
             Services.Agents.RunActivity.ClearRun(run.Session.Id);
             PostRunCostSummary(run);
             RememberRunStats(run);
             AddTurnChangesCard(run);
+            AddTurnTestsCard(run);
             AddNextStepBox(run);
             MaybeOfferFable(run);
-            // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
-            foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
-                open.CloseQuestion(Loc("chat.ask.cancelled"));
+            // A CLI that died mid-question: nobody is listening any more, so its card must not stay open. Not when the
+            // app is closing: the card stays open in the saved chat, and the restart offers it again (RunRecovery).
+            if (!_appClosing)
+                foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
+                    open.CloseQuestion(Loc("chat.ask.cancelled"));
             leftover = run.Scope?.DrainUserNotes();
             // the owner's words typed into this turn are used up with it (a leftover note keeps the turn's decision instead)
             Services.Agents.DesignGate.EndOwnerTurn(run.Session.Id);
@@ -539,7 +572,7 @@ public partial class ChatViewModel
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
             // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it. An error or a stop says
             // so (red) until the next turn begins, on screen or not.
-            var (stopped, failed) = RunBadge.Outcome(run.Messages, run.FirstRow, run.Stopped);
+            (stopped, failed) = RunBadge.Outcome(run.Messages, run.FirstRow, run.Stopped);
             run.Session.RunStatus = RunBadge.AtEnd(stopped, failed, ReferenceEquals(run.Session, CurrentSession));
             NoteRunEnded(run.Session, run.Session.RunStatus);
             ActivityEnded(run.Session, stopped, failed);
@@ -564,39 +597,11 @@ public partial class ChatViewModel
             ScheduleLearning(run.Session, run.Messages);
             if (ReferenceEquals(run.Session, CurrentSession)) FlushInstinctCards();
         }
-        if (run != null) TellParentSplitFinished(run.Session, run.Messages);
+        // Its report to the chat that opened it, and reports / messages it never took (SplitReports).
+        if (run != null) SplitTurnEnded(run, stopped, failed, leftover);
         if (run != null && leftover is { Count: > 0 }) HandOnUntakenWatchNotes(run, leftover);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
-    }
-
-    /// <summary>
-    /// A split chat finished its turn: the chat that opened it hears so (a side note in its live list, when it is
-    /// running or on screen) and the sidebar's tree updates its count — so the asking chat, or the owner, can put the
-    /// finished one away (close_chat / the sidebar's box button). It is a notice with the gist of what the split
-    /// answered, so the parent's agent reads it too — at its next step while it runs, else on its next turn.
-    /// </summary>
-    private void TellParentSplitFinished(ChatSession child, IEnumerable<ChatMessage>? childMessages = null)
-    {
-        if (child.ParentId is not { } pid) return;
-        if (Sessions.Any(s => s.Id == pid))
-        {
-            // A Fable chat's report is what the work was for: it comes back whole (it was asked to keep it short).
-            if (Services.Agents.DispatchPolicy.IsFable(child.OwnModel) && GistOf(childMessages, FableReportChars) is { Length: > 0 } report)
-            {
-                AddNotice(pid, "🧠 " + LocF("fable.report", child.Title, report),
-                    $"Claude Fable 5.2 in split chat \"{child.Title}\" (id {child.Id}) ended a turn. Its report: " + report);
-                RebuildVisibleSessions();
-                return;
-            }
-            string gist = GistOf(childMessages);
-            // In its own worktree: the notice names the branch, so the parent can merge it or open a PR from it.
-            var (treeShown, treeForModel) = WorktreeNoticeOf(child);
-            AddNotice(pid,
-                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)) + treeShown,
-                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : "") + treeForModel);
-        }
-        RebuildVisibleSessions();
     }
 
     private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)

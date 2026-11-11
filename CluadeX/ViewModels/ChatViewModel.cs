@@ -627,7 +627,9 @@ public partial class ChatViewModel : ViewModelBase
             string tree = ChatLinkStore.Current?.WorktreeOf(id) is { } wt
                 ? $" — own worktree {wt.Root}, branch {wt.Branch}" + (held != null && held.TryGetValue(id, out var why) ? $" (unmerged: {why})" : "")
                 : "";
-            return $"- \"{c?.Title ?? "?"}\" (ref {ChatRef.Of(id)}, id {id}){where} — {link.Task} — {StateOf(id, link)}{tree}";
+            string state = StateOf(id, link);
+            return $"- \"{c?.Title ?? "?"}\" (ref {ChatRef.Of(id)}, id {id}){where} — {link.Task} — {state}{tree}"
+                 + (state == "finished" ? ListGistOf(id) : "");
         }
         string List() => "Split chats of this chat:\n" + string.Join("\n", kids.Select(k => Line(k.Id, k.Link)));
 
@@ -1221,6 +1223,7 @@ public partial class ChatViewModel : ViewModelBase
         };
         InitFable();
         InitSplitWorktrees();
+        InitSplitReports();
         // Which chat split off which, and which finished split chats were put away (chat-links.json beside codex.db).
         ChatLinkStore.Current ??= new ChatLinkStore(settingsService.DataRoot);
         // Chats with a run going (live-runs.json beside codex.db): one CluadeX never saw end shows as stopped after a restart.
@@ -1492,10 +1495,12 @@ public partial class ChatViewModel : ViewModelBase
                 PermissionPlain = plain,
                 DiffLines = info.Diff?.Lines,
                 DiffStat = info.Diff?.Stat,
-                PermissionAlwaysAsk = info.AlwaysAsk || info.Danger != null,
-                PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk && info.Danger == null,
-                PermissionCanAllowAlways = info.AlwaysKey != null && !info.AlwaysAsk && info.Danger == null,
+                PermissionAlwaysAsk = info.AlwaysAsk || info.Danger != null || info.Strict != null || info.Brainx != null,
+                PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk && info.Danger == null && info.Strict == null && info.Brainx == null,
+                PermissionCanAllowAlways = info.AlwaysKey != null && !info.AlwaysAsk && info.Danger == null && info.Strict == null && info.Brainx == null,
                 PermissionDanger = info.Danger,
+                PermissionStrict = info.Strict,
+                PermissionBrainx = info.Brainx,
                 Character = CharacterForBox(askRun),
             };
             prompt.PermissionCallback = allow =>
@@ -1528,6 +1533,7 @@ public partial class ChatViewModel : ViewModelBase
             {
                 (askRun?.Messages ?? Messages).Add(prompt);
                 RaiseRunStateChanged();   // "waiting for you" on the other-chats bar
+                ChimeForBox(prompt.IsPermissionDanger ? Services.Voice.ChimeKind.Danger : Services.Voice.ChimeKind.Ask);
                 ScrollToBottom?.Invoke();
             });
             return tcs.Task;
@@ -1544,6 +1550,31 @@ public partial class ChatViewModel : ViewModelBase
             Danger = req.Reason,
         });
         Services.Safety.DangerApprovalPipe.StartServer();
+
+        // Strict approval (Features ▸ Strict approval): a hard-to-undo command waits for the owner's one-time code on a card
+        // in the asking chat. The card is answered only by what the owner types into it or approves from their terminal.
+        Services.Safety.StrictApproval.Handler = ticket => askPermission(new PermissionRequestInfo
+        {
+            ToolName = ticket.Request.Tool,
+            Detail = ticket.Request.Command,
+            Args = new Dictionary<string, string> { ["command"] = ticket.Request.Command },
+            AlwaysAsk = true,
+            Strict = ticket,
+        });
+        // BrainX's own needs_confirmation (its ssh_run gate), as a card: approve in BrainX's terminal, then CluadeX resends.
+        Services.Safety.StrictApproval.BrainxHandler = brainx => askPermission(new PermissionRequestInfo
+        {
+            ToolName = "BrainX ssh_run",
+            Detail = brainx.Command,
+            Args = new Dictionary<string, string> { ["command"] = brainx.Command },
+            AlwaysAsk = true,
+            Brainx = brainx,
+        });
+        Services.Safety.StrictApproval.StartApproveServer();
+        void PublishStrict() => Services.Safety.StrictApproval.Publish(_settingsService.Settings.Features.StrictApproval,
+            _settingsService.Settings.Features.StrictApprovalScopes);
+        PublishStrict();
+        _settingsService.SettingsChanged += PublishStrict;
         // Claude Dev's open_project / new_chat / close_chat (CluadeX.exe --cx-tools) reach this chat page through here.
         Services.Tools.ChatToolBridge.StartServer();
 
@@ -1577,6 +1608,7 @@ public partial class ChatViewModel : ViewModelBase
         InitControls(activation);
         InitSidePanel();
         InitVibe();
+        InitTurnTests();
         InitLearning();
         InitActivity();
         InitCharacter();
@@ -1624,6 +1656,9 @@ public partial class ChatViewModel : ViewModelBase
             //    saved every "New Chat" the moment it was opened, and those piled up in the sidebar.
             _persistenceService.DeleteEmptySessions();   // no-op when the DB fails its integrity check
             bool dbHealthy = _persistenceService.IsDatabaseHealthy;
+            // Chats the last run was cut off in (the app closed or crashed mid-turn): their recovery card goes into the
+            // stored chat before the list and the last chat are read, so both already have it.
+            if (dbHealthy) RecoverOrphanRunsInStore();
             if (!dbHealthy) Debug.WriteLine("codex.db failed PRAGMA quick_check — empty-chat cleanup disabled");
             List<ChatSession> savedSessions;
             try { savedSessions = _persistenceService.LoadSessionList(); }
@@ -1679,12 +1714,14 @@ public partial class ChatViewModel : ViewModelBase
                     ScheduleSidebarRebuild();
                     foreach (var msg in lastSession.Messages)
                         Messages.Add(msg);
+                    ArmRecoveryCards(Messages);   // a turn the app closed on: its question cards can be answered again
                     // Its project at once: the files panel used to keep the previous folder until the first message
                     // was sent (owner 2026-10-16: "แต่ละแชทต้องแสดงไฟล์ให้ถูกต้อง … แม้เปิดมาใหม่").
                     FollowChatProject(lastSession);
 
                     // ─── Crash recovery: detect if last session was interrupted ───
                     var lastMsg = lastSession.Messages.LastOrDefault();
+                    // (A turn on the restart ledger ends on its recovery card instead; this is for one the ledger missed.)
                     if (lastMsg is { Role: MessageRole.User })
                     {
                         // Last message is user's question with no response — app crashed during generation
@@ -1989,6 +2026,7 @@ public partial class ChatViewModel : ViewModelBase
 
         // Sync CurrentSession.Messages to point to the same data as what's displayed
         CurrentSession.Messages = Messages.ToList();
+        ArmRecoveryCards(Messages);   // a turn the app closed on: its question cards can be answered again
 
         _isDirty = false;
         // A put-away split chat shows in the list while it is open: one rebuild, coalesced with the others of this switch.
@@ -2769,6 +2807,10 @@ public partial class ChatViewModel : ViewModelBase
             if (inherited == null || inherited.Count == 0) throw new InvalidOperationException("this chat has no stored history to fork");
             foreach (var m in inherited) m.Id = Guid.NewGuid().ToString();
         }
+        // The owner is in another chat (the asking chat runs off screen): the split opens beside it in the sidebar and
+        // starts there, instead of switching the window to the new chat from under them.
+        if (parentId != null && CurrentSession?.Id != parentId && Sessions.Any(s => s.Id == parentId))
+            return OpenSplitInBackground(path, message, title, parentId, from, inherited, model, openedNote, worktree);
         if (path != null && !string.Equals(path, _fileSystemService.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
             ApplyWorkingDirectory(path, announce: false, showEditor: false);
         NewSession();
@@ -2809,10 +2851,15 @@ public partial class ChatViewModel : ViewModelBase
             return $"Opened a new empty chat (ref {chat.Ref}, id {chat.Id}) in {where}. It is on screen now; the user types there.";
         _ = StartAgentChatTurnAsync(message, chat.Id);
         return $"Opened a new chat (ref {chat.Ref}, id {chat.Id}) in {where} and started it with your message. It runs on its own beside "
-             + "this chat; the user follows it in the sidebar. Do not wait for it — carry on here or finish your reply."
-             + (worktree == null ? "" : $" When it ends a turn you are told; merge branch {worktree.Branch} or open a PR from it, "
-                + "then close_chat removes the worktree.");
+             + "this chat; the user follows it in the sidebar. " + SplitStartedTail(worktree);
     }
+
+    /// <summary>What the asking agent is told after a split started: its report comes back by itself (no polling).</summary>
+    private static string SplitStartedTail(Services.Agents.ChatWorktree? worktree) =>
+        "Do not wait for it or poll it — carry on here or finish your reply: when it ends a turn its report comes back to this "
+        + "chat by itself (if this chat is idle by then, CluadeX starts a turn here with it), and message_chat sends it more."
+        + (worktree == null ? "" : $" Its report names branch {worktree.Branch}: merge it or open a PR from it, then close_chat "
+            + "removes the worktree.");
 
     /// <summary>Why <paramref name="parentId"/> may not split off another chat now (SplitLimits), or null when it may.</summary>
     private string? SplitRefusal(string? parentId)
@@ -2832,7 +2879,14 @@ public partial class ChatViewModel : ViewModelBase
     {
         try
         {
-            if (CurrentSession?.Id != chatId) return;   // the user moved on before it started
+            if (CurrentSession?.Id != chatId)
+            {
+                // The owner moved on before it started: it starts off screen instead (it used to never start at all,
+                // while the asking agent was told it had).
+                _agentDrivenNext.Add(chatId);
+                await StartInternalTurnAsync(chatId, message);
+                return;
+            }
             _splitTurnPending = chatId;                 // its run: started by the asking chat's agent, not the owner
             await SendMessageCore(message, null);
         }
@@ -3515,7 +3569,9 @@ public partial class ChatViewModel : ViewModelBase
                     break;
                 case MessageRole.System when m.IsNotice && !string.IsNullOrWhiteSpace(m.Content):
                     // A background command or a split chat finished: the model hears it (it may have been told mid-run too).
-                    result.Add(new ChatMessage { Role = MessageRole.User, Content = NoticePrefix + m.Content, Timestamp = m.Timestamp });
+                    // A split's report keeps its whole text for the model in ToolOutput (the row shows its start).
+                    result.Add(new ChatMessage { Role = MessageRole.User, Timestamp = m.Timestamp,
+                        Content = NoticePrefix + (string.IsNullOrWhiteSpace(m.ToolOutput) ? m.Content : m.ToolOutput) });
                     break;
             }
         }
@@ -4043,6 +4099,8 @@ public partial class ChatViewModel : ViewModelBase
         // (A worktree removed by hand is not mentioned: the turn then runs in the project, as TaskFolderFor says.)
         if (FlowRun is { } wtRun && ChatLinkStore.Current?.WorktreeOf(wtRun.Session.Id) is { } ownTree && Directory.Exists(ownTree.Folder))
             input += "\n\n" + NoticePrefix + Services.Agents.SplitWorktree.InstructionFor(ownTree);
+        // A split chat hears who opened it and that its answer goes back there (and how to ask that chat something).
+        if (SplitTurnInstruction(FlowRun?.Session) is { } splitNote) input += "\n\n" + splitNote;
         if (pipe != null && FlowRun is { } pipeRun)
         {
             // A message a pipe caller sent (cluadex.continue_chat): marked as such (the BrainX model never relays it
@@ -4127,6 +4185,9 @@ public partial class ChatViewModel : ViewModelBase
         _lastStatusBase = $"{initVerb}...";
         _generationStopwatch.Restart();
         StartElapsedTimer();
+        // Read aloud as she writes: each reply bubble joins the voice queue once its text is final — not only the
+        // turn's last row when it ends (SpokenReply; owner 2026-11-11: "ไม่อ่านทุกบับเบิ้ลที่ต้องอ่าน").
+        var readAloud = pipe == null ? WatchRepliesAloud(userMsg) : null;
 
         try
         {
@@ -4230,6 +4291,7 @@ public partial class ChatViewModel : ViewModelBase
             // Save immediately after each completed interaction
             SaveNow();
             bool turnOk = TurnMessages.LastOrDefault(m => m.Role == MessageRole.Assistant)?.HasError != true;
+            readAloud?.Dispose();
             if (pipe == null) SpeakReplyIfWanted(userMsg);
             EndTurn(turn);
             _pet?.NoteTurnDone(_providerManager.ActiveProviderType.ToString(),
@@ -4497,9 +4559,13 @@ public partial class ChatViewModel : ViewModelBase
                 // The previous step's bubble gets ALL its text: the screen is only updated every 3 tokens, so its
                 // last 1-2 tokens were never shown — a reply cut off when the next step began (a message typed
                 // while it worked, a tool call after the text).
-                string previousText = streamSb.ToString();
-                streamSb.Clear();
-                streamSb.Append(token);
+                string previousText;
+                lock (streamSb)   // read-aloud's FlushReplyText reads it from the UI thread
+                {
+                    previousText = streamSb.ToString();
+                    streamSb.Clear();
+                    streamSb.Append(token);
+                }
                 lastStreamStep = step;
 
                 App.Current?.Dispatcher.Invoke(() =>
@@ -4534,14 +4600,15 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
-            streamSb.Append(token);
+            lock (streamSb) streamSb.Append(token);
             run.StreamingTokenCount++;
             run.Touch();
 
             // Paced UI updates (~12/s, below keyboard input — see UiThrottle)
             if (tokenThrottle.Due)
             {
-                string snapshot = streamSb.ToString();
+                string snapshot;
+                lock (streamSb) snapshot = streamSb.ToString();
                 int capturedCount = run.StreamingTokenCount;
                 var bubble = streamingMsg;   // this step's bubble — by the time the update runs, a new step may own the field
                 tokenThrottle.Post(() =>
@@ -4610,6 +4677,14 @@ public partial class ChatViewModel : ViewModelBase
         _agentService.OnThinkingUpdate += OnThinking;
         _agentService.OnAgenticStreamingToken += OnStreamToken;
         _agentService.OnAgentStatus += OnAgentStatusNotice;
+        // Read-aloud: the open bubble gets all its streamed text before it is read (UI thread).
+        run.FlushReplyText = () =>
+        {
+            if (streamingMsg is not { } open || closedBubbles.Contains(open)) return;
+            string all;
+            lock (streamSb) all = streamSb.ToString();
+            if (all.Length > 0 && open.Content != all) open.Content = all;
+        };
         try
         {
             // Task.Run: the agentic loop interleaves async I/O with plenty of SYNCHRONOUS work (tool
@@ -4737,6 +4812,7 @@ public partial class ChatViewModel : ViewModelBase
             _agentService.OnThinkingUpdate -= OnThinking;
             _agentService.OnAgenticStreamingToken -= OnStreamToken;
             _agentService.OnAgentStatus -= OnAgentStatusNotice;
+            run.FlushReplyText = null;
             StopElapsedTimer();
             // Ensure inline status is finalized on cancel/error
             App.Current?.Dispatcher.Invoke(() =>
@@ -5080,11 +5156,15 @@ public partial class ChatViewModel : ViewModelBase
                 ? 0
                 : rowOutput.Split('\n').Length;
             string? toolElapsed = null;
+            double? toolSeconds = null;
             if (run != null && run.ToolStarts.TryDequeue(out long started))
             {
                 double sec = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds;
+                toolSeconds = sec;
                 toolElapsed = sec < 10 ? $"{sec:0.0}s" : $"{sec:0}s";
             }
+            // every test run of the turn (and every edit between them): the test card at its end
+            run?.Tests.Note(toolResult, toolSeconds);
 
             string displayName = FormatToolDisplayName(toolResult.ToolName, toolResult.Arguments);
 
