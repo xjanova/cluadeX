@@ -437,6 +437,18 @@ public class FeaturesViewModel : ViewModelBase
             Key = "feature.commandBlock", Icon = "\U0001F6AB",
             Category = "security", IsToggleable = true, IsEnabled = ft.DangerousCommandBlocking,
         });
+        // Strict approval: a hard-to-undo command waits for the owner's one-time code (owner 2026-11-11). The choice = which
+        // commands it covers.
+        var strict = new FeatureItem
+        {
+            Key = "feature.strictApproval", Icon = "🔑",
+            Category = "security", IsToggleable = true, IsEnabled = ft.StrictApproval,
+        };
+        foreach (var value in StrictChoices.Keys) strict.Choices.Add(new FeatureChoice { Value = value });
+        strict.SelectedChoice = StrictChoices.FirstOrDefault(kv => kv.Value == Services.Safety.HardToUndo.FormatScopes(
+            Services.Safety.HardToUndo.ParseScopes(ft.StrictApprovalScopes))).Key ?? "all";
+        strict.ChoiceChanged = SaveStrictScopes;
+        SecurityFeatures.Add(strict);
         SecurityFeatures.Add(new FeatureItem
         {
             Key = "feature.pathSafety", Icon = "\U0001F512",
@@ -503,6 +515,12 @@ public class FeaturesViewModel : ViewModelBase
             else
                 item.StatusLabel = item.IsEnabled ? _loc.T("features.enabled") : _loc.T("features.disabled");
 
+            if (item.Key == "feature.strictApproval")
+            {
+                item.ChoiceLabel = _loc.T("strict.scopeLabel");
+                item.ChoiceTip = _loc.T("strict.scopeTip");
+                foreach (var c in item.Choices) c.Label = _loc.T("strict.scope." + c.Value);
+            }
             if (item.Key == "feature.devPreview")
             {
                 item.Detail = DevPreviewEngineLine();
@@ -510,6 +528,29 @@ public class FeaturesViewModel : ViewModelBase
                 item.ChoiceTip = _loc.T("devPreview.externalTip");
                 foreach (var c in item.Choices) c.Label = _loc.T("devPreview.external." + c.Value);
             }
+        }
+    }
+
+    /// <summary>Strict approval's choices → the scopes saved in FeatureToggles.StrictApprovalScopes.</summary>
+    private static readonly Dictionary<string, string> StrictChoices = new()
+    {
+        ["all"] = "local,remote,git",
+        ["remote-git"] = "remote,git",
+        ["remote"] = "remote",
+    };
+
+    private void SaveStrictScopes(string value)
+    {
+        if (!StrictChoices.TryGetValue(value, out var scopes)) return;
+        var ft = _settingsService.Settings.Features;
+        if (ft.StrictApprovalScopes == scopes) return;
+        ft.StrictApprovalScopes = scopes;
+        Services.Safety.StrictApproval.Publish(ft.StrictApproval, ft.StrictApprovalScopes);
+        if (!_settingsService.Save())
+        {
+            _log?.Error("Features", $"Saving the strict-approval scopes failed: {_settingsService.LastSaveError}");
+            ActivationSuccess = false;
+            ActivationMessage = _loc.T("featuresm.saveFailed");
         }
     }
 
@@ -573,6 +614,10 @@ public class FeaturesViewModel : ViewModelBase
             case "feature.smartEditing": ft.SmartEditing = item.IsEnabled; break;
             case "feature.permissions": ft.PermissionSystem = item.IsEnabled; break;
             case "feature.commandBlock": ft.DangerousCommandBlocking = item.IsEnabled; break;
+            case "feature.strictApproval":
+                ft.StrictApproval = item.IsEnabled;
+                Services.Safety.StrictApproval.Publish(ft.StrictApproval, ft.StrictApprovalScopes);
+                break;
         }
 
         if (!_settingsService.Save())

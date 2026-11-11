@@ -1057,10 +1057,145 @@
                                             </StackPanel>
                                         </Border>
 
+                                        <!-- Strict approval (Safety.StrictApproval): a hard-to-undo command waits for the owner's one-time
+                                             code. Every element sits under CxGuard.* so desktop tools never touch it (DesktopSafety). -->
+                                        <Border Margin="22,0,0,8" Padding="12,10" CornerRadius="8" MaxWidth="680" HorizontalAlignment="Left"
+                                                Background="{DynamicResource Surface.Sunken}" BorderBrush="{DynamicResource Status.Danger}" BorderThickness="1.5"
+                                                Visibility="{Binding IsStrict, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                AutomationProperties.AutomationId="CxGuard.StrictCard">
+                                            <StackPanel>
+                                                <TextBlock Text="{services:Loc strict.card.title}" FontSize="14" FontWeight="Bold"
+                                                           Foreground="{DynamicResource Status.Danger}" TextWrapping="Wrap"/>
+                                                <TextBlock Text="{services:Loc strict.card.body}" FontSize="12" Margin="0,4,0,8"
+                                                           Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap"/>
+                                                <Grid Margin="0,0,0,6">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto"/>
+                                                        <RowDefinition Height="Auto"/>
+                                                        <RowDefinition Height="Auto"/>
+                                                    </Grid.RowDefinitions>
+                                                    <TextBlock Grid.Row="0" Text="{services:Loc strict.card.where}" FontSize="12" Foreground="{DynamicResource Text.Muted}" Margin="0,0,10,3"/>
+                                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding StrictWhere}" FontSize="12" FontFamily="{DynamicResource Font.Mono}"
+                                                               Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap" Margin="0,0,0,3"/>
+                                                    <TextBlock Grid.Row="1" Text="{services:Loc strict.card.kind}" FontSize="12" Foreground="{DynamicResource Text.Muted}" Margin="0,0,10,3"/>
+                                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding StrictKind}" FontSize="12" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource Status.Danger}" TextWrapping="Wrap" Margin="0,0,0,3"/>
+                                                    <TextBlock Grid.Row="2" Text="{services:Loc strict.card.tool}" FontSize="12" Foreground="{DynamicResource Text.Muted}" Margin="0,0,10,0"/>
+                                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding StrictTool}" FontSize="12"
+                                                               Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap"/>
+                                                </Grid>
+                                                <TextBlock Text="{services:Loc strict.card.command}" FontSize="12" Foreground="{DynamicResource Text.Muted}" Margin="0,2,0,2"/>
+                                                <TextBox Text="{Binding StrictCommand, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
+                                                         Background="{DynamicResource Surface.Input}" FontFamily="{DynamicResource Font.Mono}" FontSize="11.5"
+                                                         Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap" MaxHeight="180" Padding="8,6"
+                                                         VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="CxGuard.StrictCommand"/>
+                                                <TextBox Text="{Binding StrictDanger, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Margin="0,6,0,0"
+                                                         Background="Transparent" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                         Foreground="{DynamicResource Status.Danger}" TextWrapping="Wrap" MaxHeight="140"
+                                                         VerticalScrollBarVisibility="Auto"
+                                                         Visibility="{Binding HasStrictDanger, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                <TextBlock Text="{services:Loc strict.card.modelMustSay}" FontSize="11.5" Margin="0,8,0,8" FontStyle="Italic"
+                                                           Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap"/>
+                                                <StackPanel Visibility="{Binding ShowsStrictButtons, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                    <WrapPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                        <TextBlock Text="{services:Loc strict.card.code}" FontSize="12" VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource Text.Muted}" Margin="0,0,8,0"/>
+                                                        <Border Background="{DynamicResource Chat.Diff.Removed.Background}" CornerRadius="6" Padding="10,3" Margin="0,0,10,0">
+                                                            <TextBlock Text="{Binding StrictCode}" FontFamily="{DynamicResource Font.Mono}" FontSize="18" FontWeight="Bold"
+                                                                       Foreground="{DynamicResource Status.Danger}" AutomationProperties.AutomationId="CxGuard.StrictCode"/>
+                                                        </Border>
+                                                        <TextBlock FontSize="11.5" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}">
+                                                            <Run Text="{services:Loc strict.card.expires}"/>
+                                                            <Run Text="{Binding StrictExpires, Mode=OneWay}"/>
+                                                        </TextBlock>
+                                                    </WrapPanel>
+                                                    <WrapPanel Orientation="Horizontal">
+                                                        <TextBox Text="{Binding StrictCodeDraft, UpdateSourceTrigger=PropertyChanged}" Width="170" Margin="0,0,8,6"
+                                                                 FontFamily="{DynamicResource Font.Mono}" FontSize="13" Padding="8,4" MaxLength="16"
+                                                                 Background="{DynamicResource Surface.Input}" Foreground="{DynamicResource Text.Primary}"
+                                                                 BorderBrush="{DynamicResource Status.Danger}" BorderThickness="1"
+                                                                 ToolTip="{services:Loc strict.card.inputTip}"
+                                                                 AutomationProperties.AutomationId="CxGuard.StrictInput"
+                                                                 KeyDown="StrictCode_KeyDown"/>
+                                                        <Button Content="{services:Loc strict.card.approve}" Padding="14,3" Margin="0,0,8,6"
+                                                                FontSize="12" FontWeight="Bold" Foreground="White"
+                                                                Background="{DynamicResource Status.Danger}" BorderBrush="{DynamicResource Status.Danger}"
+                                                                AutomationProperties.AutomationId="CxGuard.StrictApprove"
+                                                                Click="StrictApprove_Click"/>
+                                                        <Button Content="{services:Loc strict.card.copyTerminal}" Padding="14,3" Margin="0,0,8,6"
+                                                                Style="{StaticResource SecondaryButton}" FontSize="12"
+                                                                ToolTip="{Binding StrictTerminalCommand}"
+                                                                AutomationProperties.AutomationId="CxGuard.StrictCopy"
+                                                                Click="StrictCopy_Click"/>
+                                                        <Button Content="{services:Loc chat.deny}" Padding="14,3" Margin="0,0,0,6"
+                                                                Style="{StaticResource SecondaryButton}" FontSize="12"
+                                                                AutomationProperties.AutomationId="CxGuard.StrictDeny"
+                                                                Click="StrictDeny_Click"/>
+                                                    </WrapPanel>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding StrictNote}" FontSize="12" FontWeight="SemiBold" Margin="0,2,0,0"
+                                                           Foreground="{DynamicResource Status.Warning}" TextWrapping="Wrap"
+                                                           Visibility="{Binding HasStrictNote, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                           AutomationProperties.AutomationId="CxGuard.StrictNote"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- BrainX's own approval (its ssh_run needs_confirmation): the owner approves in BrainX's terminal,
+                                             opened only by their click; CluadeX then resends the identical call. -->
+                                        <Border Margin="22,0,0,8" Padding="12,10" CornerRadius="8" MaxWidth="680" HorizontalAlignment="Left"
+                                                Background="{DynamicResource Surface.Sunken}" BorderBrush="{DynamicResource Status.Warning}" BorderThickness="1.5"
+                                                Visibility="{Binding IsBrainxConfirm, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                AutomationProperties.AutomationId="CxGuard.BrainxCard">
+                                            <StackPanel>
+                                                <TextBlock Text="{services:Loc strict.brainx.title}" FontSize="14" FontWeight="Bold"
+                                                           Foreground="{DynamicResource Status.Warning}" TextWrapping="Wrap"/>
+                                                <WrapPanel Orientation="Horizontal" Margin="0,4,0,6">
+                                                    <TextBlock Text="{services:Loc strict.brainx.profile}" FontSize="12" Margin="0,0,6,0"
+                                                               Foreground="{DynamicResource Text.Secondary}"/>
+                                                    <TextBlock Text="{Binding BrainxProfile}" FontSize="12" FontWeight="SemiBold"
+                                                               FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Primary}"/>
+                                                </WrapPanel>
+                                                <TextBox Text="{Binding BrainxCommand, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
+                                                         Background="{DynamicResource Surface.Input}" FontFamily="{DynamicResource Font.Mono}" FontSize="11.5"
+                                                         Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap" MaxHeight="180" Padding="8,6"
+                                                         VerticalScrollBarVisibility="Auto"/>
+                                                <TextBlock Text="{Binding BrainxReasons}" FontSize="12" Margin="0,6,0,0"
+                                                           Foreground="{DynamicResource Status.Warning}" TextWrapping="Wrap"
+                                                           Visibility="{Binding HasBrainxReasons, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                <TextBlock Text="{services:Loc strict.brainx.body}" FontSize="11.5" Margin="0,8,0,8"
+                                                           Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap"/>
+                                                <WrapPanel Orientation="Horizontal"
+                                                           Visibility="{Binding ShowsBrainxButtons, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                    <Button Content="{services:Loc strict.brainx.open}" Padding="14,3" Margin="0,0,8,6"
+                                                            Style="{StaticResource CxCharPrimary}" FontSize="12"
+                                                            Visibility="{Binding BrainxCanOpenTerminal, Converter={StaticResource BoolVis}}"
+                                                            AutomationProperties.AutomationId="CxGuard.BrainxOpen"
+                                                            Click="BrainxOpen_Click"/>
+                                                    <Button Content="{services:Loc strict.brainx.copy}" Padding="14,3" Margin="0,0,8,6"
+                                                            Style="{StaticResource SecondaryButton}" FontSize="12"
+                                                            ToolTip="{Binding BrainxApproveCommand}"
+                                                            AutomationProperties.AutomationId="CxGuard.BrainxCopy"
+                                                            Click="BrainxCopy_Click"/>
+                                                    <Button Content="{services:Loc strict.brainx.done}" Padding="14,3" Margin="0,0,8,6"
+                                                            Style="{StaticResource SecondaryButton}" FontSize="12" FontWeight="SemiBold"
+                                                            AutomationProperties.AutomationId="CxGuard.BrainxDone"
+                                                            Click="PermissionAllow_Click"/>
+                                                    <Button Content="{services:Loc chat.deny}" Padding="14,3" Margin="0,0,0,6"
+                                                            Style="{StaticResource SecondaryButton}" FontSize="12"
+                                                            AutomationProperties.AutomationId="CxGuard.BrainxDeny"
+                                                            Click="PermissionDeny_Click"/>
+                                                </WrapPanel>
+                                            </StackPanel>
+                                        </Border>
+
                                         <!-- Allow / Deny until answered; then the outcome, localized. A WrapPanel: with four buttons a
                                              narrow chat (docked beside the editor) cut the last ones off — Deny included (owner 2026-10-20). -->
                                         <WrapPanel Orientation="Horizontal" Margin="22,0,0,-6"
-                                                   Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                                   Visibility="{Binding ShowsDefaultPermissionButtons, Converter={StaticResource BoolVis}}">
                                             <Button Content="{services:Loc chat.allow}" Padding="14,3" Margin="0,0,8,6"
                                                     Style="{StaticResource CxCharPrimary}"
                                                     FontSize="12"

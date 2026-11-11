@@ -28,6 +28,12 @@ public static class Program
             Environment.Exit(Services.Safety.GuardHook.Run());
             return;
         }
+        // The owner approving a strict-approval code from their own terminal: asks the running app, never a window.
+        if (args.Length > 0 && args[0] == Services.Safety.StrictApproval.ApproveFlag)
+        {
+            Environment.Exit(Services.Safety.StrictApproval.RunApproveCli(args));
+            return;
+        }
         // Antigravity Dev's hooks (agy's PreToolUse / PreInvocation): the same guard in agy's protocol — headless too.
         if (args.Length > 0 && args[0] == Services.Safety.AntigravityGuard.Flag)
         {

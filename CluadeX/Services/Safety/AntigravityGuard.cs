@@ -36,7 +36,13 @@ public static class AntigravityGuard
 
     /// <summary>The hook's decision about one call. AskUser = dangerous: allowed only after the user's yes on CluadeX's red
     /// prompt. Tool/Action describe the call for that prompt.</summary>
-    public sealed record Decision(Verdict Verdict, string? Reason, string Tool = "", string Action = "");
+    public sealed record Decision(Verdict Verdict, string? Reason, string Tool = "", string Action = "")
+    {
+        /// <summary>Non-null = strict approval asks (the one-time-code card) instead of the red yes / no.</summary>
+        public HardToUndoFinding? Strict { get; init; }
+        /// <summary>Where the strict command runs, for the card.</summary>
+        public string? Where { get; init; }
+    }
 
     /// <summary>agy tools that only read (names as agy 1.2.7 lists them in init.tools; a few from Antigravity's IDE that
     /// the CLI may add).</summary>
@@ -105,6 +111,14 @@ public static class AntigravityGuard
                 return Deny("CluadeX: this chat is read-only (no edit/run grant) — MCP tools are not used here. Answer from what you can read.");
             // CluadeX's own server gates every call itself.
             if (IsCluadexServer(server)) return new Decision(Verdict.Allow, null, who);
+            // Strict approval: BrainX's ssh_run with a hard-to-undo command waits for the owner's code.
+            if (mcpTool == "ssh_run" && McpArg(args, "command") is { Length: > 0 } remoteCmd)
+            {
+                string host = McpArg(args, "profile_id") ?? server;
+                if (HardToUndo.IsSelfApproval(remoteCmd)) return Deny(HardToUndo.SelfApprovalRefusal);
+                if (StrictApproval.Applies(remoteCmd, host) is { } remoteStrict)
+                    return new Decision(Verdict.AskUser, null, who, Cap(remoteCmd)) { Strict = remoteStrict, Where = "remote: " + host };
+            }
             // Any other server's tool (ssh_run, the brain's chrome__*, a user's own server…) ran unasked with a grant;
             // the other CLIs put it to the user first (parity audit 2026-11-06). Now the user decides on CluadeX's prompt.
             return new Decision(Verdict.AskUser,
@@ -117,9 +131,13 @@ public static class AntigravityGuard
             if (!cfg.Run) return Deny("CluadeX: this run may not run commands — tell the user the command instead.");
             string command = Str(args, "CommandLine") ?? Str(args, "command") ?? Str(args, "Input") ?? "";
             if (TouchesPlugin(command, cfg.PluginDir)) return Deny("CluadeX safety: commands may not touch CluadeX's guard folder.");
+            if (HardToUndo.IsSelfApproval(command)) return Deny(HardToUndo.SelfApprovalRefusal);
             if (GuardHook.NeverRun(command) is { } never) return Deny(never);
             string cwd = Str(args, "Cwd") is { Length: > 0 } c ? c : cfg.Cwd;
             string? why = GuardHook.Decide(JsonSerializer.Serialize(new { tool_name = "Bash", tool_input = new { command }, cwd }));
+            if (StrictApproval.Applies(command) is { } strict)
+                return new Decision(Verdict.AskUser, why, who, Cap(command))
+                { Strict = strict, Where = strict.Host != null ? "remote: " + strict.Host : "local: " + cwd };
             return why == null ? new Decision(Verdict.Allow, null, who, command) : new Decision(Verdict.AskUser, why, who, Cap(command));
         }
 
@@ -172,9 +190,10 @@ public static class AntigravityGuard
         try { d = Decide(input, cfg); }
         catch (Exception ex) { d = Deny("CluadeX safety: the guard failed (" + ex.GetType().Name + ") — refused to be safe."); }
         if (d.Verdict == Verdict.Allow) return Answer(new JsonObject { ["decision"] = "allow" });
-        if (d.Verdict == Verdict.AskUser && DangerApprovalPipe.Ask(d.Tool, d.Action, d.Reason ?? ""))
+        if (d.Verdict == Verdict.AskUser && DangerApprovalPipe.Ask(d.Tool, d.Action, d.Reason ?? "", d.Strict, d.Where))
             return Answer(new JsonObject { ["decision"] = "allow" });
-        string reason = d.Verdict == Verdict.AskUser
+        string reason = d.Strict != null ? StrictApproval.RefusalFor(d.Strict)
+            : d.Verdict == Verdict.AskUser
             ? d.Reason + "\nNot approved: the user did not say yes on CluadeX's red prompt (or CluadeX is not running to ask). "
               + "Do not retry or work around this; tell the user what you wanted to run and why."
             : d.Reason ?? "CluadeX safety: refused.";
@@ -255,6 +274,15 @@ public static class AntigravityGuard
             case JsonObject o: foreach (var kv in o) foreach (var s in Strings(kv.Value)) yield return s; break;
             case JsonArray a: foreach (var item in a) foreach (var s in Strings(item)) yield return s; break;
         }
+    }
+
+    /// <summary>One string argument of an MCP call (agy passes Arguments as an object or as JSON text).</summary>
+    private static string? McpArg(JsonObject args, string name)
+    {
+        JsonNode? a = args["Arguments"] ?? args["arguments"];
+        if (a is JsonValue v && v.TryGetValue(out string? text))
+            try { a = JsonNode.Parse(text ?? ""); } catch (JsonException) { return null; }
+        return Str(a as JsonObject, name);
     }
 
     private static string? Str(JsonObject? o, string key) =>

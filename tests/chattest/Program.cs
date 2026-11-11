@@ -436,6 +436,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=STRICT: just the strict-approval card and BrainX's approval card (StrictCardTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "STRICT")
+        {
+            await TestStrictCards();
+            Log($"\n## Result (CHATTEST_ONLY=STRICT): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PP: just the plain-language permission prompt and the live model chip (quick renders to look at).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") is "PP" or "PB")
         {
