@@ -58,6 +58,8 @@ internal static partial class Program
         // This harness checks real command output, so it opts out of the default dry-run on purpose (ProcessLaunchPolicy).
         // A new harness must not copy this line unless real runs are its point; the guards still check every command.
         CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = false;
+        // No chime from the speakers while the chat is driven: the boxes it opens ring into a list (ChimeTests.cs).
+        CluadeX.Services.Voice.AttentionChime.Sink = kind => Chimes.Add(kind);
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
 
@@ -431,6 +433,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=CHIME: just the chime when a box waits for the owner's answer.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "CHIME")
+        {
+            await TestAttentionChime();
+            Log($"\n## Result (CHATTEST_ONLY=CHIME): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=SPK: just the speaker under her face on a reply (hover holds still, the click switches reading aloud).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SPK")
         {
@@ -463,6 +474,7 @@ internal static partial class Program
         await TestAttachedFiles();            // XF: any file dropped into a message — read, unpacked, by path
         await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
         await TestVoiceMode();                // VM: replies read aloud + a GPT-Live call through the chat (mock API)
+        await TestAttentionChime();           // CH: a chime when a box waits for the owner's answer
         await TestSpeakerHover();             // SPK: the speaker under her face holds still on hover; its click switches reading aloud
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5

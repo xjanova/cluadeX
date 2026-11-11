@@ -72,6 +72,21 @@ public partial class SettingsViewModel
         }
     }
 
+    /// <summary>The chime when a box waits for the owner's answer (Appearance card; AppSettings.AttentionChime). Turning it
+    /// on rings it once, so the owner hears what it sounds like.</summary>
+    public bool AttentionChime
+    {
+        get => _settingsService.Settings.AttentionChime;
+        set
+        {
+            if (_settingsService.Settings.AttentionChime == value) return;
+            try { _settingsService.UpdateSettings(s => s.AttentionChime = value); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Settings] attention chime: {ex.Message}"); }
+            OnPropertyChanged();
+            if (value) Services.Voice.AttentionChime.Play(Services.Voice.ChimeKind.Ask);
+        }
+    }
+
     private readonly ObservableCollection<FontChoice> _fontChoices = new();
     private bool _fontsBuilt;
 

@@ -428,6 +428,7 @@ public partial class ChatViewModel
         {
             (run?.Messages ?? Messages).Add(msg);
             RaiseRunStateChanged();   // "waiting for you" on the other-chats bar when it is not on screen
+            ChimeForBox(Services.Voice.ChimeKind.Ask);
             ScrollToBottom?.Invoke();
         });
         return tcs.Task;
@@ -454,9 +455,19 @@ public partial class ChatViewModel
         {
             (run?.Messages ?? Messages).Add(msg);
             RaiseRunStateChanged();
+            ChimeForBox(Services.Voice.ChimeKind.Ask);
             ScrollToBottom?.Invoke();
         });
         return tcs.Task;
+    }
+
+    /// <summary>A box now waits for the owner's answer — her question, a permission prompt, the red prompt: the chime
+    /// (AppSettings.AttentionChime), so a turn waiting in the background or behind another window is heard.</summary>
+    private void ChimeForBox(Services.Voice.ChimeKind kind)
+    {
+        if (!_settingsService.Settings.AttentionChime) return;
+        if (Services.Voice.AttentionChime.Play(kind))
+            _debugLog?.Info("Chime", kind == Services.Voice.ChimeKind.Danger ? "the red prompt waits for the owner" : "a box waits for the owner's answer");
     }
 
     // ─── start / end ───
