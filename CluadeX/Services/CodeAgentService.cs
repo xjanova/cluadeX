@@ -2568,7 +2568,10 @@ public partial class CodeAgentService
                 // A question from any CLI opens the same card as ask_user on the native loop.
                 _agentToolService.AskUserAsync, spawnGate,
                 // Several questions at once: one card with steps, Back / Next and a review — the same for every CLI.
-                _agentToolService.AskUserStepsAsync)
+                _agentToolService.AskUserStepsAsync,
+                // Codex's sandbox cannot commit, push, run adb or reach https: run_as_user runs those few as the user, through
+                // run_command's gate — only on a turn the user let run commands.
+                userShell: delegated == AiProviderType.OpenAIDev && grant is { Run: true })
             : null;
         if (cliAgent)
         {

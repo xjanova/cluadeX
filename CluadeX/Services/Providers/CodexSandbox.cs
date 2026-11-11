@@ -20,10 +20,11 @@ public static class CodexSandbox
     /// One thing the sandbox takes away. <see cref="Pattern"/>: what a failed command prints when this is why it failed
     /// (null = said in the prompt only); its notice is the localization key <c>codex.sandbox.why.&lt;Id&gt;</c>.
     /// <see cref="Prompt"/>: the wrapper's sentence about it (the argument: the turn has CluadeX's chat tools).
+    /// <see cref="WithUserShell"/>: the sentence instead when the turn has run_as_user (<see cref="CodexUserShell"/>).
     /// Every limit lives in <see cref="Limits"/> alone, so the notice and the prompt cannot drift apart, and apitest
     /// checks each has both (2026-11-11: the fixes before this were made one symptom at a time, in two places).
     /// </summary>
-    public sealed record Limit(string Id, Regex? Pattern, Func<bool, string> Prompt);
+    public sealed record Limit(string Id, Regex? Pattern, Func<bool, string> Prompt, string? WithUserShell = null);
 
     private static Regex R(string p) => new(p, RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Multiline);
 
@@ -39,7 +40,10 @@ public static class CodexSandbox
             tools => "A package not downloaded yet cannot download in the sandbox (.NET's HTTPS needs a profile it lacks: "
                      + "\"Unable to load the service index\", NU1301) — "
                      + (tools ? "run verify_change once, which restores as the user, then build in the sandbox again."
-                              : "the user has to restore it once.")),
+                              : "the user has to restore it once."),
+            "A package not downloaded yet cannot download in the sandbox (.NET's HTTPS needs a profile it lacks: "
+            + "\"Unable to load the service index\", NU1301) — run `dotnet restore` (or `dotnet add <project> package <name>`) "
+            + "through run_as_user, then build in the sandbox again."),
         new("dpapi", R(@"user profile loaded for the current thread's user context|when the thread is impersonating"),
             _ => "It does not have the user's DPAPI keys (\"user profile not loaded\" / \"impersonating\"): the user's "
                  + "encrypted settings and tokens do not open there."),
@@ -50,12 +54,19 @@ public static class CodexSandbox
             _ => "Windows' own TLS needs a user profile the sandbox lacks, so HTTPS from curl.exe (SEC_E_NO_CREDENTIALS) and "
                  + "PowerShell Invoke-WebRequest fails there: to call a URL, use Node — write the script to a .js file and run "
                  + "`node file.js` (fetch works) — never conclude a server is down from curl or Invoke-WebRequest failing in the "
-                 + "sandbox. git uses OpenSSL there (CluadeX sets it), so `git ls-remote` and `git clone` over https work."),
+                 + "sandbox. git uses OpenSSL there (CluadeX sets it), so `git ls-remote` and `git clone` over https work.",
+            "Windows' own TLS needs a user profile the sandbox lacks, so HTTPS from curl.exe (SEC_E_NO_CREDENTIALS) and "
+            + "PowerShell Invoke-WebRequest fails there: to read a URL, run `curl` (GET) through run_as_user, or use Node "
+            + "(`node file.js`, fetch works) — never conclude a server is down from curl or Invoke-WebRequest failing in the "
+            + "sandbox. git uses OpenSSL there (CluadeX sets it), so `git ls-remote` and `git clone` over https work."),
         new("git", R(@"\.git[\\/][^'""\r\n]*'?:? Permission denied|Access to the path '[^']*\\\.git\\[^']*' is denied"),
             _ => "Codex keeps `.git` read-only in its sandbox: git status, diff, log and ls-remote work, but nothing that "
                  + "writes the repository does (add, commit, checkout -b, stash, fetch — \".git/index.lock': Permission "
                  + "denied\"). Never delete lock files or retry it another way: leave the commit to the user and say which "
-                 + "files changed."),
+                 + "files changed.",
+            "Codex keeps `.git` read-only in its sandbox: git status, diff, log and ls-remote work, but nothing that "
+            + "writes the repository does (\".git/index.lock': Permission denied\"). Never delete lock files or retry it in "
+            + "the sandbox: run git add / commit / push / pull / fetch / switch through run_as_user, one command per call."),
         new("python", R(@"(?:python|pip|py)[\w.]*'? failed to run: (?:The file cannot be accessed by the system|Access is denied)|WindowsApps\\[^\r\n]{0,200}(?:Access is denied|cannot be accessed)"),
             _ => "`python`/`pip` from the Microsoft Store (WindowsApps) cannot start there (\"The file cannot be accessed by "
                  + "the system\"): use `py` (the Python launcher), and `py -m pip` for pip."),
@@ -67,11 +78,15 @@ public static class CodexSandbox
                  + "(`cmd /c mklink /J link target`) or a copy."),
         new("adb", R(@"Cannot mkdir '\\?\.android'"),
             _ => "`adb` cannot run in the sandbox at all (\"Cannot mkdir '\\.android'\": the account has no profile "
-                 + "folder): ask the user (ask_user) to run the adb command and paste its output."),
+                 + "folder): ask the user (ask_user) to run the adb command and paste its output.",
+            "`adb` cannot run in the sandbox at all (\"Cannot mkdir '\\.android'\": the account has no profile folder): "
+            + "run it through run_as_user."),
         // With CluadeX's APPDATA (CodexSandboxEnv) gh finds an empty config instead of a denied one: "not logged into any".
         new("gh", R(@"GitHub CLI\\config\.yml[^\r\n]{0,120}(?:denied|Access is denied)|failed to read configuration:[^\r\n]{0,200}GitHub CLI|You are not logged into any GitHub hosts"),
             tools => "`gh` cannot read the user's GitHub login there"
-                     + (tools ? ": use the gh_pr_view, gh_pr_checks and gh_run_log tools (MCP server cluadex)." : ".")),
+                     + (tools ? ": use the gh_pr_view, gh_pr_checks and gh_run_log tools (MCP server cluadex)." : "."),
+            "`gh` cannot read the user's GitHub login there: run gh through run_as_user (pr create, pr view, pr checks, run "
+            + "view, issue …), or use the gh_pr_view, gh_pr_checks and gh_run_log tools."),
         new("registry", null,
             _ => "HKCU there is the sandbox account's own hive, not the user's: registry reads show nothing of the user's "
                  + "and writes are denied."),
@@ -170,9 +185,10 @@ public static class CodexSandbox
     /// <summary>
     /// The wrapper's lines about the sandbox for a turn that may run commands. <paramref name="chatTools"/>: the turn has
     /// CluadeX's MCP server (verify_change). <paramref name="hasRipgrep"/>: `rg` is on the turn's PATH.
-    /// <paramref name="sandboxHome"/>: the home <see cref="CodexSandboxEnv"/> gave the turn's shell, or null. Pure.
+    /// <paramref name="sandboxHome"/>: the home <see cref="CodexSandboxEnv"/> gave the turn's shell, or null.
+    /// <paramref name="userShell"/>: the turn has run_as_user (<see cref="CodexUserShell"/>). Pure.
     /// </summary>
-    public static string PromptSection(bool chatTools, bool hasRipgrep, string? sandboxHome = null)
+    public static string PromptSection(bool chatTools, bool hasRipgrep, string? sandboxHome = null, bool userShell = false)
     {
         string s = "Your shell commands run inside Codex's Windows sandbox, as a separate restricted Windows account with no "
             + "profile of its own, not as the user. It can write only in the project (and the folders the user added) and in "
@@ -186,7 +202,12 @@ public static class CodexSandbox
             + "a `.git` was made inside the sandbox (`git init` there makes it belong to the sandbox account). CluadeX rebuilds such "
             + "a `.git` as the user's as soon as that failure shows, so run the command once more; if it fails the same way again, "
             + "stop and tell the user rather than looking for another way to run it (desktop tools, terminals). ";
-        foreach (var limit in Limits) s += limit.Prompt(chatTools) + " ";
+        foreach (var limit in Limits) s += (userShell && limit.WithUserShell != null ? limit.WithUserShell : limit.Prompt(chatTools)) + " ";
+        if (userShell)
+            s += "CluadeX's run_as_user tool (MCP server cluadex) runs ONE git, gh, adb, dotnet (restore / add package) or curl "
+               + "(GET) command as the user, outside the sandbox, in the project folder: the user's approval rules and cards "
+               + "apply to each call. Use it only for what the sandbox blocks, never to get round a refusal, and never for "
+               + "commands that throw work away (reset, clean, checkout --, force push) — it refuses those. ";
         s += chatTools
             ? "Builds and tests that need the user (a new package, the user's DPAPI keys, WMI, a harness that reads the user's "
               + "AppData) go through CluadeX's verify_change tool (MCP server cluadex): it runs as the user, outside the "

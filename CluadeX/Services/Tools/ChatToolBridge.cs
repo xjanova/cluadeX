@@ -183,7 +183,7 @@ public static class ChatToolBridge
     /// on one site show three permission cards where the first answer covers the rest.</summary>
     private sealed record Registration(AgentRunScope? Scope, Func<ToolCall, CancellationToken, Task<ToolResult>> Execute,
         CancellationTokenSource Cts, string? Cwd, McpApprover? Approve, QuestionAsker? Ask, Agents.CliAgentGate? Gate,
-        StepsAsker? AskSteps = null)
+        StepsAsker? AskSteps = null, bool UserShell = false)
     {
         public SemaphoreSlim BrowserLane { get; } = new(1, 1);
 
@@ -223,7 +223,7 @@ public static class ChatToolBridge
     /// </summary>
     public static Ticket? Register(AgentRunScope? scope, Func<ToolCall, CancellationToken, Task<ToolResult>> execute,
         string? cwd, CancellationToken turn, McpApprover? approve = null, QuestionAsker? ask = null, Agents.CliAgentGate? gate = null,
-        StepsAsker? askSteps = null)
+        StepsAsker? askSteps = null, bool userShell = false)
     {
         try
         {
@@ -232,15 +232,16 @@ public static class ChatToolBridge
             Directory.CreateDirectory(dir);
             SweepStale(dir);
             string file = Path.Combine(dir, $"claude-dev-tools-{token[..12]}.json");
-            File.WriteAllText(file, ConfigJson(Safety.GuardHook.ExePath(), token, PipeName), new UTF8Encoding(false));
-            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask, gate, askSteps);
+            File.WriteAllText(file, ConfigJson(Safety.GuardHook.ExePath(), token, PipeName, userShell), new UTF8Encoding(false));
+            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask, gate, askSteps, userShell);
             return new Ticket(token, file);
         }
         catch { return null; }
     }
 
     /// <summary>The <c>--mcp-config</c> file: one stdio server, this exe in tools mode, the turn's token in its env.</summary>
-    public static string ConfigJson(string exe, string token, string pipe) => JsonSerializer.Serialize(new
+    /// <paramref name="userShell"/>: the server also lists run_as_user (a Codex turn with the run grant).
+    public static string ConfigJson(string exe, string token, string pipe, bool userShell = false) => JsonSerializer.Serialize(new
     {
         mcpServers = new Dictionary<string, object>
         {
@@ -249,10 +250,15 @@ public static class ChatToolBridge
                 type = "stdio",
                 command = exe,
                 args = new[] { Flag },
-                env = new Dictionary<string, string> { [TokenEnv] = token, [PipeEnv] = pipe },
+                env = userShell
+                    ? new Dictionary<string, string> { [TokenEnv] = token, [PipeEnv] = pipe, [UserShellEnv] = "1" }
+                    : new Dictionary<string, string> { [TokenEnv] = token, [PipeEnv] = pipe },
             },
         },
     });
+
+    /// <summary>Set (to "1") for the tools server of a turn that is offered run_as_user.</summary>
+    private const string UserShellEnv = "CLUADEX_TOOLS_USERSHELL";
 
     /// <summary>Config files a crashed turn left behind (they hold a dead token, but still: not kept).</summary>
     private static void SweepStale(string dir)
@@ -373,6 +379,8 @@ public static class ChatToolBridge
             return await AskFromToolAsync(root, reg).ConfigureAwait(false);
         if (tool == AgentGateToolName)
             return AnswerAgentGate(root, reg);
+        if (tool == Providers.CodexUserShell.ToolName)
+            return await RunAsUserAsync(root, reg, hungUp).ConfigureAwait(false);
         bool browser = BrowserToolModule.ToolNames.Contains(tool);
         bool desktop = !browser && Desktop.DesktopToolModule.ToolNames.Contains(tool);
         bool engineering = !browser && !desktop && EngineeringToolModule.ToolNames.Contains(tool);
@@ -423,6 +431,41 @@ public static class ChatToolBridge
         var (images, notes) = ImagesForCli(shots);
         if (notes.Count > 0) text += "\n" + string.Join("\n", notes);
         return new Reply(true, text, images);
+    }
+
+    /// <summary>
+    /// run_as_user (Codex only): one listed command, outside Codex's sandbox, as CluadeX's own run_command — so the user's
+    /// rules, the permission card, the red danger card and strict approval all apply, in the chat's project folder.
+    /// Refused on any turn that was not offered it (a Claude / Gemini / Grok turn, or Codex without the run grant).
+    /// </summary>
+    private static async Task<Reply> RunAsUserAsync(JsonElement request, Registration reg, CancellationToken hungUp)
+    {
+        const string tool = Providers.CodexUserShell.ToolName;
+        if (!reg.UserShell)
+            return (false, "CluadeX: run_as_user is only for an OpenAI Dev (Codex) turn the user let run commands.");
+        var args = ToolArguments(request.TryGetProperty("args", out var a) ? a : default);
+        string command = args.TryGetValue("command", out var c) ? c.Trim() : "";
+        if (Providers.CodexUserShell.Refusal(command) is { } why) return (false, why);
+
+        var call = new ToolCall
+        {
+            Type = ToolType.RunCommand, ToolName = "run_command",
+            Arguments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["command"] = command },
+        };
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(reg.Cts.Token, hungUp);
+        var ct = linked.Token;
+        if (ct.IsCancellationRequested) return (false, TurnOver);
+        AgentRunScope.Enter(reg.Scope);
+        ToolResult result;
+        try
+        {
+            await reg.WorkLane.WaitAsync(ct).ConfigureAwait(false);
+            try { result = await reg.Execute(call, ct).ConfigureAwait(false); }
+            finally { reg.WorkLane.Release(); }
+        }
+        catch (OperationCanceledException) { return (false, Stopped(tool, hungUp)); }
+        if (!result.Success && ct.IsCancellationRequested) return (false, Stopped(tool, hungUp));
+        return new Reply(result.Success, TextOf(result) + NotesFor(reg));
     }
 
     /// <summary>What the user typed while this turn works (the input box, the plan window's add box), riding on the reply
@@ -957,7 +1000,7 @@ public static class ChatToolBridge
                 case "ping":
                     return Result(id, new { });
                 case "tools/list":
-                    return Result(id, new { tools = ToolList() });
+                    return Result(id, new { tools = ToolList(Environment.GetEnvironmentVariable(UserShellEnv) == "1") });
                 case "tools/call":
                 {
                     string name = prm.ValueKind == JsonValueKind.Object && prm.TryGetProperty("name", out var nm)
@@ -996,7 +1039,13 @@ public static class ChatToolBridge
     /// list the native loop offers; this process holds no services, so none is filtered by the gate here: a tool the
     /// gate refuses right now answers the gate's reason when called, and the turn's prompt already says it), with
     /// open_project said the way it works for the CLI.</summary>
-    public static object[] ToolList() => new ProjectToolModule().GetToolSchemas().Select(s => (object)new
+    /// <paramref name="userShell"/>: also list run_as_user (the server of a Codex turn with the run grant).
+    public static object[] ToolList(bool userShell = false) => ToolListBase().Concat(userShell
+        ? new object[] { new { name = Providers.CodexUserShell.ToolName, description = Providers.CodexUserShell.Description,
+                               inputSchema = Providers.CodexUserShell.InputSchema } }
+        : Array.Empty<object>()).ToArray();
+
+    private static IEnumerable<object> ToolListBase() => new ProjectToolModule().GetToolSchemas().Select(s => (object)new
     {
         name = s.Name,
         description = s.Name == ProjectToolModule.ToolName
@@ -1087,7 +1136,7 @@ public static class ChatToolBridge
             },
             required = new[] { "tool_name", "input" },
         },
-    }).ToArray();
+    });
 
     /// <summary>A native schema as the CLIs take it: an empty "required" list left out (valid JSON Schema, but the Gemini
     /// API has never been sent one from this server). Pure.</summary>
