@@ -243,7 +243,88 @@ internal static class CodexSandboxWire
         var schema = EngineeringToolModule.Schemas().First(s => s.Name == "verify_change").InputSchema.GetProperty("properties");
         check("cx-long", "verify_change offers timeout_minutes and tests_background",
             schema.TryGetProperty("timeout_minutes", out _) && schema.TryGetProperty("tests_background", out _), schema.ToString());
-        return Task.CompletedTask;
+        return RunAsUser(check);
+    }
+
+    /// <summary>run_as_user (owner 2026-11-11 "ทำเลย"): what the sandbox cannot do, run as the user through run_command's gate.</summary>
+    static async Task RunAsUser(Action<string, string, bool, string> check)
+    {
+        string? R(string c) => CodexUserShell.Refusal(c);
+        var allowed = new[]
+        {
+            "git add -A", "git commit -m \"Fix the parser; and more\"", "git push -u origin feat/x", "git -C sub status", "git --no-pager log -5", "git fetch origin",
+            "git switch -c feat/y", "git branch -d old", "git config --get user.name", "git remote -v", "git.exe status",
+            "gh pr create --title \"T\" --body \"B\"", "gh pr view 12", "gh run view 5 --log-failed", "gh api repos/o/r/pulls",
+            "dotnet restore", "dotnet add App.csproj package Newtonsoft.Json", "dotnet nuget locals all --list",
+            "curl -s https://example.com/api", "curl -fsSL https://e.com", "curl -I https://example.com", "curl -X GET https://e.com", "adb devices", "adb logcat -d",
+        };
+        var bad = allowed.Where(c => R(c) != null).Select(c => c + " → " + R(c)).ToList();
+        check("cx-user", "run_as_user lets through what the sandbox blocks: git writes, gh, dotnet restore/add package, curl GET, adb",
+            bad.Count == 0, string.Join(" | ", bad));
+        var refused = new[]
+        {
+            "", "git status && del x", "git status; rm x", "git log | more", "git diff > out.txt", "git commit -m $(whoami)", "git log `x`",
+            "powershell -c Remove-Item x", "cmd /c del x", "node x.js", "rm -rf src",
+            "git reset --hard", "git clean -fd", "git push --force", "git push -f origin main", "git checkout -- src", "git restore x",
+            "git stash drop", "git rm x", "git branch -D x", "git switch -f main", "git tag -d v1", "git config user.name x",
+            "git remote add up u", "gh auth token", "gh secret set X", "gh repo delete o/r", "gh release delete v1",
+            "gh api -X DELETE repos/o/r", "gh api repos/o/r/issues -f title=x", "dotnet build", "dotnet test", "dotnet run",
+            "dotnet add App.csproj reference ../L.csproj", "dotnet nuget push x.nupkg", "curl -o x.exe https://e.com/x",
+            "curl -d a=b https://e.com", "curl -X POST https://e.com", "curl -XDELETE https://e.com", "curl -F f=@x https://e.com",
+            "curl --output=x https://e.com", "curl -T x https://e.com", "curl -sSo x https://e.com", "git commit -m \"$(whoami)\"", "git commit -m \"a", "git -c core.fsmonitor=x status", "git -c core.sshCommand=x fetch", "git fetch --upload-pack=x origin", "git push --receive-pack=x", "git ls-remote -u x origin", "git --config-env=a=B status", "git status (Remove-Item x)", "git log {x}",
+        };
+        var slipped = refused.Where(c => R(c) == null).ToList();
+        check("cx-user", "…and refuses chains, other programs, what throws work away, auth/secrets/deletes, builds, uploads",
+            slipped.Count == 0, string.Join(" | ", slipped));
+        check("cx-user", "a refusal says what to do instead",
+            R("git reset --hard")!.Length > 10 && R("dotnet build")!.Contains("sandbox") && R("git status && x")!.Contains("ONE"), R("dotnet build") ?? "");
+
+        // The tool list: only the server of a turn offered it (env), and Codex approves it by name.
+        string Names(bool on) => string.Join(",", JsonSerializer.SerializeToElement(ChatToolBridge.ToolList(on)).EnumerateArray().Select(e => e.GetProperty("name").GetString()));
+        check("cx-user", "tools/list has run_as_user only when the turn's server is told to (CLUADEX_TOOLS_USERSHELL)",
+            Names(true).Split(',').Contains("run_as_user") && !Names(false).Split(',').Contains("run_as_user")
+            && !ChatToolBridge.QualifiedToolNames.Any(n => n.EndsWith("run_as_user")), "");
+        string on = ChatToolBridge.ConfigJson(@"C:\x\CluadeX.exe", "t", "p", userShell: true), off = ChatToolBridge.ConfigJson(@"C:\x\CluadeX.exe", "t", "p");
+        var mcpOn = OpenAIDevProvider.McpOverrides(on); var mcpOff = OpenAIDevProvider.McpOverrides(off);
+        check("cx-user", "Codex's override approves run_as_user (CluadeX's own card asks) only when the server offers it",
+            mcpOn.Count == 1 && mcpOn[0].Contains("run_as_user={approval_mode='approve'}") && mcpOn[0].Contains("CLUADEX_TOOLS_USERSHELL='1'")
+            && mcpOff.Count == 1 && !mcpOff[0].Contains("run_as_user"), mcpOn.FirstOrDefault() ?? "");
+
+        // The prompt: a run turn with the chat tools hears of it; an edit-only turn, or one without the tools, does not.
+        var run = new ClaudeDevProvider.WorkerGrant(true, true);
+        string withShell = OpenAIDevProvider.BuildPrompt(Folder, run, null, "", "go", chatTools: true, hasRipgrep: true);
+        string editOnly = OpenAIDevProvider.BuildPrompt(Folder, new ClaudeDevProvider.WorkerGrant(true, false), null, "", "go", chatTools: true, hasRipgrep: true);
+        string noTools = OpenAIDevProvider.BuildPrompt(Folder, run, null, "", "go", chatTools: false, hasRipgrep: true);
+        check("cx-user", "run turn: commit/push, gh, adb, restore and curl go through run_as_user (not \"leave the commit to the user\")",
+            withShell.Contains("run_as_user") && withShell.Contains("git add / commit / push") && !withShell.Contains("leave the commit to the user")
+            && withShell.Contains("run `curl` (GET) through run_as_user") && withShell.Contains("`dotnet restore`") && !withShell.Contains("ask the user (ask_user) to run the adb"),
+            withShell);
+        check("cx-user", "edit-only or no chat tools: no run_as_user, the old advice stays",
+            !editOnly.Contains("run_as_user") && editOnly.Contains("leave the commit to the user") && !noTools.Contains("run_as_user"), "");
+        check("cx-user", "every limit that names run_as_user still has its plain sentence",
+            CodexSandbox.Limits.Where(l => l.WithUserShell != null).All(l => l.WithUserShell!.Contains("run_as_user") && !l.Prompt(true).Contains("run_as_user"))
+            && CodexSandbox.Limits.Count(l => l.WithUserShell != null) == 5, "");
+
+        // The bridge: refused on a turn not offered it; otherwise it is run_command (the gate's rules, cards, red card).
+        var seen = new List<ToolCall>();
+        Task<ToolResult> Exec(ToolCall c, CancellationToken _) { seen.Add(c); return Task.FromResult(new ToolResult { Type = c.Type, ToolName = c.ToolName, Success = true, Output = "ran" }); }
+        using var turnCts = new CancellationTokenSource();
+        using (var plain = ChatToolBridge.Register(new AgentRunScope("u0", Folder), Exec, Folder, turnCts.Token)!)
+        {
+            var r = await ChatToolBridge.HandleAsync(J(new { token = plain.Token, tool = "run_as_user", args = new { command = "git status" } }));
+            check("cx-user", "a turn not offered run_as_user (Claude / Gemini / Grok, or Codex without run) is refused, nothing runs",
+                !r.Ok && r.Text.Contains("only for an OpenAI Dev") && seen.Count == 0, r.Text);
+        }
+        using (var codex = ChatToolBridge.Register(new AgentRunScope("u1", Folder), Exec, Folder, turnCts.Token, userShell: true)!)
+        {
+            string cfg = File.ReadAllText(codex.ConfigFile);
+            var ok = await ChatToolBridge.HandleAsync(J(new { token = codex.Token, tool = "run_as_user", args = new { command = "git commit -m \"Fix\"" } }));
+            check("cx-user", "a Codex run turn: the config carries the flag, and the call is run_command with the same command",
+                cfg.Contains("CLUADEX_TOOLS_USERSHELL") && ok.Ok && ok.Text == "ran" && seen.Count == 1 && seen[0].Type == ToolType.RunCommand
+                && seen[0].ToolName == "run_command" && seen[0].GetArg("command") == "git commit -m \"Fix\"", ok.Text);
+            var no = await ChatToolBridge.HandleAsync(J(new { token = codex.Token, tool = "run_as_user", args = new { command = "git reset --hard" } }));
+            check("cx-user", "…a refused command never reaches the gate", !no.Ok && seen.Count == 1, no.Text);
+        }
     }
 
     /// <summary>A System.Text.Json.Nodes object from an anonymous one.</summary>

@@ -271,8 +271,12 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                 // them unasked — under approval_policy=never it would refuse them otherwise.
                 if (name == Tools.ChatToolBridge.ServerName)
                 {
+                    // run_as_user too when this turn's server offers it: CluadeX's own permission card asks for each command.
+                    bool userShell = s["env"] is JsonObject e2 && e2.ContainsKey("CLUADEX_TOOLS_USERSHELL");
                     parts.Add("tools={" + string.Join(", ", Tools.ChatToolBridge.QualifiedToolNames
-                        .Select(q => q[$"mcp__{name}__".Length..] + "={approval_mode='approve'}")) + "}");
+                        .Select(q => q[$"mcp__{name}__".Length..])
+                        .Concat(userShell ? new[] { CodexUserShell.ToolName } : Array.Empty<string>())
+                        .Select(t => t + "={approval_mode='approve'}")) + "}");
                     // A call may wait on CluadeX's permission card or question card for as long as the user takes; Codex's
                     // own limit (60 s by default) would give up on it while the card still shows.
                     parts.Add("tool_timeout_sec=" + (int)Tools.ChatToolBridge.CallTimeout.TotalSeconds);
@@ -333,7 +337,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         if (worker && chatTools && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();
         // Codex runs every shell command in its Windows sandbox, as another account (CodexSandbox): say what that blocks and
         // where builds and tests go instead, so a sandbox refusal is not taken for a bug in the code.
-        if (worker) wrapper += " " + CodexSandbox.PromptSection(chatTools, hasRipgrep, sandboxHome);
+        // run_as_user rides the chat tools' server on a turn with the run grant (CodeAgentService registers it so).
+        if (worker) wrapper += " " + CodexSandbox.PromptSection(chatTools, hasRipgrep, sandboxHome, userShell: chatTools && grant is { Run: true });
         else if (!hasRipgrep) wrapper += " `rg` is not installed here: search with `git grep -n` or PowerShell `Select-String`.";
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.OpenAIDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
