@@ -347,6 +347,15 @@ internal static partial class Program
 
         // CHATTEST_ONLY=PC: just the plan card's clock and how it closes when the run ends.
         // CHATTEST_ONLY=VB: just the vibe helpers — change card, error chip, explain simply, @-mentions, click-to-ask, gauge.
+        // CHATTEST_ONLY=TT: just the test card a turn ends with (suites, failures read, skipped) and its pictures.
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "TT")
+        {
+            await TestTurnTests();
+            Log($"\n## Result (CHATTEST_ONLY=TT): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "VB")
         {
             await TestVibe();
@@ -507,6 +516,7 @@ internal static partial class Program
         await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card
         await TestActivityCard();             // AC: the activity card — event → state, real turns, per chat, close / reopen
         await TestVibe();                     // VB: change card, error chip, explain simply, @-mentions, click-to-ask, memory gauge
+        await TestTurnTests();                // TT: the test card a turn ends with
         await TestWatchJobs();                // WJ: watch_process — the card, the turn a finished watch starts, its limits
         await TestSkillPick();                // SP: each turn is given only the skills that fit it; the composer's switch
         await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen

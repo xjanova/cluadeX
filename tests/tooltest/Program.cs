@@ -236,6 +236,30 @@ internal static partial class Program
         Fs.WorkingDirectory = Root;
         Console.WriteLine($"project   : {Root}\n");
 
+        // TOOLTEST_ONLY=ENG: just the engineering tools (verify_change, its test counts, references, checkpoints …), for a
+        // change that touched only them — the owner's rule: test what changed, not the whole sweep.
+        if (Environment.GetEnvironmentVariable("TOOLTEST_ONLY") == "ENG")
+        {
+            LocalizedResources.Instance.Initialize(provider.GetRequiredService<LocalizationService>());
+            var engPerms = provider.GetRequiredService<PermissionService>();
+            var engKept = engPerms.Rules.ToList();
+            foreach (var kept in engKept) engPerms.RemoveRule(kept);
+            try
+            {
+                Console.WriteLine("── engineering tools: verify_change, locked builds, references/rename/impact, checkpoints, gh/git, debug ──");
+                await EngineeringTools(provider, settings);
+            }
+            finally
+            {
+                foreach (var leftover in engPerms.Rules.ToList()) engPerms.RemoveRule(leftover);
+                foreach (var kept in engKept) engPerms.AddRule(kept);
+            }
+            Console.WriteLine($"\n═══ {Pass} pass · {Fail} FAIL · {Gap} GAP ═══ (TOOLTEST_ONLY=ENG)");
+            foreach (var p in Problems) Console.WriteLine("   " + p);
+            ForceDelete(Root);
+            return Fail == 0 ? 0 : 1;
+        }
+
         var schemas = Svc.BuildNativeToolSchemas().Where(s => s.Name is "multi_edit").ToList();
         foreach (var s in schemas)
             Report.AppendLine($"## schema {s.Name}\n```\n{System.Text.Json.JsonSerializer.Serialize(s.InputSchema)}\n```");
