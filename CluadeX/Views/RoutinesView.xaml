@@ -88,7 +88,7 @@
                                             <TextBlock FontSize="12" Margin="0,3,0,0" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap">
                                                 <Run Text="{Binding When, Mode=OneWay}"/><Run Text="  ·  "/><Run Text="{Binding Next, Mode=OneWay}"/>
                                             </TextBlock>
-                                            <TextBlock Text="{Binding Last}" FontSize="11.5" Margin="0,2,0,0" TextWrapping="Wrap"
+                                            <TextBlock x:Name="LastLine" Text="{Binding Last}" FontSize="11.5" Margin="0,2,0,0" TextWrapping="Wrap"
                                                        Foreground="{DynamicResource Text.Muted}"/>
                                             <TextBlock Text="{Binding Project}" FontSize="10.5" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"
                                                        FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Faint}"/>
@@ -109,6 +109,9 @@
                                 <DataTemplate.Triggers>
                                     <DataTrigger Binding="{Binding Enabled}" Value="False">
                                         <Setter TargetName="Title" Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Last}" Value="">
+                                        <Setter TargetName="LastLine" Property="Visibility" Value="Collapsed"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding IsRunning}" Value="True">
                                         <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
@@ -135,8 +138,13 @@
                                  VerticalContentAlignment="Top"/>
 
                         <TextBlock Text="{services:Loc routine.page.project}" Style="{StaticResource Kicker}"/>
-                        <ComboBox ItemsSource="{Binding Projects}" Text="{Binding EditProject, UpdateSourceTrigger=PropertyChanged}"
-                                  IsEditable="True" FontFamily="{DynamicResource Font.Mono}" FontSize="11.5"/>
+                        <TextBox Text="{Binding EditProject, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Field}"
+                                 FontFamily="{DynamicResource Font.Mono}" FontSize="11.5"/>
+                        <StackPanel Visibility="{Binding HasProjects, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{services:Loc routine.page.pickProject}" FontSize="10.5" Margin="0,6,0,3"
+                                       Foreground="{DynamicResource Text.Faint}"/>
+                            <ComboBox ItemsSource="{Binding Projects}" SelectedItem="{Binding PickProject}" FontSize="11.5"/>
+                        </StackPanel>
 
                         <TextBlock Text="{services:Loc routine.page.when}" Style="{StaticResource Kicker}"/>
                         <WrapPanel>
@@ -186,10 +194,14 @@
                             </StackPanel>
                         </StackPanel>
 
-                        <CheckBox Content="{services:Loc routine.page.sameChat}" IsChecked="{Binding EditSameChat}" Margin="0,16,0,0"
-                                  Style="{StaticResource ModernCheckBox}" Foreground="{DynamicResource Text.Secondary}"/>
-                        <CheckBox Content="{services:Loc routine.page.catchUp}" IsChecked="{Binding EditCatchUp}" Margin="0,8,0,0"
-                                  Style="{StaticResource ModernCheckBox}" Foreground="{DynamicResource Text.Secondary}"/>
+                        <CheckBox IsChecked="{Binding EditSameChat}" Margin="0,16,0,0"
+                                  Style="{StaticResource ModernCheckBox}" Foreground="{DynamicResource Text.Secondary}">
+                            <TextBlock Text="{services:Loc routine.page.sameChat}" TextWrapping="Wrap" MaxWidth="320"/>
+                        </CheckBox>
+                        <CheckBox IsChecked="{Binding EditCatchUp}" Margin="0,8,0,0"
+                                  Style="{StaticResource ModernCheckBox}" Foreground="{DynamicResource Text.Secondary}">
+                            <TextBlock Text="{services:Loc routine.page.catchUp}" TextWrapping="Wrap" MaxWidth="320"/>
+                        </CheckBox>
 
                         <TextBlock Text="{Binding EditError}" TextWrapping="Wrap" FontSize="12" Margin="0,12,0,0"
                                    Foreground="{DynamicResource Status.Danger}" Visibility="{Binding HasEditError, Converter={StaticResource BoolVis}}"/>

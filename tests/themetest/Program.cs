@@ -120,6 +120,7 @@ internal static partial class Program
                 case "--setup-wizard": SetupWizardOnly = true; break;   // the first-run setup wizard, every page and state (SetupWizardRenders.cs)
                 case "--titlebar": TitleBarOnly = true; break;
                 case "--voice-player": VoicePlayerOnly = true; break;   // reading replies aloud: the player box and the ▶ (a click on a bubble plays nothing), every theme (VoicePlayerRenders.cs)
+                case "--routines": RoutinesOnly = true; break;   // the Routines page with rows, the editor and the delete confirm, every theme (RoutinesRenders.cs)
                 case "--chat-ref": ChatRefOnly = true; break;   // the chat's reference chip at the top of the chat, every theme (ChatRefRenders.cs)   // the main title bar in every theme and width (TitleBarRenders.cs)
                 case "--uninstall": UninstallOnly = true; break;   // the uninstall page, every page and state (UninstallRenders.cs)
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
@@ -666,6 +667,7 @@ internal static partial class Program
         if (SettingsOnly) { await SettingsShots(); return Finish(); }
         if (TitleBarOnly) { if (themes != null) await TitleBarShots(themes); else Log("FATAL no ThemeService"); return Finish(); }
         if (ChatRefOnly) { await ChatRefShots(themes); return Finish(); }
+        if (RoutinesOnly) { await RoutinesShots(themes); return Finish(); }
         if (VoicePlayerOnly) { await VoicePlayerShots(themes); return Finish(); }
         if (BuddyClipsOnly) { CluadeX.Views.CluadexBuddy.ClipsAllowed = false; await ClipChecks(); await BubbleChecks(); return Finish(); }   // the chat's speech bubbles alone, for a quick look
 

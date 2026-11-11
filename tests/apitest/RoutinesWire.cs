@@ -71,6 +71,19 @@ internal static class RoutinesWire
         string msg = ChatViewModel.RoutineMessage(new Routine { Name = "Nightly tests", Prompt = "run the tests\n" }, wed, missed: true);
         check("routine", "the run's message names the task, says it may be unattended, and ends with the prompt",
             msg.Contains("Nightly tests") && msg.Contains("making up") && msg.Contains("summary") && msg.EndsWith("run the tests"), msg);
+        var was = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            // This machine is Thai: its culture writes the Buddhist year. What the model reads keeps 2026.
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("th-TH");
+            string th = ChatViewModel.RoutineMessage(new Routine { Name = "n", Prompt = "p" }, wed, missed: false);
+            var o2 = new Routine { Kind = RoutineSchedule.Once, OnceAt = wed };
+            check("routine", "under a Thai culture the model still reads 2026-11-11, and \"once\" reads in the culture asked for",
+                th.Contains("2026-11-11 10:00") && !th.Contains("2569")
+                && RoutineSchedule.Describe(o2, k => k == "routine.describe.once" ? "{0}" : k) == "11 Nov 10:00"
+                && RoutineSchedule.Describe(o2, k => k == "routine.describe.once" ? "{0}" : k, RoutineSchedule.Culture("th")).Contains("พ.ย."), th);
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = was; }
     }
 
     static void Store(Action<string, string, bool, string> check)

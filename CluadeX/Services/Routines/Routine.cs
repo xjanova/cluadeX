@@ -176,8 +176,14 @@ public static class RoutineSchedule
         return mask;
     }
 
-    /// <summary>How the schedule reads ("every day at 02:00"), with <paramref name="l"/> the localized strings.</summary>
-    public static string Describe(Routine r, Func<string, string> l)
+    /// <summary>Dates on the page in the UI language (the machine may be Thai while the UI is English); text for a
+    /// model uses <see cref="CultureInfo.InvariantCulture"/> — a Thai culture writes the Buddhist year (2569).</summary>
+    public static CultureInfo Culture(string? language) =>
+        CultureInfo.GetCultureInfo(language == "th" ? "th-TH" : "en-US");
+
+    /// <summary>How the schedule reads ("every day at 02:00"), with <paramref name="l"/> the localized strings and
+    /// <paramref name="culture"/> for a date (default invariant).</summary>
+    public static string Describe(Routine r, Func<string, string> l, CultureInfo? culture = null)
     {
         switch (r.Kind)
         {
@@ -192,7 +198,7 @@ public static class RoutineSchedule
                     ? string.Format(l("routine.describe.hours"), r.IntervalMinutes / 60)
                     : string.Format(l("routine.describe.minutes"), r.IntervalMinutes);
             case Once:
-                return string.Format(l("routine.describe.once"), r.OnceAt?.ToString("d MMM HH:mm", CultureInfo.CurrentCulture) ?? "?");
+                return string.Format(l("routine.describe.once"), r.OnceAt?.ToString("d MMM HH:mm", culture ?? CultureInfo.InvariantCulture) ?? "?");
             default:
                 return "?";
         }

@@ -79,6 +79,15 @@ public sealed class RoutinesViewModel : ViewModelBase
 
     /// <summary>Projects for the folder box: the ones the app knows.</summary>
     public ObservableCollection<string> Projects { get; } = new();
+    public bool HasProjects => Projects.Count > 0;
+
+    private string? _pick;
+    /// <summary>A pick from the recent projects: fills the folder box.</summary>
+    public string? PickProject
+    {
+        get => _pick;
+        set { if (SetProperty(ref _pick, value) && !string.IsNullOrEmpty(value)) EditProject = value; }
+    }
 
     // ─── delete, with a confirm ───
     private RoutineRow? _pendingDelete;
@@ -108,6 +117,7 @@ public sealed class RoutinesViewModel : ViewModelBase
         _loc = loc;
         for (int i = 0; i < 7; i++) Days.Add(new DayBox { Index = i, Label = loc.T("routine.day." + i) });
         Rows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasRows));
+        Projects.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasProjects));
         _service.Changed += () => Application.Current?.Dispatcher.BeginInvoke(Refresh);
 
         NewCommand = new RelayCommand(() => Open(new Routine { Project = chat.ProjectFolderNow() }));
@@ -135,6 +145,7 @@ public sealed class RoutinesViewModel : ViewModelBase
     }
 
     private string L(string key) => _loc.T(key);
+    private System.Globalization.CultureInfo Ui => RoutineSchedule.Culture(_loc.CurrentLanguage);
 
     /// <summary>The list again, from the service.</summary>
     public void Refresh()
@@ -145,8 +156,8 @@ public sealed class RoutinesViewModel : ViewModelBase
             string last = r.LastStatus switch
             {
                 "running" => L("routine.status.running"),
-                "ran" => string.Format(L("routine.status.ran"), r.LastRunAt?.ToString("d MMM HH:mm") ?? ""),
-                "failed" => string.Format(L("routine.status.failed"), r.LastRunAt?.ToString("d MMM HH:mm") ?? "") + (r.LastNote.Length > 0 ? " — " + r.LastNote : ""),
+                "ran" => string.Format(L("routine.status.ran"), r.LastRunAt?.ToString("d MMM HH:mm", Ui) ?? ""),
+                "failed" => string.Format(L("routine.status.failed"), r.LastRunAt?.ToString("d MMM HH:mm", Ui) ?? "") + (r.LastNote.Length > 0 ? " — " + r.LastNote : ""),
                 "missed" => L("routine.status.missed"),
                 _ => "",
             };
@@ -154,8 +165,8 @@ public sealed class RoutinesViewModel : ViewModelBase
             Rows.Add(new RoutineRow
             {
                 R = r,
-                When = RoutineSchedule.Describe(r, L),
-                Next = r.Enabled && r.NextRunAt is { } n ? string.Format(L("routine.page.next"), n.ToString("ddd d MMM HH:mm")) : L("routine.page.never"),
+                When = RoutineSchedule.Describe(r, L, Ui),
+                Next = r.Enabled && r.NextRunAt is { } n ? string.Format(L("routine.page.next"), n.ToString("ddd d MMM HH:mm", Ui)) : L("routine.page.never"),
                 Last = last,
                 IsRunning = _service.IsRunning(r.Id),
             });
@@ -167,7 +178,6 @@ public sealed class RoutinesViewModel : ViewModelBase
         _editing = r;
         EditName = r.Name;
         EditPrompt = r.Prompt;
-        EditProject = r.Project;
         SetKind(r.Kind);
         EditTime = r.Time;
         EditMinutes = r.IntervalMinutes.ToString();
@@ -181,6 +191,8 @@ public sealed class RoutinesViewModel : ViewModelBase
         foreach (var p in (ProjectRegistryService.Current?.Recent(50).Select(e => e.Path) ?? Enumerable.Empty<string>())
                      .Distinct(StringComparer.OrdinalIgnoreCase))
             Projects.Add(p);
+        EditProject = r.Project;
+        PickProject = null;
         OnPropertyChanged(nameof(IsEditing));
     }
 

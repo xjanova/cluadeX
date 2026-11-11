@@ -22,6 +22,7 @@ internal static class RoutineKeys
         ["routine.page.name"] = new() { ["en"] = "Name", ["th"] = "ชื่องาน" },
         ["routine.page.prompt"] = new() { ["en"] = "What to tell the chat (complete on its own)", ["th"] = "สั่งงานอะไร (เขียนให้ครบในตัว แชทนั้นไม่รู้เรื่องที่คุยไว้ที่อื่น)" },
         ["routine.page.project"] = new() { ["en"] = "Project folder (empty = none)", ["th"] = "โฟลเดอร์โปรเจกต์ (ว่าง = ไม่มี)" },
+        ["routine.page.pickProject"] = new() { ["en"] = "…or pick a recent project", ["th"] = "…หรือเลือกจากโปรเจกต์ที่เปิดล่าสุด" },
         ["routine.page.when"] = new() { ["en"] = "When", ["th"] = "เมื่อไหร่" },
         ["routine.page.kindDaily"] = new() { ["en"] = "On days", ["th"] = "ตามวัน" },
         ["routine.page.kindInterval"] = new() { ["en"] = "Every …", ["th"] = "ทุก ๆ …" },

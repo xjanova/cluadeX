@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using CluadeX.Models;
@@ -27,9 +28,12 @@ public partial class ChatViewModel
 
     /// <summary>What the chat is told at a run: the prompt, after one line saying it is a scheduled run.</summary>
     public static string RoutineMessage(Routine r, DateTime at, bool missed) =>
-        $"⏰ Scheduled task “{r.Name}” — run of {at:yyyy-MM-dd HH:mm}{(missed ? " (making up for a time CluadeX was closed)" : "")}. "
+        $"⏰ Scheduled task “{r.Name}” — run of {At(at)}{(missed ? " (making up for a time CluadeX was closed)" : "")}. "
         + "The user set this up to run on its own and may be away: do the work, and end with a short summary of what you "
         + "did and found.\n\n" + r.Prompt.Trim();
+
+    /// <summary>A time as a model reads it: always the Gregorian year (a Thai culture would write 2569).</summary>
+    private static string At(DateTime? d) => d?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) ?? "?";
 
     /// <summary>The service's runner: open or reuse the chat, send the prompt, wait for that turn.</summary>
     private async Task<(bool Ok, string Note, string? ChatId)> RunRoutineAsync(Routine r)
@@ -63,7 +67,7 @@ public partial class ChatViewModel
         chat.Messages.Add(new ChatMessage
         {
             Role = MessageRole.System,
-            Content = "⏰ " + LocF("routine.chat.opened", r.Name, RoutineSchedule.Describe(r, Loc),
+            Content = "⏰ " + LocF("routine.chat.opened", r.Name, RoutineSchedule.Describe(r, Loc, RoutineSchedule.Culture(Services.LocalizedResources.Instance.Language)),
                 folder.Length == 0 ? Loc("routine.noProject") : folder),
         });
         Sessions.Insert(0, chat);
@@ -85,7 +89,7 @@ public partial class ChatViewModel
                 if (all.Count == 0) return Task.FromResult("No scheduled tasks yet.");
                 return Task.FromResult(string.Join("\n", all.Select(r =>
                     $"- {r.Id} “{r.Name}” · {RoutineSchedule.Describe(r, Loc)} · {(r.Enabled ? "on" : "off")}"
-                    + (r.NextRunAt is { } n ? $" · next {n:yyyy-MM-dd HH:mm}" : "")
+                    + (r.NextRunAt is { } n ? $" · next {At(n)}" : "")
                     + (r.LastStatus.Length > 0 ? $" · last {r.LastStatus}" : "")
                     + $" · project {(r.Project.Length == 0 ? "(none)" : r.Project)} · by {r.CreatedBy}")));
             }
@@ -106,7 +110,7 @@ public partial class ChatViewModel
                 if (routines.Put(r) is { } problem) throw new InvalidOperationException(Loc(problem));
                 var saved = routines.Get(r.Id)!;
                 return Task.FromResult($"Scheduled “{saved.Name}” (id {saved.Id}): {RoutineSchedule.Describe(saved, Loc)}, next run "
-                    + $"{saved.NextRunAt:yyyy-MM-dd HH:mm}, in {(saved.Project.Length == 0 ? "no project" : saved.Project)}. It runs while "
+                    + $"{At(saved.NextRunAt)}, in {(saved.Project.Length == 0 ? "no project" : saved.Project)}. It runs while "
                     + "CluadeX is open; the user sees and changes it on the Routines page.");
             }
             default:
@@ -116,7 +120,7 @@ public partial class ChatViewModel
                 {
                     case "remove": routines.Remove(r.Id); return Task.FromResult($"Removed “{r.Name}”.");
                     case "pause": routines.SetEnabled(r.Id, false); return Task.FromResult($"Paused “{r.Name}”.");
-                    case "resume": routines.SetEnabled(r.Id, true); return Task.FromResult($"Resumed “{r.Name}”: next run {routines.Get(r.Id)?.NextRunAt:yyyy-MM-dd HH:mm}.");
+                    case "resume": routines.SetEnabled(r.Id, true); return Task.FromResult($"Resumed “{r.Name}”: next run {At(routines.Get(r.Id)?.NextRunAt)}.");
                     case "run_now":
                         return Task.FromResult(routines.RunNow(r.Id) ? $"Started “{r.Name}” now, in its own chat." : $"“{r.Name}” is running already.");
                     default: throw new InvalidOperationException("action is one of: list, add, remove, pause, resume, run_now.");

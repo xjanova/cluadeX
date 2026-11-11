@@ -157,6 +157,22 @@ def g_watch(d, c):
     stroke(d, [(4.8, 17), (10, 17), (12.6, 10.2), (16.6, 23.6), (19.4, 13.6), (21.2, 17), (27.2, 17)], 2.6)
 
 
+def g_routines(d, c):
+    # An alarm clock: work CluadeX starts by itself at a time (the Routines page).
+    cx, cy, r = 16, 17.4, 8.4
+    for sx in (-1, 1):                                   # the two bells, leaning out
+        bx, by = cx + sx * 6.6, cy - 7.0
+        d.pieslice(box(bx - 3.6, by - 3.6, bx + 3.6, by + 3.6), start=180 if sx < 0 else 270,
+                   end=270 if sx < 0 else 360, fill=WHITE)
+        d.ellipse(box(bx - 3.0, by - 3.0, bx + 3.0, by + 3.0), fill=WHITE)
+    stroke(d, [(cx - 5.2, cy + 7.0), (cx - 7.0, cy + 9.4)], 2.4)   # the feet
+    stroke(d, [(cx + 5.2, cy + 7.0), (cx + 7.0, cy + 9.4)], 2.4)
+    g = 1.3                                              # a gap in the tile's colour sets the bells apart from the face
+    d.ellipse(box(cx - r - g, cy - r - g, cx + r + g, cy + r + g), fill=c)
+    d.ellipse(box(cx - r, cy - r, cx + r, cy + r), fill=WHITE)
+    stroke(d, [(cx, cy - 4.8), (cx, cy), (cx + 3.6, cy + 2.0)], 2.3, fill=c)
+
+
 def g_uistudio(d, c):
     # A painter's palette: designing the UI.
     pal = Image.new("L", (S, S), 0)
@@ -228,6 +244,7 @@ ICONS = {
     "setup":       (g_setup,       "#FFB98A", "#E8642C", "#EC7240", "#7A2A0C"),
     "tasks":       (g_tasks,       "#A9EFAE", "#38B276", "#41BA7E", "#145C38"),
     "watch":       (g_watch,       "#FFA0AE", "#DE4A6C", "#E35A78", "#78192F"),
+    "routines":    (g_routines,    "#F2B6FF", "#AE4ADB", "#B758E0", "#55186E"),
     "uistudio":    (g_uistudio,    "#FFDF8E", "#E9A335", "#EDAA40", "#7A4E0C"),
     "nodegraph":   (g_nodegraph,   "#93D6FF", "#3787E0", "#4394E6", "#123F78"),
     "settings":    (g_settings,    "#D9CDEB", "#8875A8", "#9583B4", "#3A2C55"),
