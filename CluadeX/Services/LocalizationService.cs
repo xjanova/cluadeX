@@ -22,7 +22,7 @@ public class LocalizationService
                                       Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys, Localization.UsageKeys.Keys,
                                       Localization.DispatchKeys.Keys, Localization.FableKeys.Keys, Localization.DesktopKeys.Keys,
                                       Localization.StudioKeys.Keys, Localization.StudioPageKeys.Keys, Localization.SetupKeys.Keys,
-                                      Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys,
+                                      Localization.ConnectKeys.Keys, Localization.PermissionKeys.Keys, Localization.StrictApprovalKeys.Keys,
                                       Localization.StarterKeys.Keys,
                                       Localization.AutoCommentKeys.Keys,
                                       Localization.RunBadgeKeys.Keys, Localization.ActivityKeys.Keys, Localization.VoiceKeys.Keys,

@@ -334,8 +334,25 @@ public static class GuardHook
                         return Block("CluadeX safety: this turn's guard files are off limits — leave GEMINI_CLI_HOME / GROK_HOME alone.");
             // Claude Dev's Bash and PowerShell too: --disallowedTools covers them by prefix rules, this covers any wording.
             if (IsShellTool(called) && root.TryGetProperty("tool_input", out var cmdIn) && cmdIn.ValueKind == JsonValueKind.Object
-                && cmdIn.TryGetProperty("command", out var cmd) && cmd.ValueKind == JsonValueKind.String && NeverRun(cmd.GetString() ?? "") is { } never)
-                return Block(never);
+                && cmdIn.TryGetProperty("command", out var cmd) && cmd.ValueKind == JsonValueKind.String)
+            {
+                string command = cmd.GetString() ?? "";
+                // An agent never approves an approval itself (BrainX's ssh-approve, CluadeX's --cx-approve) — always.
+                if (HardToUndo.IsSelfApproval(command)) return Block(HardToUndo.SelfApprovalRefusal);
+                if (NeverRun(command) is { } never) return Block(never);
+                // Strict approval on (CluadeX passes the switch in the environment): a hard-to-undo command waits for the
+                // owner's one-time code on CluadeX's card — one question, the red prompt's finding shown on it too.
+                if (StrictApproval.Applies(command) is { } strict)
+                {
+                    string? danger;
+                    try { danger = Decide(input); } catch { danger = null; }
+                    string cwd = root.TryGetProperty("cwd", out var cw) && cw.ValueKind == JsonValueKind.String ? cw.GetString() ?? "" : "";
+                    string where = strict.Host != null ? "remote: " + strict.Host : "local: " + cwd;
+                    var (who, _) = Describe(input);
+                    if (DangerApprovalPipe.Ask(who, command.Length > 4000 ? command[..4000] + "…" : command, danger ?? "", strict, where)) return 0;
+                    return Block(StrictApproval.RefusalFor(strict));
+                }
+            }
         }
         catch (JsonException) { return Block("CluadeX safety: the guard could not read the tool call — refused."); }
 

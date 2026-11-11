@@ -605,7 +605,7 @@ public partial class ChatViewModel
     private static void ApprovePendingPrompts(IEnumerable<ChatMessage> messages)
     {
         foreach (var m in messages.Where(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered
-                                              && string.IsNullOrEmpty(m.PermissionDanger)).ToList())
+                                              && string.IsNullOrEmpty(m.PermissionDanger) && !m.IsStrict && !m.IsBrainxConfirm).ToList())
             m.ResolvePermission(PermissionOutcome.Allowed);
     }
 
@@ -613,7 +613,7 @@ public partial class ChatViewModel
     /// prompt (a delete aimed at a drive, the root or a home folder, DangerApproval) still asks — owner 2026-10-28: "allow
     /// everything" means no prompt for the rest of the conversation, Chrome and AlwaysAsk tools included.</summary>
     private bool AutoApproves(PermissionRequestInfo info, ChatSession? askSession) =>
-        string.IsNullOrEmpty(info.Danger) && AllowsAll(askSession);
+        string.IsNullOrEmpty(info.Danger) && info.Strict == null && info.Brainx == null && AllowsAll(askSession);
 
     // ─── Spend ───
     // Spend & savings live on the Billing page (MainWindow's "today" chip ▸ "Spend & savings" opens it).

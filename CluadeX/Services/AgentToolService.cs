@@ -496,6 +496,13 @@ public class AgentToolService : IDisposable
         return result;
     }
 
+    /// <summary>run_command / powershell whose command the strict-approval card will put to the owner.
+    /// The skipped prompt is owed to the card: <see cref="Safety.StrictApproval.Owed"/> makes the gate ask even if the
+    /// switch is turned off between this check and the run.</summary>
+    private static bool StrictCardWillAsk(ToolCall call) =>
+        Safety.StrictApproval.Owed.Value = call.Type is ToolType.RunCommand or ToolType.PowerShell
+                                           && Safety.StrictApproval.Applies(call.GetArg("command")) != null;
+
     // ── MCP tool policies ──
 
     /// <summary>The first policy that owns <paramref name="key"/>, or null.</summary>
@@ -532,6 +539,19 @@ public class AgentToolService : IDisposable
         var named = _permissionService.FindMcpToolRule(key?.ServerName, leaf, call.ToolName);
         if (named == PermAction.Deny)
             return Fail(call, $"Permission denied for {call.ToolName}");
+
+        // A remote command (BrainX's ssh_run): an agent approving its own approval is refused always; with strict approval
+        // on, a hard-to-undo command waits for the owner's one-time code — no rule, "Allow in this chat" or "allow
+        // everything" answers that one.
+        if (leaf == "ssh_run" && call.Arguments.TryGetValue("command", out var remoteCommand) && !string.IsNullOrWhiteSpace(remoteCommand))
+        {
+            if (Safety.HardToUndo.IsSelfApproval(remoteCommand)) return Fail(call, Safety.HardToUndo.SelfApprovalRefusal);
+            string host = call.Arguments.TryGetValue("profile_id", out var pid) && !string.IsNullOrWhiteSpace(pid) ? pid : key?.ServerName ?? "?";
+            if (Safety.StrictApproval.Applies(remoteCommand, host) is { } remoteStrict)
+                return await Safety.StrictApproval.ConfirmAsync(new Safety.StrictRequest(call.ToolName, remoteCommand, "remote: " + host, remoteStrict))
+                    ? null
+                    : Fail(call, Safety.StrictApproval.RefusalFor(remoteStrict));
+        }
 
         // A policy judged this call (a screenshot is free, a click asks once per site, page script always asks).
         if (classified?.Decision is { } decision)
@@ -937,7 +957,9 @@ public class AgentToolService : IDisposable
                         return Fail(call, $"Permission denied for {scope}: {resource}");
                     // Nobody looked at this edit: the build it may feed must not run unseen either.
                     if (byAcceptEdits) Interlocked.Increment(ref _acceptedEditSeq);
-                    if (perm == PermAction.Ask)
+                    // A hard-to-undo command with strict approval on: the strict card asks later (the one-time code),
+                    // so the ordinary prompt does not ask first — one question, not two.
+                    if (perm == PermAction.Ask && !StrictCardWillAsk(call))
                     {
                         bool allowed = OnPermissionRequired != null
                             && await OnPermissionRequired.Invoke(new PermissionRequestInfo
@@ -3052,7 +3074,7 @@ public class AgentToolService : IDisposable
     {
         if (!_fileSystem.HasWorkingDirectory) return "No project folder is open — open one first so commands have a working directory.";
         if (CheckDangerousCommand(command, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell)) is { } danger) return danger;
-        return await Safety.DangerApproval.GateAsync("run_command", command,
+        return await Safety.StrictApproval.GateCommandAsync("run_command", command, _fileSystem.WorkingDirectory,
             await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.WorkingDirectory));
     }
 
@@ -3246,8 +3268,8 @@ public class AgentToolService : IDisposable
         bool gated = false;
         if (_shellInterceptors.Length > 0 && _fileSystem.HasWorkingDirectory)
         {
-            if (await Safety.DangerApproval.GateAsync("run_command", command,
-                    await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.WorkingDirectory)) is { } unsafeEarly)
+            if (await Safety.StrictApproval.GateCommandAsync("run_command", command, _fileSystem.WorkingDirectory,
+                    await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.WorkingDirectory), ct) is { } unsafeEarly)
                 return Fail(call, unsafeEarly);
             gated = true;
         }
@@ -3300,7 +3322,7 @@ public class AgentToolService : IDisposable
         // folder, or running code that was just changed to hold one, runs only after the user's yes on the red prompt
         // (Safety.CodeRunGuard finds it, Safety.DangerApproval asks; 2026-10-17 incident, owner's rule 2026-10-18).
         if (!alreadyGated
-            && await Safety.DangerApproval.GateAsync("run_command", command, await Safety.CodeRunGuard.CheckAsync(command, root)) is { } unsafeRun)
+            && await Safety.StrictApproval.GateCommandAsync("run_command", command, cwd, await Safety.CodeRunGuard.CheckAsync(command, root), ct) is { } unsafeRun)
             return (null, null, unsafeRun);
 
         ShellRunner.Result r;
@@ -4215,6 +4237,12 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult> ExecuteMcpToolAsync(ToolCall call, CancellationToken ct)
     {
         var (result, key, raw) = await ExecuteMcpToolCoreAsync(call, ct);
+        // BrainX gated the remote command itself (needs_confirmation + a confirm_id only the owner approves, in their own
+        // terminal). With strict approval on, CluadeX shows it as a card: the model never sees the confirm id, and after the
+        // owner says they approved it CluadeX — not the model — resends the identical call.
+        if (key is { Leaf: "ssh_run" } && raw != null && Safety.StrictApproval.Enabled
+            && Safety.BrainxConfirmation.TryParse(raw.GetTextOutput(), call.GetArg("profile_id")) is { } brainx)
+            result = await HandleBrainxConfirmationAsync(call, brainx, ct);
         // The owning policy has the last word on what the model sees: a "not connected" text is a failure, a raw
         // extension error becomes a localized explanation. Runs for failures too (raw == null).
         if (key is { } k && _mcpPolicies.Length > 0 && McpPolicyFor(k) is { } policy)
@@ -4223,6 +4251,29 @@ public class AgentToolService : IDisposable
             catch (Exception ex) { Debug.WriteLine($"[mcp policy {policy.Id}] PostProcess threw: {ex.Message}"); }
         }
         return result;
+    }
+
+    /// <summary>BrainX's needs_confirmation, as CluadeX's card: the owner approves in BrainX's terminal (opened only on their
+    /// click), then CluadeX resends the call with the confirm id. What the model gets never holds the id.</summary>
+    private async Task<ToolResult> HandleBrainxConfirmationAsync(ToolCall call, Safety.BrainxConfirmation brainx, CancellationToken ct)
+    {
+        string gated = $"BrainX held this remote command for the owner's approval ({string.Join("; ", brainx.Reasons)}).";
+        bool done = Safety.StrictApproval.BrainxHandler is { } show && await show(brainx);
+        if (!done)
+            return Fail(call, gated + " The owner did not approve it on CluadeX's card (declined, dismissed or Stop). "
+                              + "Do not retry, split or rephrase it; tell the user what you wanted to run and why.");
+        var again = new ToolCall
+        {
+            Type = call.Type, ToolName = call.ToolName, McpServerName = call.McpServerName, McpToolName = call.McpToolName,
+            Arguments = new Dictionary<string, string>(call.Arguments) { ["confirm_id"] = brainx.ConfirmId },
+        };
+        var (second, _, raw2) = await ExecuteMcpToolCoreAsync(again, ct);
+        if (raw2 != null && Safety.BrainxConfirmation.TryParse(raw2.GetTextOutput()) != null)
+            return Fail(call, gated + " The owner has not approved it in BrainX's terminal yet, so nothing ran. Do not retry it; "
+                              + "tell the user it is still waiting for `brainx-mcp ssh-approve` in their own terminal.");
+        second.Output = brainx.Redact(second.Output);
+        second.Error = brainx.Redact(second.Error);
+        return second;
     }
 
     private async Task<(ToolResult Result, McpToolKey? Key, McpToolResult? Raw)> ExecuteMcpToolCoreAsync(ToolCall call, CancellationToken ct)
@@ -5919,8 +5970,8 @@ public class AgentToolService : IDisposable
 
         // The red prompt before the interceptors (as in run_command): a command they move to the background
         // must not skip it.
-        if (await Safety.DangerApproval.GateAsync("powershell", command,
-                await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null)) is { } unsafeRun)
+        if (await Safety.StrictApproval.GateCommandAsync("powershell", command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null,
+                await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null), ct) is { } unsafeRun)
             return Fail(call, unsafeRun);
 
         if (_shellInterceptors.Length > 0

@@ -109,8 +109,17 @@ public static class DangerApprovalPipe
                     using var doc = JsonDocument.Parse(line);
                     var root = doc.RootElement;
                     string Str(string p) => root.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
-                    var ask = DangerApproval.ConfirmAsync(Str("tool"), Str("action"), Str("reason"));
-                    allow = await Task.WhenAny(ask, Task.Delay(AnswerTimeout)).ConfigureAwait(false) == ask && ask.Result;
+                    if (StrictFrom(root, Str("tool"), Str("action"), Str("reason")) is { } strict)
+                    {
+                        // Strict approval: the one-time-code card, answered only by the owner (StrictApproval).
+                        using var cts = new CancellationTokenSource(AnswerTimeout);
+                        allow = await StrictApproval.ConfirmAsync(strict, cts.Token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var ask = DangerApproval.ConfirmAsync(Str("tool"), Str("action"), Str("reason"));
+                        allow = await Task.WhenAny(ask, Task.Delay(AnswerTimeout)).ConfigureAwait(false) == ask && ask.Result;
+                    }
                 }
             }
             catch { allow = false; }
@@ -125,14 +134,32 @@ public static class DangerApprovalPipe
         }
     }
 
-    /// <summary>Hook side: ask the running app. True only for an explicit "allow".</summary>
-    public static bool Ask(string tool, string action, string reason)
+    /// <summary>The strict request a hook sent ("strict": {scope, kind, matched, host, where}), or null.</summary>
+    private static StrictRequest? StrictFrom(JsonElement root, string tool, string action, string reason)
+    {
+        if (!root.TryGetProperty("strict", out var s) || s.ValueKind != JsonValueKind.Object) return null;
+        string Str(string p) => s.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+        var scope = HardToUndo.ParseScopes(Str("scope"));
+        if (scope == StrictScope.None) scope = StrictScope.Local;
+        var finding = new HardToUndoFinding(scope, Str("kind"), Str("matched"), Str("host") is { Length: > 0 } h ? h : null);
+        return new StrictRequest(tool, action, Str("where"), finding, reason.Length > 0 ? reason : null);
+    }
+
+    /// <summary>Hook side: ask the running app. True only for an explicit "allow". <paramref name="strict"/> = put it on
+    /// the strict-approval card (the code the owner types) instead of the red yes / no.</summary>
+    public static bool Ask(string tool, string action, string reason, HardToUndoFinding? strict = null, string? where = null)
     {
         try
         {
             using var client = new NamedPipeClientStream(".", Name, PipeDirection.InOut, PipeOptions.CurrentUserOnly);
             client.Connect(1500);
-            string json = JsonSerializer.Serialize(new { tool, action, reason });
+            string json = strict == null
+                ? JsonSerializer.Serialize(new { tool, action, reason })
+                : JsonSerializer.Serialize(new
+                {
+                    tool, action, reason,
+                    strict = new { scope = HardToUndo.FormatScopes(strict.Scope), kind = strict.Kind, matched = strict.Matched, host = strict.Host ?? "", where = where ?? "" },
+                });
             var bytes = Encoding.UTF8.GetBytes(json.Replace("\n", " ") + "\n");
             client.Write(bytes, 0, bytes.Length);
             client.Flush();

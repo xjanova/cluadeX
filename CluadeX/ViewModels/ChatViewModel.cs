@@ -1492,10 +1492,12 @@ public partial class ChatViewModel : ViewModelBase
                 PermissionPlain = plain,
                 DiffLines = info.Diff?.Lines,
                 DiffStat = info.Diff?.Stat,
-                PermissionAlwaysAsk = info.AlwaysAsk || info.Danger != null,
-                PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk && info.Danger == null,
-                PermissionCanAllowAlways = info.AlwaysKey != null && !info.AlwaysAsk && info.Danger == null,
+                PermissionAlwaysAsk = info.AlwaysAsk || info.Danger != null || info.Strict != null || info.Brainx != null,
+                PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk && info.Danger == null && info.Strict == null && info.Brainx == null,
+                PermissionCanAllowAlways = info.AlwaysKey != null && !info.AlwaysAsk && info.Danger == null && info.Strict == null && info.Brainx == null,
                 PermissionDanger = info.Danger,
+                PermissionStrict = info.Strict,
+                PermissionBrainx = info.Brainx,
                 Character = CharacterForBox(askRun),
             };
             prompt.PermissionCallback = allow =>
@@ -1544,6 +1546,31 @@ public partial class ChatViewModel : ViewModelBase
             Danger = req.Reason,
         });
         Services.Safety.DangerApprovalPipe.StartServer();
+
+        // Strict approval (Features ▸ Strict approval): a hard-to-undo command waits for the owner's one-time code on a card
+        // in the asking chat. The card is answered only by what the owner types into it or approves from their terminal.
+        Services.Safety.StrictApproval.Handler = ticket => askPermission(new PermissionRequestInfo
+        {
+            ToolName = ticket.Request.Tool,
+            Detail = ticket.Request.Command,
+            Args = new Dictionary<string, string> { ["command"] = ticket.Request.Command },
+            AlwaysAsk = true,
+            Strict = ticket,
+        });
+        // BrainX's own needs_confirmation (its ssh_run gate), as a card: approve in BrainX's terminal, then CluadeX resends.
+        Services.Safety.StrictApproval.BrainxHandler = brainx => askPermission(new PermissionRequestInfo
+        {
+            ToolName = "BrainX ssh_run",
+            Detail = brainx.Command,
+            Args = new Dictionary<string, string> { ["command"] = brainx.Command },
+            AlwaysAsk = true,
+            Brainx = brainx,
+        });
+        Services.Safety.StrictApproval.StartApproveServer();
+        void PublishStrict() => Services.Safety.StrictApproval.Publish(_settingsService.Settings.Features.StrictApproval,
+            _settingsService.Settings.Features.StrictApprovalScopes);
+        PublishStrict();
+        _settingsService.SettingsChanged += PublishStrict;
         // Claude Dev's open_project / new_chat / close_chat (CluadeX.exe --cx-tools) reach this chat page through here.
         Services.Tools.ChatToolBridge.StartServer();
 

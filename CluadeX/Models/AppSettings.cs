@@ -591,6 +591,12 @@ public class FeatureToggles
     // Security
     public bool PermissionSystem { get; set; } = true;
     public bool DangerousCommandBlocking { get; set; } = true;
+    /// <summary>Strict approval (owner 2026-11-11): a hard-to-undo command (Safety.HardToUndo) runs only after the owner
+    /// types its one-time code on the chat's card or approves it from their own terminal. Off by default = nothing
+    /// changes; Safety.StrictApproval.Publish carries it to the CLIs' guard hooks.</summary>
+    public bool StrictApproval { get; set; }
+    /// <summary>Which strict-approval scopes are on: "local,remote,git" (all), "remote,git" or "remote".</summary>
+    public string StrictApprovalScopes { get; set; } = "local,remote,git";
     // NOTE: there are deliberately no PathTraversalProtection / DpapiEncryption toggles here.
     // Both protections are unconditional — FileSystemService.ResolveSafePath always enforces
     // containment and SettingsService always encrypts with DPAPI. Fields for them used to exist,
