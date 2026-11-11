@@ -14,6 +14,9 @@ internal static class CodexSandboxKeys
         ["codex.sandbox.why.dpapi"] = new() { ["en"] = "it cannot use your DPAPI keys", ["th"] = "ใช้กุญแจ DPAPI ของคุณไม่ได้" },
         ["codex.sandbox.why.profile"] = new() { ["en"] = "it cannot write to your user profile", ["th"] = "เขียนโฟลเดอร์โปรไฟล์ของคุณไม่ได้" },
         ["codex.sandbox.why.wmi"] = new() { ["en"] = "it cannot start processes through WMI", ["th"] = "สร้างโปรเซสผ่าน WMI ไม่ได้" },
+        ["codex.sandbox.why.tls"] = new() { ["en"] = "Windows' HTTPS (curl.exe, Invoke-WebRequest) needs a user profile it does not have — Node's fetch works; the server may well be up", ["th"] = "HTTPS ของ Windows (curl.exe, Invoke-WebRequest) ต้องใช้โปรไฟล์ผู้ใช้ที่ sandbox ไม่มี — fetch ของ Node ใช้ได้ เซิร์ฟเวอร์อาจไม่ได้ล่ม" },
+        ["codex.sandbox.why.adb"] = new() { ["en"] = "adb needs a user profile folder it does not have — run adb yourself", ["th"] = "adb ต้องใช้โฟลเดอร์โปรไฟล์ผู้ใช้ที่ sandbox ไม่มี — ต้องรัน adb เอง" },
+        ["codex.sandbox.why.gh"] = new() { ["en"] = "it cannot read your GitHub CLI login — use CluadeX's gh_* tools", ["th"] = "อ่านการล็อกอิน GitHub CLI ของคุณไม่ได้ — ใช้เครื่องมือ gh_* ของ CluadeX แทน" },
         ["codex.sandbox.repaired"] = new()
         {
             ["en"] = "CluadeX: Codex's sandbox could not start because {0} belonged to the sandbox's own account (a git init run inside the sandbox does that). CluadeX rebuilt it as yours; the next command will run.",

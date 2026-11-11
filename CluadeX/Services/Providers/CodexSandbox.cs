@@ -28,6 +28,23 @@ public static class CodexSandbox
         @"(?:Win32_Process|CimMethod|WmiObject|ManagementException|\bWMI\b)[^\r\n]{0,200}Access (?:is )?denied|Access (?:is )?denied[^\r\n]{0,200}(?:Win32_Process|CimMethod|WmiObject|\bWMI\b)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <summary>Windows' own TLS (schannel) needs a user profile the sandbox account does not have: curl.exe fails with
+    /// SEC_E_NO_CREDENTIALS, and Invoke-WebRequest / .NET HttpClient with "an unexpected error occurred on a receive".
+    /// Node's own TLS works (checked with `codex sandbox` on this machine, 2026-11-11).</summary>
+    private static readonly Regex Schannel = new(
+        @"SEC_E_NO_CREDENTIALS|schannel: AcquireCredentialsHandle failed",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>adb finds its ~/.android through the account's profile folder (no variable changes that on Windows), and
+    /// the sandbox account has none: "Cannot mkdir '\.android'".</summary>
+    private static readonly Regex Adb = new(
+        @"Cannot mkdir '\\?\.android'", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>gh keeps its config in the user's AppData and its token in the user's credential store.</summary>
+    private static readonly Regex GhConfig = new(
+        @"GitHub CLI\\config\.yml[^\r\n]{0,120}(?:denied|Access is denied)|failed to read configuration:[^\r\n]{0,200}GitHub CLI",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly Regex PathDenied = new(
         @"Access to the path '(?<path>[^']+)' is denied", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
@@ -42,6 +59,9 @@ public static class CodexSandbox
         if (NuGetDenied.IsMatch(output)) return "codex.sandbox.why.nuget";
         if (DpapiProfile.IsMatch(output)) return "codex.sandbox.why.dpapi";
         if (Wmi.IsMatch(output)) return "codex.sandbox.why.wmi";
+        if (Schannel.IsMatch(output)) return "codex.sandbox.why.tls";
+        if (Adb.IsMatch(output)) return "codex.sandbox.why.adb";
+        if (GhConfig.IsMatch(output)) return "codex.sandbox.why.gh";
         userProfile ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (string.IsNullOrEmpty(userProfile)) return null;
         string profile = Norm(userProfile);
@@ -135,7 +155,13 @@ public static class CodexSandbox
             + "A command that fails with \"setup refresh had errors\" never ran: the sandbox itself could not start, usually because "
             + "a `.git` was made inside the sandbox (`git init` there makes it belong to the sandbox account). CluadeX rebuilds such "
             + "a `.git` as the user's as soon as that failure shows, so run the command once more; if it fails the same way again, "
-            + "stop and tell the user rather than looking for another way to run it (desktop tools, terminals). ";
+            + "stop and tell the user rather than looking for another way to run it (desktop tools, terminals). "
+            + "Windows' own TLS needs a user profile the sandbox lacks, so HTTPS from curl.exe (SEC_E_NO_CREDENTIALS) and "
+            + "PowerShell Invoke-WebRequest fails there: to call a URL, use Node — write the script to a .js file and run "
+            + "`node file.js` (fetch works) — never conclude a server is down from curl or Invoke-WebRequest failing in the sandbox. "
+            + "`adb` cannot run in the sandbox at all (\"Cannot mkdir '\\.android'\": the account has no profile folder), and "
+            + "`gh` cannot read its login there: ask the user (ask_user) to run the adb command and paste its output"
+            + (chatTools ? "; for GitHub use the gh_pr_view, gh_pr_checks and gh_run_log tools (MCP server cluadex). " : ". ");
         s += chatTools
             ? "Build and test with CluadeX's verify_change tool (MCP server cluadex): it runs as the user, outside the sandbox, under "
               + "the user's own approval rules, so restore, DPAPI and WMI work there. Pass test_command for a project's own harness; "
@@ -145,7 +171,9 @@ public static class CodexSandbox
             : "Inside the sandbox, `dotnet build --no-restore` works when the packages were restored before; a restore or a test "
               + "that needs the user's profile has to be run by the user. ";
         s += hasRipgrep
-            ? "To search, `rg` is on PATH (Codex's own copy); `git grep -n` and PowerShell `Select-String` work too."
+            ? "To search, `rg` is on PATH (Codex's own copy); `git grep -n` and PowerShell `Select-String` work too. On Windows "
+              + "rg does not expand a wildcard in a path (`rg x src/*.md` fails with os error 123): pass the folder and a glob, "
+              + "`rg x src -g \"*.md\"`."
             : "`rg` is not installed here: search with `git grep -n`, or PowerShell `Get-ChildItem -Recurse | Select-String`.";
         return s;
     }

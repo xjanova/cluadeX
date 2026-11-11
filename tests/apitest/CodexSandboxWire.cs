@@ -83,6 +83,15 @@ internal static class CodexSandboxWire
             && CodexSandbox.CauseKey("Access to the path 'C:\\Users\\xman2\\a.txt' is denied.", Folder, Profile) == null, "");
         check("cx-sandbox", "ordinary output → nothing", CodexSandbox.CauseKey("error CS1002: ; expected", Folder, Profile) == null
             && CodexSandbox.CauseKey("", Folder, Profile) == null, "");
+        // Seen in the thaiprompt chat of 2026-11-11 and reproduced with `codex sandbox` on this machine.
+        check("cx-sandbox", "curl.exe's schannel SEC_E_NO_CREDENTIALS → tls (the server is not down)",
+            CodexSandbox.CauseKey("curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e) - No credentials are available in the security package", Folder, Profile) == "codex.sandbox.why.tls"
+            && CodexSandbox.Notice("curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS", Folder, Profile) is { } tls && tls.Contains("Node"), "");
+        check("cx-sandbox", "adb's \"Cannot mkdir '\\.android'\" → adb",
+            CodexSandbox.CauseKey("11-11 10:16:04.247 29864 21316 F adb.exe : adb_utils.cpp:315 Cannot mkdir '\\.android': Permission denied", Folder, Profile) == "codex.sandbox.why.adb", "");
+        check("cx-sandbox", "gh that cannot read its config → gh",
+            CodexSandbox.CauseKey("failed to create root command: failed to read configuration: open C:\\Users\\xman\\AppData\\Roaming\\GitHub CLI\\config.yml: Access is denied.", Folder, Profile) == "codex.sandbox.why.gh"
+            && CodexSandbox.CauseKey("gh: Not Found (HTTP 404)", Folder, Profile) == null, "");
 
         // ─── the wrapper: what the sandbox blocks, where builds go, how to search ───
         var worker = new ClaudeDevProvider.WorkerGrant(true, true);
@@ -90,6 +99,9 @@ internal static class CodexSandboxWire
         check("cx-prompt", "worker turn with the chat tools: the sandbox's limits, verify_change for builds/tests, background for long runs, rg on PATH",
             withTools.Contains("Codex's Windows sandbox") && withTools.Contains("NuGet.Config") && withTools.Contains("verify_change")
             && withTools.Contains("tests_background") && withTools.Contains("timeout_minutes") && withTools.Contains("`rg` is on PATH"), withTools);
+        check("cx-prompt", "…HTTPS through node (never \"the server is down\" from curl), adb and gh need the user, rg globs on Windows",
+            withTools.Contains("node file.js") && withTools.Contains("SEC_E_NO_CREDENTIALS") && withTools.Contains("Cannot mkdir '\\.android'")
+            && withTools.Contains("gh_pr_view") && withTools.Contains("os error 123"), withTools);
         string noTools = OpenAIDevProvider.BuildPrompt(Folder, worker, null, "", "go", chatTools: false, hasRipgrep: false);
         check("cx-prompt", "no chat tools: no verify_change promise; no rg: git grep / Select-String",
             noTools.Contains("Codex's Windows sandbox") && !noTools.Contains("verify_change") && noTools.Contains("git grep")
