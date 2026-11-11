@@ -57,6 +57,10 @@ public partial class ChatViewModel
                 .Select(id => Sessions.FirstOrDefault(s => s.Id == id)).OfType<ChatSession>());
         ChatMessage.NextStepFor = m => NextStep.FromJson(m.ToolOutput) is { } step
             ? new NextStepView(step, m.ToolSummary, (_, label) => OnNextStepPicked(m, label))
+            {
+                // CluadeX's own recovery card after a restart says what it is (not the model's "Next step").
+                Title = RunRecovery.Read(m) != null ? Loc("chat.recover.title") : Loc("orch.next.title"),
+            }
             : null;
 
         OrchestrationToolModule.NextStepRequested += (chat, step) =>
@@ -275,6 +279,8 @@ public partial class ChatViewModel
     {
         // CluadeX's own Fable card: its buttons act here, they are not a message to the model.
         if (FableOfferOf(row) is { } offer) { OnFableOfferPicked(row, label, offer); return; }
+        // …and the recovery card after a restart: continue / dismiss act here (continue sends its own message).
+        if (RunRecovery.Read(row) is { } cut) { OnRecoveryPicked(row, label, cut.Info, cut.Go); return; }
         row.ToolSummary = label;   // saved with the chat: a reopened box shows what was picked, without buttons
         string draft = UserInput ?? "";
         if (CurrentSession is { } s)

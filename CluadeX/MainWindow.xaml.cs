@@ -146,6 +146,7 @@ public partial class MainWindow : Window
         // answered before it started: nothing is asked again; the chat and any tab edited since are saved.
         if (_viewModel.IsRestartingForUpdate)
         {
+            try { _viewModel.ChatVM.NoteAppClosing(); } catch { }   // a chat still working gets its recovery card after it
             _viewModel.SaveForUpdateRestart();
             return;
         }
@@ -164,6 +165,17 @@ public partial class MainWindow : Window
             e.Cancel = true;
             return;
         }
+
+        // Chats still working or waiting on a card: say what closing cuts off (and that it can be picked up again).
+        // Asked last — the answers above are harmless if this one keeps the app open.
+        if (!_viewModel.ChatVM.ConfirmCloseWithRuns())
+        {
+            e.Cancel = true;
+            return;
+        }
+        // Every running chat saved as it stands, and marked as cut off by the close (the restart offers Continue).
+        try { _viewModel.ChatVM.NoteAppClosing(); }
+        catch { /* don't prevent closing */ }
 
         // Force-save current session before app exits
         try { _viewModel.ChatVM.SaveNow(); }

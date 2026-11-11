@@ -209,6 +209,7 @@ public partial class ChatViewModel
                                                  || m.Role == MessageRole.Question && !m.QuestionAnswered);
             run.Session.RunStatus = waiting ? "waiting" : "working";
             ActivityWaiting(run.Session.Id, waiting);
+            NoteRunWaiting(run, waiting);
             run.Session.RunStep = waiting ? Loc("chat.runs.waitingForYou") : (run.ActiveStatus?.Content ?? "").TrimStart('⏵', ' ');
         }
         if (CurrentSession is { } open) open.RunStatus = RunBadge.OnOpen(open.RunStatus);
@@ -418,6 +419,8 @@ public partial class ChatViewModel
             Role = MessageRole.Question,
             Content = "❓ " + question.Trim(),
             QuestionOptions = options,
+            // kept with the row: a card the app closed on can be answered again after the restart (RunRecovery)
+            ToolOutput = RunRecovery.QuestionJson(options, null),
             QuestionGirl = who.Girl,
             Character = who,
             QuestionCallback = answer => tcs.TrySetResult(answer),
@@ -425,7 +428,8 @@ public partial class ChatViewModel
         var token = run?.Cts?.Token ?? CancellationToken.None;
         var reg = token.Register(() =>
         {
-            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
+            // (not while the app closes: the card stays open in the saved chat for the restart to offer again)
+            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { if (!_appClosing) msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
         });
         _ = tcs.Task.ContinueWith(_ => { reg.Dispose(); dispatcher.InvokeAsync(RaiseRunStateChanged); }, TaskScheduler.Default);
         dispatcher.InvokeAsync(() =>
@@ -449,10 +453,12 @@ public partial class ChatViewModel
         var who = CharacterForBox(run);
         var msg = new ChatMessage { Role = MessageRole.Question, QuestionGirl = who.Girl, Character = who };
         msg.SetSteps(steps, answers => tcs.TrySetResult(answers));
+        msg.ToolOutput = RunRecovery.QuestionJson(null, steps);
         var token = run?.Cts?.Token ?? CancellationToken.None;
         var reg = token.Register(() =>
         {
-            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
+            // (not while the app closes: the card stays open in the saved chat for the restart to offer again)
+            if (tcs.TrySetCanceled()) dispatcher.InvokeAsync(() => { if (!_appClosing) msg.CloseQuestion(Loc("chat.ask.cancelled")); RaiseRunStateChanged(); });
         });
         _ = tcs.Task.ContinueWith(_ => { reg.Dispose(); dispatcher.InvokeAsync(RaiseRunStateChanged); }, TaskScheduler.Default);
         dispatcher.InvokeAsync(() =>
@@ -501,6 +507,7 @@ public partial class ChatViewModel
     /// screen or not), working in <paramref name="folder"/>. Enters the run's scope for the calling flow.</summary>
     private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
     {
+        SettleRecoveryCards(messages);   // a recovery card not used: a new message took its place
         var run = new ChatRun { Session = session, Messages = messages, FirstRow = messages.Count };
         NoteRunBegan(session);
         ActivityBegan(session);
@@ -546,9 +553,11 @@ public partial class ChatViewModel
             AddTurnChangesCard(run);
             AddNextStepBox(run);
             MaybeOfferFable(run);
-            // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
-            foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
-                open.CloseQuestion(Loc("chat.ask.cancelled"));
+            // A CLI that died mid-question: nobody is listening any more, so its card must not stay open. Not when the
+            // app is closing: the card stays open in the saved chat, and the restart offers it again (RunRecovery).
+            if (!_appClosing)
+                foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
+                    open.CloseQuestion(Loc("chat.ask.cancelled"));
             leftover = run.Scope?.DrainUserNotes();
             // the owner's words typed into this turn are used up with it (a leftover note keeps the turn's decision instead)
             Services.Agents.DesignGate.EndOwnerTurn(run.Session.Id);
