@@ -19,6 +19,9 @@ public static partial class SpeechText
         string codeWord = thai ? " (มีโค้ดในแชท) " : " (code in the chat) ";
         string s = markdown.Replace("\r\n", "\n");
         s = ThinkBlock().Replace(s, " ");
+        // The text tool protocol writes its calls into the same reply ("let me look first [ACTION: read_file]…"): a bubble
+        // before a tool is read now, and the call is not words of hers.
+        s = ActionBlock().Replace(s, " ");
         s = FencedCode().Replace(s, codeWord);
         s = Image().Replace(s, " ");
         s = Link().Replace(s, "$1");
@@ -91,6 +94,7 @@ public static partial class SpeechText
     private static bool EndsSentence(string line) => line.Length > 0 && ".!?:;…。".Contains(line[^1]);
 
     [GeneratedRegex(@"<think>[\s\S]*?</think>", RegexOptions.IgnoreCase)] private static partial Regex ThinkBlock();
+    [GeneratedRegex(@"\[ACTION:[\s\S]*?(\[/ACTION\]|$)")] private static partial Regex ActionBlock();
     [GeneratedRegex(@"```[\s\S]*?(```|$)")] private static partial Regex FencedCode();
     [GeneratedRegex(@"!\[[^\]]*\]\([^)]*\)")] private static partial Regex Image();
     [GeneratedRegex(@"\[([^\]]+)\]\((?:[^)]*)\)")] private static partial Regex Link();

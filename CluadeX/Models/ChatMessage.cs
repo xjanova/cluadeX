@@ -106,6 +106,9 @@ public class ChatMessage : INotifyPropertyChanged
     public bool IsVoiceCurrent { get => _isVoiceCurrent; set { if (_isVoiceCurrent != value) { _isVoiceCurrent = value; OnPropertyChanged(); } } }
     /// <summary>This bubble is being read aloud right now (its ▶ shows pause).</summary>
     public bool IsVoicePlaying { get => _isVoicePlaying; set { if (_isVoicePlaying != value) { _isVoicePlaying = value; OnPropertyChanged(); } } }
+    /// <summary>The bubble's text when it went to the voice queue (read aloud by itself, or ▶ pressed); null = not yet.
+    /// Read-aloud never queues the same words again — only words written after them, when the bubble grew. Not saved.</summary>
+    public string? VoiceReadText { get; set; }
 
     public List<CodeBlock> CodeBlocks { get; set; } = new();
     public string? ExecutionResult { get; set; }

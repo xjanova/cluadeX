@@ -247,41 +247,87 @@ public partial class ChatViewModel
         }
     }
 
-    /// <summary>Settings › Voice › Read replies aloud: the reply of the turn that just ended joins the voice queue (code
-    /// and links left out), read by the girl who wrote it in her own voice and mood (VoicePersona). It waits for the
-    /// one being read — a new reply never cuts the last. The browser voice speaks in the mic window; Edge, Windows,
-    /// ElevenLabs and OpenAI make the audio here and play it in the mic window when it is open (it stops listening while
-    /// she talks), else in the app. Nothing is read for a turn that was stopped or failed.
+    /// <summary>Settings › Voice › Read replies aloud: every reply bubble of the turn joins the voice queue, in order,
+    /// each once — while the turn runs (<see cref="WatchRepliesAloud"/>) and when it ends (code and links left out),
+    /// read by the girl who wrote it in her own voice and mood (VoicePersona). Each waits for the one being read — a new
+    /// reply never cuts the last. The browser voice speaks in the mic window; Edge, Windows, ElevenLabs and OpenAI make
+    /// the audio here and play it in the mic window when it is open (it stops listening while she talks), else in the
+    /// app. After a Stop nothing more is read.
     /// <para>The free engines fall back to Edge's free voices when they cannot speak this reply: the browser voice with
     /// no mic window open, Windows with no voice for the reply's language (2026-11-09: most PCs have English voices
     /// only, and Zira reads a Thai reply as an empty WAV — the reply was silent without a word).</para></summary>
     private void SpeakReplyIfWanted(ChatMessage userMsg)
     {
-        var s = _settingsService.Settings;
-        if (!s.VoiceSpeakReplies) return;
+        if (!_settingsService.Settings.VoiceSpeakReplies) return;
         var rows = TurnMessages.ToList();
         int userAt = rows.IndexOf(userMsg);
-        // Only the reply bubble that ends the turn (SpokenReply): not a card, a tool row or the "no summary" note.
-        var reply = SpokenReply.Of(rows, userAt);
-        if (reply == null)
-        {
-            _debugLog?.Info("Voice", userAt < 0 ? "nothing read: the turn's message is not in its chat"
-                : "nothing read: the turn ended on " + SpokenReply.Describe(SpokenReply.LastRow(rows, userAt)));
-            return;
-        }
-        var item = SpokenItemOf(reply);
-        if (item == null) { _debugLog?.Info("Voice", "nothing read: the reply is only code or links"); return; }
-        VoiceQueue.Enqueue(item);
-        if (!ReferenceEquals(VoiceQueue.Current, item))
-            _debugLog?.Info("Voice", $"reply queued behind the one being read ({VoiceQueue.Waiting} waiting)");
+        if (userAt < 0) { _debugLog?.Info("Voice", "nothing read: the turn's message is not in its chat"); return; }
+        if (Cur?.Stopped == true) return;   // Stop: what was read while it ran stays read, nothing more
+        int queued = QueueReplyWords(rows, userAt, turnEnded: true);
+        bool readAny = rows.Skip(userAt + 1).Any(m => m.VoiceReadText != null);
+        if (queued == 0 && !readAny)
+            _debugLog?.Info("Voice", "nothing read: the turn ended on " + SpokenReply.Describe(SpokenReply.LastRow(rows, userAt)));
     }
 
-    /// <summary>The words of a reply to read aloud (null = nothing to say: only code or links).</summary>
-    private SpokenItem? SpokenItemOf(ChatMessage reply)
+    /// <summary>While a turn runs: each row added to its chat may close a bubble before it (her next bubble, or her
+    /// question to the user), and that bubble is read then — not after the turn, which can take minutes or wait on the
+    /// user's answer. Dispose when the turn ends (UI thread).</summary>
+    private IDisposable? WatchRepliesAloud(ChatMessage userMsg)
     {
-        bool thai = reply.Content.Any(c => c >= '฀' && c <= '๿');
+        var run = Cur;
+        if (run == null) return null;
+        var rows = run.Messages;
+        bool pending = false, done = false;
+        void OnRows(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            if (e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Add || pending || done) return;
+            pending = true;
+            // After the add's own work (a step's bubble gets its last text in the same dispatcher call).
+            Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
+            {
+                pending = false;
+                if (done || run.Stopped || !_settingsService.Settings.VoiceSpeakReplies) return;
+                run.FlushReplyText?.Invoke();
+                var list = rows.ToList();
+                int userAt = list.IndexOf(userMsg);
+                if (userAt >= 0) QueueReplyWords(list, userAt, turnEnded: false);
+            });
+        }
+        rows.CollectionChanged += OnRows;
+        return new ReadAloudWatch(() => { done = true; rows.CollectionChanged -= OnRows; });
+    }
+
+    private sealed class ReadAloudWatch(Action stop) : IDisposable
+    {
+        private Action? _stop = stop;
+        public void Dispose() { _stop?.Invoke(); _stop = null; }
+    }
+
+    /// <summary>The turn's words not read yet (SpokenReply.ToRead) join the voice queue in order. Returns how many.</summary>
+    private int QueueReplyWords(IReadOnlyList<ChatMessage> rows, int userAt, bool turnEnded)
+    {
+        int queued = 0;
+        foreach (var part in SpokenReply.ToRead(rows, userAt, turnEnded))
+        {
+            part.Message.VoiceReadText = part.Message.Content;   // never these words again, whatever comes of them
+            var item = SpokenItemOf(part.Message, part.Text);
+            if (item == null) { _debugLog?.Info("Voice", "a reply bubble not read: only code or links"); continue; }
+            VoiceQueue.Enqueue(item);
+            queued++;
+            if (!ReferenceEquals(VoiceQueue.Current, item))
+                _debugLog?.Info("Voice", $"reply queued behind the one being read ({VoiceQueue.Waiting} waiting)");
+        }
+        return queued;
+    }
+
+    /// <summary>The words of a reply to read aloud (null = nothing to say: only code or links). <paramref name="words"/>
+    /// = part of the bubble (what it grew by); null = all of it.</summary>
+    private SpokenItem? SpokenItemOf(ChatMessage reply, string? words = null)
+    {
+        string source = words ?? reply.Content;
+        bool thai = source.Any(c => c >= '฀' && c <= '๿');
         int max = Math.Clamp(_settingsService.Settings.Voice?.MaxChars ?? 1200, 100, 10000);
-        string text = SpeechText.ForSpeech(reply.Content, thai, max);
+        string text = SpeechText.ForSpeech(source, thai, max);
         if (text.Length == 0) return null;
         var who = ReplyCharacter(reply);
         return new SpokenItem(text, thai, who.Own, reply, character: who);
@@ -300,6 +346,7 @@ public partial class ChatViewModel
         if (!message.CanReadAloud) return;
         var item = VoiceQueue.ItemOf(message) ?? SpokenItemOf(message);
         if (item == null) { StatusText = Loc("voice.player.nothing"); return; }
+        message.VoiceReadText ??= message.Content;   // heard by the user's ask: read-aloud does not queue it again
         VoiceQueue.Play(item);
     }
 

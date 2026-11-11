@@ -431,6 +431,16 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=VOICE: just reading replies aloud — the mic window path (VM), every bubble of a turn (VB).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "VOICE")
+        {
+            await TestVoiceMode();
+            await TestVoiceEveryBubble();
+            Log($"\n## Result (CHATTEST_ONLY=VOICE): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=SPK: just the speaker under her face on a reply (hover holds still, the click switches reading aloud).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SPK")
         {
@@ -463,6 +473,7 @@ internal static partial class Program
         await TestAttachedFiles();            // XF: any file dropped into a message — read, unpacked, by path
         await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
         await TestVoiceMode();                // VM: replies read aloud + a GPT-Live call through the chat (mock API)
+        await TestVoiceEveryBubble();         // VB: every reply bubble of a turn read aloud, in order, once
         await TestSpeakerHover();             // SPK: the speaker under her face holds still on hover; its click switches reading aloud
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
