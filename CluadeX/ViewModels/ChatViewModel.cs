@@ -627,7 +627,9 @@ public partial class ChatViewModel : ViewModelBase
             string tree = ChatLinkStore.Current?.WorktreeOf(id) is { } wt
                 ? $" — own worktree {wt.Root}, branch {wt.Branch}" + (held != null && held.TryGetValue(id, out var why) ? $" (unmerged: {why})" : "")
                 : "";
-            return $"- \"{c?.Title ?? "?"}\" (ref {ChatRef.Of(id)}, id {id}){where} — {link.Task} — {StateOf(id, link)}{tree}";
+            string state = StateOf(id, link);
+            return $"- \"{c?.Title ?? "?"}\" (ref {ChatRef.Of(id)}, id {id}){where} — {link.Task} — {state}{tree}"
+                 + (state == "finished" ? ListGistOf(id) : "");
         }
         string List() => "Split chats of this chat:\n" + string.Join("\n", kids.Select(k => Line(k.Id, k.Link)));
 
@@ -1221,6 +1223,7 @@ public partial class ChatViewModel : ViewModelBase
         };
         InitFable();
         InitSplitWorktrees();
+        InitSplitReports();
         // Which chat split off which, and which finished split chats were put away (chat-links.json beside codex.db).
         ChatLinkStore.Current ??= new ChatLinkStore(settingsService.DataRoot);
         // Chats with a run going (live-runs.json beside codex.db): one CluadeX never saw end shows as stopped after a restart.
@@ -2770,6 +2773,10 @@ public partial class ChatViewModel : ViewModelBase
             if (inherited == null || inherited.Count == 0) throw new InvalidOperationException("this chat has no stored history to fork");
             foreach (var m in inherited) m.Id = Guid.NewGuid().ToString();
         }
+        // The owner is in another chat (the asking chat runs off screen): the split opens beside it in the sidebar and
+        // starts there, instead of switching the window to the new chat from under them.
+        if (parentId != null && CurrentSession?.Id != parentId && Sessions.Any(s => s.Id == parentId))
+            return OpenSplitInBackground(path, message, title, parentId, from, inherited, model, openedNote, worktree);
         if (path != null && !string.Equals(path, _fileSystemService.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
             ApplyWorkingDirectory(path, announce: false, showEditor: false);
         NewSession();
@@ -2810,10 +2817,15 @@ public partial class ChatViewModel : ViewModelBase
             return $"Opened a new empty chat (ref {chat.Ref}, id {chat.Id}) in {where}. It is on screen now; the user types there.";
         _ = StartAgentChatTurnAsync(message, chat.Id);
         return $"Opened a new chat (ref {chat.Ref}, id {chat.Id}) in {where} and started it with your message. It runs on its own beside "
-             + "this chat; the user follows it in the sidebar. Do not wait for it — carry on here or finish your reply."
-             + (worktree == null ? "" : $" When it ends a turn you are told; merge branch {worktree.Branch} or open a PR from it, "
-                + "then close_chat removes the worktree.");
+             + "this chat; the user follows it in the sidebar. " + SplitStartedTail(worktree);
     }
+
+    /// <summary>What the asking agent is told after a split started: its report comes back by itself (no polling).</summary>
+    private static string SplitStartedTail(Services.Agents.ChatWorktree? worktree) =>
+        "Do not wait for it or poll it — carry on here or finish your reply: when it ends a turn its report comes back to this "
+        + "chat by itself (if this chat is idle by then, CluadeX starts a turn here with it), and message_chat sends it more."
+        + (worktree == null ? "" : $" Its report names branch {worktree.Branch}: merge it or open a PR from it, then close_chat "
+            + "removes the worktree.");
 
     /// <summary>Why <paramref name="parentId"/> may not split off another chat now (SplitLimits), or null when it may.</summary>
     private string? SplitRefusal(string? parentId)
@@ -2833,7 +2845,14 @@ public partial class ChatViewModel : ViewModelBase
     {
         try
         {
-            if (CurrentSession?.Id != chatId) return;   // the user moved on before it started
+            if (CurrentSession?.Id != chatId)
+            {
+                // The owner moved on before it started: it starts off screen instead (it used to never start at all,
+                // while the asking agent was told it had).
+                _agentDrivenNext.Add(chatId);
+                await StartInternalTurnAsync(chatId, message);
+                return;
+            }
             _splitTurnPending = chatId;                 // its run: started by the asking chat's agent, not the owner
             await SendMessageCore(message, null);
         }
@@ -3516,7 +3535,9 @@ public partial class ChatViewModel : ViewModelBase
                     break;
                 case MessageRole.System when m.IsNotice && !string.IsNullOrWhiteSpace(m.Content):
                     // A background command or a split chat finished: the model hears it (it may have been told mid-run too).
-                    result.Add(new ChatMessage { Role = MessageRole.User, Content = NoticePrefix + m.Content, Timestamp = m.Timestamp });
+                    // A split's report keeps its whole text for the model in ToolOutput (the row shows its start).
+                    result.Add(new ChatMessage { Role = MessageRole.User, Timestamp = m.Timestamp,
+                        Content = NoticePrefix + (string.IsNullOrWhiteSpace(m.ToolOutput) ? m.Content : m.ToolOutput) });
                     break;
             }
         }
@@ -4044,6 +4065,8 @@ public partial class ChatViewModel : ViewModelBase
         // (A worktree removed by hand is not mentioned: the turn then runs in the project, as TaskFolderFor says.)
         if (FlowRun is { } wtRun && ChatLinkStore.Current?.WorktreeOf(wtRun.Session.Id) is { } ownTree && Directory.Exists(ownTree.Folder))
             input += "\n\n" + NoticePrefix + Services.Agents.SplitWorktree.InstructionFor(ownTree);
+        // A split chat hears who opened it and that its answer goes back there (and how to ask that chat something).
+        if (SplitTurnInstruction(FlowRun?.Session) is { } splitNote) input += "\n\n" + splitNote;
         if (pipe != null && FlowRun is { } pipeRun)
         {
             // A message a pipe caller sent (cluadex.continue_chat): marked as such (the BrainX model never relays it

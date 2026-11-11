@@ -179,6 +179,18 @@ internal static class ChatKeys
         ["chat.split.archiveDoneTip"] = new() { ["en"] = "Put away the finished split chats of this chat (kept, not deleted)", ["th"] = "เก็บแชทงานแยกที่เสร็จแล้วของแชทนี้ (ไม่ลบ เรียกคืนได้)" },
         ["chat.split.archiveTip"] = new() { ["en"] = "Put this split chat away (kept, not deleted)", ["th"] = "เก็บแชทงานแยกนี้ (ไม่ลบ เรียกคืนได้)" },
         ["chat.split.unarchiveTip"] = new() { ["en"] = "Bring this split chat back into the list", ["th"] = "นำแชทงานแยกนี้กลับมาในรายการ" },
+        // A split chat's report coming back, and chats messaging each other (Services/Agents/SplitReports)
+        ["chat.split.stoppedNote"] = new() { ["en"] = "Split chat \"{0}\" was stopped{1}", ["th"] = "งานแยก \"{0}\" ถูกหยุด{1}" },
+        ["chat.split.failedNote"] = new() { ["en"] = "Split chat \"{0}\" ended with an error{1}", ["th"] = "งานแยก \"{0}\" จบด้วยข้อผิดพลาด{1}" },
+        ["chat.split.waitOthers"] = new() { ["en"] = "(carries on once {0} more split chat(s) finish)", ["th"] = "(จะทำต่อเมื่องานแยกอีก {0} งานเสร็จ)" },
+        ["chat.split.noAuto"] = new() { ["en"] = "Carrying on after split chats is off — send a message to carry on.", ["th"] = "ปิดการทำต่อเองหลังงานแยกเสร็จไว้ — ส่งข้อความเพื่อให้ทำต่อ" },
+        ["chat.split.wakeLimit"] = new() { ["en"] = "Split chats already started {0} turns here within {1} — it waits for you now: send a message to carry on.", ["th"] = "งานแยกเริ่มเทิร์นในแชทนี้ไปแล้ว {0} ครั้งภายใน {1} — ตอนนี้รอคุณก่อน: ส่งข้อความเพื่อให้ทำต่อ" },
+        ["chat.split.wake"] = new() { ["en"] = "🔔 Split chats are done ({0}) — carrying on from their reports", ["th"] = "🔔 งานแยกเสร็จแล้ว ({0}) — ทำต่อจากรายงานที่ส่งกลับมา" },
+        ["chat.msg.fromParent"] = new() { ["en"] = "✉️ From the chat that opened this one, \"{0}\": {1}", ["th"] = "✉️ ข้อความจากแชทหลัก \"{0}\": {1}" },
+        ["chat.msg.fromSplit"] = new() { ["en"] = "✉️ From split chat \"{0}\": {1}", ["th"] = "✉️ ข้อความจากงานแยก \"{0}\": {1}" },
+        ["chat.msg.leftForYou"] = new() { ["en"] = "(left here for you: this chat's last turn was stopped)", ["th"] = "(ฝากไว้ให้คุณ: เทิร์นล่าสุดของแชทนี้ถูกหยุดไว้)" },
+        ["settings.splitAutoContinue"] = new() { ["en"] = "Carry on when split chats finish", ["th"] = "ทำต่อเองเมื่องานแยกเสร็จ" },
+        ["settings.splitAutoContinueDesc"] = new() { ["en"] = "When a chat the AI split work off to (new_chat) ends its turn while the chat that opened it sits idle, that chat starts a new turn with the report — once its last split chat is done, so several reports come in one turn. Not after you stopped either chat, and at most 8 such turns per chat in 2 hours. Off = the report waits there as a notice.", ["th"] = "เมื่อแชทที่ AI แยกงานไปทำ (new_chat) จบเทิร์นตอนที่แชทหลักว่างอยู่ แชทหลักจะเริ่มเทิร์นใหม่พร้อมรายงาน — รอจนงานแยกงานสุดท้ายเสร็จ รายงานหลายงานจึงมาในเทิร์นเดียว ไม่ทำต่อเองถ้าคุณกดหยุดแชทใดแชทหนึ่งไว้ และไม่เกิน 8 เทิร์นต่อแชทใน 2 ชั่วโมง ปิด = รายงานรออยู่เป็นแจ้งเตือน" },
         // A split chat in its own git worktree (new_chat isolation "worktree")
         ["chat.split.worktreeOpened"] = new()
         {

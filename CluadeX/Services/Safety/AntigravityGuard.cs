@@ -63,7 +63,7 @@ public static class AntigravityGuard
     public static readonly HashSet<string> ReadOnlyChatTools = new(StringComparer.Ordinal)
     {
         Tools.ProjectToolModule.ToolName, Tools.ProjectToolModule.NewChatToolName, Tools.ProjectToolModule.CloseChatToolName,
-        Tools.ChatToolBridge.PlanToolName, Tools.OrchestrationToolModule.WrapUpToolName,
+        Tools.ProjectToolModule.MessageChatToolName, Tools.ChatToolBridge.PlanToolName, Tools.OrchestrationToolModule.WrapUpToolName,
     };
 
     /// <summary>The decision for one hook input. Pure apart from the changed-files scan <see cref="GuardHook.Decide"/> makes

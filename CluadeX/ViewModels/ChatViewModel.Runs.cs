@@ -506,6 +506,11 @@ public partial class ChatViewModel
         ActivityBegan(session);
         CancelLearning(session);   // it is working again: read it when it is quiet
         if (_splitTurnPending == session.Id) { run.StartedBySplit = true; _splitTurnPending = null; }
+        // A turn CluadeX starts for another chat's agent (a message_chat, a split's report waking it, a split opened in
+        // the background) counts as the agent's: its report goes up and may wake the chat above it.
+        if (_agentDrivenNext.Remove(session.Id)) run.StartedBySplit = true;
+        // Reports waiting for this chat are in its rows: this turn reads them, no later wake needs to.
+        _splitWaiting.Remove(session.Id);
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
@@ -532,6 +537,7 @@ public partial class ChatViewModel
     {
         var run = _runs.FirstOrDefault(r => ReferenceEquals(r.Done, done));
         List<(string Text, object? Tag)>? leftover = null;
+        bool stopped = false, failed = false;
         if (run != null)
         {
             Services.Agents.RunActivity.ClearRun(run.Session.Id);
@@ -554,7 +560,7 @@ public partial class ChatViewModel
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
             // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it. An error or a stop says
             // so (red) until the next turn begins, on screen or not.
-            var (stopped, failed) = RunBadge.Outcome(run.Messages, run.FirstRow, run.Stopped);
+            (stopped, failed) = RunBadge.Outcome(run.Messages, run.FirstRow, run.Stopped);
             run.Session.RunStatus = RunBadge.AtEnd(stopped, failed, ReferenceEquals(run.Session, CurrentSession));
             NoteRunEnded(run.Session, run.Session.RunStatus);
             ActivityEnded(run.Session, stopped, failed);
@@ -579,39 +585,11 @@ public partial class ChatViewModel
             ScheduleLearning(run.Session, run.Messages);
             if (ReferenceEquals(run.Session, CurrentSession)) FlushInstinctCards();
         }
-        if (run != null) TellParentSplitFinished(run.Session, run.Messages);
+        // Its report to the chat that opened it, and reports / messages it never took (SplitReports).
+        if (run != null) SplitTurnEnded(run, stopped, failed, leftover);
         if (run != null && leftover is { Count: > 0 }) HandOnUntakenWatchNotes(run, leftover);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
-    }
-
-    /// <summary>
-    /// A split chat finished its turn: the chat that opened it hears so (a side note in its live list, when it is
-    /// running or on screen) and the sidebar's tree updates its count — so the asking chat, or the owner, can put the
-    /// finished one away (close_chat / the sidebar's box button). It is a notice with the gist of what the split
-    /// answered, so the parent's agent reads it too — at its next step while it runs, else on its next turn.
-    /// </summary>
-    private void TellParentSplitFinished(ChatSession child, IEnumerable<ChatMessage>? childMessages = null)
-    {
-        if (child.ParentId is not { } pid) return;
-        if (Sessions.Any(s => s.Id == pid))
-        {
-            // A Fable chat's report is what the work was for: it comes back whole (it was asked to keep it short).
-            if (Services.Agents.DispatchPolicy.IsFable(child.OwnModel) && GistOf(childMessages, FableReportChars) is { Length: > 0 } report)
-            {
-                AddNotice(pid, "🧠 " + LocF("fable.report", child.Title, report),
-                    $"Claude Fable 5.2 in split chat \"{child.Title}\" (id {child.Id}) ended a turn. Its report: " + report);
-                RebuildVisibleSessions();
-                return;
-            }
-            string gist = GistOf(childMessages);
-            // In its own worktree: the notice names the branch, so the parent can merge it or open a PR from it.
-            var (treeShown, treeForModel) = WorktreeNoticeOf(child);
-            AddNotice(pid,
-                "✅ " + (gist.Length > 0 ? LocF("orch.splits.turnNote", child.Title, gist) : LocF("chat.split.finishedNote", child.Title)) + treeShown,
-                $"Split chat \"{child.Title}\" (id {child.Id}) ended a turn." + (gist.Length > 0 ? " Its last answer: " + gist : "") + treeForModel);
-        }
-        RebuildVisibleSessions();
     }
 
     private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)

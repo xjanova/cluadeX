@@ -407,13 +407,16 @@ public partial class ChatViewModel
         CancellationTokenSource? linked = null;
         ObservableCollection<ChatMessage> rows = new();
         List<ChatMessage> history = new();
+        string loopText = text;   // the model's input: the message, and the notes a split chat's turn carries
         string? refused = await dispatcher.InvokeAsync(() =>
         {
             var session = Sessions.FirstOrDefault(s => s.Id == chat.Id) ?? stored;
             if (session == null) return $"The chat '{chat.Title}' could not be read, nothing was sent.";
             if (RunOf(session) != null) return $"The chat '{chat.Title}' is already running, nothing was sent.";
             if (CurrentSession?.Id == chat.Id) return $"The chat '{chat.Title}' was opened just now, nothing was sent: call again to send it there.";
-            string folder = string.IsNullOrWhiteSpace(session.ProjectPath) ? _fileSystemService.AppWorkingDirectory : session.ProjectPath;
+            // A split chat in its own git worktree works there off screen too (it ran in the parent's checkout before).
+            string folder = WorktreeFolderOf(session)
+                ?? (string.IsNullOrWhiteSpace(session.ProjectPath) ? _fileSystemService.AppWorkingDirectory : session.ProjectPath);
             if (!string.IsNullOrEmpty(folder) && !Directory.Exists(folder)) return $"The chat's folder {folder} is gone, nothing was sent.";
             rows = new ObservableCollection<ChatMessage>(stored?.Messages ?? session.Messages);
             sent = new ChatMessage { Role = MessageRole.User, Content = text };
@@ -426,6 +429,10 @@ public partial class ChatViewModel
             linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
             run.Cts = linked;
             history = BuildModelHistory(rows, before: sent, includeTools: true);
+            // What an on-screen turn adds to its input for a split chat: where it works and who it reports to.
+            if (ChatLinkStore.Current?.WorktreeOf(session.Id) is { } ownTree && Directory.Exists(ownTree.Folder))
+                loopText += "\n\n" + NoticePrefix + Services.Agents.SplitWorktree.InstructionFor(ownTree);
+            if (SplitTurnInstruction(session) is { } splitNote) loopText += "\n\n" + splitNote;
             RefreshSessionBadges();
             return null;
         });
@@ -437,7 +444,7 @@ public partial class ChatViewModel
         try
         {
             Exception? failure = null;
-            try { run.LoopResult = await Task.Run(() => RunAgentLoopAsync(history, text, maxSteps, linked!.Token), CancellationToken.None); }
+            try { run.LoopResult = await Task.Run(() => RunAgentLoopAsync(history, loopText, maxSteps, linked!.Token), CancellationToken.None); }
             // Only a real stop (the caller went, or Stop) is a stop line: any other cancellation is a failure to show and log.
             catch (OperationCanceledException) when (linked!.IsCancellationRequested) { /* the stop line below */ }
             catch (Exception ex) { failure = ex; }

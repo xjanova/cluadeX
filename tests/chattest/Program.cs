@@ -383,6 +383,20 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=SPLIT: split chats end to end — new_chat / close_chat on the chat page (NC/SC), the orchestration
+        // views that show them, their worktrees, pipe chats, and the report back + message_chat (SplitReportTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "SPLIT")
+        {
+            await TestContextWindow();
+            await TestOrchestrationViews();
+            await TestSplitWorktrees();
+            await TestPipeChats();
+            await TestSplitReports();
+            Log($"\n## Result (CHATTEST_ONLY=SPLIT): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=ORCH: just the orchestration views (docs/agent-orchestration.md), and the narrow composer the
         // Ultra switch joined.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "ORCH")
@@ -512,6 +526,7 @@ internal static partial class Program
         await TestFloatingPlan();             // MF: the floating plan card comes and goes by the chat's own card
         await TestOrchestrationViews();       // OR: workflow card, split chips, notices, next-step box, Ultra
         await TestSplitWorktrees();           // SWT: a split chat in its own git worktree — branch in the notice, close_chat keeps unmerged
+        await TestSplitReports();             // SR: a split reports back to its parent (woken when idle), message_chat both ways
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too

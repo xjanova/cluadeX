@@ -41,7 +41,7 @@ public static class ChatToolBridge
     public static readonly string[] QualifiedToolNames = new[]
         {
             ProjectToolModule.NewChatToolName, ProjectToolModule.ToolName, ProjectToolModule.CloseChatToolName, AskToolName,
-            PlanToolName,
+            PlanToolName, ProjectToolModule.MessageChatToolName,
         }
         .Concat(OrchestrationToolModule.ToolNames)
         .Concat(BrowserToolModule.ToolNames)
@@ -382,10 +382,10 @@ public static class ChatToolBridge
             : tool == PlanToolName ? ToolType.TodoWrite
             : tool == AutoComment.AutoCommentToolModule.ToolName ? ToolType.AddCodeComments
             : OrchestrationToolModule.TypeOf(tool) ?? new ProjectToolModule().ResolveToolType(tool);
-        if (type == null || (!browser && !desktop && !engineering && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat
+        if (type == null || (!browser && !desktop && !engineering && type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat or ToolType.MessageChat
                                                                  or ToolType.TodoWrite or ToolType.Workflow or ToolType.WrapUp
                                                                  or ToolType.AddCodeComments)))
-            return (false, $"CluadeX: '{tool}' is not one of its tools for CLI agents (open_project, new_chat, close_chat, "
+            return (false, $"CluadeX: '{tool}' is not one of its tools for CLI agents (open_project, new_chat, close_chat, message_chat, "
                            + "ask_user, update_plan, workflow, wrap_up, browser_open … browser_close, desktop_windows … desktop_wait, "
                            + "verify_change, find_references, rename_symbol, impact_of, checkpoint_list/diff/restore, gh_pr_view, "
                            + "gh_pr_checks, gh_run_log, git_blame, git_show, debug, add_code_comments).");
@@ -827,6 +827,10 @@ public static class ChatToolBridge
               .Append("works on its own branch — ")
               .Append($"and {T(ProjectToolModule.CloseChatToolName)} lists the chats you split off and puts finished ones away. ")
               .Append("Never answer that you cannot open a chat. ");
+        // Every CLI, split chats or not: a split chat's report comes back by itself, and the two can message each other.
+        sb.Append($"{T(ProjectToolModule.MessageChatToolName)} sends a message to the chat that opened this one (chat \"parent\") or to ")
+          .Append("a chat you split off — a working chat reads it at its next step, an idle one starts a turn with it; a split chat's ")
+          .Append("report comes back to you by itself when it ends a turn, so never poll or wait for it in a loop. ");
         if (plan)
             sb.Append($"{T(PlanToolName)} keeps the plan card under your reply: send the whole plan when a task has several ")
               .Append("steps, then advance as each step finishes. ");
