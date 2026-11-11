@@ -135,6 +135,7 @@ internal static class Program
         }
         if (args.Contains("--llama-launch")) { await LlamaLaunchWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--account")) { await AccountWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--recover")) { await RunRecoveryWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--buddy")) { await RunBadgeWire.Run(Check, Section); await BuddyIdleWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--voice")) { await VoiceWire.Run(Check, Section); await EdgeTtsWire.Run(Check, Section); await SpokenReplyWire.Run(Check, Section); return Finish(); }
@@ -584,6 +585,7 @@ internal static class Program
         await LlamaLaunchWire.Run(Check, Section);
         await PricingWire.Run(Check, Section);
         await RunBadgeWire.Run(Check, Section);
+        await RunRecoveryWire.Run(Check, Section);
         await BuddyIdleWire.Run(Check, Section);
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);

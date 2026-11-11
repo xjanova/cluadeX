@@ -513,6 +513,27 @@ public class ChatMessage : INotifyPropertyChanged
         return true;
     }
 
+    /// <summary>A card read back after a restart, open again (RunRecovery): its options and who hears the answer. A card
+    /// with steps is reopened with <see cref="SetSteps"/> instead.</summary>
+    public void ReopenQuestion(List<string> options, Action<string> answered)
+    {
+        _questionAnswered = false;
+        QuestionOptions = options;
+        QuestionCallback = answered;
+        OnPropertyChanged(nameof(QuestionOptions));
+        OnPropertyChanged(nameof(QuestionAnswered));
+        RaiseSteps();
+    }
+
+    /// <summary><see cref="ReopenQuestion"/> for a card with steps.</summary>
+    public void ReopenSteps(IReadOnlyList<AskStep> steps, Action<IReadOnlyList<string>> answered)
+    {
+        _questionAnswered = false;
+        SetSteps(steps, answered);
+        OnPropertyChanged(nameof(UsesSteps));
+        OnPropertyChanged(nameof(QuestionAnswered));
+    }
+
     /// <summary>Nobody will answer it any more (the run was stopped): say so under the question.</summary>
     public void CloseQuestion(string note)
     {

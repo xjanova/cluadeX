@@ -1624,6 +1624,9 @@ public partial class ChatViewModel : ViewModelBase
             //    saved every "New Chat" the moment it was opened, and those piled up in the sidebar.
             _persistenceService.DeleteEmptySessions();   // no-op when the DB fails its integrity check
             bool dbHealthy = _persistenceService.IsDatabaseHealthy;
+            // Chats the last run was cut off in (the app closed or crashed mid-turn): their recovery card goes into the
+            // stored chat before the list and the last chat are read, so both already have it.
+            if (dbHealthy) RecoverOrphanRunsInStore();
             if (!dbHealthy) Debug.WriteLine("codex.db failed PRAGMA quick_check — empty-chat cleanup disabled");
             List<ChatSession> savedSessions;
             try { savedSessions = _persistenceService.LoadSessionList(); }
@@ -1679,12 +1682,14 @@ public partial class ChatViewModel : ViewModelBase
                     ScheduleSidebarRebuild();
                     foreach (var msg in lastSession.Messages)
                         Messages.Add(msg);
+                    ArmRecoveryCards(Messages);   // a turn the app closed on: its question cards can be answered again
                     // Its project at once: the files panel used to keep the previous folder until the first message
                     // was sent (owner 2026-10-16: "แต่ละแชทต้องแสดงไฟล์ให้ถูกต้อง … แม้เปิดมาใหม่").
                     FollowChatProject(lastSession);
 
                     // ─── Crash recovery: detect if last session was interrupted ───
                     var lastMsg = lastSession.Messages.LastOrDefault();
+                    // (A turn on the restart ledger ends on its recovery card instead; this is for one the ledger missed.)
                     if (lastMsg is { Role: MessageRole.User })
                     {
                         // Last message is user's question with no response — app crashed during generation
@@ -1989,6 +1994,7 @@ public partial class ChatViewModel : ViewModelBase
 
         // Sync CurrentSession.Messages to point to the same data as what's displayed
         CurrentSession.Messages = Messages.ToList();
+        ArmRecoveryCards(Messages);   // a turn the app closed on: its question cards can be answered again
 
         _isDirty = false;
         // A put-away split chat shows in the list while it is open: one rebuild, coalesced with the others of this switch.

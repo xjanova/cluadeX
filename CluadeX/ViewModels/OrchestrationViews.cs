@@ -239,6 +239,10 @@ public sealed class NextStepView : ViewModelBase
 
     private readonly Action<NextStepView, string>? _send;
 
+    /// <summary>The box's heading: "Next step" for the model's wrap_up; CluadeX's own boxes (the recovery card after a
+    /// restart) say what they are.</summary>
+    public string Title { get; init; } = LocalizedResources.Instance["orch.next.title"];
+
     public NextStepView(NextStep step, string? picked, Action<NextStepView, string>? send)
     {
         Recap = step.Recap;
@@ -261,6 +265,13 @@ public sealed class NextStepView : ViewModelBase
     }
     public bool IsAnswered => _picked.Length > 0;
     public string PickedText => _picked.Length > 0 ? string.Format(LocalizedResources.Instance["orch.next.picked"], _picked) : "";
+
+    /// <summary>Answered some other way (the recovery card when its question card is answered, or a new message took
+    /// its place): the buttons go, nothing is sent.</summary>
+    internal void MarkPicked(string label)
+    {
+        if (!IsAnswered && label.Length > 0) Picked = label;
+    }
 
     /// <summary>A click: once (a double click, or the other button after it, does nothing).</summary>
     internal void Choose(string label)

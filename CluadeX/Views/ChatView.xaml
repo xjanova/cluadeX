@@ -1555,7 +1555,7 @@
                                         Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1.Border.Soft}"
                                         Visibility="{Binding ShowsNextStep, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                     <StackPanel DataContext="{Binding NextStep}">
-                                        <TextBlock Text="{services:Loc orch.next.title}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Accent.1}"/>
+                                        <TextBlock Text="{Binding Title}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Accent.1}"/>
                                         <TextBlock Text="{Binding Recap}" Margin="0,4,0,0" FontSize="12.5" TextWrapping="Wrap" Foreground="{DynamicResource Text.Primary}"/>
                                         <TextBlock Text="{Binding Ask}" Margin="0,8,0,0" FontSize="12.5" FontWeight="SemiBold" TextWrapping="Wrap"
                                                    Foreground="{DynamicResource Text.Primary}" Visibility="{Binding HasAsk, Converter={StaticResource BoolVis}}"/>

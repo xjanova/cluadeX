@@ -126,27 +126,53 @@ public sealed class LiveRunLedger
         catch { return false; }
     }
 
-    private Dictionary<string, int> Read()
+    /// <summary>One run on the ledger: the CluadeX process running it; whether that CluadeX was closed by the owner while
+    /// it ran (<see cref="Closed"/>, set on the way out — a crash never sets it); and what it was waiting on then
+    /// (<see cref="Waiting"/>: <see cref="WaitQuestion"/>, <see cref="WaitPermission"/>, or null while it works).</summary>
+    public sealed record Entry(int Pid, bool Closed = false, string? Waiting = null);
+
+    public const string WaitQuestion = "question", WaitPermission = "permission";
+
+    /// <summary>A run the restart found: the chat, and how it was cut off.</summary>
+    public sealed record Orphan(string ChatId, bool Closed, string? Waiting);
+
+    // The file is {chatId: pid} — what builds before 3.0.310 write and read. An entry with more to say (closed, waiting)
+    // is an object instead; an older build reading one loses only the badge.
+    private Dictionary<string, Entry> Read()
     {
-        if (_path == null || !File.Exists(_path)) return new(StringComparer.Ordinal);
+        var runs = new Dictionary<string, Entry>(StringComparer.Ordinal);
+        if (_path == null || !File.Exists(_path)) return runs;
         try
         {
-            return JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(_path)) is { } d
-                ? new Dictionary<string, int>(d, StringComparer.Ordinal)
-                : new(StringComparer.Ordinal);
+            using var doc = JsonDocument.Parse(File.ReadAllText(_path));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return runs;
+            foreach (var p in doc.RootElement.EnumerateObject())
+            {
+                if (p.Value.ValueKind == JsonValueKind.Number && p.Value.TryGetInt32(out int pid)) runs[p.Name] = new Entry(pid);
+                else if (p.Value.ValueKind == JsonValueKind.Object && p.Value.TryGetProperty("pid", out var pv) && pv.TryGetInt32(out pid))
+                    runs[p.Name] = new Entry(pid,
+                        p.Value.TryGetProperty("closed", out var c) && c.ValueKind == JsonValueKind.True,
+                        p.Value.TryGetProperty("waiting", out var w) && w.ValueKind == JsonValueKind.String ? w.GetString() : null);
+            }
         }
-        catch { return new(StringComparer.Ordinal); }
+        catch { /* unreadable: nothing on it */ }
+        return runs;
     }
 
-    private void Write(Dictionary<string, int> runs)
+    private void Write(Dictionary<string, Entry> runs)
     {
         if (_path == null) return;
         try
         {
             if (runs.Count == 0) { if (File.Exists(_path)) File.Delete(_path); return; }
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+            var root = new System.Text.Json.Nodes.JsonObject();
+            foreach (var (id, e) in runs)
+                root[id] = !e.Closed && e.Waiting == null
+                    ? System.Text.Json.Nodes.JsonValue.Create(e.Pid)
+                    : new System.Text.Json.Nodes.JsonObject { ["pid"] = e.Pid, ["closed"] = e.Closed, ["waiting"] = e.Waiting };
             string tmp = _path + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(runs), new UTF8Encoding(false));
+            File.WriteAllText(tmp, root.ToJsonString(), new UTF8Encoding(false));
             if (File.Exists(_path)) File.Replace(tmp, _path, null);
             else File.Move(tmp, _path);
         }
@@ -154,11 +180,11 @@ public sealed class LiveRunLedger
     }
 
     // Memory-only copy for a ledger with no file (tests).
-    private readonly Dictionary<string, int> _memory = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Entry> _memory = new(StringComparer.Ordinal);
 
-    private Dictionary<string, int> Load() => _path == null ? new(_memory, StringComparer.Ordinal) : Read();
+    private Dictionary<string, Entry> Load() => _path == null ? new(_memory, StringComparer.Ordinal) : Read();
 
-    private void Store(Dictionary<string, int> runs)
+    private void Store(Dictionary<string, Entry> runs)
     {
         if (_path == null) { _memory.Clear(); foreach (var kv in runs) _memory[kv.Key] = kv.Value; return; }
         Write(runs);
@@ -167,7 +193,7 @@ public sealed class LiveRunLedger
     /// <summary>A run began in <paramref name="chatId"/>.</summary>
     public void Began(string chatId)
     {
-        lock (_gate) { var runs = Load(); runs[chatId] = _pid; Store(runs); }
+        lock (_gate) { var runs = Load(); runs[chatId] = new Entry(_pid); Store(runs); }
     }
 
     /// <summary>The run in <paramref name="chatId"/> ended (CluadeX saw it end).</summary>
@@ -176,16 +202,52 @@ public sealed class LiveRunLedger
         lock (_gate) { var runs = Load(); if (runs.Remove(chatId)) Store(runs); }
     }
 
-    /// <summary>At start-up: the chats whose run never ended because the CluadeX running it is gone. They are taken off
-    /// the ledger (they are told once); runs of a CluadeX still alive stay.</summary>
-    public List<string> TakeOrphans()
+    /// <summary>What the run in <paramref name="chatId"/> waits on now (null: it works). Written only when it changes, so a
+    /// crash while a card is open still says so after the restart.</summary>
+    public void SetWaiting(string chatId, string? waiting)
     {
         lock (_gate)
         {
             var runs = Load();
-            var orphans = runs.Where(kv => kv.Value != _pid && !IsAlive(kv.Value)).Select(kv => kv.Key).ToList();
+            if (!runs.TryGetValue(chatId, out var e) || e.Pid != _pid || e.Waiting == waiting) return;
+            runs[chatId] = e with { Waiting = waiting };
+            Store(runs);
+        }
+    }
+
+    /// <summary>The owner is closing CluadeX with these runs going: each is marked as cut off by the close (not a crash),
+    /// with what it waits on (<paramref name="waiting"/>: chat id → kind, missing = working).</summary>
+    public void MarkClosing(IReadOnlyDictionary<string, string?> waiting)
+    {
+        lock (_gate)
+        {
+            var runs = Load();
+            bool changed = false;
+            foreach (var (id, e) in runs.ToList())
+            {
+                if (e.Pid != _pid) continue;
+                runs[id] = e with { Closed = true, Waiting = waiting.TryGetValue(id, out var w) ? w : e.Waiting };
+                changed = true;
+            }
+            if (changed) Store(runs);
+        }
+    }
+
+    /// <summary>At start-up: the chats whose run never ended because the CluadeX running it is gone. They are taken off
+    /// the ledger (they are told once); runs of a CluadeX still alive stay.</summary>
+    public List<string> TakeOrphans() => TakeOrphanRuns().Select(o => o.ChatId).ToList();
+
+    /// <summary><see cref="TakeOrphans"/> with how each run was cut off (the owner closed CluadeX, or it ended on its own)
+    /// and what it was waiting on.</summary>
+    public List<Orphan> TakeOrphanRuns()
+    {
+        lock (_gate)
+        {
+            var runs = Load();
+            var orphans = runs.Where(kv => kv.Value.Pid != _pid && !IsAlive(kv.Value.Pid))
+                .Select(kv => new Orphan(kv.Key, kv.Value.Closed, kv.Value.Waiting)).ToList();
             if (orphans.Count == 0) return orphans;
-            foreach (var id in orphans) runs.Remove(id);
+            foreach (var o in orphans) runs.Remove(o.ChatId);
             Store(runs);
             return orphans;
         }

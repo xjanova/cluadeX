@@ -291,6 +291,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=RR: just a turn cut off by the app closing or crashing, after the restart (RestartRecoveryTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "RR")
+        {
+            await TestRestartRecovery();
+            Log($"\n## Result (CHATTEST_ONLY=RR): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=RB: just the sidebar run badges on real runs and the buddy's mood (RunBadgeTests.cs).
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "RB")
         {
@@ -502,6 +511,7 @@ internal static partial class Program
         await TestSidebarIdentity();          // SI: opening a chat keeps its sidebar row (pin, folders); cached context count
         await TestChatRef();                  // CR: the chat's reference (CX-…): parsing, search, the model's line, the pinned chip
         await TestRunBadges();                // RB: run badges on real runs (unread, failed, stopped, restart ledger), the buddy's mood
+        await TestRestartRecovery();          // RR: a turn cut off by the app closing or crashing, after the restart
         await TestChatUx();                   // CF / AS / XM: code boxes, the question card with steps, media + web pictures
         await TestDoneCheck();                // DC: a written file must parse before "done"; the tool track record
         await TestPlanCardClock();            // PC: the plan card's clock runs on its own; a run that ends says so on the card

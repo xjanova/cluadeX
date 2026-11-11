@@ -46,18 +46,8 @@ public partial class ChatViewModel
     /// <summary>The ledger beside codex.db (made with the chat store).</summary>
     private void InitLiveRuns(string? dataRoot) => _liveRuns ??= new LiveRunLedger(dataRoot);
 
-    /// <summary>At start-up, after the chats are listed: a chat whose run CluadeX never saw end shows as stopped, not as
-    /// finished and not as working (nothing runs it any more).</summary>
-    private void MarkOrphanRuns()
-    {
-        if (_liveRuns == null) return;
-        List<string> orphans;
-        try { orphans = _liveRuns.TakeOrphans(); }
-        catch { return; }
-        foreach (var id in orphans)
-            if (Sessions.FirstOrDefault(s => s.Id == id) is { } s && RunOf(s) == null)
-                s.RunStatus = RunBadge.Stopped;
-    }
+    // MarkOrphanRuns (a chat whose run CluadeX never saw end shows as stopped) is in ChatViewModel.Recovery.cs, with the
+    // recovery card that run gets.
 
     private void NoteRunBegan(ChatSession session)
     {
@@ -69,7 +59,9 @@ public partial class ChatViewModel
     {
         _lastActivityUtc = _lastEndUtc = DateTime.UtcNow;
         _lastEndBadge = badge;
-        try { _liveRuns?.Ended(session.Id); } catch { }
+        _ledgerWaiting.Remove(session.Id);
+        // A run that ends because the app is going down was cut off: it stays on the ledger for the restart.
+        if (!_appClosing) try { _liveRuns?.Ended(session.Id); } catch { }
     }
 
     /// <summary>The buddy's mood from the runs now (UI thread): on every run change and on the 5 s tick, which carries
