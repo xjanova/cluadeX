@@ -228,6 +228,32 @@ internal static partial class Program
                 && JsonSerializer.Serialize(sch.InputSchema).Contains("\"chat\"") && JsonSerializer.Serialize(sch.InputSchema).Contains("\"message\""));
             Check("SR8 CLI agents reach it through the chat tool bridge", ChatToolBridge.QualifiedToolNames.Any(n => n.EndsWith("message_chat"))
                 && Enum.GetValues<ChatToolBridge.CliToolNames>().All(n => ChatToolBridge.ChatToolsHint(n, splitChats: false).Contains("message_chat")));
+
+            // ── SR9: which chat new work belongs to — the parent's turn lists its open splits; new_chat refuses a lookalike ──
+            var p9 = StoredChat("SR9 parent");
+            var c9a = Split(p9, "SR9 แก้ปุ่ม login หน้าแรก");
+            var c9b = Split(p9, "SR9 build the sales dashboard");
+            var c9old = Split(p9, "SR9 old docs work");
+            store.SetArchived(c9old.Id, true);
+            string? note9 = (string?)CallVm("SplitTurnInstruction", p9);
+            Check("SR9 a parent's turn lists its open split chats (not the put-away ones) and says where new work goes",
+                note9 != null && note9.Contains(ChatRef.Of(c9a.Id)) && note9.Contains(ChatRef.Of(c9b.Id)) && !note9.Contains("old docs")
+                && note9.Contains("message_chat") && note9.Contains("how things stand"), note9 ?? "null");
+            Check("SR9 a chat with no split chats gets no note (no tokens spent on it)",
+                CallVm("SplitTurnInstruction", StoredChat("SR9 lonely")) == null);
+            string? childNote9 = (string?)CallVm("SplitTurnInstruction", c9a);
+            Check("SR9 a split chat still hears who opened it (and no children list it does not have)",
+                childNote9 != null && childNote9.Contains("This chat was opened by chat") && !childNote9.Contains("not put away"), childNote9 ?? "null");
+            Check("SR9 new_chat finds the open split that already has the work (other wording around it), and a sibling's too",
+                ProjectToolModule.SameWorkAs(p9.Id, "SR9 แก้ปุ่ม login หน้าแรกให้กดได้บนมือถือ")?.Id == c9a.Id
+                && ProjectToolModule.SameWorkAs(c9b.Id, "SR9 แก้ปุ่ม login หน้าแรก") is { Sibling: true } sib9 && sib9.Id == c9a.Id
+                && ProjectToolModule.SameWorkAs(p9.Id, "write the release notes") == null
+                && ProjectToolModule.SameWorkAs(p9.Id, "SR9 old docs work") == null);
+            lastEnd[c9a.Id] = (true, false);
+            string toSib = Message(c9b.Id, ChatRef.Of(c9a.Id), "SR9 the button also needs a mobile size");
+            Check("SR9 a split chat can hand work to its sibling with message_chat (it is that chat's work now)",
+                toSib.StartsWith("Not started")
+                && RowsOf(c9a.Id).Any(m => m.IsNotice && m.Content.Contains("SR9 the button")), toSib);
             await WaitUntil(() => Vm.Sessions.All(s => !Running(s.Id)), 15000);
         }
         finally

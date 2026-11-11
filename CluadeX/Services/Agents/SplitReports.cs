@@ -118,12 +118,105 @@ public static class SplitReports
         + "permission to start. Only when you cannot go on without its answer (a decision, a missing fact): message_chat with chat "
         + "\"parent\" and end your turn — its answer comes back here as a message.";
 
-    /// <summary>A message between two chats, as the receiving agent reads it.</summary>
-    public static string MessageForModel(bool fromParent, string fromTitle, string fromRef, string fromId, string text) =>
+    /// <summary>A message between two chats, as the receiving agent reads it. <paramref name="sibling"/>: from another
+    /// split chat of the same parent.</summary>
+    public static string MessageForModel(bool fromParent, string fromTitle, string fromRef, string fromId, string text, bool sibling = false) =>
         (fromParent
             ? $"Message from the chat that opened you, \"{fromTitle}\" (ref {fromRef}, id {fromId}):\n"
+            : sibling
+            ? $"Message from \"{fromTitle}\" (ref {fromRef}, id {fromId}), another split chat of the chat that opened you — this is "
+              + "work for this chat; answer it with message_chat chat \"{fromRef}\" when it asks something:\n"
             : $"Message from your split chat \"{fromTitle}\" (ref {fromRef}, id {fromId}) — answer it with message_chat chat \"{fromRef}\" when it asks something:\n")
         + Clip(text, MessageChars);
+
+    // ─── which chat a piece of work belongs to (owner 2026-11-11: "ต้องฉลาดพอรู้ว่างานที่คุยมีในแชทย่อยหรือยัง … หรือต้องส่งไป
+    //     สมทบกับแชทที่ทำงานได้เองที่เป็นเรื่องเดียวกันคล้ายๆ กัน" — and "อย่าสร้างสิ่งไม่จำเป็นจนทำให้เสียโทเค็น") ───
+
+    /// <summary>A split chat that is not put away, as the router and the parent's note see it.</summary>
+    public sealed record OpenSplit(string Id, string Ref, string Title, string Task, bool Working, string? Gist = null, bool Sibling = false);
+
+    /// <summary>At or above this, new_chat treats the task as one an open split chat already has.</summary>
+    public const double SameWorkAt = 0.7;
+    /// <summary>The parent's note lists this many split chats; the rest are counted (close_chat list has them all).</summary>
+    public const int NoteMax = 8;
+
+    /// <summary>Lower case, letters / digits / marks only (Thai keeps its vowels and tone marks), one space between words.</summary>
+    private static string Norm(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return "";
+        var sb = new System.Text.StringBuilder(s.Length);
+        bool space = false;
+        foreach (char ch in s.ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch) || char.GetUnicodeCategory(ch) is System.Globalization.UnicodeCategory.NonSpacingMark
+                    or System.Globalization.UnicodeCategory.SpacingCombiningMark)
+            { if (space && sb.Length > 0) sb.Append(' '); sb.Append(ch); space = false; }
+            else space = true;
+        }
+        return sb.ToString();
+    }
+
+    private static HashSet<string> Grams(string n)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i + 3 <= n.Length; i++) set.Add(n.Substring(i, 3));
+        return set;
+    }
+
+    /// <summary>
+    /// How much of the shorter task the longer one holds (0–1), by letter triples — works for Thai, which has no spaces
+    /// between words, as well as English. Short texts (under 4 triples) count only when they are the same. Pure.
+    /// </summary>
+    public static double Likeness(string? a, string? b)
+    {
+        string x = Norm(a), y = Norm(b);
+        if (x.Length == 0 || y.Length == 0) return 0;
+        if (x == y) return 1;
+        var ga = Grams(x); var gb = Grams(y);
+        var (small, big) = ga.Count <= gb.Count ? (ga, gb) : (gb, ga);
+        if (small.Count < 4) return 0;
+        return small.Count(big.Contains) / (double)small.Count;
+    }
+
+    /// <summary>The open split chat whose task (or title) is most like <paramref name="task"/>, when it is at least
+    /// <see cref="SameWorkAt"/> alike; null otherwise. Pure.</summary>
+    public static OpenSplit? SameWork(string? task, IEnumerable<OpenSplit> open)
+    {
+        OpenSplit? best = null; double top = 0;
+        foreach (var s in open)
+        {
+            double l = Math.Max(Likeness(task, s.Task), Likeness(task, s.Title));
+            if (l > top) { top = l; best = s; }
+        }
+        return top >= SameWorkAt ? best : null;
+    }
+
+    /// <summary>What new_chat says when an open split chat already has the task.</summary>
+    public static string SameWorkRefusal(OpenSplit hit) =>
+        $"Not opened: {(hit.Sibling ? "another split chat of the chat that opened you" : "your split chat")} \"{hit.Title}\" "
+        + $"(ref {hit.Ref}) already has this work ({Clip(hit.Task, 120, oneLine: true)}; {(hit.Working ? "working" : "finished, not put away")}). "
+        + $"Send it there with message_chat chat \"{hit.Ref}\" — the message joins that chat's work"
+        + (hit.Working ? " at its next step" : " and starts a turn there")
+        + ". Only when it really is different work, call new_chat again with again \"true\".";
+
+    /// <summary>
+    /// The note a chat's turn carries while it has split chats that are not put away (null when it has none — a chat that
+    /// never split pays nothing for this): each on one short line, and where new work goes. Pure.
+    /// </summary>
+    public static string? ChildrenNote(IReadOnlyList<OpenSplit> open)
+    {
+        if (open.Count == 0) return null;
+        var lines = open.Take(NoteMax).Select(s =>
+            $"- {s.Ref} \"{Clip(s.Title, 60, oneLine: true)}\""
+            + (Likeness(s.Title, s.Task) >= SameWorkAt ? "" : $" — {Clip(s.Task, 80, oneLine: true)}")
+            + (s.Working ? " — working" : " — finished" + (string.IsNullOrEmpty(s.Gist) ? "" : ": " + Clip(s.Gist, 100, oneLine: true))));
+        string more = open.Count > NoteMax ? $"\n- … and {open.Count - NoteMax} more (close_chat list)" : "";
+        return "Split chats of this chat that are not put away (each reports back here by itself):\n" + string.Join("\n", lines) + more
+             + "\nFor each new request: if it is the same or close to one of these chats' work, send it there with message_chat "
+             + "(do not do it here, do not open another chat); if it builds on this chat's work, do it here; only separate new work "
+             + "goes to new_chat. When the user asks how things stand, answer from this list. Put finished ones away with close_chat "
+             + "once their result is used.";
+    }
 }
 
 /// <summary>

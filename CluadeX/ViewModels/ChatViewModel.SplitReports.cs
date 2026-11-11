@@ -309,9 +309,34 @@ public partial class ChatViewModel
     /// nobody split off.</summary>
     private string? SplitTurnInstruction(ChatSession? session)
     {
-        if (session == null || ChatLinkStore.Current?.Get(session.Id) is not { ArchivedAt: null } link) return null;
-        string parentTitle = Sessions.FirstOrDefault(s => s.Id == link.ParentId)?.Title ?? ChatRef.Of(link.ParentId);
-        return NoticePrefix + SplitReports.SplitInstruction(parentTitle, link.Task);
+        if (session == null || ChatLinkStore.Current is not { } store) return null;
+        string? own = null;
+        if (store.Get(session.Id) is { ArchivedAt: null } link)
+        {
+            string parentTitle = Sessions.FirstOrDefault(s => s.Id == link.ParentId)?.Title ?? ChatRef.Of(link.ParentId);
+            own = NoticePrefix + SplitReports.SplitInstruction(parentTitle, link.Task);
+        }
+        // A chat with split chats still open hears, every turn, which they are and where new work goes — so a request that
+        // is one of theirs joins that chat instead of being done twice. Nothing is added for a chat with none.
+        string? kids = SplitReports.ChildrenNote(OpenSplitsOf(session.Id));
+        return own == null ? kids == null ? null : NoticePrefix + kids
+             : kids == null ? own : own + "\n\n" + NoticePrefix + kids;
+    }
+
+    /// <summary>The split chats of <paramref name="parentId"/> not put away, with whether each is working and a short gist
+    /// of a finished one's answer (only from rows already loaded — nothing is read from disk for this).</summary>
+    private List<SplitReports.OpenSplit> OpenSplitsOf(string parentId)
+    {
+        var list = new List<SplitReports.OpenSplit>();
+        foreach (var (id, link) in ChatLinkStore.Current?.ChildrenOf(parentId) ?? new())
+        {
+            if (link.ArchivedAt != null || Sessions.FirstOrDefault(c => c.Id == id) is not { } c) continue;
+            bool working = RunOf(c) != null;
+            IEnumerable<ChatMessage>? rows = working ? null : CurrentSession?.Id == id ? Messages : c.Messages.Count > 0 ? c.Messages : null;
+            string title = string.IsNullOrWhiteSpace(c.Title) ? link.Task : c.Title;
+            list.Add(new(id, ChatRef.Of(id), title, link.Task, working, rows == null ? null : AnswerOf(rows, failed: false)));
+        }
+        return list;
     }
 
     // ─── message_chat ───
@@ -325,6 +350,7 @@ public partial class ChatViewModel
         var store = ChatLinkStore.Current ?? throw new InvalidOperationException("Split chats are not available here.");
         target = (target ?? "").Trim().Trim('"', '\'');
         bool toParent = ParentWords.Contains(target.ToLowerInvariant());
+        bool sibling = false;
         string toId;
         if (toParent)
             toId = store.Get(fromId)?.ParentId
@@ -341,6 +367,11 @@ public partial class ChatViewModel
                 if (store.Get(fromId)?.ParentId is { } up && (up == target || ChatRef.Matches(up, target)
                         || string.Equals(Sessions.FirstOrDefault(c => c.Id == up)?.Title, target, StringComparison.OrdinalIgnoreCase)))
                 { toId = up; toParent = true; }
+                // Another split chat of the same parent: work that is its own goes straight to it (new_chat names it).
+                else if (store.Get(fromId)?.ParentId is { } p && store.ChildrenOf(p).FirstOrDefault(k => k.Id != fromId
+                             && (k.Id == target || ChatRef.Matches(k.Id, target)
+                                 || string.Equals(Sessions.FirstOrDefault(c => c.Id == k.Id)?.Title, target, StringComparison.OrdinalIgnoreCase))) is { Id: not null } sib)
+                { toId = sib.Id; sibling = true; }
                 else
                     throw new InvalidOperationException($"No chat \"{target}\" to message. message_chat reaches \"parent\" (the chat that opened this one"
                         + (store.Get(fromId) == null ? " — this chat has none" : "") + ") and the chats this one split off"
@@ -358,10 +389,11 @@ public partial class ChatViewModel
 
         string fromTitle = string.IsNullOrWhiteSpace(from.Title) ? ChatRef.Of(fromId) : from.Title;
         string toTitle = string.IsNullOrWhiteSpace(to.Title) ? ChatRef.Of(toId) : to.Title;
-        string shown = LocF(toParent ? "chat.msg.fromSplit" : "chat.msg.fromParent", fromTitle, SplitReports.Clip(message, SplitReports.ShownChars, oneLine: true));
-        string forModel = NoticePrefix + SplitReports.MessageForModel(!toParent, fromTitle, ChatRef.Of(fromId), fromId, message);
+        string shown = LocF(toParent || sibling ? "chat.msg.fromSplit" : "chat.msg.fromParent", fromTitle, SplitReports.Clip(message, SplitReports.ShownChars, oneLine: true));
+        string forModel = NoticePrefix + SplitReports.MessageForModel(!toParent && !sibling, fromTitle, ChatRef.Of(fromId), fromId, message, sibling);
         string after = toParent
             ? "Its answer arrives here as a message — end your turn now if you cannot go on without it."
+            : sibling ? "It is that chat's work now: its report goes to the chat that opened you both, not here — carry on here or end your turn."
             : "Its report comes back here by itself when it ends its turn — do not poll; carry on here or end your turn.";
         var run = RunOf(to);
         var d = SplitReports.DecideMessage(run != null, _lastTurnEnd.TryGetValue(toId, out var e) && e.Stopped, _splitWakes.WouldAllow(toId, DateTime.Now));

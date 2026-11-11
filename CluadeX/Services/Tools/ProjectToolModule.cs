@@ -206,6 +206,12 @@ public sealed class ProjectToolModule : IAgentToolModule
                         + "once nothing on it is unmerged. Uncommitted changes here are not in it — commit first if it needs them. "
                         + "Git repositories only; not with fork, not for another project (that has its own checkout).",
                 },
+                ["again"] = new Dictionary<string, string>
+                {
+                    ["type"] = "boolean",
+                    ["description"] = "true: open it although an open split chat already has a task like it (CluadeX refuses a "
+                        + "lookalike and names that chat — send the work there with message_chat instead).",
+                },
             },
         };
         yield return new ToolSchema
@@ -350,6 +356,19 @@ public sealed class ProjectToolModule : IAgentToolModule
         };
     }
 
+    /// <summary>The open split chat of <paramref name="asking"/> — or a sibling of it — that already has
+    /// <paramref name="task"/>, or null. Reads chat-links.json only (no model call).</summary>
+    public static Agents.SplitReports.OpenSplit? SameWorkAs(string? asking, string? task)
+    {
+        if (asking == null || string.IsNullOrWhiteSpace(task) || ChatLinkStore.Current is not { } store) return null;
+        var open = store.ChildrenOf(asking).Where(k => k.Link.ArchivedAt == null)
+            .Select(k => new Agents.SplitReports.OpenSplit(k.Id, ChatRef.Of(k.Id), k.Link.Task, k.Link.Task, Working: false)).ToList();
+        if (store.Get(asking)?.ParentId is { } parent)
+            open.AddRange(store.ChildrenOf(parent).Where(k => k.Id != asking && k.Link.ArchivedAt == null)
+                .Select(k => new Agents.SplitReports.OpenSplit(k.Id, ChatRef.Of(k.Id), k.Link.Task, k.Link.Task, Working: false, Sibling: true)));
+        return Agents.SplitReports.SameWork(task, open);
+    }
+
     /// <summary>new_chat: a new chat in the sidebar, in this project or <c>path</c>, started with <c>message</c>.</summary>
     private async Task<ToolResult> ExecuteNewChatAsync(ToolCall call, ToolModuleContext context)
     {
@@ -371,6 +390,10 @@ public sealed class ProjectToolModule : IAgentToolModule
         string? message = call.GetArg("message").Trim() is { Length: > 0 } m ? m : null;
         string? title = call.GetArg("title").Trim() is { Length: > 0 } t ? t : null;
         bool fork = bool.TryParse(call.GetArg("fork"), out bool f) && f;
+        // Work an open split chat of this chat (or of its parent) already has goes there, not into a second chat.
+        if (!(bool.TryParse(call.GetArg("again"), out bool again) && again)
+            && SameWorkAs(Agents.WorkflowGate.CurrentChat, title ?? message?.Split('\n')[0]) is { } same)
+            return Fail(Agents.SplitReports.SameWorkRefusal(same));
         string modelArg = call.GetArg("model").Trim().Trim('"', '\'');
         if (modelArg.Length > 0 && !modelArg.Equals("default", StringComparison.OrdinalIgnoreCase)
             && !modelArg.Equals("auto", StringComparison.OrdinalIgnoreCase))

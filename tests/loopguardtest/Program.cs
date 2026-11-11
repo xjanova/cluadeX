@@ -602,6 +602,39 @@ Call Write(string path) => new("write_file", $"{{\"path\":\"{path}\",\"content\"
     Check("R9 a message names its sender and, from a split, how to answer it",
         SplitReports.MessageForModel(true, "Main", "CX-1", "p", "add tests").StartsWith("Message from the chat that opened you, \"Main\"")
         && SplitReports.MessageForModel(false, "API", "CX-2", "c", "which port?").Contains("answer it with message_chat chat \"CX-2\""));
+    Check("R9 a message from a sibling split says it is this chat's work",
+        SplitReports.MessageForModel(false, "UI", "CX-3", "s", "also fix the button", sibling: true).Contains("another split chat of the chat that opened you"));
+
+    // R14–R16: which chat a piece of work belongs to (pure, no model call)
+    var openKids = new List<SplitReports.OpenSplit>
+    {
+        new("a", "CX-A", "แก้ปุ่ม login หน้าแรก", "แก้ปุ่ม login หน้าแรก", Working: true),
+        new("b", "CX-B", "Fix the API parser tests", "Fix the API parser tests", Working: false, Gist: "All 41 tests pass; branch cluadex/split-api."),
+    };
+    Check("R14 the same or close task (Thai or English, other wording around it) finds the open split chat",
+        SplitReports.SameWork("แก้ปุ่ม login หน้าแรกให้กดได้บนมือถือด้วย", openKids)?.Id == "a"
+        && SplitReports.SameWork("fix the api parser tests again", openKids)?.Id == "b"
+        && SplitReports.SameWork("Fix the API parser tests", openKids)?.Id == "b",
+        SplitReports.Likeness("แก้ปุ่ม login หน้าแรกให้กดได้บนมือถือด้วย", "แก้ปุ่ม login หน้าแรก").ToString("0.00"));
+    Check("R14 different work finds none; short or empty text never matches by accident",
+        SplitReports.SameWork("ทำหน้า dashboard ยอดขายรายเดือน", openKids) == null
+        && SplitReports.SameWork("Write the release notes for 3.0.312", openKids) == null
+        && SplitReports.SameWork("fix", openKids) == null && SplitReports.SameWork("", openKids) == null
+        && SplitReports.SameWork("Fix the API parser tests", Array.Empty<SplitReports.OpenSplit>()) == null
+        && SplitReports.Likeness("ab", "ab c") == 0);
+    string refusal = SplitReports.SameWorkRefusal(openKids[0]);
+    Check("R15 new_chat's refusal names the chat, says message_chat and how to open one anyway",
+        refusal.Contains("\"CX-A\"") && refusal.Contains("message_chat") && refusal.Contains("again \"true\"") && refusal.Contains("working"));
+    string? kidsNote = SplitReports.ChildrenNote(openKids);
+    Check("R16 the parent's note lists each open split (working / finished + gist) and where new work goes; none = no note",
+        SplitReports.ChildrenNote(Array.Empty<SplitReports.OpenSplit>()) == null
+        && kidsNote != null && kidsNote.Contains("CX-A") && kidsNote.Contains("— working") && kidsNote.Contains("finished: All 41 tests pass")
+        && kidsNote.Contains("message_chat") && kidsNote.Contains("how things stand") && kidsNote.Length < 900, kidsNote?.Length.ToString() ?? "null");
+    var many = Enumerable.Range(1, 12).Select(i => new SplitReports.OpenSplit("i" + i, "CX-" + i, "task " + i, "task " + i, Working: true)).ToList();
+    string manyNote = SplitReports.ChildrenNote(many)!;
+    Check("R16 a long list stays short: the first 8, then a count",
+        manyNote.Contains("CX-8") && !manyNote.Contains("CX-9 ") && manyNote.Contains("and 4 more"));
+
     Check("R10 the wake turn says the reports are above, to carry on from them and not redo them",
         SplitReports.WakeForModel(1).StartsWith("The split chat you started has ended its turn")
         && SplitReports.WakeForModel(3).StartsWith("The 3 split chats") && SplitReports.WakeForModel(2).Contains("do not redo"));

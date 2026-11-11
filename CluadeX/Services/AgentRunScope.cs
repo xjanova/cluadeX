@@ -372,6 +372,8 @@ public sealed class AgentRunScope
                + "- It adds to the current work: put it into your plan with " + planTool + " where it belongs — next, when it "
                + "changes what you were about to do; otherwise after the items already there — say in one line where you put "
                + "it, and do it in this turn.\n"
+               + "- It is the work of one of your split chats that are not put away (same or close to its task): send it "
+               + "there with message_chat, and carry on here.\n"
                + "- It is a NEW request that stands on its own (it does not need what you are doing and touches other files "
                + "or another project): start it now in its own chat with new_chat — a complete message, since that chat does "
                + "not see this one — so both run in parallel, and keep going with your plan here. Once its result is in, put "
