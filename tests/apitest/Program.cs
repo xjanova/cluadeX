@@ -139,6 +139,7 @@ internal static class Program
         if (args.Contains("--buddy")) { await RunBadgeWire.Run(Check, Section); await BuddyIdleWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--routines")) { await RoutinesWire.Run(Check, Section); return Finish(); }
+        if (args.Contains("--triggers")) { await TriggersTelegramWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--voice")) { await VoiceWire.Run(Check, Section); await EdgeTtsWire.Run(Check, Section); await SpokenReplyWire.Run(Check, Section); await ChimeWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--edge")) { await EdgeTtsWire.Run(Check, Section); await EdgeTtsWire.RunLive(Check, Section); return Finish(); }
         if (args.Contains("--codex-sandbox-live")) { await CodexSandboxLive.Run(Check, Section); return Finish(); }

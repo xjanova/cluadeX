@@ -57,11 +57,38 @@ public sealed class RoutinesViewModel : ViewModelBase
     public bool KindDaily { get => _kind == RoutineSchedule.Daily; set { if (value) SetKind(RoutineSchedule.Daily); } }
     public bool KindInterval { get => _kind == RoutineSchedule.Interval; set { if (value) SetKind(RoutineSchedule.Interval); } }
     public bool KindOnce { get => _kind == RoutineSchedule.Once; set { if (value) SetKind(RoutineSchedule.Once); } }
+    public bool KindEvent { get => _kind == RoutineSchedule.Event; set { if (value) SetKind(RoutineSchedule.Event); } }
+    /// <summary>A time kind (catching up a missed time means something only there).</summary>
+    public bool KindTimed => _kind != RoutineSchedule.Event;
     private void SetKind(string k)
     {
         _kind = k;
         OnPropertyChanged(nameof(KindDaily)); OnPropertyChanged(nameof(KindInterval)); OnPropertyChanged(nameof(KindOnce));
+        OnPropertyChanged(nameof(KindEvent)); OnPropertyChanged(nameof(KindTimed));
     }
+
+    // ─── "when something happens" ───
+    private string _trigger = RoutineSchedule.CiFailed;
+    public bool TrigCi { get => _trigger == RoutineSchedule.CiFailed; set { if (value) SetTrigger(RoutineSchedule.CiFailed); } }
+    public bool TrigComment { get => _trigger == RoutineSchedule.PrComment; set { if (value) SetTrigger(RoutineSchedule.PrComment); } }
+    public bool TrigIssue { get => _trigger == RoutineSchedule.NewIssue; set { if (value) SetTrigger(RoutineSchedule.NewIssue); } }
+    public bool TrigFiles { get => _trigger == RoutineSchedule.FileChanged; set { if (value) SetTrigger(RoutineSchedule.FileChanged); } }
+    /// <summary>Comments and issues: whose may start it.</summary>
+    public bool TrigByPeople => _trigger is RoutineSchedule.PrComment or RoutineSchedule.NewIssue;
+    public bool TrigGitHub => _trigger != RoutineSchedule.FileChanged;
+    private void SetTrigger(string t)
+    {
+        _trigger = t;
+        foreach (var n in new[] { nameof(TrigCi), nameof(TrigComment), nameof(TrigIssue), nameof(TrigFiles), nameof(TrigByPeople), nameof(TrigGitHub) })
+            OnPropertyChanged(n);
+    }
+
+    private string _branch = "", _files = "", _cooldown = "15";
+    private bool _fromAnyone;
+    public string EditBranch { get => _branch; set => SetProperty(ref _branch, value); }
+    public string EditFiles { get => _files; set => SetProperty(ref _files, value); }
+    public string EditCooldown { get => _cooldown; set => SetProperty(ref _cooldown, value); }
+    public bool EditFromAnyone { get => _fromAnyone; set => SetProperty(ref _fromAnyone, value); }
 
     private bool _sameChat, _catchUp = true;
     public bool EditSameChat { get => _sameChat; set => SetProperty(ref _sameChat, value); }
@@ -99,6 +126,66 @@ public sealed class RoutinesViewModel : ViewModelBase
     public bool IsDeleteOpen => _pendingDelete != null;
     public string DeleteText => _pendingDelete == null ? "" : string.Format(_loc.T("routine.page.deleteConfirm"), _pendingDelete.Name);
 
+    // ─── Telegram (Services/Remote/TelegramBridge) ───
+    private static Services.Remote.TelegramBridge? _tg => Services.Remote.TelegramBridge.Current;
+    public bool TgAvailable => _tg != null;
+    public bool TgHasToken => _tg?.HasToken == true;
+    public bool TgNoToken => _tg != null && !_tg.HasToken;
+    public bool TgPaired => _tg?.IsPaired == true;
+    public string TgConnectedText => _tg == null ? "" : string.Format(L("tg.page.connected"), _tg.BotName);
+    public string TgPairedText => _tg == null ? "" : _tg.IsPaired ? string.Format(L("tg.page.pairedWith"), _tg.PairedName) : L("tg.page.notPaired");
+    public string? TgPairCode => _tg?.PairCode;
+    public bool TgPairing => _tg?.PairCode != null;
+    public string TgPairMessage => _tg?.PairCode is { } code ? "/pair " + code : "";
+    public string TgPairHint => _tg == null ? "" : string.Format(L("tg.page.pairCode"), _tg.BotName);
+    public string TgError => _tg?.LastError ?? "";
+    public bool TgHasError => TgError.Length > 0;
+    private bool _tgBusy;
+    public bool TgBusy { get => _tgBusy; private set { if (SetProperty(ref _tgBusy, value)) OnPropertyChanged(nameof(TgIdle)); } }
+    public bool TgIdle => !_tgBusy;
+    private string _tgConnectError = "";
+    public string TgConnectError { get => _tgConnectError; private set { if (SetProperty(ref _tgConnectError, value)) OnPropertyChanged(nameof(TgHasConnectError)); } }
+    public bool TgHasConnectError => _tgConnectError.Length > 0;
+    public bool TgNotifyRoutines
+    {
+        get => _tg?.NotifyRoutines == true;
+        set { if (_tg != null && value != _tg.NotifyRoutines) _tg.SetOptions(value, _tg.ForwardAllCards); }
+    }
+    public bool TgAllCards
+    {
+        get => _tg?.ForwardAllCards == true;
+        set { if (_tg != null && value != _tg.ForwardAllCards) _tg.SetOptions(_tg.NotifyRoutines, value); }
+    }
+    private bool _tgDisconnectOpen;
+    public bool TgDisconnectOpen { get => _tgDisconnectOpen; set => SetProperty(ref _tgDisconnectOpen, value); }
+
+    public ICommand TgPairCommand { get; }
+    public ICommand TgUnpairCommand { get; }
+    public ICommand TgAskDisconnectCommand { get; }
+    public ICommand TgConfirmDisconnectCommand { get; }
+    public ICommand TgCancelDisconnectCommand { get; }
+
+    /// <summary>The page's Connect (code-behind passes the PasswordBox's text, then clears the box). Never logged.</summary>
+    public async Task ConnectTelegramAsync(string token)
+    {
+        if (_tg == null || _tgBusy) return;
+        TgBusy = true;
+        TgConnectError = "";
+        try
+        {
+            if (await _tg.ConnectAsync(token) is { } problem) TgConnectError = L(problem);
+        }
+        finally { TgBusy = false; RefreshTelegram(); }
+    }
+
+    private void RefreshTelegram()
+    {
+        foreach (var n in new[] { nameof(TgAvailable), nameof(TgHasToken), nameof(TgNoToken), nameof(TgPaired), nameof(TgConnectedText), nameof(TgPairedText),
+                     nameof(TgPairCode), nameof(TgPairing), nameof(TgPairMessage), nameof(TgPairHint), nameof(TgError), nameof(TgHasError),
+                     nameof(TgNotifyRoutines), nameof(TgAllCards) })
+            OnPropertyChanged(n);
+    }
+
     public ICommand NewCommand { get; }
     public ICommand EditCommand { get; }
     public ICommand SaveCommand { get; }
@@ -110,7 +197,8 @@ public sealed class RoutinesViewModel : ViewModelBase
     public ICommand ConfirmDeleteCommand { get; }
     public ICommand CancelDeleteCommand { get; }
 
-    public RoutinesViewModel(RoutineService service, ChatViewModel chat, LocalizationService loc)
+    /// <param name="telegram">Asked for so the bridge exists when the page does (it is <see cref="Services.Remote.TelegramBridge.Current"/>).</param>
+    public RoutinesViewModel(RoutineService service, ChatViewModel chat, LocalizationService loc, Services.Remote.TelegramBridge telegram)
     {
         _service = service;
         _chat = chat;
@@ -119,6 +207,13 @@ public sealed class RoutinesViewModel : ViewModelBase
         Rows.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasRows));
         Projects.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasProjects));
         _service.Changed += () => Application.Current?.Dispatcher.BeginInvoke(Refresh);
+        if (RoutineTriggers.Current is { } triggers) triggers.Changed += () => Application.Current?.Dispatcher.BeginInvoke(Refresh);
+        if (_tg != null) _tg.Changed += () => Application.Current?.Dispatcher.BeginInvoke(RefreshTelegram);
+        TgPairCommand = new RelayCommand(() => { _tg?.StartPairing(); RefreshTelegram(); });
+        TgUnpairCommand = new RelayCommand(() => { _tg?.Unpair(); RefreshTelegram(); });
+        TgAskDisconnectCommand = new RelayCommand(() => TgDisconnectOpen = true);
+        TgCancelDisconnectCommand = new RelayCommand(() => TgDisconnectOpen = false);
+        TgConfirmDisconnectCommand = new RelayCommand(() => { TgDisconnectOpen = false; _tg?.Disconnect(); RefreshTelegram(); });
 
         NewCommand = new RelayCommand(() => Open(new Routine { Project = chat.ProjectFolderNow() }));
         EditCommand = new RelayCommand<RoutineRow>(row => { if (row != null) Open(row.R.Copy()); });
@@ -162,11 +257,16 @@ public sealed class RoutinesViewModel : ViewModelBase
                 _ => "",
             };
             if (r.LastNote == "busy") last += (last.Length > 0 ? " · " : "") + L("routine.status.busy");
+            bool isEvent = r.Kind == RoutineSchedule.Event;
+            if (isEvent && r.Enabled && RoutineTriggers.Current?.ErrorOf(r.Id) is { Length: > 0 } watchError)
+                last += (last.Length > 0 ? " · " : "") + string.Format(L("routine.page.watchError"), watchError);
             Rows.Add(new RoutineRow
             {
                 R = r,
                 When = RoutineSchedule.Describe(r, L, Ui),
-                Next = r.Enabled && r.NextRunAt is { } n ? string.Format(L("routine.page.next"), n.ToString("ddd d MMM HH:mm", Ui)) : L("routine.page.never"),
+                Next = isEvent
+                    ? (!r.Enabled ? L("routine.page.never") : r.PendingEvent.Length > 0 ? L("routine.page.eventWaiting") : L("routine.page.waitsEvent"))
+                    : r.Enabled && r.NextRunAt is { } n ? string.Format(L("routine.page.next"), n.ToString("ddd d MMM HH:mm", Ui)) : L("routine.page.never"),
                 Last = last,
                 IsRunning = _service.IsRunning(r.Id),
             });
@@ -186,6 +286,11 @@ public sealed class RoutinesViewModel : ViewModelBase
         foreach (var d in Days) d.On = (r.Days & (1 << d.Index)) != 0;
         EditSameChat = r.SameChat;
         EditCatchUp = r.CatchUp;
+        SetTrigger(RoutineSchedule.Triggers.Contains(r.Trigger) ? r.Trigger : RoutineSchedule.CiFailed);
+        EditBranch = r.Branch;
+        EditFiles = r.Files;
+        EditCooldown = r.CooldownMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        EditFromAnyone = r.FromAnyone;
         EditError = "";
         Projects.Clear();
         foreach (var p in (ProjectRegistryService.Current?.Recent(50).Select(e => e.Path) ?? Enumerable.Empty<string>())
@@ -218,6 +323,11 @@ public sealed class RoutinesViewModel : ViewModelBase
             ? day.Date + t : null;
         r.SameChat = EditSameChat;
         r.CatchUp = EditCatchUp;
+        r.Trigger = _kind == RoutineSchedule.Event ? _trigger : r.Trigger;
+        r.Branch = EditBranch.Trim();
+        r.Files = EditFiles.Trim();
+        r.CooldownMinutes = int.TryParse(EditCooldown.Trim(), out var cool) ? cool : 0;
+        r.FromAnyone = EditFromAnyone;
         if (r.Project.Length > 0 && !System.IO.Directory.Exists(r.Project))
         {
             EditError = string.Format(L("routine.err.noFolder"), r.Project);

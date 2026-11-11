@@ -19,7 +19,7 @@ public sealed class Routine
     /// <summary>What the chat is told each time.</summary>
     public string Prompt { get; set; } = "";
 
-    /// <summary>daily | interval | once</summary>
+    /// <summary>daily | interval | once | event (runs when <see cref="Trigger"/> happens)</summary>
     public string Kind { get; set; } = RoutineSchedule.Daily;
     /// <summary>daily: the time of day, "HH:mm".</summary>
     public string Time { get; set; } = "09:00";
@@ -29,6 +29,26 @@ public sealed class Routine
     public int IntervalMinutes { get; set; } = 60;
     /// <summary>once: when (local time).</summary>
     public DateTime? OnceAt { get; set; }
+
+    /// <summary>event: what starts it — ci_failed | pr_comment | new_issue | file_changed (<see cref="RoutineTriggers"/>).</summary>
+    public string Trigger { get; set; } = "";
+    /// <summary>event ci_failed: only runs on this branch ("" = any branch).</summary>
+    public string Branch { get; set; } = "";
+    /// <summary>event file_changed: which files, e.g. "*.cs; docs/*" ("" = any file outside .git, bin, obj, node_modules…).</summary>
+    public string Files { get; set; } = "";
+    /// <summary>event pr_comment / new_issue: true = anyone's (a public repository: strangers too); false = only people
+    /// with a role in the repository (owner, member, collaborator). The owner's own never start it (a run replying
+    /// under their GitHub account would start the next).</summary>
+    public bool FromAnyone { get; set; }
+    /// <summary>event: at least this many minutes between two runs; what happens in between waits for the next one.</summary>
+    public int CooldownMinutes { get; set; } = 15;
+    /// <summary>event: where the watching got to (GitHub: the newest run id / time already seen). Empty = not looked
+    /// yet: the first look only notes where things stand, so old failures and comments never start it.</summary>
+    public string Cursor { get; set; } = "";
+    /// <summary>event: what happened and is waiting for its run (the run was busy, or within the cooldown).</summary>
+    public string PendingEvent { get; set; } = "";
+    /// <summary>The event a run is for, on the copy handed to the runner (not stored).</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public string EventText { get; set; } = "";
 
     /// <summary>A run missed while CluadeX was closed (or the PC asleep) runs once when it is back; false = skip it.</summary>
     public bool CatchUp { get; set; } = true;
@@ -54,7 +74,11 @@ public sealed class Routine
 /// <summary>When a routine runs next, how that reads, and the short form a chat's schedule_task passes. Pure.</summary>
 public static class RoutineSchedule
 {
-    public const string Daily = "daily", Interval = "interval", Once = "once";
+    public const string Daily = "daily", Interval = "interval", Once = "once", Event = "event";
+    public const string CiFailed = "ci_failed", PrComment = "pr_comment", NewIssue = "new_issue", FileChanged = "file_changed";
+    public static readonly string[] Triggers = { CiFailed, PrComment, NewIssue, FileChanged };
+    /// <summary>The least gap between two runs of an event routine — you / a chat.</summary>
+    public const int MinCooldown = 5, MinCooldownForAi = 60;
     public const int EveryDay = 0b111_1111, Weekdays = 0b011_1110, Weekend = 0b100_0001;
     public const int MinInterval = 15;
     /// <summary>A routine made by a chat runs at most this often: a model that read untrusted text cannot set a loop going.</summary>
@@ -83,6 +107,12 @@ public static class RoutineSchedule
                 return r.IntervalMinutes < (byAi ? MinIntervalForAi : MinInterval) ? (byAi ? "routine.err.intervalAi" : "routine.err.interval") : null;
             case Once:
                 return r.OnceAt == null ? "routine.err.once" : null;
+            case Event:
+                if (!Triggers.Contains(r.Trigger)) return "routine.err.trigger";
+                if (r.CooldownMinutes < (byAi ? MinCooldownForAi : MinCooldown)) return byAi ? "routine.err.cooldownAi" : "routine.err.cooldown";
+                if (string.IsNullOrWhiteSpace(r.Project)) return "routine.err.eventProject";
+                if (r.Trigger == CiFailed && r.Branch.Length > 0 && !Regex.IsMatch(r.Branch, @"^[\w./-]{1,100}$")) return "routine.err.branch";
+                return null;
             default:
                 return "routine.err.kind";
         }
@@ -134,6 +164,19 @@ public static class RoutineSchedule
             int n = int.Parse(every.Groups[1].Value);
             r.Kind = Interval;
             r.IntervalMinutes = every.Groups[2].Value.StartsWith('h') ? n * 60 : n;
+            return null;
+        }
+        // "on ci_failed [branch]", "on pr_comment", "on new_issue", "on file_changed [*.cs; docs/*]"
+        var on = Regex.Match((text ?? "").Trim(), @"^on\s+(ci_failed|ci_fail|pr_comment|new_issue|file_changed|files_changed)(?:\s+(.+))?$", RegexOptions.IgnoreCase);
+        if (on.Success)
+        {
+            string trig = on.Groups[1].Value.ToLowerInvariant() switch { "ci_fail" => CiFailed, "files_changed" => FileChanged, var t => t };
+            string rest = on.Groups[2].Value.Trim();
+            if (rest.Length > 0 && trig is PrComment or NewIssue) return "routine.err.schedule";
+            r.Kind = Event;
+            r.Trigger = trig;
+            if (trig == CiFailed) r.Branch = rest;
+            if (trig == FileChanged) r.Files = rest;
             return null;
         }
         var once = Regex.Match(s, @"^once (\d{4}-\d{2}-\d{2})[ t](\d{1,2}[:.]\d{2})$");
@@ -199,6 +242,15 @@ public static class RoutineSchedule
                     : string.Format(l("routine.describe.minutes"), r.IntervalMinutes);
             case Once:
                 return string.Format(l("routine.describe.once"), r.OnceAt?.ToString("d MMM HH:mm", culture ?? CultureInfo.InvariantCulture) ?? "?");
+            case Event:
+                return r.Trigger switch
+                {
+                    CiFailed => r.Branch.Length > 0 ? string.Format(l("routine.describe.ciBranch"), r.Branch) : l("routine.describe.ci"),
+                    PrComment => l("routine.describe.comment"),
+                    NewIssue => l("routine.describe.issue"),
+                    FileChanged => r.Files.Length > 0 ? string.Format(l("routine.describe.filesOf"), r.Files) : l("routine.describe.files"),
+                    _ => "?",
+                };
             default:
                 return "?";
         }

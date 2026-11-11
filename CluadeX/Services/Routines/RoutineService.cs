@@ -38,6 +38,16 @@ public sealed class RoutineService : IDisposable
     /// <summary>Raised (any thread) after any routine was added, changed, removed, or ran.</summary>
     public event Action? Changed;
 
+    /// <summary>Raised (any thread) when a run has ended: the routine (as it ran), ok, the short note, the chat it used.
+    /// The Telegram bridge tells the owner's phone.</summary>
+    public event Action<Routine, bool, string, string?>? RunFinished;
+
+    /// <summary>When each routine's last run ended (memory only): the file watcher ignores what a run itself wrote.</summary>
+    private readonly Dictionary<string, DateTime> _endedAt = new(StringComparer.Ordinal);
+
+    /// <summary>Events kept waiting for one routine at most (the oldest go; the run is told how many there were).</summary>
+    public const int MaxPendingChars = 4000;
+
     /// <summary>The clock (tests set it).</summary>
     public Func<DateTime> Now { get; set; } = () => DateTime.Now;
 
@@ -127,10 +137,17 @@ public sealed class RoutineService : IDisposable
         var r = routine.Copy();
         r.Name = string.IsNullOrWhiteSpace(r.Name) ? FirstLine(r.Prompt) : r.Name.Trim();
         r.Prompt = r.Prompt.Trim();
+        r.Branch = (r.Branch ?? "").Trim();
+        r.Files = (r.Files ?? "").Trim();
         r.NextRunAt = r.Enabled ? RoutineSchedule.Next(r, Now()) : null;
         lock (_gate)
         {
             int i = _routines.FindIndex(x => x.Id == r.Id);
+            // What it watches changed → the watching starts over (a baseline first, never the old history).
+            if (i >= 0 && (_routines[i].Kind != r.Kind || _routines[i].Trigger != r.Trigger || _routines[i].Project != r.Project
+                           || _routines[i].Branch != r.Branch || _routines[i].Files != r.Files))
+            { r.Cursor = ""; r.PendingEvent = ""; }
+            if (i < 0 && r.Kind == RoutineSchedule.Event) { r.Cursor = ""; r.PendingEvent = ""; }
             if (i >= 0) _routines[i] = r; else _routines.Add(r);
         }
         Save();
@@ -177,6 +194,17 @@ public sealed class RoutineService : IDisposable
         {
             foreach (var r in _routines.Where(r => r.Enabled).OrderBy(r => r.NextRunAt ?? DateTime.MaxValue))
             {
+                if (r.Kind == RoutineSchedule.Event)
+                {
+                    // No clock: it runs when RoutineTriggers fires it. Here only what waited (busy / cooldown) starts.
+                    if (r.PendingEvent.Length > 0 && Runner != null && _running.Count < MaxRunning && CanFire(r, now))
+                    {
+                        start.Add(Begin(r, now, r.PendingEvent));
+                        r.PendingEvent = "";
+                        changed = true;
+                    }
+                    continue;
+                }
                 if (r.NextRunAt == null)
                 {
                     r.NextRunAt = RoutineSchedule.Next(r, now);
@@ -236,6 +264,75 @@ public sealed class RoutineService : IDisposable
         return true;
     }
 
+    // ─── events (RoutineTriggers) ───
+
+    /// <summary>What <see cref="Fire"/> did.</summary>
+    public enum FireResult { Started, Waiting, Ignored }
+
+    /// <summary>
+    /// Something an event routine watches happened (<paramref name="text"/> says what, for the run). It starts now —
+    /// unless its last run still works, or ended less than its cooldown ago, or <see cref="MaxRunning"/> run already:
+    /// then the event waits (with any others that come meanwhile) and the next <see cref="Tick"/> starts one run for all.
+    /// Ignored when the routine is off, gone, or not an event routine.
+    /// </summary>
+    public FireResult Fire(string id, string text)
+    {
+        Routine? copy = null;
+        lock (_gate)
+        {
+            if (_routines.FirstOrDefault(x => x.Id == id) is not { } r || !r.Enabled || r.Kind != RoutineSchedule.Event) return FireResult.Ignored;
+            var now = Now();
+            string all = r.PendingEvent.Length == 0 ? text.Trim() : r.PendingEvent + "\n\n---\n\n" + text.Trim();
+            if (all.Length > MaxPendingChars) all = "…(older events dropped)\n" + all[^MaxPendingChars..];
+            if (Runner == null || _running.Contains(r.Id) || _running.Count >= MaxRunning || !CanFire(r, now))
+                r.PendingEvent = all;
+            else
+            {
+                r.PendingEvent = "";
+                copy = Begin(r, now, all);
+            }
+        }
+        Save();
+        if (copy == null) return FireResult.Waiting;
+        _ = RunAsync(copy);
+        return FireResult.Started;
+    }
+
+    /// <summary>Where an event routine's watching got to (<see cref="Routine.Cursor"/>). Saved only when it moved.</summary>
+    public void SetCursor(string id, string cursor)
+    {
+        lock (_gate)
+        {
+            if (_routines.FirstOrDefault(x => x.Id == id) is not { } r || r.Cursor == cursor) return;
+            r.Cursor = cursor;
+        }
+        Save();
+    }
+
+    /// <summary>True while <paramref name="id"/> runs, or within <paramref name="after"/> of its last run ending — what
+    /// a file a run wrote itself looks like to the file watcher.</summary>
+    public bool RanWithin(string id, TimeSpan after)
+    {
+        lock (_gate)
+            return _running.Contains(id) || (_endedAt.TryGetValue(id, out var end) && Now() - end < after);
+    }
+
+    /// <summary>Not running, and its cooldown since the last start has passed (caller holds the lock).</summary>
+    private bool CanFire(Routine r, DateTime now) =>
+        !_running.Contains(r.Id) && (r.LastRunAt == null || now - r.LastRunAt.Value >= TimeSpan.FromMinutes(Math.Max(1, r.CooldownMinutes)));
+
+    /// <summary>Mark <paramref name="r"/> started with <paramref name="eventText"/> (caller holds the lock); the copy for the runner.</summary>
+    private Routine Begin(Routine r, DateTime now, string eventText)
+    {
+        r.LastRunAt = now;
+        r.LastStatus = "running";
+        r.LastNote = "event";
+        _running.Add(r.Id);
+        var copy = r.Copy();
+        copy.EventText = eventText;
+        return copy;
+    }
+
     private static void Skip(Routine r, string why, DateTime now)
     {
         r.LastStatus = why;
@@ -252,6 +349,7 @@ public sealed class RoutineService : IDisposable
         lock (_gate)
         {
             _running.Remove(r.Id);
+            _endedAt[r.Id] = Now();
             if (_routines.FirstOrDefault(x => x.Id == r.Id) is { } live)
             {
                 live.LastStatus = result.Ok ? "ran" : "failed";
@@ -260,6 +358,7 @@ public sealed class RoutineService : IDisposable
             }
         }
         Save();
+        try { RunFinished?.Invoke(r, result.Ok, Clip(result.Note, 300), result.ChatId); } catch { /* a listener never breaks a run */ }
     }
 
     private static string Clip(string? s, int n)

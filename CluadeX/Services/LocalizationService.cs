@@ -29,7 +29,7 @@ public class LocalizationService
                                       Localization.GitPanelKeys.Keys,
                                       Localization.OrchestrationKeys.Keys,
                                       Localization.DesignKeys.Keys, Localization.SkillPickKeys.Keys,
-                                      Localization.WatchKeys.Keys, Localization.CodexSandboxKeys.Keys, Localization.InstinctKeys.Keys, Localization.RoutineKeys.Keys,
+                                      Localization.WatchKeys.Keys, Localization.CodexSandboxKeys.Keys, Localization.InstinctKeys.Keys, Localization.RoutineKeys.Keys, Localization.TelegramKeys.Keys,
                                       Localization.BillingKeys.Keys, Localization.BillingSavingsKeys.Keys,
                                       Localization.AggregatorKeys.Keys,
                                       Localization.LspKeys.Keys, Localization.ChangeMarkKeys.Keys,
