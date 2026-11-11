@@ -354,6 +354,9 @@ public sealed partial class EngineeringToolModule
     private static readonly Regex PytestFailed = new(@"^FAILED\s+(?<name>\S+)", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex GoFailed = new(@"^\s*--- FAIL:\s+(?<name>\S+)", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex JestFailed = new(@"^\s*[✕×]\s+(?<name>.+?)(?:\s+\(\d+\s*m?s\))?\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex FlutterSummary = new(@"\+(?<p>\d+)(?: ~(?<s>\d+))?(?: -(?<f>\d+))?: (?:All tests passed|Some tests failed)", RegexOptions.Compiled);
+    // A project harness's own line: "  FAIL name   detail" (apitest, chattest, tooltest …) — the name ends at a wide gap.
+    private static readonly Regex HarnessFailed = new(@"^\s*FAIL\s+(?<name>\S[^\n]*?)(?:\s{2,}|\s*\[|\s*$)", RegexOptions.Multiline | RegexOptions.Compiled);
 
     /// <summary>Passed / failed / skipped and the failing tests' names from a runner's output (dotnet test, pytest,
     /// jest/vitest, cargo, go test). Counts are null when no summary is found.</summary>
@@ -369,17 +372,27 @@ public sealed partial class EngineeringToolModule
             foreach (Match m in dotnet) { Add(ref failed, m.Groups[1].Value); Add(ref passed, m.Groups[2].Value); Add(ref skipped, m.Groups[3].Value); }
         else if (cargo.Count > 0)
             foreach (Match m in cargo) { Add(ref passed, m.Groups[1].Value); Add(ref failed, m.Groups[2].Value); Add(ref skipped, m.Groups[3].Value); }
+        else if (FlutterSummary.Matches(raw) is { Count: > 0 } flutter)
+        {
+            // flutter/dart test's last progress line: "00:04 +12 ~1 -2: Some tests failed."
+            var m = flutter[^1];
+            Add(ref passed, m.Groups["p"].Value);
+            if (m.Groups["s"].Success) Add(ref skipped, m.Groups["s"].Value);
+            failed = 0;
+            if (m.Groups["f"].Success) Add(ref failed, m.Groups["f"].Value);
+        }
         else
         {
-            // pytest "=== 3 failed, 10 passed, 1 skipped in 0.5s ===", jest/vitest "Tests: 1 failed, 5 passed, 6 total".
+            // pytest "=== 3 failed, 10 passed, 1 skipped in 0.5s ===", jest/vitest "Tests: 1 failed, 5 passed, 6 total",
+            // a project harness "36 passed, 0 failed" / "═══ 36 pass · 0 FAIL ═══" / "## Result: 33 pass / 0 FAIL".
             var line = raw.Split('\n').LastOrDefault(l =>
-                Regex.IsMatch(l, @"^\s*(?:=+.*\bin\s+[\d.]+s|Tests?:\s+.*\btotal\b|.*\d+\s+(?:passed|failed)\b)", RegexOptions.IgnoreCase));
+                Regex.IsMatch(l, @"^\s*(?:=+.*\bin\s+[\d.]+s|Tests?:\s+.*\btotal\b|.*\d+\s+(?:passed|failed)\b|.*\d+\s+pass\b.*\d+\s+fail\b)", RegexOptions.IgnoreCase));
             if (line != null)
             {
-                foreach (Match m in Regex.Matches(line, @"(\d+)\s+(passed|failed|skipped|errors?)", RegexOptions.IgnoreCase))
+                foreach (Match m in Regex.Matches(line, @"(\d+)\s+(passed|pass|failed|fail|skipped|errors?)\b", RegexOptions.IgnoreCase))
                     switch (m.Groups[2].Value.ToLowerInvariant())
                     {
-                        case "passed": Add(ref passed, m.Groups[1].Value); break;
+                        case "passed" or "pass": Add(ref passed, m.Groups[1].Value); break;
                         case "skipped": Add(ref skipped, m.Groups[1].Value); break;
                         default: Add(ref failed, m.Groups[1].Value); break;
                     }
@@ -387,7 +400,7 @@ public sealed partial class EngineeringToolModule
         }
 
         var failing = new List<string>();
-        foreach (var re in new[] { DotnetFailed, CargoFailed, PytestFailed, GoFailed, JestFailed })
+        foreach (var re in new[] { DotnetFailed, CargoFailed, PytestFailed, GoFailed, JestFailed, HarnessFailed })
             foreach (Match m in re.Matches(raw))
             {
                 string n = m.Groups["name"].Value.Trim();

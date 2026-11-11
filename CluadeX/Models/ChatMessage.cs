@@ -365,7 +365,7 @@ public class ChatMessage : INotifyPropertyChanged
     //     shows is built on first use by the chat page (it holds the services), from the row's own data. ───
 
     public const string WorkflowTag = "cx:workflow", SplitsTag = "cx:splits", NextStepTag = "cx:nextstep", NoticeTag = "cx:notice",
-        WatchTag = "cx:watch", TurnChangesTag = "cx:changes", InstinctTag = "cx:instinct";
+        WatchTag = "cx:watch", TurnChangesTag = "cx:changes", InstinctTag = "cx:instinct", TurnTestsTag = "cx:tests";
 
     /// <summary>Builds a row's view (set by the chat page). Null result = the row shows its text.</summary>
     public static Func<ChatMessage, ViewModels.WorkflowCard?>? WorkflowCardFor;
@@ -373,6 +373,7 @@ public class ChatMessage : INotifyPropertyChanged
     public static Func<ChatMessage, ViewModels.NextStepView?>? NextStepFor;
     public static Func<ChatMessage, ViewModels.WatchCardView?>? WatchCardFor;
     public static Func<ChatMessage, ViewModels.TurnChangesView?>? TurnChangesFor;
+    public static Func<ChatMessage, ViewModels.TurnTestsView?>? TurnTestsFor;
     public static Func<ChatMessage, ViewModels.InstinctCardView?>? InstinctCardFor;
 
     private ViewModels.WorkflowCard? _workflow;
@@ -405,6 +406,13 @@ public class ChatMessage : INotifyPropertyChanged
     public bool IsTurnChanges => ToolName == TurnChangesTag;
     public bool ShowsTurnChanges => IsTurnChanges && TurnChanges != null;
 
+    private ViewModels.TurnTestsView? _turnTests;
+    /// <summary>The tests a turn ran (ToolOutput = TurnTestSummary as JSON): built on first use, so a row that is not
+    /// one costs nothing; the card is a ContentControl that only draws when this is not null.</summary>
+    public ViewModels.TurnTestsView? TurnTests => _turnTests ??= ToolName == TurnTestsTag ? TurnTestsFor?.Invoke(this) : null;
+    public bool IsTurnTests => ToolName == TurnTestsTag;
+    public bool ShowsTurnTests => IsTurnTests && TurnTests != null;
+
     private ViewModels.InstinctCardView? _instinctCard;
     /// <summary>"Remember this next time?" (ToolOutput = {"ids":[…],"from":title}) — instincts a finished chat taught.</summary>
     public ViewModels.InstinctCardView? InstinctCard => _instinctCard ??= ToolName == InstinctTag ? InstinctCardFor?.Invoke(this) : null;
@@ -423,7 +431,7 @@ public class ChatMessage : INotifyPropertyChanged
 
     /// <summary>A row with its own card instead of the chat bubble.</summary>
     public bool IsOrchestrationCard => ShowsWorkflowCard || IsSplitChips || ShowsNextStep || ShowsWatchCard || ShowsTurnChanges
-                                       || ShowsInstinctCard;
+                                       || ShowsTurnTests || ShowsInstinctCard;
     /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:
     /// a reloaded group shows its merged output instead).</summary>
     public System.Collections.ObjectModel.ObservableCollection<ToolStepView> GroupSteps { get; } = new();

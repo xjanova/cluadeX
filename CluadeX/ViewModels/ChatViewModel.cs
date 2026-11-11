@@ -1581,6 +1581,7 @@ public partial class ChatViewModel : ViewModelBase
         InitControls(activation);
         InitSidePanel();
         InitVibe();
+        InitTurnTests();
         InitLearning();
         InitActivity();
         InitCharacter();
@@ -5128,11 +5129,15 @@ public partial class ChatViewModel : ViewModelBase
                 ? 0
                 : rowOutput.Split('\n').Length;
             string? toolElapsed = null;
+            double? toolSeconds = null;
             if (run != null && run.ToolStarts.TryDequeue(out long started))
             {
                 double sec = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds;
+                toolSeconds = sec;
                 toolElapsed = sec < 10 ? $"{sec:0.0}s" : $"{sec:0}s";
             }
+            // every test run of the turn (and every edit between them): the test card at its end
+            run?.Tests.Note(toolResult, toolSeconds);
 
             string displayName = FormatToolDisplayName(toolResult.ToolName, toolResult.Arguments);
 

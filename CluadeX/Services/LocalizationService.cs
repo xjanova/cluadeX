@@ -35,7 +35,7 @@ public class LocalizationService
                                       Localization.LspKeys.Keys, Localization.ChangeMarkKeys.Keys,
                                       Localization.PopOutKeys.Keys,
                                       Localization.ModelPickerKeys.Keys,
-                                      Localization.MediaKeys.Keys, Localization.VibeKeys.Keys, Localization.PlanKeys.Keys, Localization.TierKeys.Keys,
+                                      Localization.MediaKeys.Keys, Localization.VibeKeys.Keys, Localization.TurnTestKeys.Keys, Localization.PlanKeys.Keys, Localization.TierKeys.Keys,
                                       Localization.TypographyKeys.Keys, Localization.BuddyBubbleKeys.Keys, Localization.ColibriKeys.Keys,
                                       Localization.SetupWizardKeys.Keys, Localization.UninstallKeys.Keys,
                                       Localization.BugReportKeys.Keys, Localization.SettingsLayoutKeys.Keys })

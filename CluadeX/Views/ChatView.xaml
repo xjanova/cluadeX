@@ -1708,6 +1708,175 @@
                                     </ContentControl.ContentTemplate>
                                 </ContentControl>
 
+                                <!-- ═══ What the turn tested: one line per suite, each failure read (real / flaky / unrelated / fixed),
+                                     the suites left out as out of scope. Collapsed unless the row is one; a still record of the turn. ═══ -->
+                                <ContentControl Grid.Row="1" Margin="20,8,0,4" Focusable="False" Content="{Binding TurnTests}"
+                                                Visibility="{Binding ShowsTurnTests, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                AutomationProperties.AutomationId="CxChat.TurnTests">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate>
+                                            <Border x:Name="Card" Padding="14,10,14,12" CornerRadius="10" BorderThickness="1"
+                                                    Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}">
+                                                <StackPanel Grid.IsSharedSizeScope="True">
+                                                    <!-- header: title and the overall state as a pill -->
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Accent.1}"
+                                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                            <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                        <Border x:Name="Pill" Grid.Column="1" CornerRadius="9" Padding="9,2" VerticalAlignment="Center"
+                                                                Background="{DynamicResource Status.Neutral.Tint}">
+                                                            <TextBlock x:Name="PillText" Text="{Binding StatusText}" FontSize="11.5" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource Text.Secondary}"/>
+                                                        </Border>
+                                                    </Grid>
+
+                                                    <!-- the table: suite | result | time | runs -->
+                                                    <StackPanel Margin="0,10,0,0" Visibility="{Binding HasSuites, Converter={StaticResource BoolVis}}">
+                                                        <Grid Margin="6,0,6,4">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="20"/><ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto" SharedSizeGroup="TtResult"/>
+                                                                <ColumnDefinition Width="Auto" SharedSizeGroup="TtTime"/>
+                                                                <ColumnDefinition Width="Auto" SharedSizeGroup="TtRuns"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Grid.Column="1" Text="{services:Loc tests.col.suite}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                                                            <TextBlock Grid.Column="2" Text="{services:Loc tests.col.result}" FontSize="11" Margin="14,0,0,0" Foreground="{DynamicResource Text.Muted}"/>
+                                                            <TextBlock Grid.Column="3" Text="{services:Loc tests.col.time}" FontSize="11" Margin="14,0,0,0" HorizontalAlignment="Right"
+                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                        </Grid>
+                                                        <Border Height="1" Background="{DynamicResource Border.Subtle}" Margin="0,0,0,3"/>
+                                                        <ItemsControl ItemsSource="{Binding Suites}" Focusable="False">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <Border x:Name="Row" CornerRadius="6" Padding="6,4" Background="Transparent" ToolTip="{Binding CommandTip}">
+                                                                        <Grid>
+                                                                            <Grid.ColumnDefinitions>
+                                                                                <ColumnDefinition Width="20"/><ColumnDefinition Width="*"/>
+                                                                                <ColumnDefinition Width="Auto" SharedSizeGroup="TtResult"/>
+                                                                                <ColumnDefinition Width="Auto" SharedSizeGroup="TtTime"/>
+                                                                                <ColumnDefinition Width="Auto" SharedSizeGroup="TtRuns"/>
+                                                                            </Grid.ColumnDefinitions>
+                                                                            <TextBlock x:Name="Glyph" Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                                                       VerticalAlignment="Center" Foreground="{DynamicResource Status.Warning}"/>
+                                                                            <TextBlock Grid.Column="1" Text="{Binding Suite}" FontFamily="{DynamicResource Font.Mono}" FontSize="12"
+                                                                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Foreground="{DynamicResource Text.Primary}"/>
+                                                                            <TextBlock x:Name="Result" Grid.Column="2" Text="{Binding ResultText}" FontFamily="{DynamicResource Font.Mono}"
+                                                                                       FontSize="12" Margin="14,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"/>
+                                                                            <TextBlock Grid.Column="3" Text="{Binding TimeText}" FontFamily="{DynamicResource Font.Mono}" FontSize="11.5"
+                                                                                       Margin="14,0,0,0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                                            <Border Grid.Column="4" CornerRadius="4" Padding="5,0" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                                                    Background="{DynamicResource Status.Info.Tint}" ToolTip="{Binding RunsTip}"
+                                                                                    Visibility="{Binding HasRuns, Converter={StaticResource BoolVis}}">
+                                                                                <TextBlock Text="{Binding RunsText}" FontFamily="{DynamicResource Font.Mono}" FontSize="10.5"
+                                                                                           Foreground="{DynamicResource Status.Info}"/>
+                                                                            </Border>
+                                                                        </Grid>
+                                                                    </Border>
+                                                                    <DataTemplate.Triggers>
+                                                                        <DataTrigger Binding="{Binding State}" Value="pass">
+                                                                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                                                            <Setter TargetName="Result" Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding State}" Value="fail">
+                                                                            <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                                            <Setter TargetName="Result" Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                                            <Setter TargetName="Row" Property="Background" Value="{DynamicResource Status.Danger.Tint}"/>
+                                                                        </DataTrigger>
+                                                                        <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                                                                            <Setter TargetName="Row" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                                        </Trigger>
+                                                                    </DataTemplate.Triggers>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+
+                                                    <!-- each failing test: how it was read, its name, why -->
+                                                    <StackPanel Margin="0,10,0,0" Visibility="{Binding HasFailures, Converter={StaticResource BoolVis}}">
+                                                        <ItemsControl ItemsSource="{Binding Failures}" Focusable="False">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <Grid Margin="6,2,6,2">
+                                                                        <Grid.ColumnDefinitions>
+                                                                            <ColumnDefinition Width="Auto" SharedSizeGroup="TtKind"/><ColumnDefinition Width="*"/>
+                                                                        </Grid.ColumnDefinitions>
+                                                                        <Border x:Name="Chip" CornerRadius="4" Padding="6,1" Margin="0,1,10,0" VerticalAlignment="Top"
+                                                                                HorizontalAlignment="Left" Background="{DynamicResource Status.Danger.Tint}">
+                                                                            <TextBlock x:Name="ChipText" Text="{Binding KindText}" FontSize="10.5" FontWeight="SemiBold"
+                                                                                       Foreground="{DynamicResource Status.Danger}"/>
+                                                                        </Border>
+                                                                        <TextBlock Grid.Column="1" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Top">
+                                                                            <Run Text="{Binding Suite, Mode=OneWay}" Foreground="{DynamicResource Text.Faint}"/><Run
+                                                                                 Text=" · " Foreground="{DynamicResource Text.Faint}"/><Run
+                                                                                 Text="{Binding Test, Mode=OneWay}" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Primary}"/><LineBreak/><Run
+                                                                                 Text="{Binding Why, Mode=OneWay}" FontSize="11.5" Foreground="{DynamicResource Text.Secondary}"/>
+                                                                        </TextBlock>
+                                                                    </Grid>
+                                                                    <DataTemplate.Triggers>
+                                                                        <DataTrigger Binding="{Binding Kind}" Value="flaky">
+                                                                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Status.Warning.Tint}"/>
+                                                                            <Setter TargetName="ChipText" Property="Foreground" Value="{DynamicResource Status.Warning}"/>
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding Kind}" Value="unrelated">
+                                                                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Status.Neutral.Tint}"/>
+                                                                            <Setter TargetName="ChipText" Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding Kind}" Value="fixed">
+                                                                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource Status.Success.Tint}"/>
+                                                                            <Setter TargetName="ChipText" Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                                                        </DataTrigger>
+                                                                    </DataTemplate.Triggers>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                        <TextBlock Text="{Binding MoreFailuresText}" Margin="6,2,0,0" FontSize="11.5" Foreground="{DynamicResource Text.Muted}"
+                                                                   Visibility="{Binding HasMoreFailures, Converter={StaticResource BoolVis}}"/>
+                                                    </StackPanel>
+
+                                                    <!-- the suites the model left out as out of scope -->
+                                                    <StackPanel Margin="0,10,0,0" Visibility="{Binding HasSkipped, Converter={StaticResource BoolVis}}">
+                                                        <StackPanel Orientation="Horizontal" Margin="6,0,0,3">
+                                                            <TextBlock Text="&#xE893;" FontFamily="Segoe MDL2 Assets" FontSize="10.5" Foreground="{DynamicResource Text.Muted}"
+                                                                       VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                                            <TextBlock Text="{services:Loc tests.skippedTitle}" FontSize="11.5" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                                        </StackPanel>
+                                                        <ItemsControl ItemsSource="{Binding Skipped}" Focusable="False">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Margin="24,1,6,1" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}">
+                                                                        <Run Text="•  " Foreground="{DynamicResource Text.Faint}"/><Run Text="{Binding Mode=OneWay}"/>
+                                                                    </TextBlock>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding State}" Value="pass">
+                                                    <Setter TargetName="Pill" Property="Background" Value="{DynamicResource Status.Success.Tint}"/>
+                                                    <Setter TargetName="PillText" Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding State}" Value="fail">
+                                                    <Setter TargetName="Pill" Property="Background" Value="{DynamicResource Status.Danger.Tint}"/>
+                                                    <Setter TargetName="PillText" Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                    <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Status.Danger.Border}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding State}" Value="pending">
+                                                    <Setter TargetName="Pill" Property="Background" Value="{DynamicResource Status.Warning.Tint}"/>
+                                                    <Setter TargetName="PillText" Property="Foreground" Value="{DynamicResource Status.Warning}"/>
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
+
                                 <!-- ═══ "Remember this next time?" — instincts the last chat taught, one ✓ / ✗ each ═══ -->
                                 <!-- Collapsed unless the row is one; its template only applies when it is. A vote is final on the card
                                      (the Instincts page can change it). -->

@@ -49,6 +49,8 @@ public partial class ChatViewModel
         public ChatMessage? SplitsMsg;
         /// <summary>The files this turn wrote and its pictures: the change card at its end (ChatViewModel.Vibe).</summary>
         public readonly Services.Agents.TurnChanges Changes = new();
+        /// <summary>The tests this turn ran and what the model said it skipped: the test card at its end (TurnTests).</summary>
+        public readonly Services.Agents.TurnTests Tests = new();
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
@@ -551,6 +553,7 @@ public partial class ChatViewModel
             PostRunCostSummary(run);
             RememberRunStats(run);
             AddTurnChangesCard(run);
+            AddTurnTestsCard(run);
             AddNextStepBox(run);
             MaybeOfferFable(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open. Not when the

@@ -141,6 +141,13 @@ internal static class Program
         if (args.Contains("--voice")) { await VoiceWire.Run(Check, Section); await EdgeTtsWire.Run(Check, Section); await SpokenReplyWire.Run(Check, Section); await ChimeWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--edge")) { await EdgeTtsWire.Run(Check, Section); await EdgeTtsWire.RunLive(Check, Section); return Finish(); }
         if (args.Contains("--codex-sandbox-live")) { await CodexSandboxLive.Run(Check, Section); return Finish(); }
+        // the test card, and the wires that read what it changed (the CLI wrapper hint, wrap_up)
+        if (args.Contains("--turntests"))
+        {
+            await TurnTestsWire.Run(Check, Section); await CliParityWire.Run(Check, Section); await GrokDevWire.Run(Check, Section);
+            SmallModelWire.Run(Check, Section); await PlanWire.Run(Check, Section);
+            return Finish();
+        }
         if (args.Contains("--codex-sandbox")) { await CodexSandboxWire.Run(Check, Section); await CodexSandboxRepairWire.Run(Check, Section); return Finish(); }
 
         await Offline();
@@ -616,6 +623,7 @@ internal static class Program
         await GitMultiRepoWire.Run(Check, Section);
         await AggregatorWire.Run(Check, Section);
         await VibeWire.Run(Check, Section);
+        await TurnTestsWire.Run(Check, Section);
         await PlanWire.Run(Check, Section);
         await ColibriWire.Run(Check, Section);
         await UltraWire.Run(Check, Section);

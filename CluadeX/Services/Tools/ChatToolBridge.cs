@@ -836,6 +836,8 @@ public static class ChatToolBridge
               .Append("steps, then advance as each step finishes. ");
         sb.Append($"{T(OrchestrationToolModule.WrapUpToolName)} ends a turn of multi-step work with a short recap and, only ")
           .Append("when the user must decide, one question with 1-2 answer buttons — call it once, last. ")
+          .Append("After a turn that ran tests, your final answer names each suite you ran (pass/fail) and each you left out as ")
+          .Append("out of scope, and wrap_up's tests_skipped lists the skipped ones — CluadeX draws its test card from the runs themselves. ")
           .Append($"In a project: {T("verify_change")} proves a change (build, tests and the problems it left); ")
           .Append($"{T("find_references")}, {T("rename_symbol")} and {T("impact_of")} work on a symbol across the project; ")
           .Append($"{T("checkpoint_list")}, {T("checkpoint_diff")} and {T("checkpoint_restore")} show or undo what the AI changed ")
