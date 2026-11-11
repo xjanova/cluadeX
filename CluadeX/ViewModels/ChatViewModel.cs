@@ -1359,6 +1359,8 @@ public partial class ChatViewModel : ViewModelBase
         InitDesign();
         // watch_ci / watch_process: their cards, and the turn a finished watch starts (ChatViewModel.Watch.cs).
         InitWatch();
+        // Scheduled tasks: the runner that opens their chats, and schedule_task (ChatViewModel.Routines.cs).
+        InitRoutines();
         InitSkillPick();
 
         // Agent map: every sub-agent this command started, live, as one tree card per command.

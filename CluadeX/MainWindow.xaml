@@ -132,6 +132,9 @@
         <DataTemplate DataType="{x:Type vm:WatchViewModel}">
             <views:WatchView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:RoutinesViewModel}">
+            <views:RoutinesView/>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type vm:BillingViewModel}">
             <views:BillingView/>
         </DataTemplate>
@@ -672,6 +675,11 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Watch"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.watchTip}" AutomationProperties.Name="Watch"/>
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="routines" Content="&#xE823;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Routines, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Routines"
+                                             GroupName="Activity"
+                                             ToolTip="{services:Loc nav.routinesTip}" AutomationProperties.Name="Routines"/>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Tag="billing" Content="&#xE8C7;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Billing, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Billing"

@@ -48,6 +48,7 @@ internal static partial class Program
         ("time-machine", "TimeMachine", "Time Machine"),
         ("hex-editor", "HexEditor", "Hex editor"),
         ("debug-log", "DebugLog", "Debug log"),
+        ("routines", "Routines", "Routines"),
     };
 
     /// <summary>The view class each page key shows (the element audit walks only that view).</summary>
@@ -58,7 +59,7 @@ internal static partial class Program
         ["plugins"] = "PluginManagerView", ["skills"] = "SkillsView", ["task-manager"] = "TaskManagerView",
         ["permissions"] = "PermissionsView", ["sub-agents"] = "SubAgentsView", ["hook-library"] = "HookLibraryView",
         ["instincts"] = "InstinctsView", ["security-shield"] = "SecurityShieldView", ["time-machine"] = "TimeMachineView",
-        ["hex-editor"] = "HexEditorView", ["debug-log"] = "DebugLogView",
+        ["hex-editor"] = "HexEditorView", ["debug-log"] = "DebugLogView", ["routines"] = "RoutinesView",
     };
 
     /// <summary>settings → provider, settings-general → general, settings-model → model …</summary>

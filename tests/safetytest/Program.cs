@@ -59,6 +59,14 @@ internal static class Program
                 Console.WriteLine($"\n{Pass} passed, {Fail} failed");
                 return Fail == 0 ? 0 : 1;
             }
+            if (args.Contains("--chattools"))
+            {
+                // CluadeX's own tools over the CLI bridge only (tools/list, QualifiedToolNames, each CLI's config) — for a
+                // change to the tool list; the real-CLI sections are left out.
+                ChatTools(work);
+                Console.WriteLine($"\n{Pass} passed, {Fail} failed");
+                return Fail == 0 ? 0 : 1;
+            }
             Protected();
             Scanner();
             Deletes(work);

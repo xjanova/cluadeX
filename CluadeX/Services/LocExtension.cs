@@ -72,5 +72,8 @@ public class LocalizedResources : INotifyPropertyChanged
 
     public string this[string key] => (_loc ?? EnglishFallback.Value).T(key);
 
+    /// <summary>The UI language ("en", "th" …): for text that formats dates the way the page reads.</summary>
+    public string Language => _loc?.CurrentLanguage ?? "en";
+
     public event PropertyChangedEventHandler? PropertyChanged;
 }

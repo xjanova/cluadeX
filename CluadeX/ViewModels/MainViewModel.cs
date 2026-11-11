@@ -267,6 +267,8 @@ public class MainViewModel : ViewModelBase
     public PermissionsViewModel PermissionsVM { get; }
     public TaskManagerViewModel TaskManagerVM { get; }
     public WatchViewModel? WatchVM { get; }
+    /// <summary>The Routines page (scheduled tasks); null only in harnesses.</summary>
+    public RoutinesViewModel? RoutinesVM { get; }
     /// <summary>The Billing &amp; cost page; null only in harnesses that build the window without it.</summary>
     public BillingViewModel? BillingVM { get; }
     public FeaturesViewModel FeaturesVM { get; }
@@ -327,7 +329,7 @@ public class MainViewModel : ViewModelBase
             ("Chat", "Chat", ""), ("Code", "Code Editor", ""),
             ("Models", "Models", ""), ("TimeMachine", "Time Machine", ""),
             ("HexEditor", "Hex Editor", ""), ("Plugins", "Plugins", ""),
-            ("McpServers", "MCP Servers", ""), ("Setup", "Setup · ตัวช่วยติดตั้ง", ""), ("Tasks", "Tasks", ""), ("Watch", "Watch", ""),
+            ("McpServers", "MCP Servers", ""), ("Setup", "Setup · ตัวช่วยติดตั้ง", ""), ("Tasks", "Tasks", ""), ("Watch", "Watch", ""), ("Routines", "Routines", ""),
             ("Billing", "Billing & cost · บิลและค่าใช้จ่าย", ""),
             ("UiStudio", "UI Studio", ""), ("NodeGraph", "Node Graph", ""),
             ("Permissions", "Permissions", ""), ("Features", "Features", ""),
@@ -472,6 +474,7 @@ public class MainViewModel : ViewModelBase
         CodeWorkspaceService? workspace = null,
         DebugLogService? log = null,
         WatchViewModel? watchVM = null,
+        RoutinesViewModel? routinesVM = null,
         UiStudioViewModel? uiStudioVM = null,
         NodeGraphViewModel? nodeGraphVM = null,
         SetupViewModel? setupVM = null,
@@ -500,6 +503,7 @@ public class MainViewModel : ViewModelBase
         PermissionsVM = permissionsVM;
         TaskManagerVM = taskManagerVM;
         WatchVM = watchVM;
+        RoutinesVM = routinesVM;
         UiStudioVM = uiStudioVM;
         NodeGraphVM = nodeGraphVM;
         // The Studio and the Graph ask for other pages (open the code at a line, the chat, each other).
@@ -1010,6 +1014,7 @@ public class MainViewModel : ViewModelBase
         "Permissions" => PermissionsVM,
         "Tasks" => TaskManagerVM,
         "Watch" => (ViewModelBase?)WatchVM ?? ChatVM,
+        "Routines" => (ViewModelBase?)RoutinesVM ?? ChatVM,
         "Billing" => (ViewModelBase?)BillingVM ?? ChatVM,
         "UiStudio" => (ViewModelBase?)UiStudioVM ?? ChatVM,
         "NodeGraph" => (ViewModelBase?)NodeGraphVM ?? ChatVM,

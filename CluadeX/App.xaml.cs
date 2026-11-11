@@ -96,6 +96,9 @@ public partial class App : Application
         // The brain bridge tells instinct learning that BrainX is this PC's memory (InstinctService.PausedForBrain) —
         // made now, so the first prompt and the first chat already know, not only once a page touches the brain.
         _ = _serviceProvider.GetRequiredService<BrainSyncService>();
+        // Scheduled tasks (Routines page, schedule_task): made before the chat page, which runs them; the first check a
+        // minute after start, once the window is up.
+        _serviceProvider.GetRequiredService<Services.Routines.RoutineService>().Start(TimeSpan.FromMinutes(1));
         // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
         var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
         _ = Task.Run(checkpoints.Prune);
@@ -1386,6 +1389,8 @@ public partial class App : Application
         services.AddSingleton<PermissionsViewModel>();
         services.AddSingleton<TaskManagerViewModel>();
         services.AddSingleton<WatchViewModel>();
+        services.AddSingleton(sp => Services.Routines.RoutineService.Current = new Services.Routines.RoutineService(sp.GetRequiredService<SettingsService>().DataRoot));
+        services.AddSingleton<RoutinesViewModel>();
         services.AddSingleton<BillingViewModel>();
         services.AddSingleton<FeaturesViewModel>();
         services.AddSingleton<McpServersViewModel>();
