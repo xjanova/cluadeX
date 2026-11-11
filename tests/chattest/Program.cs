@@ -3242,7 +3242,10 @@ internal class FakeProvider : IAiProvider
         lock (Script)
         {
             // The marker in the new message first; else the newest one in the conversation that still has steps.
-            var key = ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k))
+            // A marker that still has steps wins over one used up: a split chat's message carries its parent's title
+            // (SplitInstruction), and the parent's used-up marker used to hide the split's own (RR5).
+            var key = ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k) && ScriptFor[k].Count > 0)
+                ?? ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k))
                 ?? history.AsEnumerable().Reverse().SelectMany(h => ScriptFor.Keys.Where(k => h.Content?.Contains(k) == true))
                           .FirstOrDefault(k => ScriptFor[k].Count > 0);
             // The memory/instinct extraction a finished chat starts in the background never takes a scripted step: it

@@ -119,7 +119,9 @@ internal static partial class Program
         await FreshChat();
         Vm.UserInput = "my own draft";
         Fake.Script.Clear();
-        Fake.Script.Enqueue(FakeStep.Reply("Carried on from step 101", " — all steps are done."));
+        // Keyed on the paused chat's own history: a turn a split's report wakes in another chat (split-report-back) used to
+        // take this step from the shared queue first, and C3 got "ok".
+        Fake.ScriptFor["Paused after step 101"] = new Queue<FakeStep>([FakeStep.Reply("Carried on from step 101", " — all steps are done.")]);
         callsBefore = Fake.Calls.Count;
         var go = await Dispatch("cluadex.continue_chat", "{\"title\":\"HIVE-T2\",\"message\":\"continue\",\"focus\":true}");
         await Render();
