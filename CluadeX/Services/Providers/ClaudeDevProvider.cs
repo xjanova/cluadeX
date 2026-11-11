@@ -132,16 +132,24 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         "mcp__brainx-brain__cowork_join,mcp__brainx-brain__cowork_leave,mcp__brainx-brain__cowork_read," +
         "mcp__brainx-brain__cowork_say,mcp__brainx-brain__cowork_task,mcp__brainx-brain__cowork_who";
 
+    /// <summary>The brain's server READS — the saved SSH profiles and the tail of a log on one of the owner's servers —
+    /// with the run grant (a turn that may run commands may read a server log). Codex runs approval_policy=never, so they
+    /// were refused outright: a chat looking into "the app cannot connect" could not read the server log
+    /// (`ssh_profiles_list` → "MCP tool call requires approval, but approval policy is never", thaiprompt chat 2026-11-11).
+    /// ssh_run (any command on the server) is not among them: it keeps asking.</summary>
+    private const string RemoteReadTools = "mcp__brainx-brain__ssh_profiles_list,mcp__brainx-brain__ssh_tail";
+
     /// <summary>The brain tools a headless turn may call without asking, as bare names (brain_search…): exactly the brain
     /// part of what --allowedTools gives Claude Dev — recall and the agent bus always, the brain's write tools with the
-    /// edit grant. OpenAI Dev hands the same set to Codex (OpenAIDevProvider.BuildArgs).</summary>
+    /// edit grant, the server reads with the run grant. OpenAI Dev hands the same set to Codex (OpenAIDevProvider.BuildArgs).</summary>
     /// <remarks>Every look-up of the brain is in it (Mcp.McpToolClassifier.BrainLookupTools): Codex runs with
     /// approval_policy=never, so a read left out — brain_list, brain_walk, brain_lookup — was refused outright ("MCP tool
     /// call requires approval, but approval policy is never", BrainX chat 2026-11-09).</remarks>
     public static List<string> BrainToolsFor(WorkerGrant? grant)
     {
         const string prefix = "mcp__brainx-brain__";
-        string all = AllowedTools + "," + AgentTools + (grant is { Edit: true } ? "," + EditTools : "");
+        string all = AllowedTools + "," + AgentTools + (grant is { Edit: true } ? "," + EditTools : "")
+            + (grant is { Run: true } ? "," + RemoteReadTools : "");
         return all.Split(',').Where(t => t.StartsWith(prefix)).Select(t => t[prefix.Length..])
             .Concat(Mcp.McpToolClassifier.BrainLookupTools)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -279,7 +287,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         string tools = AllowedTools + "," + AgentTools;
         if (chatTools) tools += "," + string.Join(",", Tools.ChatToolBridge.QualifiedToolNames);
         if (grant is { Edit: true }) tools += "," + EditTools;
-        if (grant is { Run: true }) tools += "," + ShellTools;
+        if (grant is { Run: true }) tools += "," + ShellTools + "," + RemoteReadTools;
         bool noSubAgents = dispatch is { Legacy: false, SubAgents: false };
         if (worker && !noSubAgents) tools += "," + SubAgentTools;
 

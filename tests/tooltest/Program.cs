@@ -273,6 +273,22 @@ internal static partial class Program
                     && reg.PromptList().Contains(root), reg?.PromptList() ?? "no registry");
                 Check("OP10", "a project's memory lives outside the project (~/.cluadex/projects/<slug>/memory)",
                     MemoryService.ProjectSlug(@"D:\Code\Atmos") == "D--Code-Atmos", MemoryService.ProjectSlug(@"D:\Code\Atmos"));
+                // An empty folder of the project's name, while the code sits in a folder of that name inside a known
+                // project (the thaiprompt chat, 2026-11-11): the result says so and names the right one.
+                string side = Path.Combine(Path.GetTempPath(), "cx-op11-" + Guid.NewGuid().ToString("N")[..6]);
+                string emptyApp = Path.Combine(side, "App", "mobileapp");
+                string realApp = Path.Combine(side, "Shop", "mobileapp");
+                Directory.CreateDirectory(emptyApp);
+                Directory.CreateDirectory(realApp);
+                File.WriteAllText(Path.Combine(realApp, "package.json"), "{}");
+                reg?.Record(Path.Combine(side, "Shop"));
+                var empty = await T("open_project", ("path", emptyApp));
+                Check("OP15", "an empty folder opens, but the result says it is EMPTY and names the folder of that name with code in it",
+                    empty.Success && Seen(empty).Contains("EMPTY") && Seen(empty).Contains(realApp), Seen(empty));
+                var full = await T("open_project", ("path", realApp));
+                Check("OP15", "…a folder with files gets no such note", full.Success && !Seen(full).Contains("EMPTY"), Seen(full));
+                try { Directory.Delete(side, true); } catch { }
+                await T("open_project", ("path", root));
 
                 // Owner 2026-10-20: open the related folder by itself; when there is none, make a new one sensibly.
                 string leaf = Path.GetFileName(root);

@@ -150,7 +150,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, string effort,
         IReadOnlyList<string>? addDirs, string? chatToolsConfigJson = null, bool brainInCodexConfig = false,
         Agents.DispatchDecision? dispatch = null, string? readOnlyAgentModel = null, string? brainServerJson = null,
-        IReadOnlyList<string>? images = null)
+        IReadOnlyList<string>? images = null, IReadOnlyList<string>? sandboxEnv = null)
     {
         bool write = grant is { Edit: true } || grant is { Run: true };
         var args = new List<string>
@@ -225,6 +225,13 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         foreach (var image in images ?? Array.Empty<string>())
             if (!string.IsNullOrWhiteSpace(image) && !image.Contains(','))
                 args.Add("--image=" + image);
+        // The sandboxed shell's own environment (CodexSandboxEnv): git over OpenSSL, NuGet/Gradle/pip homes, UTF-8 —
+        // shell_environment_policy.set reaches the shell only, never codex.exe or its MCP servers.
+        foreach (var o in sandboxEnv ?? Array.Empty<string>())
+        {
+            args.Add("-c");
+            args.Add(o);
+        }
         args.Add("-");
         return args;
     }
@@ -295,7 +302,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
         string transcript, string userMessage, string? codeComments = null, string? browserHint = null, string? agentLine = null,
-        bool noProject = false, bool chatTools = false, string? splitGuide = null, bool hasRipgrep = false)
+        bool noProject = false, bool chatTools = false, string? splitGuide = null, bool hasRipgrep = false,
+        string? sandboxHome = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -325,7 +333,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         if (worker && chatTools && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();
         // Codex runs every shell command in its Windows sandbox, as another account (CodexSandbox): say what that blocks and
         // where builds and tests go instead, so a sandbox refusal is not taken for a bug in the code.
-        if (worker) wrapper += " " + CodexSandbox.PromptSection(chatTools, hasRipgrep);
+        if (worker) wrapper += " " + CodexSandbox.PromptSection(chatTools, hasRipgrep, sandboxHome);
         else if (!hasRipgrep) wrapper += " `rg` is not installed here: search with `git grep -n` or PowerShell `Select-String`.";
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.OpenAIDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
@@ -392,11 +400,15 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             StandardErrorEncoding = Encoding.UTF8,
         };
         bool brainInConfig = CodexConfigHasServer(GeminiDevProvider.BrainServerName);
+        var sandboxEnv = CodexSandboxEnv.ForTurn();
+        string? sandboxHome = sandboxEnv.Any(o => o.StartsWith("shell_environment_policy.set.APPDATA=", StringComparison.Ordinal))
+            ? CodexSandboxEnv.HomeFor() : null;
         foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, chatToolsJson,
                      brainInConfig, dispatch,
                      Agents.CliAgentPolicy.ModelFor(AiProviderType.OpenAIDev, true, _settingsService.Settings.SubAgentModelOverrides),
                      brainInConfig ? null : GeminiDevProvider.BrainServerFromClaude(),
-                     Attachments.AttachmentDigest.CliImagePaths(userMessage).Where(File.Exists).Take(MaxImages).ToList())) psi.ArgumentList.Add(a);
+                     Attachments.AttachmentDigest.CliImagePaths(userMessage).Where(File.Exists).Take(MaxImages).ToList(),
+                     sandboxEnv)) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
         // Codex ships a ripgrep but its shell has none on PATH; the sandbox inherits PATH, so the copy is put in front.
         string? path = psi.Environment.TryGetValue("PATH", out var p) ? p : Environment.GetEnvironmentVariable("PATH");
@@ -450,7 +462,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                         workflow: chatToolsJson != null && Agents.WorkflowGate.Allowed(Agents.WorkflowGate.CurrentChat)),
                     noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
                     splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.OpenAIDev),
-                    hasRipgrep: hasRipgrep));
+                    hasRipgrep: hasRipgrep, sandboxHome: sandboxHome));
             }
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

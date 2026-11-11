@@ -499,7 +499,7 @@ public sealed class ProjectToolModule : IAgentToolModule
         bool same = before != null && string.Equals(Path.GetFullPath(before).TrimEnd('\\', '/'), full, StringComparison.OrdinalIgnoreCase);
         string text = note + (same ? $"{full} was already the open project." : $"Opened project {full}.")
             + " The file, search, shell and build tools now work in it (paths relative to this folder). Top level:\n"
-            + Listing(full);
+            + Listing(full) + (target.Creating ? "" : EmptyFolderNote(full));
         return Task.FromResult(new ToolResult
         {
             Type = call.Type, ToolName = call.ToolName, Success = true, Output = text,
@@ -570,6 +570,35 @@ public sealed class ProjectToolModule : IAgentToolModule
     {
         try { return Directory.Exists(root) ? Directory.EnumerateDirectories(root).Take(500).ToList() : Array.Empty<string>(); }
         catch { return Array.Empty<string>(); }
+    }
+
+    /// <summary>
+    /// An existing folder that holds nothing is rarely the project the user means: the thaiprompt chat of 2026-11-11 opened
+    /// an empty D:\Code\App\thaiprompt while the app's code was in D:\Code\Thaiprompt-Affiliate\thaiprompt, and spent its
+    /// first steps finding that out. Say so, with the folders of the same name inside the known projects (and the known
+    /// projects of that name). Empty when the folder holds anything.
+    /// </summary>
+    private string EmptyFolderNote(string full)
+    {
+        try { if (Directory.EnumerateFileSystemEntries(full).Any()) return ""; }
+        catch { return ""; }
+        string name = Path.GetFileName(full.TrimEnd('\\', '/'));
+        var (known, _, _) = Knowledge();
+        var others = known.Select(k => k.Path)
+            .SelectMany(p => new[] { p, Path.Combine(p, name) })
+            .Where(p => !string.Equals(p.TrimEnd('\\', '/'), full.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(Path.GetFileName(p.TrimEnd('\\', '/')), name, StringComparison.OrdinalIgnoreCase)
+                && SafeHasEntries(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList();
+        return "\n\nThis folder is EMPTY. If the user means an existing project, its code is somewhere else"
+            + (others.Count > 0 ? ": folders of that name with files in them — " + string.Join(", ", others) + ". Open the right one" : "; look for it (brain_search, the known projects)")
+            + " before working here, or ask the user. Work here only if they want a new project in this folder.";
+    }
+
+    private static bool SafeHasEntries(string dir)
+    {
+        try { return Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any(); }
+        catch { return false; }
     }
 
     private static string Listing(string dir)
