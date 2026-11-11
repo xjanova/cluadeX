@@ -1361,6 +1361,8 @@ public partial class ChatViewModel : ViewModelBase
         InitWatch();
         // Scheduled tasks: the runner that opens their chats, and schedule_task (ChatViewModel.Routines.cs).
         InitRoutines();
+        // The owner's phone: messages in, replies and cards out (ChatViewModel.Telegram.cs).
+        InitTelegram();
         InitSkillPick();
 
         // Agent map: every sub-agent this command started, live, as one tree card per command.
@@ -1534,6 +1536,10 @@ public partial class ChatViewModel : ViewModelBase
             dispatcher.InvokeAsync(() =>
             {
                 (askRun?.Messages ?? Messages).Add(prompt);
+                // The owner's phone (Telegram): the card goes there too when its chat is one the phone drives.
+                var askChat = askRun?.Session ?? CurrentSession;
+                try { Services.Remote.TelegramBridge.Current?.OfferCard(prompt, askChat?.Id ?? "", askChat?.Title ?? ""); }
+                catch (Exception ex) { _debugLog?.Warn("Telegram", "card not sent: " + ex.Message); }
                 RaiseRunStateChanged();   // "waiting for you" on the other-chats bar
                 ChimeForBox(prompt.IsPermissionDanger ? Services.Voice.ChimeKind.Danger : Services.Voice.ChimeKind.Ask);
                 ScrollToBottom?.Invoke();

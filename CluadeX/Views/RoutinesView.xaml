@@ -57,9 +57,80 @@
 
             <!-- The routines -->
             <Grid>
-                <TextBlock Text="{services:Loc routine.page.empty}" TextWrapping="Wrap" FontSize="12.5" Foreground="{DynamicResource Text.Muted}"
-                           Margin="4,8" Visibility="{Binding HasRows, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Style="{StaticResource SlimScrollViewer}">
+                  <StackPanel>
+                    <!-- Telegram: the owner's phone -->
+                    <Border Padding="14,11" Margin="0,0,0,12" CornerRadius="10" BorderThickness="1"
+                            Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}"
+                            Visibility="{Binding TgAvailable, Converter={StaticResource BoolVis}}">
+                        <StackPanel>
+                            <TextBlock Text="{services:Loc tg.page.title}" FontSize="13.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                            <!-- not connected -->
+                            <StackPanel Visibility="{Binding TgNoToken, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{services:Loc tg.page.intro}" FontSize="11.5" Margin="0,4,0,0" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Text.Muted}"/>
+                                <TextBlock Text="{services:Loc tg.page.token}" Style="{StaticResource Kicker}"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                                            Background="{DynamicResource Input.Background}" Padding="8,5">
+                                        <PasswordBox x:Name="TgToken" Background="Transparent" BorderThickness="0" FontSize="12.5"
+                                                     Foreground="{DynamicResource Text.Primary}" CaretBrush="{DynamicResource Input.Caret}"
+                                                     FontFamily="{DynamicResource Font.Mono}" IsEnabled="{Binding TgIdle}"/>
+                                    </Border>
+                                    <Button Grid.Column="1" Content="{services:Loc tg.page.connect}" Click="TgConnect_Click" Style="{StaticResource PrimaryButton}"
+                                            Padding="12,5" Margin="8,0,0,0" IsEnabled="{Binding TgIdle}"/>
+                                </Grid>
+                                <TextBlock Text="{services:Loc tg.page.connecting}" FontSize="11.5" Margin="0,6,0,0" Foreground="{DynamicResource Text.Muted}"
+                                           Visibility="{Binding TgBusy, Converter={StaticResource BoolVis}}"/>
+                                <TextBlock Text="{Binding TgConnectError}" FontSize="11.5" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{DynamicResource Status.Danger}"
+                                           Visibility="{Binding TgHasConnectError, Converter={StaticResource BoolVis}}"/>
+                            </StackPanel>
+                            <!-- connected -->
+                            <StackPanel Visibility="{Binding TgHasToken, Converter={StaticResource BoolVis}}">
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding TgConnectedText}" FontSize="12" Foreground="{DynamicResource Text.Secondary}"/>
+                                        <TextBlock Text="{Binding TgPairedText}" FontSize="12" Margin="0,2,0,0" Foreground="{DynamicResource Text.Secondary}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                                        <Button Content="{services:Loc tg.page.pair}" Command="{Binding TgPairCommand}" Style="{StaticResource Small}"/>
+                                        <Button Content="{services:Loc tg.page.unpair}" Command="{Binding TgUnpairCommand}" Style="{StaticResource Small}"
+                                                Visibility="{Binding TgPaired, Converter={StaticResource BoolVis}}"/>
+                                        <Button Content="{services:Loc tg.page.disconnect}" Command="{Binding TgAskDisconnectCommand}" Style="{StaticResource Small}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Border CornerRadius="8" Padding="10,8" Margin="0,10,0,0" Background="{DynamicResource State.Fill.Faint}"
+                                        Visibility="{Binding TgPairing, Converter={StaticResource BoolVis}}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding TgPairHint}" FontSize="11.5" TextWrapping="Wrap" Foreground="{DynamicResource Text.Secondary}"/>
+                                        <TextBox Text="{Binding TgPairMessage, Mode=OneWay}" IsReadOnly="True" Style="{StaticResource Field}" Margin="0,6,0,0"
+                                                 FontFamily="{DynamicResource Font.Mono}" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Left" MinWidth="160"/>
+                                    </StackPanel>
+                                </Border>
+                                <CheckBox IsChecked="{Binding TgNotifyRoutines}" Margin="0,10,0,0" Style="{StaticResource ModernCheckBox}"
+                                          Foreground="{DynamicResource Text.Secondary}">
+                                    <TextBlock Text="{services:Loc tg.page.notifyRoutines}" TextWrapping="Wrap" MaxWidth="520"/>
+                                </CheckBox>
+                                <CheckBox IsChecked="{Binding TgAllCards}" Margin="0,6,0,0" Style="{StaticResource ModernCheckBox}"
+                                          Foreground="{DynamicResource Text.Secondary}">
+                                    <TextBlock Text="{services:Loc tg.page.allCards}" TextWrapping="Wrap" MaxWidth="520"/>
+                                </CheckBox>
+                                <TextBlock Text="{Binding TgError}" FontSize="11.5" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{DynamicResource Status.Danger}"
+                                           Visibility="{Binding TgHasError, Converter={StaticResource BoolVis}}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="{services:Loc routine.page.empty}" TextWrapping="Wrap" FontSize="12.5" Foreground="{DynamicResource Text.Muted}"
+                               Margin="4,8" Visibility="{Binding HasRows, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                     <ItemsControl ItemsSource="{Binding Rows}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
@@ -120,6 +191,7 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                  </StackPanel>
                 </ScrollViewer>
             </Grid>
 
@@ -151,7 +223,39 @@
                             <RadioButton Content="{services:Loc routine.page.kindDaily}" IsChecked="{Binding KindDaily}" Style="{StaticResource Choice}"/>
                             <RadioButton Content="{services:Loc routine.page.kindInterval}" IsChecked="{Binding KindInterval}" Style="{StaticResource Choice}"/>
                             <RadioButton Content="{services:Loc routine.page.kindOnce}" IsChecked="{Binding KindOnce}" Style="{StaticResource Choice}"/>
+                            <RadioButton Content="{services:Loc routine.page.kindEvent}" IsChecked="{Binding KindEvent}" Style="{StaticResource Choice}"
+                                         Margin="0,6,16,0"/>
                         </WrapPanel>
+
+                        <!-- When something happens -->
+                        <StackPanel Visibility="{Binding KindEvent, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{services:Loc routine.page.trigger}" Style="{StaticResource Kicker}"/>
+                            <RadioButton GroupName="RoutineTrigger" Content="{services:Loc routine.trigger.ci}" IsChecked="{Binding TrigCi}" Style="{StaticResource Choice}" Margin="0,0,0,5"/>
+                            <RadioButton GroupName="RoutineTrigger" Content="{services:Loc routine.trigger.comment}" IsChecked="{Binding TrigComment}" Style="{StaticResource Choice}" Margin="0,0,0,5"/>
+                            <RadioButton GroupName="RoutineTrigger" Content="{services:Loc routine.trigger.issue}" IsChecked="{Binding TrigIssue}" Style="{StaticResource Choice}" Margin="0,0,0,5"/>
+                            <RadioButton GroupName="RoutineTrigger" Content="{services:Loc routine.trigger.files}" IsChecked="{Binding TrigFiles}" Style="{StaticResource Choice}"/>
+                            <StackPanel Visibility="{Binding TrigCi, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{services:Loc routine.page.branch}" Style="{StaticResource Kicker}"/>
+                                <TextBox Text="{Binding EditBranch, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Field}" Width="200"
+                                         HorizontalAlignment="Left" FontFamily="{DynamicResource Font.Mono}"/>
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding TrigFiles, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{services:Loc routine.page.files}" Style="{StaticResource Kicker}" TextWrapping="Wrap"/>
+                                <TextBox Text="{Binding EditFiles, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Field}"
+                                         FontFamily="{DynamicResource Font.Mono}"/>
+                            </StackPanel>
+                            <CheckBox IsChecked="{Binding EditFromAnyone}" Margin="0,10,0,0" Style="{StaticResource ModernCheckBox}"
+                                      Foreground="{DynamicResource Text.Secondary}" Visibility="{Binding TrigByPeople, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{services:Loc routine.page.fromAnyone}" TextWrapping="Wrap" MaxWidth="320"/>
+                            </CheckBox>
+                            <TextBlock Text="{services:Loc routine.page.cooldown}" Style="{StaticResource Kicker}" TextWrapping="Wrap"/>
+                            <TextBox Text="{Binding EditCooldown, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Field}" Width="90"
+                                     HorizontalAlignment="Left" FontFamily="{DynamicResource Font.Mono}"/>
+                            <TextBlock Text="{services:Loc routine.page.eventNoteGh}" FontSize="10.5" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Faint}" Visibility="{Binding TrigGitHub, Converter={StaticResource BoolVis}}"/>
+                            <TextBlock Text="{services:Loc routine.page.eventNoteFiles}" FontSize="10.5" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Faint}" Visibility="{Binding TrigFiles, Converter={StaticResource BoolVis}}"/>
+                        </StackPanel>
 
                         <!-- On days -->
                         <StackPanel Visibility="{Binding KindDaily, Converter={StaticResource BoolVis}}">
@@ -198,7 +302,7 @@
                                   Style="{StaticResource ModernCheckBox}" Foreground="{DynamicResource Text.Secondary}">
                             <TextBlock Text="{services:Loc routine.page.sameChat}" TextWrapping="Wrap" MaxWidth="320"/>
                         </CheckBox>
-                        <CheckBox IsChecked="{Binding EditCatchUp}" Margin="0,8,0,0"
+                        <CheckBox IsChecked="{Binding EditCatchUp}" Margin="0,8,0,0" Visibility="{Binding KindTimed, Converter={StaticResource BoolVis}}"
                                   Style="{StaticResource ModernCheckBox}" Foreground="{DynamicResource Text.Secondary}">
                             <TextBlock Text="{services:Loc routine.page.catchUp}" TextWrapping="Wrap" MaxWidth="320"/>
                         </CheckBox>
@@ -219,6 +323,22 @@
         <!-- Status line -->
         <TextBlock Grid.Row="1" Text="{Binding Status}" VerticalAlignment="Bottom" Margin="24,0,24,4" FontSize="11.5"
                    Foreground="{DynamicResource Accent.1}"/>
+
+        <!-- Confirm Telegram disconnect -->
+        <Grid Grid.RowSpan="2" Background="{DynamicResource Bg.Scrim.Dialog}"
+              Visibility="{Binding TgDisconnectOpen, Converter={StaticResource BoolVis}}">
+            <Border Width="420" Padding="22" CornerRadius="12" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Background="{DynamicResource Dialog.Background}" BorderThickness="1" BorderBrush="{DynamicResource Dialog.Border}">
+                <StackPanel>
+                    <TextBlock Text="{services:Loc tg.page.disconnectConfirm}" FontSize="13.5" TextWrapping="Wrap" Margin="0,0,0,16" Foreground="{DynamicResource Text.Primary}"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="{services:Loc routine.page.cancel}" Command="{Binding TgCancelDisconnectCommand}" Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,0" Padding="12,5"/>
+                        <Button Content="{services:Loc tg.page.disconnect}" Command="{Binding TgConfirmDisconnectCommand}" Style="{StaticResource DangerButton}" Padding="12,5"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
 
         <!-- Confirm delete -->
         <Grid Grid.RowSpan="2" Background="{DynamicResource Bg.Scrim.Dialog}"

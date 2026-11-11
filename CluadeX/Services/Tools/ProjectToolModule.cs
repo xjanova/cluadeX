@@ -314,7 +314,8 @@ public sealed class ProjectToolModule : IAgentToolModule
             Description = "Scheduled tasks: work CluadeX starts by itself at a time, while it is open — at each run it opens a "
                 + "chat in the task's project (or carries on in the same chat) and sends the prompt, as if the user typed it. "
                 + "Use it when the user asks for something to happen later or again and again (\"every night run the tests and "
-                + "summarise\", \"each Monday check the open PRs\", \"remind me at 17:00\"). The user approves each add / remove "
+                + "summarise\", \"each Monday check the open PRs\", \"remind me at 17:00\") — or when something happens (\"when CI fails, "
+                + "find out why and fix it\", \"answer new issues\"). The user approves each add / remove "
                 + "/ run on a card. Write the prompt complete on its own: the run's chat has none of this conversation.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object>
             {
@@ -324,7 +325,7 @@ public sealed class ProjectToolModule : IAgentToolModule
                     ["action"] = new Dictionary<string, object> { ["type"] = "string", ["enum"] = new[] { "list", "add", "remove", "pause", "resume", "run_now" } },
                     ["name"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: a short name the user recognises" },
                     ["prompt"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: what the run's chat is told, complete on its own" },
-                    ["schedule"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: \"daily 02:00\", \"weekdays 09:00\", \"weekend 10:00\", \"mon,wed,fri 08:30\", \"every 2h\" (at least 1 hour), or \"once 2026-11-12 14:00\" — local time" },
+                    ["schedule"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: \"daily 02:00\", \"weekdays 09:00\", \"weekend 10:00\", \"mon,wed,fri 08:30\", \"every 2h\" (at least 1 hour), or \"once 2026-11-12 14:00\" — local time. Or on an event in the project (its GitHub repository through gh, at most once an hour): \"on ci_failed\" / \"on ci_failed main\" (a CI run failed, on any / that branch), \"on pr_comment\" (someone with a role in the repository commented on a pull request), \"on new_issue\", \"on file_changed *.cs; docs/*\" (files in the project folder changed)" },
                     ["project"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: the project folder (absolute path); default the one open now" },
                     ["same_chat"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: \"true\" = every run carries on in one chat (it sees the earlier runs); default a new chat each run" },
                     ["catch_up"] = new Dictionary<string, string> { ["type"] = "string", ["description"] = "add: \"false\" = skip a time missed while CluadeX was closed; default run it once when CluadeX is back" },

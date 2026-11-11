@@ -99,6 +99,10 @@ public partial class App : Application
         // Scheduled tasks (Routines page, schedule_task): made before the chat page, which runs them; the first check a
         // minute after start, once the window is up.
         _serviceProvider.GetRequiredService<Services.Routines.RoutineService>().Start(TimeSpan.FromMinutes(1));
+        // What starts an event routine (CI failed, a PR comment, a new issue, files changed): first look two minutes in.
+        _serviceProvider.GetRequiredService<Services.Routines.RoutineTriggers>().Start(TimeSpan.FromMinutes(2));
+        // The owner's phone (Telegram): made now, starts reading once the chat page has wired it (InitTelegram).
+        _ = _serviceProvider.GetRequiredService<Services.Remote.TelegramBridge>();
         // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
         var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
         _ = Task.Run(checkpoints.Prune);
@@ -1390,6 +1394,12 @@ public partial class App : Application
         services.AddSingleton<TaskManagerViewModel>();
         services.AddSingleton<WatchViewModel>();
         services.AddSingleton(sp => Services.Routines.RoutineService.Current = new Services.Routines.RoutineService(sp.GetRequiredService<SettingsService>().DataRoot));
+        services.AddSingleton(sp => Services.Routines.RoutineTriggers.Current = new Services.Routines.RoutineTriggers(sp.GetRequiredService<Services.Routines.RoutineService>()));
+        services.AddSingleton(sp =>
+        {
+            _ = sp.GetRequiredService<Services.Routines.RoutineService>();   // the bridge listens to its runs
+            return Services.Remote.TelegramBridge.Current = new Services.Remote.TelegramBridge(sp.GetRequiredService<SettingsService>().DataRoot);
+        });
         services.AddSingleton<RoutinesViewModel>();
         services.AddSingleton<BillingViewModel>();
         services.AddSingleton<FeaturesViewModel>();
