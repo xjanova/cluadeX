@@ -67,6 +67,10 @@ public partial class ChatViewModel
         public int FirstRow;
         /// <summary>The activity card already knows the model is writing its answer (reset when a tool starts).</summary>
         public volatile bool ActivityWriting;
+        /// <summary>Puts all the text the open reply bubble has streamed into it — the screen shows it a few tokens late,
+        /// and with no next token nothing catches it up. Read-aloud calls it before it reads a bubble. Set by the agent
+        /// loop while it runs; UI thread.</summary>
+        public Action? FlushReplyText;
 
         /// <summary>Who started the turn, for a supervisor: "pipe" (a program over the pipe), "split_parent" (new_chat from
         /// another chat's agent) or "user". The pipe flag is read live: it is set right after the run begins.</summary>

@@ -4127,6 +4127,9 @@ public partial class ChatViewModel : ViewModelBase
         _lastStatusBase = $"{initVerb}...";
         _generationStopwatch.Restart();
         StartElapsedTimer();
+        // Read aloud as she writes: each reply bubble joins the voice queue once its text is final — not only the
+        // turn's last row when it ends (SpokenReply; owner 2026-11-11: "ไม่อ่านทุกบับเบิ้ลที่ต้องอ่าน").
+        var readAloud = pipe == null ? WatchRepliesAloud(userMsg) : null;
 
         try
         {
@@ -4230,6 +4233,7 @@ public partial class ChatViewModel : ViewModelBase
             // Save immediately after each completed interaction
             SaveNow();
             bool turnOk = TurnMessages.LastOrDefault(m => m.Role == MessageRole.Assistant)?.HasError != true;
+            readAloud?.Dispose();
             if (pipe == null) SpeakReplyIfWanted(userMsg);
             EndTurn(turn);
             _pet?.NoteTurnDone(_providerManager.ActiveProviderType.ToString(),
@@ -4497,9 +4501,13 @@ public partial class ChatViewModel : ViewModelBase
                 // The previous step's bubble gets ALL its text: the screen is only updated every 3 tokens, so its
                 // last 1-2 tokens were never shown — a reply cut off when the next step began (a message typed
                 // while it worked, a tool call after the text).
-                string previousText = streamSb.ToString();
-                streamSb.Clear();
-                streamSb.Append(token);
+                string previousText;
+                lock (streamSb)   // read-aloud's FlushReplyText reads it from the UI thread
+                {
+                    previousText = streamSb.ToString();
+                    streamSb.Clear();
+                    streamSb.Append(token);
+                }
                 lastStreamStep = step;
 
                 App.Current?.Dispatcher.Invoke(() =>
@@ -4534,14 +4542,15 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
-            streamSb.Append(token);
+            lock (streamSb) streamSb.Append(token);
             run.StreamingTokenCount++;
             run.Touch();
 
             // Paced UI updates (~12/s, below keyboard input — see UiThrottle)
             if (tokenThrottle.Due)
             {
-                string snapshot = streamSb.ToString();
+                string snapshot;
+                lock (streamSb) snapshot = streamSb.ToString();
                 int capturedCount = run.StreamingTokenCount;
                 var bubble = streamingMsg;   // this step's bubble — by the time the update runs, a new step may own the field
                 tokenThrottle.Post(() =>
@@ -4610,6 +4619,14 @@ public partial class ChatViewModel : ViewModelBase
         _agentService.OnThinkingUpdate += OnThinking;
         _agentService.OnAgenticStreamingToken += OnStreamToken;
         _agentService.OnAgentStatus += OnAgentStatusNotice;
+        // Read-aloud: the open bubble gets all its streamed text before it is read (UI thread).
+        run.FlushReplyText = () =>
+        {
+            if (streamingMsg is not { } open || closedBubbles.Contains(open)) return;
+            string all;
+            lock (streamSb) all = streamSb.ToString();
+            if (all.Length > 0 && open.Content != all) open.Content = all;
+        };
         try
         {
             // Task.Run: the agentic loop interleaves async I/O with plenty of SYNCHRONOUS work (tool
@@ -4737,6 +4754,7 @@ public partial class ChatViewModel : ViewModelBase
             _agentService.OnThinkingUpdate -= OnThinking;
             _agentService.OnAgenticStreamingToken -= OnStreamToken;
             _agentService.OnAgentStatus -= OnAgentStatusNotice;
+            run.FlushReplyText = null;
             StopElapsedTimer();
             // Ensure inline status is finalized on cancel/error
             App.Current?.Dispatcher.Invoke(() =>
