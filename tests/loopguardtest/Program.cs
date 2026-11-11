@@ -560,6 +560,61 @@ Call Write(string path) => new("write_file", $"{{\"path\":\"{path}\",\"content\"
     finally { try { File.Delete(file); } catch { } }
 }
 
+// ─── R: SplitReports — a split chat's report goes back to its parent, and the two can message each other ───
+{
+    SplitReports.Decision D(bool running = false, bool auto = true, bool pStop = false, bool pFail = false, bool agent = true,
+        bool cStop = false, int sib = 0, bool wake = true) => SplitReports.Decide(running, auto, pStop, pFail, agent, cStop, sib, wake);
+    Check("R1 a working parent gets the report as a note at its next step (whatever else holds)",
+        D(running: true).Delivery == SplitReports.Delivery.NoteToRun && D(running: true, auto: false, cStop: true, agent: false, sib: 3, wake: false).Delivery == SplitReports.Delivery.NoteToRun);
+    Check("R2 an idle parent whose last split just finished is woken", D() == new SplitReports.Decision(SplitReports.Delivery.Wake, SplitReports.Reason.None));
+    Check("R3 other splits still working: the report waits for the last one (one turn for all)",
+        D(sib: 2) == new SplitReports.Decision(SplitReports.Delivery.Wait, SplitReports.Reason.SiblingsWorking));
+    Check("R4 no wake when: the split was stopped, the owner drove it, auto-continue is off, the parent was stopped / failed, the wake limit is used",
+        D(cStop: true).Why == SplitReports.Reason.ChildStopped && D(agent: false).Why == SplitReports.Reason.OwnerDrove
+        && D(auto: false).Why == SplitReports.Reason.AutoOff && D(pStop: true).Why == SplitReports.Reason.TargetStopped
+        && D(pFail: true).Why == SplitReports.Reason.TargetFailed && D(wake: false).Why == SplitReports.Reason.WakeLimit
+        && new[] { D(cStop: true), D(agent: false), D(auto: false), D(pStop: true), D(pFail: true), D(wake: false) }.All(d => d.Delivery == SplitReports.Delivery.Wait));
+    Check("R5 a message: a working chat gets a note, an idle one a turn, a stopped one or one at its limit keeps it as a row",
+        SplitReports.DecideMessage(true, true, false).Delivery == SplitReports.Delivery.NoteToRun
+        && SplitReports.DecideMessage(false, false, true).Delivery == SplitReports.Delivery.Wake
+        && SplitReports.DecideMessage(false, true, true).Why == SplitReports.Reason.TargetStopped
+        && SplitReports.DecideMessage(false, false, false).Why == SplitReports.Reason.WakeLimit);
+
+    string longAnswer = string.Join(" ", Enumerable.Range(1, 1200).Select(i => "word" + i));
+    string clipped = SplitReports.Clip(longAnswer, 400, oneLine: true);
+    Check("R6 the shown report is cut at a word, marked, never longer than asked",
+        clipped.Length <= 402 && clipped.EndsWith(" …") && longAnswer.StartsWith(clipped[..^2] + " "), clipped[^30..]);
+    Check("R6 a short answer is kept as it is; one line squashes white space, otherwise lines stay",
+        SplitReports.Clip("All 41 tests pass.", 400) == "All 41 tests pass." && SplitReports.Clip("a\n\n  b", 40, oneLine: true) == "a b"
+        && SplitReports.Clip("a\r\nb", 40) == "a\nb" && SplitReports.Clip(null, 10) == "" && SplitReports.Clip("   ", 10) == "");
+    string report = SplitReports.ReportForModel("API split", "id-1", "CX-12345678", SplitReports.Outcome(false, false), longAnswer, "Its work is on branch cluadex/split-api.");
+    Check("R7 the parent's agent reads who, how it ended, the report (up to 4000 chars), the branch, and how to read the rest",
+        report.StartsWith("Split chat \"API split\" (ref CX-12345678, id id-1) ended a turn. Its report:\n")
+        && report.Contains("cluadex/split-api") && report.Contains("close_chat with chat \"CX-12345678\" and read \"true\"")
+        && report.Length < SplitReports.ModelChars + 400, report.Length.ToString());
+    Check("R7 a stopped or failed split says so; no answer says so",
+        SplitReports.Outcome(true, false) == "was stopped" && SplitReports.Outcome(false, true) == "ended with an error"
+        && SplitReports.ReportForModel("x", "i", "CX-1", "ended a turn", "", null).EndsWith("It gave no answer."));
+    string instr = SplitReports.SplitInstruction("Main chat", "Fix the parser\nand commit");
+    Check("R8 a split chat is told who opened it, for what, that its answer goes back by itself, and how to ask the parent",
+        instr.Contains("\"Main chat\"") && instr.Contains("Fix the parser and commit") && instr.Contains("goes back to that chat by itself")
+        && instr.Contains("message_chat with chat \"parent\""));
+    Check("R9 a message names its sender and, from a split, how to answer it",
+        SplitReports.MessageForModel(true, "Main", "CX-1", "p", "add tests").StartsWith("Message from the chat that opened you, \"Main\"")
+        && SplitReports.MessageForModel(false, "API", "CX-2", "c", "which port?").Contains("answer it with message_chat chat \"CX-2\""));
+    Check("R10 the wake turn says the reports are above, to carry on from them and not redo them",
+        SplitReports.WakeForModel(1).StartsWith("The split chat you started has ended its turn")
+        && SplitReports.WakeForModel(3).StartsWith("The 3 split chats") && SplitReports.WakeForModel(2).Contains("do not redo"));
+
+    var lim = new SplitWakeLimit { MaxWakes = 3, Window = TimeSpan.FromHours(2) };
+    var t0 = new DateTime(2026, 11, 11, 10, 0, 0);
+    bool[] took = Enumerable.Range(0, 4).Select(i => lim.TryTake("p", t0.AddMinutes(i))).ToArray();
+    Check("R11 at most MaxWakes turns per chat in the window; another chat has its own count",
+        took.SequenceEqual(new[] { true, true, true, false }) && !lim.WouldAllow("p", t0.AddMinutes(5)) && lim.TryTake("q", t0));
+    Check("R11 the window slides: once the oldest is older than the window, one more is allowed",
+        lim.WouldAllow("p", t0.AddHours(2).AddSeconds(1)) && lim.TryTake("p", t0.AddHours(2).AddSeconds(1)) && !lim.TryTake("p", t0.AddHours(2).AddSeconds(2)));
+}
+
 Console.WriteLine($"\n{pass} passed, {fail} failed");
 return fail == 0 ? 0 : 1;
 

@@ -68,9 +68,24 @@ public sealed class ProjectToolModule : IAgentToolModule
     /// </summary>
     public static Func<string, Task<string>>? CloseChatHandler;
 
+    /// <summary>
+    /// close_chat with read "true" (set by the chat page): the whole last answer of one of the asking chat's split chats
+    /// (reference / id / title), with how it stands. Returns what the tool reports. Null in harnesses with no chat page.
+    /// </summary>
+    public static Func<string, Task<string>>? ReadChatHandler;
+
+    public const string MessageChatToolName = "message_chat";
+
+    /// <summary>
+    /// message_chat (set by the chat page): the target ("parent", or a split chat's reference / id / title) and the text.
+    /// Delivered to a working chat as a note it reads at its next step; an idle one gets a turn with it. Returns what the
+    /// tool reports, or throws to fail it. Null in harnesses with no chat page.
+    /// </summary>
+    public static Func<string, string, Task<string>>? MessageChatHandler;
+
     public string Id => "project";
 
-    public IReadOnlyCollection<ToolType> ToolTypes { get; } = new[] { ToolType.OpenProject, ToolType.NewChat, ToolType.CloseChat };
+    public IReadOnlyCollection<ToolType> ToolTypes { get; } = new[] { ToolType.OpenProject, ToolType.NewChat, ToolType.CloseChat, ToolType.MessageChat };
 
     public bool WorksWithoutProject => true;
 
@@ -79,6 +94,7 @@ public sealed class ProjectToolModule : IAgentToolModule
         "open_project" or "open_folder" or "set_project" or "open_workspace" or "set_working_directory" => ToolType.OpenProject,
         "new_chat" or "open_new_chat" or "start_chat" or "new_session" or "create_chat" => ToolType.NewChat,
         "close_chat" or "archive_chat" or "finish_chat" or "close_chats" or "cleanup_chats" or "list_split_chats" => ToolType.CloseChat,
+        "message_chat" or "send_to_chat" or "tell_chat" or "message_parent" or "chat_message" or "send_message_to_chat" => ToolType.MessageChat,
         _ => null,
     };
 
@@ -202,8 +218,11 @@ public sealed class ProjectToolModule : IAgentToolModule
                 + "something else (a note that arrives mid-task): start that request in its own chat so both run at once, and "
                 + "keep corrections or follow-ups of the current task here. The message must be complete — that chat does not "
                 + "see this one, unless you pass fork. A new chat in THIS project shares this checkout: when it will edit files "
-                + "while a chat is still running here, pass isolation \"worktree\" so it works on its own branch. Never answer "
-                + "that you cannot open a chat.",
+                + "while a chat is still running here, pass isolation \"worktree\" so it works on its own branch. Its report "
+                + "comes back to this chat by itself when it ends a turn (if this chat is idle by then, CluadeX starts a turn here "
+                + "with it), so never poll or wait for it in a loop; message_chat sends it more to do. Do NOT use it for a piece "
+                + "whose result your very next step needs, for a quick lookup a sub-agent does, or for a part that edits the "
+                + "same files as this chat. Never answer that you cannot open a chat.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(chatSchema)).RootElement.Clone(),
         };
 
@@ -219,18 +238,58 @@ public sealed class ProjectToolModule : IAgentToolModule
                     ["description"] = "Which split chat to put away: its reference (CX-…), id or title, or \"done\" for every finished one. "
                         + "Omit (or \"list\") to only list this chat's split chats and how each stands.",
                 },
+                ["read"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "\"true\" = put nothing away: return the WHOLE last answer of the split chat named in chat "
+                        + "(the report that came back here is cut short when it is long), with how it stands.",
+                },
             },
         };
         yield return new ToolSchema
         {
             Name = CloseChatToolName,
             Description = "The chats THIS chat split off with new_chat: list them with how each stands (working / finished / put "
-                + "away), or put finished ones away so the chat list stays tidy. Put away = hidden from the list, kept, the user "
+                + "away) and the start of each finished one's last answer, read one's whole last answer (read \"true\"), or put "
+                + "finished ones away so the chat list stays tidy. Put away = hidden from the list, kept, the user "
                 + "can bring it back; a chat still working is never closed. A split chat in its own git worktree (new_chat "
                 + "isolation \"worktree\") is put away only once nothing on its branch is unmerged: then its worktree and branch "
                 + "are removed; otherwise close_chat says what is left and keeps both — merge the branch or open a PR first. "
                 + "Use it once a split chat's result is in.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(closeSchema)).RootElement.Clone(),
+        };
+
+        // Owner 2026-11-11: "แชทเซสชั่น หลัก กับย่อย สามารถส่งข้อมูลงานหากันได้" — the two can talk while they work.
+        var messageSchema = new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>
+            {
+                ["chat"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "\"parent\" = the chat that opened this one (this chat is a split chat). Otherwise one of "
+                        + "the chats THIS chat split off with new_chat: its reference (CX-…), id or title.",
+                },
+                ["message"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "What to tell it, complete on its own: more work or a correction for a split chat, an "
+                        + "answer to its question, or — from a split chat — the question it cannot go on without.",
+                },
+            },
+            ["required"] = new[] { "chat", "message" },
+        };
+        yield return new ToolSchema
+        {
+            Name = MessageChatToolName,
+            Description = "Send a message to the chat that opened this one (chat \"parent\") or to a chat this one split off "
+                + "with new_chat. A chat that is working reads it at its next step; an idle one starts a turn with it. Either way "
+                + "its answer comes back by itself (a split chat's report when it ends its turn, the parent's reply as a "
+                + "message), so do not poll. Use it to give a split chat more work or a correction, to answer its question, or — "
+                + "in a split chat — to ask the parent something you cannot go on without, then end your turn. Not for progress "
+                + "reports (your final answer goes back by itself), and not to chats outside this split.",
+            InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(messageSchema)).RootElement.Clone(),
         };
     }
 
@@ -403,12 +462,45 @@ public sealed class ProjectToolModule : IAgentToolModule
             return new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = none, Error = none };
         }
         string target = call.GetArg("chat").Trim().Trim('"', '\'');
+        string readArg = call.GetArg("read").Trim().Trim('"', '\'');
+        if (readArg.Equals("true", StringComparison.OrdinalIgnoreCase) || readArg == "1" || readArg.Equals("yes", StringComparison.OrdinalIgnoreCase))
+        {
+            if (target.Length == 0 || target.Equals("list", StringComparison.OrdinalIgnoreCase) || target.Equals("done", StringComparison.OrdinalIgnoreCase))
+            {
+                const string which = "read \"true\" needs chat: the split chat's reference (CX-…), id or title — close_chat with no arguments lists them.";
+                return new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = which, Error = which };
+            }
+            if (ReadChatHandler == null)
+            {
+                const string none = "No chat page is running here, so no split chat can be read.";
+                return new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = none, Error = none };
+            }
+            string read = await ReadChatHandler(target);
+            return new ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true, Output = read, Summary = "📄 " + target };
+        }
         string said = await CloseChatHandler(target);
         return new ToolResult
         {
             Type = call.Type, ToolName = call.ToolName, Success = true, Output = said,
             Summary = target.Length == 0 || target.Equals("list", StringComparison.OrdinalIgnoreCase) ? "💬 split chats" : "🗃 " + target,
         };
+    }
+
+    /// <summary>message_chat: a message to the parent chat or to one of this chat's split chats.</summary>
+    private static async Task<ToolResult> ExecuteMessageChatAsync(ToolCall call)
+    {
+        ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
+        string target = call.GetArg("chat").Trim().Trim('"', '\'');
+        string message = call.GetArg("message").Trim();
+        if (target.Length == 0) return Fail("message_chat needs chat: \"parent\", or a split chat's reference (CX-…), id or title.");
+        if (message.Length == 0) return Fail("message_chat needs message: what to tell that chat, complete on its own.");
+        if (MessageChatHandler == null) return Fail("No chat page is running here, so no chat can be messaged.");
+        try
+        {
+            string said = await MessageChatHandler(target, message);
+            return new ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true, Output = said, Summary = "✉️ " + target };
+        }
+        catch (Exception ex) { return Fail(ex.Message); }
     }
 
     private static string? FullPathOrNull(string raw)
@@ -443,6 +535,7 @@ public sealed class ProjectToolModule : IAgentToolModule
     {
         if (call.Type == ToolType.NewChat) return ExecuteNewChatAsync(call, context);
         if (call.Type == ToolType.CloseChat) return ExecuteCloseChatAsync(call);
+        if (call.Type == ToolType.MessageChat) return ExecuteMessageChatAsync(call);
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
 
         string raw = call.GetArg("path").Trim().Trim('"', '\'');
