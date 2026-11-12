@@ -258,7 +258,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
               $"Project working directory: {cwd}. " +
               (grant!.Edit ? "You may create and edit files inside it. " : "You may not edit files: propose changes as diffs. ") +
               (grant.Run ? "You may run commands (builds, tests, git) in it. " : "You may not run commands. ") +
-              (Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.ClaudeDev) ??
+              (Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.ClaudeDev, machine: Agents.AgentLoad.Snapshot()) ??
               "When the task has two or more independent parts (several folders or questions to investigate, bulky reading, " +
               "separate files to change), hand them to sub-agents with the Task tool — several in one response run in parallel, " +
               "and the user watches each one on the agent map. Keep a small task to yourself. ") +

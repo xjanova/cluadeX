@@ -463,7 +463,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         foreach (var a in BuildArgs(cwd, grant, model, ClaudeDevProvider.TurnAddDirs(extras),
                      LearnedHabits.Append(CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), cwd),
                      chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
-                     Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GeminiDev),
+                     Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GeminiDev, machine: Agents.AgentLoad.Snapshot()),
                      noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
                      splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.GeminiDev))) psi.ArgumentList.Add(a);
 #if DEBUG
