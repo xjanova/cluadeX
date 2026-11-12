@@ -31,6 +31,46 @@
     <!-- IDE SHELL STYLES (Title bar / Activity bar / Status bar) -->
     <!-- ═══════════════════════════════════════════════════ -->
 
+    <!-- The rail's "more this way" chevron (MainWindow.RailScroll.cs): shown only on an edge that has more icons past it.
+         Resting the pointer on it glides the list; a click moves it one icon. The near-clear fill takes the hover. -->
+    <Style x:Key="RailMoreHint" TargetType="Border">
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="Height" Value="18"/>
+        <Setter Property="Width" Value="40"/>
+        <Setter Property="CornerRadius" Value="9"/>
+        <Setter Property="Background" Value="{DynamicResource ActivityBar.Hover.Background}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ActivityBar.Checked.Border}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Visibility" Value="Collapsed"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource ActivityBar.Checked.Background}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- The chevron breathes (opacity) so the eye finds it; it holds still and lights while the pointer rests on it. -->
+    <Style x:Key="RailMoreGlyph" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{DynamicResource ActivityBar.Hover.Foreground}"/>
+        <Style.Triggers>
+            <EventTrigger RoutedEvent="Loaded">
+                <BeginStoryboard>
+                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.45" Duration="0:0:0.9"/>
+                    </Storyboard>
+                </BeginStoryboard>
+            </EventTrigger>
+            <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Border}}" Value="True">
+                <Setter Property="Foreground" Value="{DynamicResource ActivityBar.Checked.Foreground}"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- Activity bar icon button (60px wide rail, 44x44 buttons, color accent on active) -->
     <Style x:Key="ActivityBarButton" TargetType="RadioButton">
         <Setter Property="Width" Value="44"/>
