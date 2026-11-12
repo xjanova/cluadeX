@@ -5497,8 +5497,9 @@ public partial class ChatViewModel : ViewModelBase
     {
         if (run.TodoMsg?.PlanItems is not { Count: > 0 } items) return;
         foreach (var item in items) item.IsLive = false;
-        // Stopped by the owner with a step in progress: "หยุดไว้ (2/6)", and the card is saved as stopped.
-        run.TodoMsg.PlanStopped = run.Stopped && items.Any(p => p.IsActive);
+        // Stopped by the owner with a step in progress, or wrap_up left steps open (a pause): "หยุดไว้ (4/8)" on the step
+        // it stopped at, and the card is saved as stopped — the next turn carries the plan on from there.
+        run.TodoMsg.PlanStopped = (run.Stopped || run.Scope.PlanLeftOpen) && items.Any(p => p.IsActive);
         run.TodoMsg.PlanHeader = run.TodoMsg.PlanStopped
             ? Services.Agents.PlanRecord.EndedHeader(items, stopped: true, Loc)
             : PlanCardHeader(items.Count(p => p.IsDone), items.Count, running: false);
