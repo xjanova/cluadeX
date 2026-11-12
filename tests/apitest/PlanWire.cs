@@ -128,8 +128,34 @@ internal static class PlanWire
         run.PlanTouched = true;
         int n = PlanOps.FinishForWrapUp(run);
         int twice = PlanOps.FinishForWrapUp(run);
-        check("plan", "PL12 wrap_up checks off its plan", untouched == 0 && n == 2 && twice == 0 && Shape(run.Todos) == "c,c,c",
-            $"untouched {untouched}, then {n}, again {twice}: {Shape(run.Todos)}");
+        check("plan", "PL12 wrap_up checks off the step in progress, the step after it is where it stopped",
+            untouched == 0 && n == 1 && Shape(run.Todos) == "c,c,ip" && run.PlanLeftOpen,
+            $"untouched {untouched}, then {n}, again {twice}: {Shape(run.Todos)} · left open {run.PlanLeftOpen}");
+
+        // Owner 2026-11-12: paused at step 4 of 8, closed CluadeX, and the card came back "เสร็จแล้ว (8/8)".
+        var paused = new AgentRunScope("chat-p", null) { PlanTouched = true };
+        paused.Todos.AddRange(Plan("completed", "completed", "completed", "in_progress", "pending", "pending", "pending", "pending"));
+        var (fin, left) = PlanOps.WrapUp(paused);
+        check("plan", "PL12b a pause at step 4 of 8: 1-4 done, stopped at 5, 5-8 left open, the model told",
+            fin == 1 && Shape(paused.Todos) == "c,c,c,c,ip,p,p,p" && string.Join(",", left) == "5,6,7,8" && paused.PlanLeftOpen
+            && PlanOps.LeftOpenNote(left) is { } note && note.Contains("steps 5, 6, 7, 8 are still open") && note.Contains("done [5,6,7,8]"),
+            $"{fin} · {Shape(paused.Todos)} · left {string.Join(",", left)} · {PlanOps.LeftOpenNote(left)}");
+        var rec = PlanRecord.FromCard(new PlanRecord(paused.Todos, "continuation").ToRows(live: false), "continuation", stopped: true);
+        check("plan", "PL12c read back: \"หยุดไว้ (4/8)\" and the plan still has work for the next turn",
+            PlanRecord.EndedHeader(rec.ToRows(live: false), rec.Stopped, k => k == "plan.card.stopped" ? "หยุดไว้ ({0}/{1})" : k + " {0}/{1}") == "หยุดไว้ (4/8)"
+            && rec.HasWorkLeft, "");
+
+        var all = new AgentRunScope("chat-d", null) { PlanTouched = true };
+        all.Todos.AddRange(Plan("completed", "completed", "in_progress"));
+        var (allFin, allLeft) = PlanOps.WrapUp(all);
+        check("plan", "PL12d the last step in progress: all done, nothing left open, no note",
+            allFin == 1 && Shape(all.Todos) == "c,c,c" && allLeft.Count == 0 && !all.PlanLeftOpen && PlanOps.LeftOpenNote(allLeft) == null, Shape(all.Todos));
+        check("plan", "PL12e wrap_up twice keeps the step it stopped at open", twice == 0 && Shape(run.Todos) == "c,c,ip" && run.PlanLeftOpen,
+            $"{twice}: {Shape(run.Todos)}");
+        run.PlanLeftOpen = false;   // what todo_write does (AgentToolService.PlanChanged): the model moved the plan again
+        int afterMove = PlanOps.FinishForWrapUp(run);
+        check("plan", "PL12f after the model moves the plan, wrap_up closes it again", afterMove == 1 && Shape(run.Todos) == "c,c,c" && !run.PlanLeftOpen,
+            $"{afterMove}: {Shape(run.Todos)}");
 
         var child = run.CreateChild();
         child.Todos.AddRange(Plan("in_progress"));

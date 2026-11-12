@@ -66,9 +66,10 @@ public partial class ChatViewModel
         OrchestrationToolModule.NextStepRequested += (chat, step) =>
         {
             if (chat != null) _pendingNextStep[chat] = step;
-            // In the tool's own flow (the run's scope): wrap_up checks off the plan this run worked on.
-            _agentToolService.FinishPlanAtWrapUp();
         };
+        // In the tool's own flow (the run's scope): wrap_up closes the plan this run worked on, and tells the model about
+        // steps it left open.
+        OrchestrationToolModule.ClosePlan = _agentToolService.FinishPlanAtWrapUp;
 
         if (_cleanup?.Background is { } bg)
             bg.Ended += (snap, owner) => App.Current?.Dispatcher.BeginInvoke(() => OnBackgroundEnded(snap, owner));

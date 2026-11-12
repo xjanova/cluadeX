@@ -3801,7 +3801,11 @@ public class AgentToolService : IDisposable
     /// <summary>The plan changed in this run: wrap_up may check it off, and the card follows.</summary>
     private void PlanChanged()
     {
-        if (AgentRunScope.Current is { } run) run.PlanTouched = true;
+        if (AgentRunScope.Current is { } run)
+        {
+            run.PlanTouched = true;
+            run.PlanLeftOpen = false;   // moved after wrap_up: the next wrap_up closes it afresh
+        }
         TodoChanged?.Invoke();
     }
 
@@ -3811,11 +3815,12 @@ public class AgentToolService : IDisposable
     /// from the last turn that this turn never touched is a different request's and stays as it was; a sub-agent's
     /// wrap_up does not finish its parent's plan. Returns how many items it finished.
     /// </summary>
-    public int FinishPlanAtWrapUp()
+    /// <returns>The note for wrap_up's answer about steps left open (null = the plan is done, or not this run's).</returns>
+    public string? FinishPlanAtWrapUp()
     {
-        int n = Agents.PlanOps.FinishForWrapUp(AgentRunScope.Current);
-        if (n > 0) TodoChanged?.Invoke();
-        return n;
+        var (n, left) = Agents.PlanOps.WrapUp(AgentRunScope.Current);
+        if (n > 0 || left.Count > 0) TodoChanged?.Invoke();
+        return Agents.PlanOps.LeftOpenNote(left);
     }
 
     private ToolResult ExecuteTodoWrite(ToolCall call)
