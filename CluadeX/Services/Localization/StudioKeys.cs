@@ -10,6 +10,9 @@ internal static class StudioKeys
         // ═══════ NAV ═══════
         ["nav.uiStudioTip"] = E("UI Studio — edit your app's UI live, straight into the source", "UI Studio — แก้หน้าตาแอปแบบเรียลไทม์ ลงซอร์สตรงจุด"),
         ["nav.nodeGraphTip"] = E("Node Graph — your project as draggable nodes", "Node Graph — ดูโปรเจกต์เป็นโหนดที่ลากได้"),
+        // The rail's chevrons when more icons are past an edge (MainWindow.RailScroll.cs)
+        ["nav.rail.moreUp"] = E("More icons above — rest the pointer here to scroll, or click", "มีเมนูอยู่ด้านบนอีก — ชี้ค้างไว้เพื่อเลื่อน หรือคลิก"),
+        ["nav.rail.moreDown"] = E("More icons below — rest the pointer here to scroll, or click", "มีเมนูอยู่ด้านล่างอีก — ชี้ค้างไว้เพื่อเลื่อน หรือคลิก"),
 
         // ═══════ STUDIO: toolbar ═══════
         ["studio.title"] = E("UI Studio", "UI Studio"),

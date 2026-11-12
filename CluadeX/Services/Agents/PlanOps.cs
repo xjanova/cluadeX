@@ -66,11 +66,51 @@ public static class PlanOps
         return n;
     }
 
-    /// <summary>wrap_up in <paramref name="run"/>: its plan is checked off only when it is the run's own (not a sub-agent's
+    /// <summary>
+    /// wrap_up: the turn is over, so the step in progress and every step before it are checked off. Steps after it stay
+    /// open — the turn ended before them (paused, stopped, or it ran out of road) — and the first of them becomes the
+    /// step the plan stopped at, so the card reads "หยุดไว้" on it and the next turn carries the plan on from there.
+    /// Owner 2026-11-12: paused at step 4 of 8, closed CluadeX, and the card came back "เสร็จแล้ว (8/8)" — wrap_up used
+    /// to check off every open step. Returns how many it finished and the 1-based steps left open.
+    /// </summary>
+    public static (int Finished, List<int> Left) CloseForWrapUp(List<TodoItem> items)
+    {
+        int cur = items.FindIndex(t => t.Status == "in_progress");
+        int n = 0;
+        for (int i = 0; i <= cur; i++)
+            if (items[i].Status != "completed") { items[i].Status = "completed"; n++; }
+        var left = new List<int>();
+        for (int i = cur + 1; i < items.Count; i++)
+            if (items[i].Status != "completed") left.Add(i + 1);
+        if (left.Count > 0) items[left[0] - 1].Status = "in_progress";
+        return (n, left);
+    }
+
+    /// <summary>wrap_up in <paramref name="run"/>: its plan is closed only when it is the run's own (not a sub-agent's
     /// parent's) and this run wrote or moved it — a plan carried over from the last turn that this turn never touched
-    /// belongs to another request and stays as it was. Returns how many items it finished.</summary>
-    public static int FinishForWrapUp(AgentRunScope? run)
-        => run == null || run.Parent != null || !run.PlanTouched ? 0 : FinishAll(run.Todos);
+    /// belongs to another request and stays as it was. Steps left open mark the run's plan as stopped
+    /// (<see cref="AgentRunScope.PlanLeftOpen"/>). Returns how many items it finished.</summary>
+    public static int FinishForWrapUp(AgentRunScope? run) => WrapUp(run).Finished;
+
+    /// <summary><see cref="FinishForWrapUp"/> with the steps it left open (1-based; empty = the plan is done).</summary>
+    public static (int Finished, List<int> Left) WrapUp(AgentRunScope? run)
+    {
+        if (run == null || run.Parent != null || !run.PlanTouched) return (0, new List<int>());
+        // Closed already and not moved since: a second wrap_up must not finish the step the plan stopped at.
+        if (run.PlanLeftOpen)
+            return (0, run.Todos.Select((t, i) => (t, i)).Where(x => x.t.Status != "completed").Select(x => x.i + 1).ToList());
+        var r = CloseForWrapUp(run.Todos);
+        run.PlanLeftOpen = r.Left.Count > 0;
+        return r;
+    }
+
+    /// <summary>What wrap_up's answer tells the model about steps it left open (null = none): mark them done if they are,
+    /// so the card is true either way.</summary>
+    public static string? LeftOpenNote(IReadOnlyList<int> left) => left.Count == 0 ? null
+        : $"Plan: step{(left.Count == 1 ? "" : "s")} {string.Join(", ", left)} {(left.Count == 1 ? "is" : "are")} still open, so the "
+          + $"card shows it stopped at step {left[0]} and the next turn carries on from there. If you did finish "
+          + $"{(left.Count == 1 ? "it" : "them")} this turn, mark {(left.Count == 1 ? "it" : "them")} first with todo_write "
+          + $"done [{string.Join(",", left)}]; otherwise leave the plan as it is. ";
 
     /// <summary>
     /// The step-3 plan reminder (CodeAgentService), or null when the run needs none: no plan at all → write one; a plan

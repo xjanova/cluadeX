@@ -21,6 +21,9 @@ public sealed class OrchestrationToolModule : IAgentToolModule
     public static event Action<string?, NextStep>? NextStepRequested;
     /// <summary>wrap_up named tests it left out as out of scope (chat key, the items): the turn's test card lists them.</summary>
     public static event Action<string?, IReadOnlyList<string>>? TestsSkippedNoted;
+    /// <summary>wrap_up closes the run's plan (in the tool's own flow, so the run's scope is current) and returns a note
+    /// for its answer about steps left open (null = none). Set by the chat page.</summary>
+    public static Func<string?>? ClosePlan { get; set; }
 
     public string Id => "orchestration";
 
@@ -189,11 +192,12 @@ public sealed class OrchestrationToolModule : IAgentToolModule
             var step = NextStep.FromArgsRepaired(call.GetArg("recap"), call.GetArg("ask"), call.GetArg("actions"), out var err, out var repaired);
             if (step == null) return Fail(err!);
             NextStepRequested?.Invoke(Chat, step);
+            string? planNote = ClosePlan?.Invoke();
             if (TurnTests.SkippedFromArg(call.GetArg("tests_skipped")) is { Count: > 0 } skipped) TestsSkippedNoted?.Invoke(Chat, skipped);
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = (repaired != null ? repaired + " Nothing else is needed: do not redo any work. " : "")
+                Output = (repaired != null ? repaired + " Nothing else is needed: do not redo any work. " : "") + (planNote ?? "")
                     + "The next-step box will show under your closing message. Now write that message (your answer in full) and end the turn; do not repeat the box's question in prose.",
                 Summary = "⏭ " + (step.Ask ?? step.Recap),
             };
@@ -261,7 +265,9 @@ public sealed class OrchestrationToolModule : IAgentToolModule
         if (context.OfferedToolNames.Contains("todo_write") || context.OfferedToolNames.Contains("update_plan"))
             s = (context.IsLocalModel ? PlanGuideShort : PlanGuide) + "\n";
         s += "At the end of a turn that did multi-step work, call wrap_up once (recap, and at most one question with 1-2 "
-           + "buttons when the next move is the user's; it also checks off the plan's remaining steps), then write your closing message.";
+           + "buttons when the next move is the user's; it also checks off the step in progress and those before it — steps "
+           + "after it stay open, so the plan shows where the work stopped; mark finished ones with todo_write first), then "
+           + "write your closing message.";
         if (!context.NativeTools)
             s += "\n[ACTION: wrap_up]\nrecap: Fixed the timeout in client.cs; the build passes. Not run against the live API.\n"
                + "ask: Run the live test now?\nactions: [\"Yes, run it\", \"Not now\"]\n[/ACTION]";

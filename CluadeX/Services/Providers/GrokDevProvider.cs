@@ -320,7 +320,7 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
         PruneStalePrompts(promptDir);
         string promptText = BuildPrompt(cwd, grant, addDirs, ClaudeDevProvider.BuildTranscript(history), userMessage,
             LearnedHabits.Append(CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), cwd), ChatToolsHint(extras, chatTools),
-            noSubAgents ? null : Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GrokDev),
+            noSubAgents ? null : Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GrokDev, machine: Agents.AgentLoad.Snapshot()),
             noProject: !_fileSystemService.HasWorkingDirectory,
             splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.GrokDev));
 

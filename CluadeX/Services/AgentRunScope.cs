@@ -150,6 +150,8 @@ public sealed class AgentRunScope
     public bool PlanTouched { get; set; }
     /// <summary>The plan came over from the chat's last turn with work left (PlanRecord.CarryNote tells the model).</summary>
     public bool PlanCarried { get; set; }
+    /// <summary>wrap_up left steps open (PlanOps.WrapUp): the card closes as stopped at the first of them, like a Stop.</summary>
+    public bool PlanLeftOpen { get; set; }
 
     private readonly object _costLock = new();
     private decimal _costUsd;

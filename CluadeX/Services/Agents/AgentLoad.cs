@@ -27,6 +27,9 @@ public static class AgentLoad
 
     public static int CurrentCap() => Cap(Environment.ProcessorCount, FreeRamMb());
 
+    /// <summary>The limit now and how many run, across every chat: what a step's prompt tells its model.</summary>
+    public static (int Cap, int Running) Snapshot() => (CurrentCap(), Running);
+
     /// <summary>Take a slot unless the limit is reached. Each true needs one <see cref="Leave"/>.</summary>
     public static bool TryEnter(int cap)
     {
