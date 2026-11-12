@@ -459,6 +459,17 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   `tests/chattest` WJ0–WJ14 (`CHATTEST_ONLY=WJ`, the real chat page + native loop + real `cmd` background processes).
   Not yet: a real CI watch woken in the running app, and a CLI agent (Claude Dev / Codex) calling watch_ci for real.
 
+## Opening a chat fast: lazy row parts (2026-11-12)
+- The chat row template in `ChatView.xaml` holds every row kind. Each rarely-shown part (question card, permission box,
+  plan card, next-step box, agent map, diff, tool output ...) sits in a `ContentControl` with style `LazyRowPart` or
+  `LazyRowPart.<Role>`; its Visibility is the part's guard and the part is its `ContentTemplate`. A collapsed element is
+  never measured, so the part is built only when it shows: 321 -> 108 elements per row, switch freeze 210 -> 165 ms.
+  **A new part that only some rows show goes in such a wrapper too**, guard copied onto the wrapper, its own rules kept.
+- `ChatList` caches half a page each side (`VirtualizingPanel.CacheLength`); the default page built 2-3x the visible rows.
+- Measure a switch: `tests/animtest` with `--db <copy of codex.db> --switch` (`SwitchChecks.cs`; `SWITCH_TIMELINE=1`,
+  `SWITCH_SPLIT=1`, `SWITCH_HANDLERS=1`). Point the copy's `project_path`s at throwaway folders first.
+- Not done: row containers are not reused across a switch (a new `Messages` collection = a new ItemsSource).
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

@@ -82,6 +82,11 @@ internal static class Program
         while (vm.ChatVM.CurrentSession == null && wait.ElapsedMilliseconds < 20000) await Task.Delay(60);
         await Task.Delay(1500);
 
+        if (realDb != null && cli.Contains("--switch"))
+        {
+            await SwitchChecks.Run(win, vm, sp, settings.DataRoot);
+            return 0;
+        }
         if (realDb != null)
         {
             await SidebarChecks.RealList(win, vm);
