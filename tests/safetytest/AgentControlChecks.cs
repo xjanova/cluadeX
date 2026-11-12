@@ -31,9 +31,64 @@ internal static class AgentControlChecks
         Gate(check);
         Stream(check);
         Args(check);
+        Honest(check);
         RealHook(proj, check, matchingExe);
         Sweep(proj, check);
         if (Environment.GetEnvironmentVariable("CLUADEX_LIVE_CLI") == "1") LiveClaude(proj, check, matchingExe);
+    }
+
+    /// <summary>The checks that need no CLI and no project (--agentgate): the policy, the gate and the wording.</summary>
+    public static void Pure(Action<string, bool, string> check)
+    {
+        Console.WriteLine("Sub-agents: the policy, the machine limit, the wording (no CLI)");
+        MachineLimit(check);
+        Policy(check);
+        Gate(check);
+        Args(check);
+        Honest(check);
+    }
+
+    /// <summary>The model is told the machine's real room before it plans, and a refusal gives the numbers (2026-11-12:
+    /// a chat told "at most 4" on a machine that held 2 lost six starts in a row to bare "machine is full" refusals).</summary>
+    static void Honest(Action<string, bool, string> check)
+    {
+        var claude = AiProviderType.ClaudeDev;
+        var four = Writers with { MaxConcurrency = 4 };
+        check("room: the step's limit when the machine has more", CliAgentPolicy.RoomNow(4, (8, 1)) == 4, "");
+        check("room: cut to the machine's free places", CliAgentPolicy.RoomNow(4, (2, 0)) == 2 && CliAgentPolicy.RoomNow(4, (3, 2)) == 1, "");
+        check("room: none when other chats fill it, never below 0", CliAgentPolicy.RoomNow(4, (2, 2)) == 0 && CliAgentPolicy.RoomNow(4, (2, 5)) == 0, "");
+        check("room: no machine figures = the step's limit (as before)", CliAgentPolicy.RoomNow(4, null) == 4, "");
+
+        string roomy = CliAgentPolicy.PromptLine(four, claude, machine: (8, 0))!;
+        check("prompt: a roomy machine keeps the old wording", roomy.Contains("At most 4 at once") && !roomy.Contains("free memory"), roomy);
+        string tight = CliAgentPolicy.PromptLine(four, claude, machine: (2, 0))!;
+        check("prompt: a tight machine says the real number and why", tight.Contains("At most 2 at once right now") && tight.Contains("free memory holds 2")
+            && tight.Contains("do not retry"), tight);
+        string full = CliAgentPolicy.PromptLine(four, claude, machine: (2, 2))!;
+        check("prompt: a full machine says do it yourself, no spawn advice", full.StartsWith("Do not use the Agent tool") && full.Contains("2 sub-agents are running in other chats")
+            && !full.Contains("hand them to"), full);
+        check("prompt: sub-agents off still wins over the machine", CliAgentPolicy.PromptLine(Off, claude, machine: (8, 0))!.Contains("off for this step"), "");
+        check("prompt: no decision stays null with machine figures", CliAgentPolicy.PromptLine(Legacy, claude, machine: (2, 2)) == null, "");
+        string codex = CliAgentPolicy.PromptLine(four, AiProviderType.OpenAIDev, workflow: true, machine: (3, 1))!;
+        check("prompt: Codex's workflow line carries the cut number too", codex.Contains("workflow tool") && codex.Contains("At most 2 at once right now"), codex);
+
+        string theirs = CliAgentPolicy.MachineFullReason(2, 2, 0);
+        check("refusal: names the limit and the count, all in other chats → do it yourself",
+            theirs.Contains("holds 2 sub-agents") && theirs.Contains("2 are running") && theirs.Contains("all in other chats") && theirs.Contains("do this part yourself")
+            && !theirs.Contains("wait for it"), theirs);
+        string mine = CliAgentPolicy.MachineFullReason(1, 1, 1);
+        check("refusal: one of yours running → wait for it or do it yourself, singular words",
+            mine.Contains("holds 1 sub-agent at once") && mine.Contains("1 is running") && mine.Contains("1 of them yours") && mine.Contains("wait for it"), mine);
+
+        Free();
+        var gate = new CliAgentGate(claude, () => four, machineCap: () => 1);
+        gate.Ask(new CliSpawn("Explore", "h1"));
+        var refused = gate.Ask(new CliSpawn("Explore", "h2"));
+        check("gate: the machine refusal carries the live numbers", !refused.Allow && refused.Reason!.Contains("holds 1 sub-agent") && refused.Reason.Contains("1 of them yours"),
+            refused.Reason ?? "");
+        gate.ReleaseAll();
+        check("gate: nothing held after the turn", AgentLoad.Running == 0, AgentLoad.Running.ToString());
+        Free();
     }
 
     /// <summary>The whole chain with the real Claude Code CLI, on the user's login: the settings CluadeX writes, the real

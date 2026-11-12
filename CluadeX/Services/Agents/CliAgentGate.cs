@@ -78,7 +78,10 @@ public static class CliAgentPolicy
     /// enforces, so the model plans for it instead of finding out from refusals. Null = this CLI's old wording stands.</summary>
     /// <paramref name="workflow"/>: the cluadex workflow tool is open in this chat (Ultra, or the owner asked) — a CLI
     /// whose own spawns cannot write (Codex) is sent there to split edits, each agent in its own worktree.
-    public static string? PromptLine(DispatchDecision? d, AiProviderType cli, bool workflow = false)
+    /// <paramref name="machine"/>: the machine's limit and how many sub-agents run now across every chat
+    /// (<see cref="AgentLoad.Snapshot"/>). The step's own limit can be more than free memory holds: on 2026-11-12 a chat
+    /// was told "at most 4", the machine held 2, and it lost six starts in a row to refusals before doing the work itself.
+    public static string? PromptLine(DispatchDecision? d, AiProviderType cli, bool workflow = false, (int Cap, int Running)? machine = null)
     {
         if (d == null || d.Legacy) return null;
         string tool = cli switch
@@ -89,7 +92,15 @@ public static class CliAgentPolicy
             _ => "your sub-agents",
         };
         if (!d.SubAgents) return $"Sub-agents are off for this step ({d.Reason}): do the work yourself in this conversation.";
-        string most = $"At most {d.MaxConcurrency} at once; a start over that is refused until one finishes. ";
+        int room = RoomNow(d.MaxConcurrency, machine);
+        if (room == 0)
+            return $"Do not use {tool} in this step: this machine is full — {machine!.Value.Running} sub-agents are running in "
+                 + $"other chats, the most its free memory holds ({machine.Value.Cap}), so a start would be refused. Do the work "
+                 + "yourself in this conversation.";
+        string most = room < d.MaxConcurrency
+            ? $"At most {room} at once right now: this machine's free memory holds {machine!.Value.Cap} sub-agents and other chats "
+              + $"run {machine.Value.Running}. A start over that is refused — do not retry a refused start; do that part yourself. "
+            : $"At most {d.MaxConcurrency} at once; a start over that is refused until one finishes. ";
         if (!d.ReadOnlyOnly && d.Workers && !CanIsolate(cli) && workflow && cli == AiProviderType.OpenAIDev)
             return $"Use {tool} (agent_type \"{ReadOnlyType(cli)}\") for independent read-only investigation only: its agents share "
                  + "your folder and cannot get a worktree. To split EDITS across agents, call the workflow tool (MCP server "
@@ -105,6 +116,19 @@ public static class CliAgentPolicy
                    ? " and have one Explore sub-agent review the combined diff before you call it done. "
                    : " and review the combined diff. ") + most;
     }
+
+    /// <summary>How many sub-agents this step may start now: its own limit, cut to the machine's free places. Pure.</summary>
+    public static int RoomNow(int stepMax, (int Cap, int Running)? machine) =>
+        machine is { } m ? Math.Clamp(Math.Min(stepMax, m.Cap - m.Running), 0, Math.Max(0, stepMax)) : stepMax;
+
+    /// <summary>The refusal when the machine is full, with its numbers, so the model stops retrying. <paramref name="mine"/>:
+    /// this turn's own sub-agents still running (only those can free a place it is sure to see). Pure.</summary>
+    public static string MachineFullReason(int cap, int running, int mine) =>
+        $"Refused: this machine holds {cap} sub-agent{(cap == 1 ? "" : "s")} at once (its free memory) and {running} "
+        + $"{(running == 1 ? "is" : "are")} running — {(mine == 0 ? "all in other chats" : $"{mine} of them yours")}. "
+        + (mine == 0
+            ? "Starting again now will be refused too: do this part yourself in this conversation."
+            : "Starting again before one of yours finishes will be refused too: wait for it, or do this part yourself.");
 
     /// <summary>One spawn under the step's decision. <paramref name="running"/>: how many of this turn's sub-agents have
     /// not ended.</summary>
@@ -185,8 +209,9 @@ public sealed class CliAgentGate
         lock (_lock)
         {
             verdict = CliAgentPolicy.Decide(decision, _cli, spawn.Type, _running.Count + _unnamed, _overrides);
-            if (verdict.Allow && !decision.Legacy && !AgentLoad.TryEnter(_machineCap()))
-                verdict = new CliSpawnVerdict(false, "This machine is running as many sub-agents as it can hold. Wait for one to finish, or do this part yourself.");
+            int cap = verdict.Allow && !decision.Legacy ? _machineCap() : 0;
+            if (verdict.Allow && !decision.Legacy && !AgentLoad.TryEnter(cap))
+                verdict = new CliSpawnVerdict(false, CliAgentPolicy.MachineFullReason(cap, AgentLoad.Running, _running.Count + _unnamed));
             else if (verdict.Allow && !decision.Legacy)
             {
                 if (spawn.ToolUseId.Length > 0) _running.Add(spawn.ToolUseId);

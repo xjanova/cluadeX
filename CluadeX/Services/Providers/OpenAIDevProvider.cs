@@ -464,7 +464,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                     chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
                     // Codex has no spawn hook: this line is the only thing that keeps its sub-agents to the step's policy.
                     agentLine: Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.OpenAIDev,
-                        workflow: chatToolsJson != null && Agents.WorkflowGate.Allowed(Agents.WorkflowGate.CurrentChat)),
+                        workflow: chatToolsJson != null && Agents.WorkflowGate.Allowed(Agents.WorkflowGate.CurrentChat),
+                        machine: Agents.AgentLoad.Snapshot()),
                     noProject: !_fileSystemService.HasWorkingDirectory, chatTools: chatToolsJson != null,
                     splitGuide: Agents.WorkflowGate.SplitGuideFor(Agents.WorkflowGate.CurrentChat, AiProviderType.OpenAIDev),
                     hasRipgrep: hasRipgrep, sandboxHome: sandboxHome));
