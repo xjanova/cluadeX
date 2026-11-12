@@ -625,8 +625,12 @@
                             <!-- Activity icons -->
                             <!-- In a short window the list scrolls (wheel) instead of sliding under the Settings button, which
                                  covered the last items and took their clicks. -->
-                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
-                                          Focusable="False" PanningMode="VerticalOnly">
+                            <!-- More icons than fit: the edge that has more fades out and shows a chevron; resting the
+                                 pointer on a chevron glides the list, a click moves it one icon (MainWindow.RailScroll.cs).
+                                 Owner 2026-11-12: "ทำให้ผู้ใช้รู้ว่า สามารถ สกรอร์เลื่อนมาได้อีก … ทำเป็น hover move". -->
+                            <Grid Grid.Row="1">
+                            <ScrollViewer x:Name="RailScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                                          Focusable="False" PanningMode="VerticalOnly" ScrollChanged="RailScroll_ScrollChanged">
                             <!-- Only the places you work in (owner 2026-10-11: "อันไหนใช้ไม่ได้จริงบ้างหรือไม่จำเป็นต้องมี ให้เอาออกเลย").
                                  Skills, Subagents, Instincts, Hooks, Plugins, Permissions, Features, Security Shield,
                                  Hex Editor and Debug Log live under the ⋯ button at the bottom of this bar, Settings › General ›
@@ -701,6 +705,15 @@
                                              ToolTip="{services:Loc nav.nodeGraphTip}" AutomationProperties.Name="Node Graph"/>
                             </StackPanel>
                             </ScrollViewer>
+                            <Border x:Name="RailMoreUp" Style="{StaticResource RailMoreHint}" VerticalAlignment="Top" Tag="up"
+                                    ToolTip="{services:Loc nav.rail.moreUp}" AutomationProperties.Name="Scroll the icons up">
+                                <TextBlock Text="&#xE70E;" Style="{StaticResource RailMoreGlyph}"/>
+                            </Border>
+                            <Border x:Name="RailMoreDown" Style="{StaticResource RailMoreHint}" VerticalAlignment="Bottom" Tag="down"
+                                    ToolTip="{services:Loc nav.rail.moreDown}" AutomationProperties.Name="Scroll the icons down">
+                                <TextBlock Text="&#xE70D;" Style="{StaticResource RailMoreGlyph}"/>
+                            </Border>
+                            </Grid>
 
                             <!-- Bottom: More tools (⋯ → the pages that are not on the rail: Skills, Subagents, Plugins …) and
                                  Settings. Lit while one of those pages is on screen. Its own group, so a click never
