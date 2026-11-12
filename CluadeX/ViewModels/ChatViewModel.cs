@@ -1920,7 +1920,7 @@ public partial class ChatViewModel : ViewModelBase
         NoteUserActivity();   // opening a chat: the screen is in use
         CluadeX.Helpers.UiStallWatchdog.Note("switching chat");
         var switchWatch = System.Diagnostics.Stopwatch.StartNew();
-        long tSave = 0, tLoad = 0, tList = 0, tFollow = 0, tCtx = 0;
+        long tSave = 0, tLoad = 0, tList = 0, tFollow = 0, tCtx = 0, tAdopt = 0, tLeave = 0, tCur = 0, tRows = 0;
 
         // Navigate to Chat page if we're on a different page
         NavigateToChatRequested?.Invoke();
@@ -1994,7 +1994,7 @@ public partial class ChatViewModel : ViewModelBase
         }
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
         {
-            _debugLog?.Info("Perf", $"chat switch {switchWatch.ElapsedMilliseconds} ms (save {tSave} · load {tLoad} · {session?.Messages.Count ?? 0} rows · list@{tList} follow@{tFollow} ctx@{tCtx} · realized {Views.ChatView.RealizedRows()})");
+            _debugLog?.Info("Perf", $"chat switch {switchWatch.ElapsedMilliseconds} ms (save {tSave} · load {tLoad} · {session?.Messages.Count ?? 0} rows · adopt@{tAdopt} leave@{tLeave} current@{tCur} rows@{tRows} list@{tList} follow@{tFollow} ctx@{tCtx} · realized {Views.ChatView.RealizedRows()})");
             CluadeX.Helpers.UiStallWatchdog.Note("");
         });
 
@@ -2020,17 +2020,21 @@ public partial class ChatViewModel : ViewModelBase
         }
         // The sidebar's own row becomes the chat, with the stored rows and header copied onto it.
         else session = AdoptLoadedSession(session);
+        tAdopt = switchWatch.ElapsedMilliseconds;
 
         // Only now, when this switch really happens: a load that is overtaken leaves its chat on screen WITH its row.
         if (!leavingRun) LearnFrom(leaving, Messages);   // the chat left (its rows are still on screen), read for what it taught
         DropIfUntouched(leaving);
+        tLeave = switchWatch.ElapsedMilliseconds;
         // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
         CurrentSession = session;
+        tCur = switchWatch.ElapsedMilliseconds;
 
         // The chat being left: its open prompts are answered "dismissed" — unless a run there is waiting on them.
         if (!leavingRun) ResolvePendingPermissionPrompts();
         // A list of its own (the one being left may be a running turn's live list — it must not be emptied).
         Messages = new ObservableCollection<ChatMessage>(session.Messages);
+        tRows = switchWatch.ElapsedMilliseconds;
 
         // Sync CurrentSession.Messages to point to the same data as what's displayed
         CurrentSession.Messages = Messages.ToList();

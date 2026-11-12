@@ -104,6 +104,9 @@ internal static partial class Program
             Fake.ScriptFor["[RR2]"] = new Queue<FakeStep>([FakeStep.Hang()]);
             await Send("[RR2] long job");
             await WaitUntil(() => c2.RunStatus == RunBadge.Working);
+            // Working is set before the provider is called: stopping in between left the Hang step unused, and the
+            // Continue below took it and hung (RR2d/RR6 timing misses). Wait until the model really has the call.
+            await WaitUntil(() => { lock (Fake.Calls) return Fake.Calls.Any(c => c.Input.Contains("[RR2]")); });
             Closing(true);   // the process dies: nothing sees the run end (no NoteAppClosing — a crash writes nothing)
             Vm.StopGenerationCommand.Execute(null);
             await WaitIdle();

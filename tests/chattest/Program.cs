@@ -610,8 +610,9 @@ internal static partial class Program
     {
         var c = Container(perm);
         var buttons = c == null ? new List<Button>() : Find<Button>(c).ToList();
-        return (buttons.FirstOrDefault(b => Equals(b.Content, L("chat.allow"))),
-                buttons.FirstOrDefault(b => Equals(b.Content, L("chat.deny"))));
+        // By id: the strict-approval and BrainX cards in the same row carry their own (hidden) "Deny" buttons.
+        return (buttons.FirstOrDefault(b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == "CxGuard.PermissionAllow"),
+                buttons.FirstOrDefault(b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == "CxGuard.PermissionDeny"));
     }
 
     static ChatMessage AddPrompt(List<bool> answers, string text = "Allow run_command to run `npm test`?")
