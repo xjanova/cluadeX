@@ -1090,6 +1090,10 @@ internal static partial class Program
         Check("W1 the agent gets everything typed since it last looked, as one block that says what it is",
             note != null && note.StartsWith("[The user sent this while you were working") && note.Contains("also add tests\n\nand use English names")
             && !scope.HasUserNotes, note ?? "null");
+        // Owner 2026-11-14: a question typed mid-run was read at once but answered 12 minutes later, after a deploy.
+        Check("W1 the agent is told to answer in the chat before its next tool call, and never to park a question in the plan",
+            note != null && note.Contains("before your next tool call, write a reply to the user")
+            && note.Contains("Never park a question in the plan"), note ?? "null");
 
         await FreshChat();
         var gate = new SemaphoreSlim(0);
