@@ -201,7 +201,7 @@ public class GrokDevProvider : IAiProvider, IDelegatedCliProvider
                $"a new, independent request that arrives mid-task goes to its own chat with {s}__new_chat too, and {s}__close_chat " +
                "lists the chats you split off and puts finished ones away. Never answer that you cannot open a chat or a folder. " +
                Tools.ChatToolBridge.AskHint + " " +
-               Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Grok, splitChats: false) + " " +
+               Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Grok, splitChats: false, relay: true) + " " +
                (ClaudeDevProvider.BrowserHintFor(extras) ?? "");
     }
 

@@ -325,6 +325,55 @@ internal static class CodexSandboxWire
             var no = await ChatToolBridge.HandleAsync(J(new { token = codex.Token, tool = "run_as_user", args = new { command = "git reset --hard" } }));
             check("cx-user", "…a refused command never reaches the gate", !no.Ok && seen.Count == 1, no.Text);
         }
+
+        // ─── mcp_call: another MCP server's tool through CluadeX's gate (owner 2026-11-14: a Codex chat could not deploy
+        // over ssh_run — "MCP tool call requires approval, but approval policy is never") ───
+        string Relay(bool shell, bool relay) => string.Join(",", JsonSerializer.SerializeToElement(ChatToolBridge.ToolList(shell, relay)).EnumerateArray().Select(e => e.GetProperty("name").GetString()));
+        check("cx-relay", "tools/list has mcp_call only when the turn's server is told to (CLUADEX_TOOLS_MCPRELAY), never for Claude Dev's allow-list",
+            Relay(false, true).Split(',').Contains("mcp_call") && !Relay(true, false).Split(',').Contains("mcp_call")
+            && !ChatToolBridge.QualifiedToolNames.Any(n => n.EndsWith("mcp_call")), Relay(false, true));
+        string relayOn = ChatToolBridge.ConfigJson(@"C:\x\CluadeX.exe", "t", "p", mcpRelay: true);
+        var relayMcp = OpenAIDevProvider.McpOverrides(relayOn);
+        check("cx-relay", "Codex's override approves mcp_call (CluadeX's card asks inside the call) only when the server offers it",
+            relayMcp.Count == 1 && relayMcp[0].Contains("mcp_call={approval_mode='approve'}") && relayMcp[0].Contains("CLUADEX_TOOLS_MCPRELAY='1'")
+            && !mcpOff[0].Contains("mcp_call") && !mcpOn[0].Contains("mcp_call"), relayMcp.FirstOrDefault() ?? "");
+        check("cx-relay", "the target: server__tool and mcp__server__tool name the same tool; a bare name or spaces do not",
+            ChatToolBridge.McpRelayTarget("brainx-brain__ssh_run") == "mcp__brainx-brain__ssh_run"
+            && ChatToolBridge.McpRelayTarget("mcp__brainx-brain__ssh_run") == "mcp__brainx-brain__ssh_run"
+            && ChatToolBridge.McpRelayTarget("brainx-brain__chrome__navigate") == "mcp__brainx-brain__chrome__navigate"
+            && ChatToolBridge.McpRelayTarget("ssh_run") == null && ChatToolBridge.McpRelayTarget("__ssh_run") == null
+            && ChatToolBridge.McpRelayTarget("brainx-brain__") == null && ChatToolBridge.McpRelayTarget("a b__c") == null, "");
+        string codexPrompt = OpenAIDevProvider.BuildPrompt(Folder, run, null, "", "go", chatTools: true, hasRipgrep: true);
+        check("cx-relay", "a Codex turn with the chat tools is told to use mcp_call, not to change its approval policy",
+            codexPrompt.Contains("call mcp_call with tool \"server__tool\"") && codexPrompt.Contains("Never tell the user to change your approval policy")
+            && !noTools.Contains("mcp_call"), "");
+
+        var relayed = new List<ToolCall>();
+        Task<ToolResult> RelayExec(ToolCall c, CancellationToken _) { relayed.Add(c); return Task.FromResult(new ToolResult { Type = c.Type, ToolName = c.ToolName, Success = true, Output = "deployed" }); }
+        using (var claude = ChatToolBridge.Register(new AgentRunScope("r0", Folder), RelayExec, Folder, turnCts.Token)!)
+        {
+            var r = await ChatToolBridge.HandleAsync(J(new { token = claude.Token, tool = "mcp_call", args = new { tool = "brainx-brain__ssh_run", arguments = new { profile_id = "web", command = "ls" } } }));
+            check("cx-relay", "a turn not offered mcp_call (Claude Dev, Antigravity) is refused, nothing runs", !r.Ok && relayed.Count == 0, r.Text);
+        }
+        using (var codex = ChatToolBridge.Register(new AgentRunScope("r1", Folder), RelayExec, Folder, turnCts.Token, mcpRelay: true)!)
+        {
+            string cfg = File.ReadAllText(codex.ConfigFile);
+            var ok = await ChatToolBridge.HandleAsync(J(new { token = codex.Token, tool = "mcp_call",
+                args = new { tool = "brainx-brain__ssh_run", arguments = new { profile_id = "web", command = "bash deploy.sh" } } }));
+            check("cx-relay", "an offered turn: the call is one McpTool call of the chat's own agent (its gate and cards), arguments kept",
+                cfg.Contains("CLUADEX_TOOLS_MCPRELAY") && ok.Ok && ok.Text == "deployed" && relayed.Count == 1 && relayed[0].Type == ToolType.McpTool
+                && relayed[0].ToolName == "mcp__brainx-brain__ssh_run" && relayed[0].GetArg("profile_id") == "web"
+                && relayed[0].GetArg("command") == "bash deploy.sh", ok.Text);
+            var flat = await ChatToolBridge.HandleAsync(J(new { token = codex.Token, tool = "mcp_call",
+                args = new { tool = "mcp__brainx-brain__agent_send", arguments = "{\"to\":\"codex\",\"message\":\"hi\"}" } }));
+            check("cx-relay", "…arguments sent as a JSON string are read as the object", flat.Ok && relayed.Count == 2
+                && relayed[1].ToolName == "mcp__brainx-brain__agent_send" && relayed[1].GetArg("to") == "codex", flat.Text);
+            var self = await ChatToolBridge.HandleAsync(J(new { token = codex.Token, tool = "mcp_call", args = new { tool = "cluadex__open_project" } }));
+            var bare = await ChatToolBridge.HandleAsync(J(new { token = codex.Token, tool = "mcp_call", args = new { tool = "ssh_run" } }));
+            var notJson = await ChatToolBridge.HandleAsync(J(new { token = codex.Token, tool = "mcp_call", args = new { tool = "brainx-brain__ssh_run", arguments = "not json" } }));
+            check("cx-relay", "…CluadeX's own tools, a name without a server and arguments that are not an object never reach the gate",
+                !self.Ok && !bare.Ok && bare.Text.Contains("server__tool") && !notJson.Ok && relayed.Count == 2, self.Text + " | " + bare.Text + " | " + notJson.Text);
+        }
     }
 
     /// <summary>A System.Text.Json.Nodes object from an anonymous one.</summary>
