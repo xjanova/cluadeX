@@ -585,6 +585,44 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
   localhost server that records each request's model) and `tests/chattest` CM1–CM11 (`CHATTEST_ONLY=CM`, with MS).
   **Not yet:** two real chats on Claude Dev (fable / opus) and Codex side by side in the running app.
 
+## Effort "auto": the label is the chat's own, and the level comes down (2026-11-13, after 3.0.324)
+- Owner: "ทำไม effort เริ่มต้นเป็น xhigh ตลอด ไม่เคยเริ่มจาก low หรือ normal เลย และมันลดเองได้ไหมหากงานไม่ต้องใช้ xhigh".
+  The logs said otherwise (2026-11-13: 42 turns — 8 low, 19 medium, 7 high, 8 xhigh; 3.0.319 the day before: 23 of 46
+  xhigh, the skill-list bug fixed in 3.0.320). What made it look like "always":
+- **The label was the provider's latest, not the chat's.** `LiveModelReport` kept one snapshot per provider for the whole
+  app, and a chat with no run showed it — another chat's "auto → xhigh (ครั้งก่อนยังไม่หาย)" from hours earlier. Now each
+  chat keeps its own last report (`ForChat`, the run's root scope only, this run of the app); a run shows only its own
+  (`OwnOf`); a run's first report takes the model name alone from the provider's latest, never its level or reason; a
+  chat with none shows the provider's model name and plain "auto" (`ModelOnly`).
+- **"Still not fixed" was read from loose words.** `AutoEffortPolicy.RetryWords` now say it by themselves ("ยังไม่หาย",
+  "ยังพัง", "still broken"); `WeakRetryWords` ("อีกแล้ว", "ยังไม่ได้", "again", "ไม่หาย") count only beside a word of
+  trouble — "ยังไม่ได้ push" and "run the tests again" are ordinary work.
+- **A CLI turn cannot come down** (one process, one `--effort`): `AutoEffortPolicy.ForCliTurn` keeps xhigh for a brief that
+  is big and hard by itself ("bigTask"); anything else that would start at xhigh starts at high, reason kept. Through
+  `ClaudeDevProvider.ResolveEffort` (Claude Dev, Codex, Grok Dev). An explicit xhigh / max goes out as picked.
+- **On the API loops whose level moves both ways** (Anthropic per-message effort, OpenAI, Gemini): once a change is on disk
+  and nothing is wrong with it (no unresolved edit, no file that fails its check, no page issue, build not red, no failed
+  step), a task that started at high / xhigh runs one level under its start (`StepEffortFor(..., underWay)`, label
+  "แก้แล้ว ทุกอย่างปกติ"); trouble puts it back above the start at once. Medium and low are not lowered.
+- Proven by `tests/apitest --failover` (EffortWire: auto-retry / auto-cli / auto-down / live-chat) and `tests/chattest`
+  U11 (`CHATTEST_ONLY=U11`). **Not yet:** a real Anthropic API run stepping down after its first edit; whether a Claude
+  Dev turn at a different `--effort` than the last one re-writes the CLI's prompt cache (not measured).
+
+## No portable zip any more (2026-11-13, from 3.0.325)
+- Owner: "เราไม่ออกรุ่น portable แล้ว เอาออกจากดาวโหลดที่ xman studio เลย". `release.yml` packs with `--noPortable true`
+  (vpk 1.1.1 lists it under `vpk pack -H`): a release is Setup.exe + full / delta nupkg + RELEASES + the two json files.
+- Nobody loses updates: the zip xman4289.com handed out was Velopack's own bundle (`.portable`, `Update.exe`,
+  `current\sq.version` — read from the zip's directory), so those copies are "installed" to `AutoUpdateService` and
+  update from the feed like any other.
+- The site's download button and `update/check` send whatever its `asset_pattern` (admin ▸ product versions) matches —
+  it was the zip. **The site must point at `CluadeX-win-Setup.exe` before the first release without the zip**: its sync
+  falls back to the release's first asset when nothing matches. xmanstudio has a migration for it.
+- A copy Velopack does not update (a developer build) that is told about an installer says where to get it
+  (`AutoUpdateService.IsInstallerFile`, `update.needsInstaller`) instead of downloading 170 MB and failing to unzip.
+- "Portable mode" (a `portable` / `portable.txt` file beside the exe = data in `<exe>\Data`) is unchanged: the harnesses
+  and `try-branch.ps1` live on it.
+- Proven by `tests/apitest --update` (33, localhost only). The pack flag itself is proven by the PR's build run.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

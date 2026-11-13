@@ -2313,7 +2313,7 @@ public partial class CodeAgentService
         if (delegated is AiProviderType.ClaudeDev or AiProviderType.OpenAIDev
             && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto)
         {
-            var pick = AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, AgentRunScope.Current?.UserImages?.Count ?? 0, history));
+            var pick = AutoEffortPolicy.ForCliTurn(AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, AgentRunScope.Current?.UserImages?.Count ?? 0, history)));
             _debugLog?.Info("Agent", $"effort auto starts at {pick.Effort} ({pick.ReasonKey}) · the CLI runs the turn, no climb");
         }
         string? folderBefore = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
@@ -4328,10 +4328,13 @@ public partial class CodeAgentService
                     // Top-level effort stays at the turn's first pick (stepEffort, on the scope); this step's level goes out as
                     // an effort-only system message placed before the pending user turn (it applies from that turn on).
                     bool falseFinishNow = falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0;
+                    // The change is on disk and nothing is wrong with it: the steps that follow (build, tests, a look at
+                    // the result) do not need the level the diagnosis did.
+                    bool underWay = anyWriteSucceeded && unresolvedEditPaths.Count == 0 && brokenFiles.Count == 0 && pageIssues.Count == 0;
                     string want = StepEffortFor(effortBase, effortPlanFirst, iteration, budgetLastStep || wrapUpForced,
-                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishNow);
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishNow, underWay);
                     SetEffortWhy(EffortWhyFor(effortWhyKey, effortPlanFirst && iteration == 0, budgetLastStep || wrapUpForced,
-                        lastBuildFailed, failedStepsInARow, falseFinishNow, 0));
+                        lastBuildFailed, failedStepsInARow, falseFinishNow, 0, underWay && iteration > 0 && effortBase >= 2));
                     if (want != appliedEffort && nativeMessages.Count > 0 && nativeMessages[^1].Role == "user")
                     {
                         nativeMessages.Insert(nativeMessages.Count - 1, new Services.Providers.NativeMessage { Role = "system", Effort = want });
@@ -4346,10 +4349,13 @@ public partial class CodeAgentService
                 else if (smartEffortOn && topLevelBothWays)
                 {
                     bool falseFinishNow = falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0;
+                    // The change is on disk and nothing is wrong with it: the steps that follow (build, tests, a look at
+                    // the result) do not need the level the diagnosis did.
+                    bool underWay = anyWriteSucceeded && unresolvedEditPaths.Count == 0 && brokenFiles.Count == 0 && pageIssues.Count == 0;
                     string want = StepEffortFor(effortBase, effortPlanFirst, iteration, budgetLastStep || wrapUpForced,
-                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishNow);
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishNow, underWay);
                     SetEffortWhy(EffortWhyFor(effortWhyKey, effortPlanFirst && iteration == 0, budgetLastStep || wrapUpForced,
-                        lastBuildFailed, failedStepsInARow, falseFinishNow, 0));
+                        lastBuildFailed, failedStepsInARow, falseFinishNow, 0, underWay && iteration > 0 && effortBase >= 2));
                     if (want != stepEffort)
                     {
                         _debugLog?.Info("Agent", $"step {iteration + 1}: effort {stepEffort} → {want} (per request; build red {lastBuildFailed}, "
@@ -6129,9 +6135,11 @@ public partial class CodeAgentService
 
     /// <summary>Per-message smart effort from the task's own starting level (<see cref="AutoEffortPolicy.Pick"/>: 0 low …
     /// 3 xhigh): a planning first step goes one level up (at least high), trouble climbs one or two levels above the
-    /// start, the wrap-up runs at low.</summary>
+    /// start, the wrap-up runs at low. <paramref name="underWay"/> = the change is on disk and nothing is wrong with it:
+    /// a task that started at high or xhigh then runs one level under its start (owner 2026-11-13: "มันลดเองได้ไหมหาก
+    /// งานไม่ต้องใช้ xhigh"), and is back at once when a build goes red or steps fail.</summary>
     public static string StepEffortFor(int baseLevel, bool planFirst, int iteration, bool wrapUp, bool buildRed,
-        int redBuildGuards, int failedStepsInARow, bool falseFinish)
+        int redBuildGuards, int failedStepsInARow, bool falseFinish, bool underWay = false)
     {
         string[] ladder = ["low", "medium", "high", "xhigh"];
         if (wrapUp) return "low";
@@ -6140,18 +6148,20 @@ public partial class CodeAgentService
         if (iteration == 0 && planFirst) level = Math.Max(level + 1, 2);
         if (buildRed && redBuildGuards >= 2 || failedStepsInARow >= 4) level = Math.Max(level, start >= 1 ? start + 2 : 2);
         else if (buildRed || failedStepsInARow >= 2 || falseFinish) level = Math.Max(level, start + 1);
+        else if (underWay && iteration > 0 && failedStepsInARow == 0 && start >= 2) level = start - 1;
         return ladder[Math.Min(level, ladder.Length - 1)];
     }
 
     /// <summary>Why "auto" is where it is now (a key under "auto.why."): trouble in the run beats the task's own reason.</summary>
     public static string EffortWhyFor(string taskReason, bool planningStep, bool wrapUp, bool buildRed, int failedStepsInARow,
-        bool falseFinish, int failedEdits)
+        bool falseFinish, int failedEdits, bool underWay = false)
     {
         if (wrapUp) return "wrapUp";
         if (buildRed) return "buildRed";
         if (failedStepsInARow >= 2 || failedEdits >= 2) return "failing";
         if (falseFinish) return "falseFinish";
         if (planningStep) return "planning";
+        if (underWay && failedStepsInARow == 0) return "underWay";   // (the level is one under the task's own)
         return taskReason;
     }
 

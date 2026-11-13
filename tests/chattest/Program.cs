@@ -2920,6 +2920,42 @@ internal static partial class Program
         await Render();
         shown = string.Join(" ", Find<TextBlock>(effortBox).Where(t => t.IsVisible).Select(t => t.Text));
         Check("U11 with no run going it reads plain auto again", !shown.Contains("medium") && Vm.LiveEffortLevel == "", shown);
+
+        // Between runs the label is this chat's own last request — not whatever chat asked the provider last (owner
+        // 2026-11-13: an idle chat read "auto → xhigh (ครั้งก่อนยังไม่หาย)" from another chat's turn).
+        var picked = Settings.Settings.ActiveProvider;
+        try
+        {
+            Settings.UpdateSettings(s => s.ActiveProvider = AiProviderType.ClaudeDev);   // a provider that has effort (the label only reads the pick)
+            LiveModelReport.Reset();
+            var idle = Vm.CurrentSession!;
+            var elsewhere = new AgentRunScope("u11-another-chat", null) { EffortWhy = L("auto.why.retry") };
+            await Task.Run(() =>
+            {
+                AgentRunScope.Enter(elsewhere);
+                LiveModelReport.Sent(AiProviderType.ClaudeDev, "", "xhigh", true);
+                LiveModelReport.Served(AiProviderType.ClaudeDev, "claude-opus-5-5");
+            });
+            Check("U11 another chat's xhigh does not show on this idle chat: plain auto, with the model's name",
+                !Vm.LiveModelEffortText.Contains("xhigh") && !Vm.LiveModelEffortText.Contains(L("auto.why.retry")) && Vm.LiveModelEffortText.Contains("auto")
+                && !Vm.LiveEffortSuffix.Contains("xhigh"), $"{Vm.LiveModelEffortText} | {Vm.LiveEffortSuffix}");
+            var own = new AgentRunScope(idle.Id, null) { EffortWhy = L("auto.why.task") };
+            await Task.Run(() =>
+            {
+                AgentRunScope.Enter(own);
+                LiveModelReport.Sent(AiProviderType.ClaudeDev, "", "medium", true);
+                LiveModelReport.Served(AiProviderType.ClaudeDev, "claude-opus-5-5");
+            });
+            Check("U11 its own last request does: auto → medium with its reason",
+                Vm.LiveModelEffortText.Contains("auto → medium") && Vm.LiveModelEffortText.Contains(L("auto.why.task")), Vm.LiveModelEffortText);
+            await FreshChat();
+            Check("U11 and a new chat reads plain auto", !Vm.LiveModelEffortText.Contains("medium") && !Vm.LiveModelEffortText.Contains("xhigh"), Vm.LiveModelEffortText);
+        }
+        finally
+        {
+            Settings.UpdateSettings(s => s.ActiveProvider = picked);
+            LiveModelReport.Reset();
+        }
     }
 
     static async Task TestNarrowComposer()

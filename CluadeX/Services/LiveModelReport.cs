@@ -14,6 +14,10 @@ namespace CluadeX.Services;
 /// the wire, or "none" for a provider without one), <see cref="Served"/> when the response names the model that answered,
 /// and <see cref="Reported"/> when the other side says which level it used (the Claude Code CLI's hooks do). The report
 /// lands on the current run's scope — several chats can run at once — and as the provider's latest, for outside a run.
+///
+/// A chat with no run shows ITS OWN last report (<see cref="ForChat"/>), never the provider's latest: that one is whatever
+/// chat asked last, and it made an idle chat read "auto → xhigh (still not fixed)" from another chat's turn hours earlier
+/// (owner 2026-11-13: "ทำไม effort เริ่มต้นเป็น xhigh ตลอด").
 /// </summary>
 public static class LiveModelReport
 {
@@ -30,6 +34,11 @@ public static class LiveModelReport
     }
 
     private static readonly ConcurrentDictionary<AiProviderType, Snapshot> Latest = new();
+
+    /// <summary>Each chat's last report (the run's own scope only, not its sub-agents'): what the chat shows between runs.
+    /// Kept for this run of the app.</summary>
+    private static readonly ConcurrentDictionary<string, Snapshot> ByChat = new(StringComparer.Ordinal);
+    private const int MaxChats = 400;
 
     /// <summary>Raised on every report (any thread).</summary>
     public static event Action? Changed;
@@ -75,8 +84,29 @@ public static class LiveModelReport
         return Latest.TryGetValue(provider, out var last) ? last : null;
     }
 
+    /// <summary>The run's own report for this provider, or null before its first request — never another chat's.</summary>
+    public static Snapshot? OwnOf(AgentRunScope? scope, AiProviderType provider) =>
+        scope?.LiveReport is { } s && s.Provider == provider ? s : null;
+
+    /// <summary>What <paramref name="chat"/>'s last run said for this provider (null = it has not asked it in this run of
+    /// the app).</summary>
+    public static Snapshot? ForChat(string? chat, AiProviderType provider) =>
+        !string.IsNullOrEmpty(chat) && ByChat.TryGetValue(chat, out var s) && s.Provider == provider ? s : null;
+
+    /// <summary>The model this provider last named, with no effort: for a chat that has no report of its own, the model
+    /// name is still the provider's ("default" resolved to Opus 5.5), the level is not.</summary>
+    public static Snapshot? ModelOnly(AiProviderType provider) =>
+        Latest.TryGetValue(provider, out var last) && !string.IsNullOrWhiteSpace(last.Model)
+            ? new Snapshot(provider, last.Model, null, false, last.At) : null;
+
+    /// <summary>A chat that is gone.</summary>
+    public static void ForgetChat(string? chat) { if (!string.IsNullOrEmpty(chat)) ByChat.TryRemove(chat, out _); }
+
+    /// <summary>Every chat's last report (the user changed the effort pick: no old request says what is next).</summary>
+    public static void ForgetChats() => ByChat.Clear();
+
     /// <summary>Forget everything (tests).</summary>
-    public static void Reset() => Latest.Clear();
+    public static void Reset() { Latest.Clear(); ByChat.Clear(); }
 
     /// <summary>Forget a provider's latest (the user changed the effort pick: the old request no longer says what is next).</summary>
     public static void Forget(AiProviderType provider) => Latest.TryRemove(provider, out _);
@@ -84,11 +114,23 @@ public static class LiveModelReport
     private static void Update(AiProviderType provider, Func<Snapshot?, Snapshot> next)
     {
         var scope = AgentRunScope.Current;
+        // A run's first report starts from the provider's latest for the model name only (kept until its own response
+        // names one). The level, its reason and "confirmed" there are another chat's.
         Snapshot? prev = scope?.LiveReport is { } own && own.Provider == provider ? own
-            : Latest.TryGetValue(provider, out var l) ? l : null;
+            : !Latest.TryGetValue(provider, out var l) ? null
+            : scope != null ? new Snapshot(provider, l.Model, null, false, l.At) : l;
         var snap = next(prev);
         Latest[provider] = snap;
-        if (scope != null) scope.LiveReport = snap;
+        if (scope != null)
+        {
+            scope.LiveReport = snap;
+            if (scope.Parent == null && !string.IsNullOrEmpty(scope.SessionKey))
+            {
+                if (ByChat.Count >= MaxChats && !ByChat.ContainsKey(scope.SessionKey))
+                    foreach (var old in ByChat.OrderBy(p => p.Value.At).Take(MaxChats / 4).Select(p => p.Key).ToList()) ByChat.TryRemove(old, out _);
+                ByChat[scope.SessionKey] = snap;
+            }
+        }
         try { Changed?.Invoke(); } catch { /* the chat's label must never break a request */ }
     }
 

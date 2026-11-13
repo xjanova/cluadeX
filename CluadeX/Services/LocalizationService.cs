@@ -122,6 +122,11 @@ public class LocalizationService
         ["update.applyFailed"] = new() { ["en"] = "Could not apply the update — see the log. It will be retried on the next launch.", ["th"] = "ติดตั้งอัปเดตไม่สำเร็จ — ดูรายละเอียดใน log · จะลองใหม่เมื่อเปิดโปรแกรมครั้งหน้า" },
         ["update.downloading"] = new() { ["en"] = "Downloading update…", ["th"] = "กำลังดาวน์โหลดอัปเดต…" },
         ["update.installing"] = new() { ["en"] = "Installing update… CluadeX will restart.", ["th"] = "กำลังติดตั้งอัปเดต… CluadeX จะเริ่มใหม่" },
+        ["update.needsInstaller"] = new()
+        {
+            ["en"] = "This copy does not update itself. Get the installer from xman4289.com/cluadex and run it once — the installed app updates by itself from then on.",
+            ["th"] = "สำเนานี้อัปเดตตัวเองไม่ได้ ดาวน์โหลดตัวติดตั้งจาก xman4289.com/cluadex แล้วติดตั้งหนึ่งครั้ง จากนั้นแอปจะอัปเดตเอง",
+        },
         ["update.downloadFailed"] = new() { ["en"] = "Download failed — try again later.", ["th"] = "ดาวน์โหลดไม่สำเร็จ — ลองใหม่ภายหลัง" },
         ["update.checkFailed"] = new() { ["en"] = "Couldn't check for updates — check the internet connection and try again.", ["th"] = "ตรวจหาอัปเดตไม่ได้ — ตรวจการเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่" },
         ["settings.card.license"] = new() { ["en"] = "License", ["th"] = "ไลเซนส์" },
