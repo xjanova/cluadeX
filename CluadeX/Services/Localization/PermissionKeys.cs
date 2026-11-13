@@ -153,5 +153,6 @@ internal static class PermissionKeys
         ["auto.why.failing"] = new() { ["en"] = "steps keep failing", ["th"] = "ทำแล้วพลาดซ้ำ" },
         ["auto.why.falseFinish"] = new() { ["en"] = "said done too early", ["th"] = "บอกเสร็จทั้งที่ยังไม่เสร็จ" },
         ["auto.why.planning"] = new() { ["en"] = "planning first", ["th"] = "วางแผนก่อนลงมือ" },
+        ["auto.why.underWay"] = new() { ["en"] = "change made, all green", ["th"] = "แก้แล้ว ทุกอย่างปกติ" },
     };
 }

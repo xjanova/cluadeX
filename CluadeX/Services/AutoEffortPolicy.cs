@@ -13,6 +13,11 @@ namespace CluadeX.Services;
 /// Owner 2026-10-19: "effort auto มันฉลาดปรับค่าเองหรือยังทุกค่าย".
 ///
 /// Levels 0..3 = low, medium, high, xhigh. "max" is never picked automatically: it is the user's to choose.
+///
+/// 2026-11-13 (owner: "ทำไม effort เริ่มต้นเป็น xhigh ตลอด … มันลดเองได้ไหม"): "still not fixed" is read from words that
+/// say so, not from "again" / "ยังไม่ได้" alone (<see cref="RetryWords"/> / <see cref="WeakRetryWords"/>), and a turn a
+/// CLI runs — one process, one level, no way down — starts at high at most unless the brief itself is big and hard
+/// (<see cref="ForCliTurn"/>).
 /// </summary>
 public static class AutoEffortPolicy
 {
@@ -70,7 +75,9 @@ public static class AutoEffortPolicy
         bool multiFile = files >= 2 || Has(m, MultiFileWords);
         int items = ListItem.Matches(raw).Count;
         bool longSpec = len >= 1500 || items >= 5;
-        bool retry = Has(trouble, RetryWords);
+        // "ยังไม่หาย" says it by itself; "อีกแล้ว" / "ยังไม่ได้" / "again" only next to a word of trouble ("ยังไม่ได้ push",
+        // "run it again" are not a fix that failed).
+        bool retry = Has(trouble, RetryWords) || (bug && Has(trouble, WeakRetryWords));
         bool action = Has(m, ActionWords) || files >= 1 || raw.Contains("```");
         bool question = Has(m, QuestionWords) || raw.TrimEnd().EndsWith('?');
         // "ทำไม build ช้าจัง" / "how does the build work?" ask about work; they do not ask for it. A short question with no
@@ -102,6 +109,14 @@ public static class AutoEffortPolicy
 
         return new Decision(Math.Clamp(level, 0, 3), why) { PlanFirst = longSpec && action && level < 3 };
     }
+
+    /// <summary>
+    /// The pick for a turn a CLI agent runs (Claude Dev, Codex, Grok Dev): the CLI takes one level for the whole turn —
+    /// it can neither climb nor come down between steps — so xhigh is kept for a brief that is big and hard by itself.
+    /// "Still not fixed" on a bug starts at high there, with the reason kept.
+    /// </summary>
+    public static Decision ForCliTurn(Decision pick) =>
+        pick.Level >= 3 && pick.ReasonKey != "bigTask" ? pick with { Level = 2 } : pick;
 
     /// <summary>The level of the last message that held a task, at least medium and at most high; null if there is none.</summary>
     private static int? CarriedLevel(IReadOnlyList<string>? earlier)
@@ -205,10 +220,21 @@ public static class AutoEffortPolicy
         "หลายไฟล์", "ทุกไฟล์", "ทุกหน้า", "หลายหน้า", "ทุกค่าย", "ทุกจุด",
     ];
 
+    /// <summary>They say "the last fix did not work" by themselves.</summary>
     private static readonly string[] RetryWords =
     [
-        "still not", "still broken", "still fails", "still doesn't", "still the same", "same error", "again", "didn't fix", "not fixed",
-        "ยังไม่ได้", "ยังพัง", "ยังไม่หาย", "ยังเหมือนเดิม", "ยังไม่ทำงาน", "ยังเป็นอยู่", "ยังไม่แก้", "ไม่หาย", "อีกแล้ว", "ยังไม่เป็น",
+        "still broken", "still fails", "still failing", "still doesn't", "still does not", "still not working", "still not fixed",
+        "still the same", "same error", "didn't fix", "did not fix", "not fixed", "broke again", "broken again", "failed again",
+        "fails again", "crashed again", "happened again", "happening again",
+        "ยังพัง", "ยังไม่หาย", "ยังเหมือนเดิม", "ยังไม่ทำงาน", "ยังเป็นอยู่", "ยังเป็นเหมือนเดิม", "แก้แล้วยัง", "แก้ไม่หาย",
+        "ยังใช้ไม่ได้", "ยังไม่ขึ้น", "ยังค้าง", "ยังเด้ง", "ยังแครช",
+    ];
+
+    /// <summary>They say it only beside a word of trouble (<see cref="BugWords"/>): alone, "ยังไม่ได้ push", "ทำอีกแล้ว",
+    /// "run the tests again" are ordinary work.</summary>
+    private static readonly string[] WeakRetryWords =
+    [
+        "still not", "again", "อีกแล้ว", "ยังไม่ได้", "ไม่หาย", "ยังไม่เป็น", "ยังไม่แก้",
     ];
 
     private static readonly string[] ActionWords =

@@ -764,6 +764,7 @@ public partial class ChatViewModel : ViewModelBase
                 _settingsService.UpdateSettings(s => s.ReasoningEffort = v);
                 // The last request's effort belongs to the old pick: show the new one until a request carries it.
                 LiveModelReport.Forget(_providerManager.ActiveProviderType);
+                LiveModelReport.ForgetChats();
                 OnPropertyChanged(nameof(LiveModelEffortText)); OnPropertyChanged(nameof(LiveModelEffortTip)); OnPropertyChanged(nameof(LiveEffortSuffix)); OnPropertyChanged(nameof(LiveEffortLevel));
             }
         }
@@ -808,7 +809,10 @@ public partial class ChatViewModel : ViewModelBase
         // A run that switched provider by itself is answered by the stand-in: its report, not the pick's.
         var type = ShownAutoSwitch?.To ?? _providerManager.PickedProviderType;
         var run = RunOf(CurrentSession);
-        var snap = LiveModelReport.For(run?.Scope, type);
+        // This chat's own: its run's report, or — between runs — what its last run said. Never the provider's latest,
+        // which is whatever chat asked last ("auto → xhigh" from another chat's turn sat on every idle chat).
+        var snap = run != null ? LiveModelReport.OwnOf(run.Scope, type)
+            : LiveModelReport.ForChat(CurrentSession?.Id, type) ?? LiveModelReport.ModelOnly(type);
         if (snap != null && run == null && !ReportMatchesPick(type, snap.Model)) snap = null;
         // A run whose loop picked a level but whose provider reports nothing (yet): that pick is what goes out.
         if (snap == null && run?.Scope?.LiveEffort is { Length: > 0 } picked)
@@ -2108,6 +2112,7 @@ public partial class ChatViewModel : ViewModelBase
         Services.Agents.DesignGate.Forget(left.Id);
         Services.Skills.SkillPickGate.Forget(left.Id);
         ChatModelStore.Forget(left.Id);
+        LiveModelReport.ForgetChat(left.Id);
     }
 
     /// <summary>
@@ -2185,6 +2190,7 @@ public partial class ChatViewModel : ViewModelBase
         _watch?.CancelChat(sessionId, "the chat was deleted");
         Services.Skills.SkillPickGate.Forget(sessionId);
         ChatModelStore.Forget(sessionId);
+        LiveModelReport.ForgetChat(sessionId);
 
         if (_settingsService.Settings.PinnedChatIds.Contains(sessionId))
         {

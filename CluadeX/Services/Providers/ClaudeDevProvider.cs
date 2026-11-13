@@ -365,7 +365,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     {
         string s = Models.EffortLevels.Normalize(setting);
         if (s != Models.EffortLevels.Auto) return (s, null);
-        var pick = AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, images, history));
+        // One level for the whole CLI turn: xhigh only for a brief that is big and hard by itself (ForCliTurn).
+        var pick = AutoEffortPolicy.ForCliTurn(AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, images, history)));
         return (pick.Effort, pick.ReasonKey);
     }
 

@@ -210,6 +210,51 @@ internal static class EffortWire
             && CodeAgentService.EffortWhyFor("task", false, false, false, 3, false, 0) == "failing"
             && CodeAgentService.EffortWhyFor("plan", true, false, false, 0, false, 0) == "planning"
             && CodeAgentService.EffortWhyFor("bug", false, false, false, 0, false, 0) == "bug", "");
+
+        // Owner 2026-11-13: "ทำไม effort เริ่มต้นเป็น xhigh ตลอด ไม่เคยเริ่มจาก low หรือ normal เลย และมันลดเองได้ไหมหากงานไม่ต้องใช้ xhigh".
+        // 1. "still not fixed" is read from words that say so.
+        foreach (var (msg, want, reason) in new[]
+        {
+            ("แก้แล้วยังพังเหมือนเดิม ปุ่ม Save ไม่ทำงาน", "xhigh", "retry"),                   // says it by itself, on a bug
+            ("แอปค้างอีกแล้ว ช่วยแก้ที", "xhigh", "retry"),                                     // "อีกแล้ว" beside a word of trouble
+            ("the build is still broken, fix it", "xhigh", "retry"),
+            ("ยังไม่ได้ push งานนี้ ช่วย push ให้หน่อย", "medium", "task"),                       // "have not pushed yet" is ordinary work
+            ("ยังไม่ได้ออกรุ่น ออกรุ่นเลย", "medium", "task"),
+            ("run the tests again and update the README", "medium", "task"),                // "again" alone
+            ("ทำหน้านี้อีกแล้วเพิ่มปุ่ม Export", "medium", "task"),
+            ("เพิ่มปุ่มแล้วยังไม่ขึ้นเหมือนเดิม แก้ใหม่", "xhigh", "retry"),
+        })
+        {
+            var d = P(msg);
+            check("auto-retry", $"\"{msg}\" starts at {want} ({reason})", d.Effort == want && d.ReasonKey == reason, D(d));
+        }
+        // 2. A CLI runs the whole turn at one level: xhigh only for a brief that is big and hard by itself.
+        var cliRetry = AutoEffortPolicy.ForCliTurn(P("แก้แล้วยังพังเหมือนเดิม ปุ่ม Save ไม่ทำงาน"));
+        var cliBig = AutoEffortPolicy.ForCliTurn(big);
+        var cliTask = AutoEffortPolicy.ForCliTurn(task);
+        check("auto-cli", "a CLI turn: \"still not fixed\" on a bug starts at high, the reason kept", cliRetry.Effort == "high" && cliRetry.ReasonKey == "retry", D(cliRetry));
+        check("auto-cli", "a CLI turn: a big, hard brief keeps xhigh; lower picks are untouched",
+            cliBig.Effort == "xhigh" && cliBig.ReasonKey == "bigTask" && cliTask.Effort == "medium" && AutoEffortPolicy.ForCliTurn(hi).Effort == "low", $"{D(cliBig)} {D(cliTask)}");
+        var (cliEffort, cliWhy) = ClaudeDevProvider.ResolveEffort("auto", "แก้แล้วยังพังเหมือนเดิม ปุ่ม Save ไม่ทำงาน", 0);
+        var (setEffort, setWhy) = ClaudeDevProvider.ResolveEffort("xhigh", "แก้แล้วยังพังเหมือนเดิม ปุ่ม Save ไม่ทำงาน", 0);
+        check("auto-cli", "what Claude Dev / Codex / Grok Dev send on auto follows it; an explicit xhigh goes out as picked",
+            cliEffort == "high" && cliWhy == "retry" && setEffort == "xhigh" && setWhy == null, $"{cliEffort}/{cliWhy} {setEffort}/{setWhy}");
+        // 3. Once the change is on disk and nothing is wrong, a high / xhigh task runs one level under its start.
+        string U(int start, int it = 3, bool red = false, int reds = 0, int fails = 0, bool ff = false, bool under = true, bool plan = false, bool wrap = false)
+            => CodeAgentService.StepEffortFor(start, plan, it, wrap, red, reds, fails, ff, under);
+        check("auto-down", "a bug (high) with its fix on disk and all green runs at medium; an xhigh task at high",
+            U(2) == "medium" && U(3) == "high", $"{U(2)}/{U(3)}");
+        check("auto-down", "before any change is on disk the task keeps its level", U(2, under: false) == "high" && U(3, under: false) == "xhigh", $"{U(2, under: false)}/{U(3, under: false)}");
+        check("auto-down", "regular work (medium) and a question (low) are not lowered", U(1) == "medium" && U(0) == "low", $"{U(1)}/{U(0)}");
+        check("auto-down", "trouble brings the level back at once, and above the start: a red build, failing steps, a false finish",
+            U(2, red: true, reds: 1) == "xhigh" && U(2, fails: 2) == "xhigh" && U(2, ff: true) == "xhigh" && U(2, fails: 1) == "high",
+            $"{U(2, red: true, reds: 1)}/{U(2, fails: 2)}/{U(2, ff: true)}/{U(2, fails: 1)}");
+        check("auto-down", "the first step is never lowered; the wrap-up is still low", U(2, it: 0) == "high" && U(1, it: 0, plan: true) == "high" && U(3, wrap: true) == "low",
+            $"{U(2, it: 0)}/{U(1, it: 0, plan: true)}/{U(3, wrap: true)}");
+        check("auto-why", "the label says why it is lower; trouble still goes first",
+            CodeAgentService.EffortWhyFor("bug", false, false, false, 0, false, 0, true) == "underWay"
+            && CodeAgentService.EffortWhyFor("bug", false, false, true, 0, false, 0, true) == "buildRed"
+            && CodeAgentService.EffortWhyFor("bug", false, false, false, 1, false, 0, true) == "bug", "");
     }
 
     // Owner 2026-10-19: "ส่วนที่ชี้ว่าใช้โมเดลอะไร effort อะไรต้องแสดงตามจริงที่กำลังใช้ เช่น opus 5.5 effort max".
@@ -260,8 +305,45 @@ internal static class EffortWire
                 LiveModelReport.Describe("high", cd, "Claude Code default", T));
         }
         finally { AgentRunScope.Enter(null); }
-        check("live", "outside the run the provider's latest still answers (the label between turns)",
+        check("live", "outside the run the provider's latest is still kept (calls outside any chat)",
             LiveModelReport.For(null, AiProviderType.ClaudeDev)?.Effort == "max", LiveModelReport.For(null, AiProviderType.ClaudeDev)?.Effort ?? "null");
+
+        // Between runs a chat shows ITS OWN last report (2026-11-13: an idle chat read "auto → xhigh (still not fixed)"
+        // from another chat's turn, because the label was the provider's latest).
+        check("live-chat", "a chat's last report is kept for that chat", LiveModelReport.ForChat("live-test", AiProviderType.ClaudeDev)?.Effort == "max"
+            && LiveModelReport.ForChat("live-test", AiProviderType.OpenAIDev) == null && LiveModelReport.ForChat("another-chat", AiProviderType.ClaudeDev) == null, "");
+        var chatB = new AgentRunScope("chat-b", null) { EffortWhy = "still not fixed" };
+        var chatC = new AgentRunScope("chat-c", null);
+        try
+        {
+            AgentRunScope.Enter(chatB);
+            LiveModelReport.Sent(AiProviderType.ClaudeDev, "", "xhigh", true);
+            AgentRunScope.Enter(chatC);
+            check("live-chat", "a run that has not asked yet has no report of its own (not chat B's xhigh)",
+                LiveModelReport.OwnOf(chatC, AiProviderType.ClaudeDev) == null && LiveModelReport.OwnOf(chatB, AiProviderType.ClaudeDev)?.Effort == "xhigh", "");
+            LiveModelReport.Served(AiProviderType.ClaudeDev, "claude-opus-5-5");
+            var first = LiveModelReport.OwnOf(chatC, AiProviderType.ClaudeDev);
+            check("live-chat", "its first report takes the model name only: no level, no reason from the other chat",
+                first is { Effort: null, Why: null, EffortConfirmed: false, Model: "claude-opus-5-5" }
+                && LiveModelReport.Describe("auto", first, null, T) == "Opus 5.5 · auto", LiveModelReport.Describe("auto", first, null, T));
+            LiveModelReport.Reported(AiProviderType.ClaudeDev, "medium");
+            var sub = chatC.CreateChild();
+            AgentRunScope.Enter(sub);
+            LiveModelReport.Sent(AiProviderType.ClaudeDev, "claude-haiku-5-5", "low", true);
+        }
+        finally { AgentRunScope.Enter(null); }
+        check("live-chat", "each chat keeps its own: B xhigh with its reason, C medium with none; C's sub-agent does not change C's",
+            LiveModelReport.ForChat("chat-b", AiProviderType.ClaudeDev) is { Effort: "xhigh", Why: "still not fixed" }
+            && LiveModelReport.ForChat("chat-c", AiProviderType.ClaudeDev) is { Effort: "medium", Why: null, Model: "claude-opus-5-5" },
+            $"b={LiveModelReport.ForChat("chat-b", AiProviderType.ClaudeDev)} c={LiveModelReport.ForChat("chat-c", AiProviderType.ClaudeDev)}");
+        check("live-chat", "a chat with no report of its own gets the provider's model name, never a level",
+            LiveModelReport.ModelOnly(AiProviderType.ClaudeDev) is { Effort: null, Why: null } only && !string.IsNullOrEmpty(only.Model)
+            && LiveModelReport.ModelOnly(AiProviderType.Gemini) == null, $"{LiveModelReport.ModelOnly(AiProviderType.ClaudeDev)}");
+        LiveModelReport.ForgetChat("chat-b");
+        check("live-chat", "a deleted chat's report goes with it", LiveModelReport.ForChat("chat-b", AiProviderType.ClaudeDev) == null
+            && LiveModelReport.ForChat("chat-c", AiProviderType.ClaudeDev) != null, "");
+        LiveModelReport.ForgetChats();
+        check("live-chat", "a new effort pick forgets every chat's old level", LiveModelReport.ForChat("chat-c", AiProviderType.ClaudeDev) == null, "");
         check("live", "before any request: the setting and the set model", LiveModelReport.Describe("medium", null, "gpt-5.5", T) == "GPT-5.5 · medium",
             LiveModelReport.Describe("medium", null, "gpt-5.5", T));
         LiveModelReport.Forget(AiProviderType.ClaudeDev);
