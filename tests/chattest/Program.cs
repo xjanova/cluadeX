@@ -455,6 +455,16 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=CM: each chat keeps its own provider and model (ChatModelTests.cs), and the model box that sets it (MS).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "CM")
+        {
+            await TestModelSwitchNow();
+            await TestChatModels();
+            Log($"{Environment.NewLine}## Result (CHATTEST_ONLY=CM): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PICK: just the full-screen model picker.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PICK")
         {
@@ -557,6 +567,7 @@ internal static partial class Program
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
+        await TestChatModels();               // CM: each chat keeps its own provider and model
         await TestConnectWizardJump();        // CW: a model that is not connected opens its wizard
         await TestModelPicker();              // PK: the full-screen model picker (provider → models, status, a pick applies)
         await TestModelButton();              // MB: the model button names the real model, glows + locks while working; switch cost

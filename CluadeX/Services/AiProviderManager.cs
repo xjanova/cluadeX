@@ -124,6 +124,10 @@ public class AiProviderManager : IDisposable
     public IAiProvider GetProvider(AiProviderType type)
         => _providers.TryGetValue(type, out var p) ? p : _activeProvider;
 
+    /// <summary>The provider registered for <paramref name="type"/>, or null — where <see cref="GetProvider"/> would hand
+    /// back the active one instead (a chat that keeps its own provider must not be put on another one silently).</summary>
+    public IAiProvider? FindProvider(AiProviderType type) => _providers.TryGetValue(type, out var p) ? p : null;
+
     public Task ReinitializeActiveAsync(CancellationToken ct = default) => InitializeSafeAsync(_activeProvider, ct);
 
     /// <summary>

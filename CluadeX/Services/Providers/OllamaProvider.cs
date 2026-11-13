@@ -152,7 +152,7 @@ public class OllamaProvider : ApiProviderBase
     {
         string baseUrl = GetBaseUrl();
         var config = GetConfig();
-        string model = config.EffectiveModelId ?? "llama3";
+        string model = AgentRunScope.Current?.ModelFor(ProviderId) ?? config.EffectiveModelId ?? "llama3";   // the chat's own model first
         var settings = _settingsService.Settings;
 
         // Reset token counts
@@ -465,7 +465,7 @@ public class OllamaProvider : ApiProviderBase
         LastCompletionTokens = 0;
         string baseUrl = GetBaseUrl();
         var config = GetConfig();
-        string model = config.EffectiveModelId ?? "llama3.1";
+        string model = AgentRunScope.Current?.ModelFor(ProviderId) ?? config.EffectiveModelId ?? "llama3.1";   // the chat's own model first
         var settings = _settingsService.Settings;
         // Tool images go out as images[] only to a vision model — make sure that is known before building.
         if (HasToolImages(messages)) await SupportsToolResultImagesAsync(model, ct);

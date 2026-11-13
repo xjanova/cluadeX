@@ -547,6 +547,44 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
   **Not yet:** `php artisan test` run for real, and a Flutter chat in the running app.
 - Not looked at: tools a CLI agent (Codex, Claude Dev) runs itself — they are not in CluadeX's log line by line.
 
+## Edge while Chrome is connected, and choosing the browser (2026-11-13, after 3.0.322)
+- Owner: "จะติดตั้ง edge extension ยังไง … เราต้องไปกดไม่ใช่เหรอ". 3.0.320–3.0.322 showed "Add the extension" only while
+  NO browser was connected, so with Chrome connected (the owner's case) there was nothing to press for Edge. Now each
+  browser's button shows while that browser is not the one connected (`ChromeBridgeCanAddToChrome/Edge`), and each
+  browser's steps stay up until that browser has connected.
+- The pipe takes one client, so with the extension in both it was always Chrome. `Services/Chrome/BridgeBrowserChoice.cs`
+  + `AppSettings.BridgeBrowser` ("" = the first to connect, "chrome", "edge"): Settings has "Let the agent use Edge /
+  Chrome". `ChromeBridgeConnector.Use` saves it, lets the other browser go (`ChromeBridgeServer.DropConnection`) and for
+  20 s — also after every start — a hello from the other browser is turned away without a welcome
+  (`ChromeBridgeServer.AcceptBrowser`), at most 4 times, so the chosen one's waiting native host gets the pipe. The
+  chosen browser not there = the other is let in after the window, and the row says the chosen one is not connected.
+- The bridge is not an MCP server (nothing on the MCP page): it is the engine under the `browser_*` tools.
+- Proven by `tests/apitest --bridge` (15 checks: the rule, and the real server + connector on a named pipe of its own
+  with made-up Chrome and Edge clients) and `tests/themetest --settings`. **Not yet:** the two real browsers switching in
+  the running app, and `chrometest` (not run: the owner's Chrome with the extension was open).
+
+## Each chat keeps its own provider and model (2026-11-13)
+- Owner: "บางแชทใช้ fable บางแชทใช้ opus หรือ codex มันกลายเป็นใช้ร่วมกันทั้งหมด … แชทใครแชทมัน … เลยกลายเป็นสลับโมเดลกลางแชท
+  ซึ่งทำให้เสียโทเค็นหนัก". The pick was one for the whole app (`Settings.ActiveProvider` + each provider's `SelectedModel`)
+  and every provider read the model from Settings on every request: a model picked in chat B reached chat A's next turn,
+  and on the same provider chat A's run in progress — whose loop then re-wrote its conversation for the new model.
+- `Services/ChatModelStore.cs` (`<data root>\chat-models.json`): chat id → provider + model. Not pinned: Local, LlamaServer
+  (one set of weights for the app) and the BrainX room.
+- A run carries the pin (`AgentRunScope.PinModel` / `ModelFor(providerId)`, copied to sub-agents) and **every provider reads
+  it before Settings** (`SubAgentModel.PickFor`, the CLI providers, Ollama; `CodeAgentService.ModelIdFor`). The pin names one
+  provider: a run that goes on with a failover stand-in gets that one's model from Settings.
+- `ViewModels/ChatViewModel.ChatModel.cs`: a turn begins (`PinChatModel`, in `BeginTurnFor`) on the chat's own provider and
+  model — a chat with none takes the pick of that moment (a chat another chat's agent opened: that chat's pin) and keeps
+  it. The model box / picker stamps the chat on screen and re-pins its run (`RememberChatPick`). Opening a chat makes the
+  app's pick that chat's (`FollowChatPick`, nothing stopped or carried over), so the composer shows what THIS chat runs
+  on. Rule for the chat on screen: what the composer shows is what runs (`AppPickIsFor`) — a pick changed on the Settings
+  page is the chat's from its next turn. A chat off screen runs on the pick it keeps, whatever is on screen.
+- The app's pick still exists: it is what a new chat starts with. `AiProviderManager.FindProvider` = the registered provider
+  or null (GetProvider hands back the active one instead).
+- Proven by `tests/apitest --chatmodel` (21: the store, the pin, the real OpenAI provider asked under two runs against a
+  localhost server that records each request's model) and `tests/chattest` CM1–CM11 (`CHATTEST_ONLY=CM`, with MS).
+  **Not yet:** two real chats on Claude Dev (fable / opus) and Codex side by side in the running app.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

@@ -144,6 +144,10 @@ internal static class Program
         if (args.Contains("--buildfind")) { SmallModelWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--clifind-real")) { await CliParityWire.RunCliFindReal(Check, Section); return Finish(); }
         if (args.Contains("--clifind")) { await CliParityWire.RunCliFind(Check, Section); return Finish(); }
+        // the browser the agent uses when Chrome and Edge both have the extension (a pipe of its own, no browser)
+        if (args.Contains("--bridge")) { await BridgeChoiceWire.Run(Check, Section); return Finish(); }
+        // each chat keeps its own provider and model (the store, the run's pin, the real OpenAI provider on localhost)
+        if (args.Contains("--chatmodel")) { await ChatModelWire.Run(Check, Section); return Finish(); }
         // the automatic change of provider (order, the run's record of it, the cooldown) and where "auto" effort starts
         if (args.Contains("--failover")) { await FailoverWire.Run(Check, Section); await EffortWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--triggers")) { await TriggersTelegramWire.Run(Check, Section); return Finish(); }
@@ -625,6 +629,7 @@ internal static class Program
         await GrokDevWire.Run(Check, Section);
         await CliParityWire.Run(Check, Section);
         await CliParityWire.RunCliFind(Check, Section);
+        await BridgeChoiceWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
         await FailoverWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);

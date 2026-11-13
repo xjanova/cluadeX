@@ -55,6 +55,28 @@ public sealed class ChromeBridgeServer : IDisposable
     /// to reload itself; an unpacked extension never does that on its own.</summary>
     public string? ExpectedVersion { get; set; }
 
+    /// <summary>Asked when an extension says hello, with its user agent. False = this browser is not the one wanted
+    /// now: its connection is ended without a welcome, and the pipe listens again — a browser whose native host was
+    /// waiting gets its turn, and the one turned away tries again on its extension's own schedule. Null = every browser
+    /// is welcome. Called on the read thread; it must not block.</summary>
+    public Func<string?, bool>? AcceptBrowser { get; set; }
+
+    /// <summary>Hellos turned away by <see cref="AcceptBrowser"/> since the server was made (the harness).</summary>
+    public int Refused => _refused;
+    private volatile int _refused;
+
+    /// <summary>The connection in progress, to end it alone (the server keeps listening).</summary>
+    private CancellationTokenSource? _ending;
+
+    /// <summary>End the connection that is open now, and listen for the next one. The owner picked the other browser:
+    /// the one connected lets go (its extension keeps the agent's window for the user and tries again in a second).
+    /// No-op when nothing is connected.</summary>
+    public void DropConnection()
+    {
+        try { _ending?.Cancel(); }
+        catch (ObjectDisposedException) { /* it ended by itself just now */ }
+    }
+
     /// <summary>Connected, disconnected or paused. Any thread: UI listeners marshal.</summary>
     public event Action? StateChanged;
     /// <summary>The connection ended: whatever was open in Chrome is out of reach.</summary>
@@ -164,6 +186,7 @@ public sealed class ChromeBridgeServer : IDisposable
                 await RunConnectionAsync(pipe, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) { /* this one connection was ended (DropConnection, a browser turned away): listen again */ }
             catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
             {
                 // The usual end of a connection is an IOException too, so only a pipe that could not be made is an error.
@@ -199,9 +222,11 @@ public sealed class ChromeBridgeServer : IDisposable
         var writing = WriteLoopAsync(pipe, outbox.Reader, ending.Token);
         _writing = writing;
         _outbox = outbox;
+        _ending = ending;
         try { await ReadLoopAsync(pipe, ending.Token); }
         finally
         {
+            _ending = null;
             _outbox = null;
             _writing = null;
             outbox.Writer.TryComplete();
@@ -270,6 +295,18 @@ public sealed class ChromeBridgeServer : IDisposable
         _version = m.TryGetProperty("version", out var v) ? v.GetString() : null;
         _userAgent = m.TryGetProperty("userAgent", out var ua) ? ua.GetString() : null;
         _paused = m.TryGetProperty("paused", out var p) && p.GetBoolean();
+        if (AcceptBrowser is { } accept)
+        {
+            bool welcome;
+            try { welcome = accept(_userAgent); }
+            catch (Exception ex) { Debug.WriteLine($"[chrome] accept handler threw: {ex.Message}"); welcome = true; }
+            if (!welcome)
+            {
+                _refused++;
+                DropConnection();   // no welcome: it was never connected, so nothing to tell the listeners
+                return;
+            }
+        }
         Post("welcome");
         if (!string.IsNullOrEmpty(ExpectedVersion) && _version != ExpectedVersion && !_reloadAsked)
         {

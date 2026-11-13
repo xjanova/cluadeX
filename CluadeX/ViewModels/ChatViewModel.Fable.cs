@@ -60,7 +60,9 @@ public partial class ChatViewModel
     private void ApplyChatModel(ChatRun run, ChatSession session, ObservableCollection<ChatMessage> messages)
     {
         string? own = session.OwnModel;
-        bool can = own != null && _providerManager.ActiveProviderType is AiProviderType.Anthropic or AiProviderType.ClaudeDev;
+        // the run's own provider (the chat keeps its own — PinChatModel ran just before), not the app's pick
+        var runsOn = run.Scope.ProviderType ?? _providerManager.ActiveProviderType;
+        bool can = own != null && runsOn is AiProviderType.Anthropic or AiProviderType.ClaudeDev;
         bool fable = can && DispatchPolicy.IsFable(own);
         SubAgentModel.UseChat(can ? own : null);
         SubAgentModel.UseTaskBudget(fable ? DispatchPolicy.FableChatTaskBudget : null);
@@ -69,9 +71,9 @@ public partial class ChatViewModel
             messages.Add(new ChatMessage
             {
                 Role = MessageRole.System,
-                Content = "🧠 " + LocF("fable.chat.providerOff", _providerManager.ActiveProviderType),
+                Content = "🧠 " + LocF("fable.chat.providerOff", runsOn),
             });
-        if (own != null) _debugLog?.Info("Fable", $"chat {session.Id} runs on {(can ? own : "the app's pick")} · provider {_providerManager.ActiveProviderType}");
+        if (own != null) _debugLog?.Info("Fable", $"chat {session.Id} runs on {(can ? own : "the app's pick")} · provider {runsOn}");
     }
 
     // ─── new_chat model "fable" (and the card's yes) ───

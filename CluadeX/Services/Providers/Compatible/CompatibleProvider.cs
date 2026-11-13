@@ -62,7 +62,7 @@ public sealed class CompatibleProvider : ApiProviderBase, IModelLister
     private string BaseUrlOf(ProviderConfig config) =>
         (string.IsNullOrWhiteSpace(config.BaseUrl) ? Preset.BaseUrl : config.BaseUrl.Trim()).TrimEnd('/');
 
-    private string ModelOf(ProviderConfig config) => Agents.SubAgentModel.Pick(
+    private string ModelOf(ProviderConfig config) => Agents.SubAgentModel.PickFor(ProviderId,
         string.IsNullOrWhiteSpace(config.EffectiveModelId) ? Preset.DefaultModel : config.EffectiveModelId.Trim());
 
     /// <summary>The model a request goes out with now (the setting, else the preset's default).</summary>

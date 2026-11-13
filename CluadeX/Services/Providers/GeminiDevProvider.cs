@@ -402,8 +402,10 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         bool worker = grant is { Edit: true } || grant is { Run: true };
         var sink = worker ? ClaudeDevProvider.StreamSink.Value : null;
         var extras = ClaudeDevProvider.Extras.Value;
-        string model = _settingsService.Settings.ProviderConfigs.TryGetValue(Id, out var cfg)
-            && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId! : "";
+        // The chat's own model first (each chat keeps its own: Services/ChatModelStore.cs), else the one in Settings.
+        string model = AgentRunScope.Current?.ModelFor(Id) is { Length: > 0 } pinned ? pinned
+            : _settingsService.Settings.ProviderConfigs.TryGetValue(Id, out var cfg)
+              && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId! : "";
 
         // The turn's own home: the user's settings plus the guard (worker turns), CluadeX's chat tools, the brain.
         var user = ReadUserSettings();

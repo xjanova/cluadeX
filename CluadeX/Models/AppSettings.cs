@@ -94,6 +94,10 @@ public class AppSettings
     /// <summary>Browser engine of the browser_* tools: "auto" or "webview2" (the built-in browser), or "chrome" (the
     /// user's real Chrome through CluadeX's own extension, Settings ▸ Agent ▸ Your Chrome).</summary>
     public string BrowserEngine { get; set; } = "auto";
+
+    /// <summary>Which browser the agent's tools work in when both Chrome and Edge have the CluadeX Bridge extension:
+    /// "" = the first to connect, "chrome", "edge" (Services/Chrome/BridgeBrowserChoice.cs; Settings › Agent).</summary>
+    public string BridgeBrowser { get; set; } = "";
     /// <summary>Longest edge, in pixels, of a screenshot sent to a model (also capped at ~1.15 MP).</summary>
     public int BrowserScreenshotMaxEdge { get; set; } = 1568;
     /// <summary>Pages outside localhost / the open project: "ask" (default), "allow" or "deny".</summary>

@@ -1985,6 +1985,7 @@ public partial class ChatViewModel : ViewModelBase
             FollowChatProject(running.Session);
             UpdateContextInfo();
             ScrollToBottom?.Invoke();
+            _ = FollowChatPick(running.Session);   // the composer shows this chat's own model (its run keeps its pin either way)
             return;
         }
 
@@ -2068,6 +2069,7 @@ public partial class ChatViewModel : ViewModelBase
             ? LocF("chat.status.loaded", session.Title, session.Messages.Count)
             : LocF("chat.status.loadedEmpty", session.Title);
         FollowChatProject(session);
+        _ = FollowChatPick(session);   // the app's pick becomes this chat's own: the composer shows what it runs on
         tFollow = switchWatch.ElapsedMilliseconds;
         FlushInstinctCards();   // a card that waited for a chat with rows and no run
 
@@ -2105,6 +2107,7 @@ public partial class ChatViewModel : ViewModelBase
             if (Sessions[i].Id == left.Id) Sessions.RemoveAt(i);
         Services.Agents.DesignGate.Forget(left.Id);
         Services.Skills.SkillPickGate.Forget(left.Id);
+        ChatModelStore.Forget(left.Id);
     }
 
     /// <summary>
@@ -2181,6 +2184,7 @@ public partial class ChatViewModel : ViewModelBase
         Services.Agents.DesignGate.Forget(sessionId);
         _watch?.CancelChat(sessionId, "the chat was deleted");
         Services.Skills.SkillPickGate.Forget(sessionId);
+        ChatModelStore.Forget(sessionId);
 
         if (_settingsService.Settings.PinnedChatIds.Contains(sessionId))
         {

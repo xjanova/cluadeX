@@ -369,6 +369,7 @@ public partial class ChatViewModel
     {
         if (_switchingModel) return;
         _switchingModel = true;
+        var pickedIn = CurrentSession;   // the chat this pick is for (each chat keeps its own — ChatViewModel.ChatModel.cs)
         try
         {
             if (c.NeedsKey)
@@ -378,7 +379,7 @@ public partial class ChatViewModel
                 return;
             }
             // A GGUF on this PC is only listed while it answers: nothing to switch. (An Ollama model is: Ollama loads it.)
-            if (c.Provider is AiProviderType.Local or AiProviderType.LlamaServer) return;
+            if (c.Provider is AiProviderType.Local or AiProviderType.LlamaServer) { ForgetChatPick(); return; }
             bool otherProvider = _providerManager.PickedProviderType != c.Provider;
             var onScreen = RunOf(CurrentSession);
             bool pipeRun = onScreen?.Scope.FromPipe == true;
@@ -408,6 +409,7 @@ public partial class ChatViewModel
                     cfg.SelectedModel = c.Model;
                     cfg.UseCustomModel = false;
                 });
+                RememberChatPick(c, pickedIn);   // this chat's pick, and its run's pin: the loop reads the new model at its next step
                 if (otherProvider) await _providerManager.SwitchProviderAsync(c.Provider);
                 if (Services.Agents.ProviderSwitchBoard.Request(carryOn.Scope, new Services.Agents.ProviderSwitchBoard.PendingSwitch(c.Provider, c.Model, "owner")))
                 {
@@ -427,6 +429,13 @@ public partial class ChatViewModel
                     StatusText = Loc("chat.busy.stillStopping");
                     return;
                 }
+                if (!ReferenceEquals(CurrentSession, pickedIn))
+                {
+                    // The owner went to another chat while the run was stopping: the pick is the first chat's alone. The
+                    // app's pick shows the chat on screen now, and is left as it is.
+                    RememberChatPick(c, pickedIn);
+                    return;
+                }
             }
             string key = c.Provider.ToString();
             _settingsService.UpdateSettings(s =>
@@ -435,6 +444,7 @@ public partial class ChatViewModel
                 cfg.SelectedModel = c.Model;
                 cfg.UseCustomModel = false;
             });
+            RememberChatPick(c, pickedIn);   // the pick of the chat on screen — no other chat's
             if (otherProvider) await _providerManager.SwitchProviderAsync(c.Provider);
             StatusText = LocF("chat.model.switched", c.Model);
             if (carryOn != null) await CarryOnWithNewModelAsync(carryOn.Session, c);
@@ -832,6 +842,7 @@ public partial class ChatViewModel
         PropertyChanged += OnControlsSourceChanged;
         InitModelButton();
         InitAutoSwitch();
+        InitChatModels();
         _costTracker.OnCostUpdated += _ => App.Current?.Dispatcher.BeginInvoke(RefreshSpend);
         _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(() =>
         {

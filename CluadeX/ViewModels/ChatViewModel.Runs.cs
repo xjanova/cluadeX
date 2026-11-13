@@ -523,6 +523,7 @@ public partial class ChatViewModel
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.Provider = _providerManager.ActiveProvider;
         run.Scope.ProviderType = _providerManager.ActiveProviderType;
+        PinChatModel(run, session);   // the chat's own provider and model (each chat keeps its own), over the app's pick
         ApplyChatModel(run, session, messages);
         run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
         run.Scope.PromptSized = tokens => OnPromptSized(run, tokens);

@@ -488,7 +488,7 @@ That is the one step Chrome keeps for you: it does not let a program install an 
 2. Turn on **Developer mode** (the switch in the left column of the Extensions page).
 3. Press **Load unpacked** (top right), paste the path and press **Select Folder**.
 
-The extension gets the same id in Edge as in Chrome, and CluadeX registers its native host for both browsers (`HKCU\Software\Google\Chrome\NativeMessagingHosts` and `HKCU\Software\Microsoft\Edge\NativeMessagingHosts`), so nothing else is needed. One browser is connected at a time: the first one opened with the extension. To move the agent from Chrome to Edge, close Chrome (or remove the extension there) and open Edge. The status line in Settings names the browser that is connected.
+The extension gets the same id in Edge as in Chrome, and CluadeX registers its native host for both browsers (`HKCU\Software\Google\Chrome\NativeMessagingHosts` and `HKCU\Software\Microsoft\Edge\NativeMessagingHosts`), so nothing else is needed. One browser is connected at a time. With the extension in both, press **Let the agent use Edge** (or **Let the agent use Chrome**) in the same card: the choice is kept, the other browser lets go at once, and at every start the chosen one goes first. If the chosen browser is not open, the other one is used meanwhile. The status line in Settings names the browser that is connected.
 
 - Your own tabs are never attached to. The agent gets its own window, which opens without taking the focus.
 - Sites still ask once per chat, as in the built-in browser.
@@ -509,7 +509,7 @@ The extension gets the same id in Edge as in Chrome, and CluadeX registers its n
 2. เปิด **Developer mode / โหมดนักพัฒนา** (สวิตช์ที่แถบซ้ายของหน้า Extensions)
 3. กด **Load unpacked / โหลดที่คลายแพ็กแล้ว** (มุมขวาบน) วาง path แล้วกด **Select Folder**
 
-extension ได้ id เดียวกันทั้งใน Edge และ Chrome และ CluadeX ลงทะเบียน native host ให้ทั้งสองเบราว์เซอร์แล้ว จึงไม่ต้องทำอะไรเพิ่ม เชื่อมต่อได้ทีละเบราว์เซอร์ คือตัวที่มี extension และเปิดขึ้นมาก่อน ถ้าจะย้ายเอเจนต์จาก Chrome ไป Edge ให้ปิด Chrome (หรือลบ extension ใน Chrome) แล้วเปิด Edge บรรทัดสถานะในหน้าตั้งค่าจะบอกว่าเบราว์เซอร์ไหนเชื่อมต่ออยู่
+extension ได้ id เดียวกันทั้งใน Edge และ Chrome และ CluadeX ลงทะเบียน native host ให้ทั้งสองเบราว์เซอร์แล้ว จึงไม่ต้องทำอะไรเพิ่ม เชื่อมต่อได้ทีละเบราว์เซอร์ ถ้าลง extension ไว้ทั้งสองตัว ให้กด **ให้เอเจนต์ใช้ Edge** (หรือ **ให้เอเจนต์ใช้ Chrome**) ในการ์ดเดียวกัน ระบบจะจำตัวที่เลือกไว้ อีกตัวจะปล่อยการเชื่อมต่อทันที และทุกครั้งที่เปิดโปรแกรมตัวที่เลือกจะได้เชื่อมก่อน ถ้าตัวที่เลือกไม่ได้เปิดอยู่จะใช้อีกตัวไปก่อน บรรทัดสถานะในหน้าตั้งค่าจะบอกว่าเบราว์เซอร์ไหนเชื่อมต่ออยู่
 
 - เอเจนต์ไม่แตะแท็บของคุณ และทำงานในหน้าต่างของตัวเองที่เปิดโดยไม่แย่งโฟกัส
 - แต่ละเว็บยังถามก่อนหนึ่งครั้งต่อแชต เหมือนเบราว์เซอร์ในตัว
