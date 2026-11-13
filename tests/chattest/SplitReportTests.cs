@@ -128,6 +128,26 @@ internal static partial class Program
             Check("SR1 one wake for one report (the parent's own reply does not wake anything again)",
                 provider.Lasts.Count(l => l.Contains("has ended its turn")) == wakesSr1 && wakesSr1 == 1, wakesSr1.ToString());
 
+            // ── SR1n: the report has a box of its own in the parent (owner 2026-11-13: "การส่งโน๊ตกลับมาในห้องแชทของแชทย่อย
+            //    ควรมีกล่องข้อความที่แตกต่างด้วยไม่ใช่ไม่มีกล่องอะไรเลย") ──
+            if (Vm.CurrentSession?.Id != parent.Id) { Vm.LoadSessionCommand.Execute(parent.Id); await WaitUntil(() => Vm.CurrentSession?.Id == parent.Id, 8000); }
+            await Render();
+            var noteRow = Vm.Messages.LastOrDefault(m => m.IsNotice && m.Content.Contains("SR1 docs split"));
+            Check("SR1n a split's report is a note from another chat (it carries what the model reads), not the app's own notice",
+                noteRow is { IsChatNote: true } && !new ChatMessage { Role = MessageRole.System, ToolName = ChatMessage.NoticeTag, Content = "🌿 a worktree" }.IsChatNote,
+                noteRow == null ? "row not on screen" : $"IsChatNote {noteRow.IsChatNote}");
+            var noteCards = Find<System.Windows.FrameworkElement>(View).Where(e => System.Windows.Automation.AutomationProperties.GetAutomationId(e) == "CxChat.NoticeCard" && e.IsVisible).ToList();
+            var noteCard = noteCards.FirstOrDefault(c => ReferenceEquals(c.DataContext, noteRow));
+            Check("SR1n it is drawn in the notice card: a filled, bordered box with the \"note from another chat\" caption and its text",
+                noteCard is System.Windows.Controls.Border { BorderThickness.Left: > 0, Background: not null } && noteCard.ActualHeight > 30
+                && Find<System.Windows.Controls.TextBlock>(noteCard).Any(t => t.IsVisible && t.Text == LocalizedResources.Instance["chat.note.fromChat"]),
+                noteCard == null ? $"{noteCards.Count} card(s) on screen, none for the row" : $"{noteCard.ActualWidth:0}×{noteCard.ActualHeight:0}");
+            if (Environment.GetEnvironmentVariable("CHATTEST_RENDERS") is { Length: > 0 } shotDir)
+            {
+                Directory.CreateDirectory(shotDir);
+                SaveShot(Path.Combine(shotDir, "notice-card.png"));
+            }
+
             // ── SR2: the owner's own turn in a split: a row in the parent (off screen, saved), no turn ──
             await FreshChat();
             var p2 = StoredChat("SR2 parent");
@@ -204,8 +224,8 @@ internal static partial class Program
             for (int i = 0; i < 12; i++) answers.Add(Message(p4.Id, "SR4 split", $"note {i}"));
             int started = answers.Count(a => a.StartsWith("Not started")) + 1;   // + the [SR4-child] message above
             Check("SR5 a stopped split is not started by a message (it is left there for the owner)", answers[0].StartsWith("Not started"), answers[0]);
-            Check("SR5 at most 10 messages per pair in 30 minutes, then refused with the reason (no endless back-and-forth)",
-                started == 10 && answers[^1].StartsWith("THREW") && answers[^1].Contains("already sent 10"), $"{started}: {answers[^1]}");
+            Check("SR5 at most 6 messages per pair in 30 minutes, then refused with the reason (no endless back-and-forth)",
+                started == 6 && answers[^1].StartsWith("THREW") && answers[^1].Contains("already sent 6"), $"{started}: {answers[^1]}");
 
             // ── SR7: new_chat from a chat that runs off screen opens the split beside the owner's work ──
             await FreshChat();

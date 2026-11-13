@@ -493,7 +493,7 @@ public sealed class ChromeDictationService : IDisposable
         ? JsonSerializer.Serialize(new
         {
             active, sent = _sent, v = _version,
-            say = new { id = _sayId, text = _sayText, lang = _sayLang, audio = _sayAudio != null, voice = _sayVoice, rate = _sayRate, pitch = _sayPitch },
+            say = new { id = _sayId, text = _sayText, lang = _sayLang, audio = _sayAudio != null, voice = _sayVoice, rate = _sayRate, pitch = _sayPitch, vol = BuddyVolume.PageLevel },
             hush = _hush,
             @out = _out.Select(m => new { n = m.N, m = m.Msg }).ToArray(),
         })

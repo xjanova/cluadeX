@@ -124,6 +124,7 @@ public partial class CodeAgentService
             string from = ModelLabelFor(_providerManager.ActiveProvider);
             scope.Provider = p;
             scope.ProviderType = c.Type;
+            scope.NoteAutoSwitch(picked, from, c.Type, ModelLabelFor(p), ModelIdFor(p));
             bool isThai = _localizationService.CurrentLanguage == "th";
             string line = isThai
                 ? $"⤳ {from} ยังหมดโควต้าอยู่ — เทิร์นนี้ใช้ {ModelLabelFor(p)} (จะกลับไปใช้ตัวที่เลือกไว้เองเมื่อโควต้ากลับมา)"

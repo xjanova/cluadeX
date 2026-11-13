@@ -487,6 +487,11 @@ public class AppSettings
     /// "Hello? Is anyone there?"). Views/CluadexBuddy.Clips.cs; Settings › General › Appearance.</summary>
     public bool BuddySounds { get; set; } = true;
 
+    /// <summary>How loud น้อง CluadeX is, 0–100 (owner 2026-11-13: "เสียงน้องอวาต้าควรปรับโวลุ่มได้"): the sounds in her
+    /// clips, the lines she says and the replies she reads aloud. 50 = the level she always had. Her right-click menu and
+    /// Settings › General › Appearance; <see cref="Services.Voice.BuddyVolume"/> turns it into each player's volume.</summary>
+    public int BuddyVolume { get; set; } = 50;
+
     /// <summary>A short sound when a box in a chat waits for the owner's answer (owner 2026-11-11: "มีเอฟเฟคเสียง ติ๊ง เมื่อต้อง
     /// ตอบคำถามจากกล่อง หรือกล่องแดง"): a soft "ting" for her question card and a permission prompt, a sharper two-tone
     /// alert for the red prompt (a delete aimed at a drive, the root or a home folder). Services/Voice/AttentionChime.cs;

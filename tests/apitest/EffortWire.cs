@@ -134,6 +134,31 @@ internal static class EffortWire
         var late = P("สวัสดีค่ะ\n\n[The app's automatic BrainX recall did not answer in time. Before you start, call brain_search, then do the task.]");
         check("auto-pick", "the late-recall note is not the task either", late.Effort == "low", D(late));
         check("auto-pick", "own words drop the block and keep the message", AutoEffortPolicy.OwnWords(recall + "ต่อ") == "ต่อ", AutoEffortPolicy.OwnWords(recall + "ต่อ"));
+        // 2026-11-13: the picked-skills list rode on the message and was read as the task — five "- skill: text" lines are
+        // a five-item spec, "debug" in a description is a bug: a 26-letter message started Opus at xhigh.
+        string skillsTh = "\n\n" + CluadeX.Services.Skills.SkillPick.BlockMarkTh + "21 ตัวที่เปิดไว้ เรียกด้วย skill_invoke เมื่อตัวไหนเหมาะกับงาน]\n"
+            + "- `agent-introspection-debug`: debug a stuck agent, find the error and fix the failing step\n- `review-pr`: review a pull request\n"
+            + "- `commit`: create a commit\n- `tool-precision`: fix tool calls that fail\n- `verification-loop`: build, test and fix until green";
+        string skillsEn = skillsTh.Replace(CluadeX.Services.Skills.SkillPick.BlockMarkTh, CluadeX.Services.Skills.SkillPick.BlockMarkEn);
+        var underSkills = P("สวัสดีค่ะ" + skillsTh);
+        check("auto-pick", "the picked-skills list is not the task: a greeting under it stays low and is not planned first",
+            underSkills.Effort == "low" && underSkills.ReasonKey == "chat" && !underSkills.PlanFirst, D(underSkills));
+        var taskUnderSkills = P("เพิ่มปุ่มบันทึกในหน้า settings" + skillsEn);
+        check("auto-pick", "a plain task under the list stays a plain task (was xhigh as a five-item bug spec)",
+            taskUnderSkills.Effort == "medium" && !taskUnderSkills.PlanFirst, D(taskUnderSkills));
+        check("auto-pick", "own words stop at the skill list, in both languages",
+            AutoEffortPolicy.OwnWords("ต่อ" + skillsTh) == "ต่อ" && AutoEffortPolicy.OwnWords("go on" + skillsEn) == "go on", AutoEffortPolicy.OwnWords("ต่อ" + skillsTh));
+        var realPick = new CluadeX.Services.Skills.SkillPick(new[]
+        {
+            new CluadeX.Services.Skills.SkillPickEntry(new CluadeX.Models.SkillDefinition { Name = "review-pr", Description = "debug and fix a failing build" }, 9, CluadeX.Services.Skills.PickReason.Matched, Array.Empty<string>()),
+        }, 21, 40, 800);
+        check("auto-pick", "the block the app really writes opens with those marks",
+            realPick.BlockFor(true).StartsWith(CluadeX.Services.Skills.SkillPick.BlockMarkTh, StringComparison.Ordinal)
+            && realPick.BlockFor(false).StartsWith(CluadeX.Services.Skills.SkillPick.BlockMarkEn, StringComparison.Ordinal), realPick.BlockFor(false));
+        var handedOver = P("เพิ่มปุ่มบันทึกในหน้า settings\n\n" + AutoEffortPolicy.HandoffMarkTh + "OpenAI Dev · gpt-6.1-sol) หมดโควต้ากลางงาน ขั้นที่มันทำไปแล้วอยู่ในประวัติด้านบน — ตรวจสถานะไฟล์ตอนนี้แล้วทำต่อจากจุดที่ค้าง อย่าทำงานที่เสร็จแล้วซ้ำ]");
+        check("auto-pick", "a failover's \"the previous agent ran out\" note is not the task (its \"ค้าง\" read as a bug)",
+            handedOver.Effort == "medium" && handedOver.ReasonKey == "task", D(handedOver));
+        check("auto-pick", "…in English too", AutoEffortPolicy.OwnWords("add a button\n\n" + AutoEffortPolicy.HandoffMarkEn + "Codex) ran out of its usage limit mid-task; do not redo finished work.]") == "add a button", "");
 
         // A short go-ahead carries on the last task, whatever the chat held in between.
         AutoEffortPolicy.Decision After(string m, params string[] earlier) => AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(m, Earlier: earlier));

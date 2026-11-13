@@ -425,6 +425,11 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>A notice the model also sees on its next turn (a background command or a split chat finished).</summary>
     public bool IsNotice => ToolName == NoticeTag;
 
+    /// <summary>A notice that came from another chat: a split chat's report, or a message_chat note. Those carry what the
+    /// model reads in <see cref="ToolOutput"/> (ChatViewModel.SplitReports.Notice); the app's own notices (a watch, a
+    /// worktree, a recovery) carry none. The notice card draws these with an accent stripe and "note from another chat".</summary>
+    public bool IsChatNote => IsNotice && !string.IsNullOrEmpty(ToolOutput);
+
     /// <summary>The card can be drawn (a workflow whose state file is gone, or an unreadable box, shows its text instead).</summary>
     public bool ShowsWorkflowCard => IsWorkflow && Workflow != null;
     public bool ShowsNextStep => IsNextStep && NextStep != null;

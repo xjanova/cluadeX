@@ -40,14 +40,18 @@ public sealed class SkillPick
 
     /// <summary>The text that goes after the turn's message (empty when nothing was picked). It rides on the turn, not
     /// in the system prompt, so a different pick each turn never invalidates the prompt cache of the turns before it.</summary>
+    /// <summary>How the block begins: what reads the owner's own words (AutoEffortPolicy.OwnWords) cuts the message here.</summary>
+    public const string BlockMarkTh = "[Skill ที่เข้ากับงานนี้ — CluadeX เลือกให้จาก ";
+    public const string BlockMarkEn = "[Skills that fit this task — picked by CluadeX from the ";
+
     public string BlockFor(bool isThai)
     {
         if (Picked.Count == 0) return "";
         var sb = new StringBuilder();
         sb.AppendLine(isThai
-            ? $"[Skill ที่เข้ากับงานนี้ — CluadeX เลือกให้จาก {Offered} ตัวที่เปิดไว้ เรียกด้วย skill_invoke เมื่อตัวไหนเหมาะกับงาน "
+            ? $"{BlockMarkTh}{Offered} ตัวที่เปิดไว้ เรียกด้วย skill_invoke เมื่อตัวไหนเหมาะกับงาน "
               + "(skill_invoke แบบไม่ใส่ชื่อ = ดูรายการที่เปิดไว้ทั้งหมด)]"
-            : $"[Skills that fit this task — picked by CluadeX from the {Offered} switched on. Run one with skill_invoke when it fits "
+            : $"{BlockMarkEn}{Offered} switched on. Run one with skill_invoke when it fits "
               + "(skill_invoke with no name lists all of them)]");
         foreach (var p in Picked) sb.AppendLine(SkillBudget.ListingLine(p.Skill, isThai));
         return sb.ToString().TrimEnd();

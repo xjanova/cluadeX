@@ -210,8 +210,11 @@ public static class FailoverPolicy
         _ => TimeSpan.FromMinutes(3),
     };
 
-    /// <summary>The automatic order: the owner's other cloud APIs first (they carry on in place), then their CLI
-    /// logins (a handoff brief), then a model on this PC (small window). Never the BrainX room.</summary>
+    /// <summary>The automatic order after a cloud API failed: the owner's other cloud APIs first (they carry on in
+    /// place), then their CLI logins (a handoff brief), then a model on this PC (small window). After a CLI login
+    /// failed it is the CLI logins first: both ways are a handoff there, and a login runs on its plan while an API
+    /// bills every token (2026-11-12: five chats whose Codex login ran out went on with the Anthropic API for about
+    /// $40 while a signed-in Claude login stood by). Never the BrainX room.</summary>
     private static readonly AiProviderType[] DefaultApiOrder =
     {
         AiProviderType.Anthropic, AiProviderType.OpenAI, AiProviderType.Gemini, AiProviderType.XAI, AiProviderType.AzureOpenAI,
@@ -254,6 +257,7 @@ public static class FailoverPolicy
                                          && (!nativeOnly || c.Kind != CandidateKind.Cli))
             .GroupBy(c => c.Type).Select(g => g.First()).ToList();
 
+        bool planFirst = IsCli(failed);   // a login ran out: the other logins (plan-priced) before a pay-per-token API
         int Rank(FailoverCandidate c)
         {
             int owner = wanted.IndexOf(c.Type);
@@ -261,8 +265,8 @@ public static class FailoverPolicy
             int baseRank = 1000;
             return c.Kind switch
             {
-                CandidateKind.Api => baseRank + IndexOr(DefaultApiOrder, c.Type, 99),
-                CandidateKind.Cli => baseRank + 200 + IndexOr(DefaultCliOrder, c.Type, 99),
+                CandidateKind.Api => baseRank + (planFirst ? 200 : 0) + IndexOr(DefaultApiOrder, c.Type, 99),
+                CandidateKind.Cli => baseRank + (planFirst ? 0 : 200) + IndexOr(DefaultCliOrder, c.Type, 99),
                 _ => baseRank + 400 + (int)c.Type,
             };
         }
@@ -307,6 +311,12 @@ public sealed class QuotaBook
     public ProviderErrorKind KindOf(AiProviderType t, DateTime nowUtc)
     {
         lock (_gate) return _until.TryGetValue(t, out var u) && u.Until > nowUtc ? u.Kind : ProviderErrorKind.None;
+    }
+
+    /// <summary>When <paramref name="t"/> is tried again (UTC), or null when it is not passed over.</summary>
+    public DateTime? Until(AiProviderType t, DateTime nowUtc)
+    {
+        lock (_gate) return _until.TryGetValue(t, out var u) && u.Until > nowUtc ? u.Until : null;
     }
 
     /// <summary>It answered: no longer passed over.</summary>

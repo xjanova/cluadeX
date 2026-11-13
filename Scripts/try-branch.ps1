@@ -138,6 +138,9 @@ function Mentions($path) { (Test-Path -LiteralPath $path) -and ([IO.File]::ReadA
 # what the installed CluadeX owns outside its folder
 $hostKey = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.xmanstudio.cluadex_chrome'
 function HostManifest { try { (Get-ItemProperty -LiteralPath $hostKey -ErrorAction Stop).'(default)' } catch { $null } }
+# the same host is registered for Microsoft Edge under its own key
+$edgeHostKey = 'HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.xmanstudio.cluadex_chrome'
+function EdgeHostManifest { try { (Get-ItemProperty -LiteralPath $edgeHostKey -ErrorAction Stop).'(default)' } catch { $null } }
 $vault = $null
 foreach ($cfg in (Join-Path $env:USERPROFILE '.claude.json'), (Join-Path $real 'mcp_servers.json')) {
     if (-not $vault -and (Test-Path $cfg)) {
@@ -147,7 +150,7 @@ foreach ($cfg in (Join-Path $env:USERPROFILE '.claude.json'), (Join-Path $real '
 }
 $bridges = if ($vault) { Join-Path $vault '.obsidianx\mcp-bridges.json' } else { $null }
 $links = @((Join-Path $desktop 'CluadeX.lnk'), (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'CluadeX.lnk'))
-$before = @{ host = HostManifest; links = ($links | ForEach-Object { FileHash $_ }) -join ',' }
+$before = @{ host = HostManifest; edgeHost = EdgeHostManifest; links = ($links | ForEach-Object { FileHash $_ }) -join ',' }
 
 $results = New-Object System.Collections.Generic.List[object]
 function Check([string]$what, [bool]$ok, [string]$detail = '') { $results.Add([pscustomobject]@{ ok = $ok; what = $what; detail = $detail }) }
@@ -185,6 +188,8 @@ if ($bridges -and (Test-Path $bridges)) { Check 'BrainX bridges still point at t
 else { Check 'BrainX bridges still point at the installed CluadeX' $true 'no bridges file found - nothing to take over' }
 $hostNow = HostManifest
 Check 'Chrome host still the installed one' (($hostNow -eq $before.host) -and -not ($hostNow -and (Mentions $hostNow))) $(if ($hostNow) { $hostNow } else { 'not registered' })
+$edgeHostNow = EdgeHostManifest
+Check 'Edge host still the installed one' (($edgeHostNow -eq $before.edgeHost) -and -not ($edgeHostNow -and (Mentions $edgeHostNow))) $(if ($edgeHostNow) { $edgeHostNow } else { 'not registered' })
 Check 'CluadeX.lnk unchanged' ((($links | ForEach-Object { FileHash $_ }) -join ',') -eq $before.links)
 Check 'no trial shortcut left on the desktop' (-not (Test-Path $link))
 

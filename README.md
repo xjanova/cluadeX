@@ -472,28 +472,44 @@ Enable or disable optional features from the **Features** page in the sidebar. T
 - Markdown Rendering
 - Permission System, Dangerous Command Blocking
 
-### Your own Chrome / Chrome ของคุณ
+### Your own Chrome or Edge / Chrome หรือ Edge ของคุณ
 
-The browser tools can work in your real Chrome, with your logins, in a window of their own. This needs no Claude account and no `claude.exe`, and it works with any model, local ones included. It is under the same Dev Preview gate as the built-in browser.
+The browser tools can work in your real Chrome or Microsoft Edge, with your logins, in a window of their own. This needs no Claude account and no `claude.exe`, and it works with any model, local ones included. It is under the same Dev Preview gate as the built-in browser.
 
-1. In **Settings > Agent > Your Chrome**, turn on **Control Chrome with CluadeX's own extension**.
+1. In **Settings > Agent > Your Chrome / Edge**, turn on **Control Chrome or Edge with CluadeX's own extension**.
 2. Press **Add the extension to Chrome**. Chrome opens its extensions page, and the folder's path is on your clipboard.
 3. Turn on **Developer mode**, press **Load unpacked**, paste the path and press **Select Folder**.
 
 That is the one step Chrome keeps for you: it does not let a program install an extension by itself. After that, CluadeX and Chrome find each other whenever both are open. Leave Developer mode on, because Chrome turns the extension off without it.
+
+**Microsoft Edge** uses the same extension folder:
+
+1. In **Settings > Agent > Your Chrome / Edge**, press **Add the extension to Edge**. Edge opens `edge://extensions`, and the folder's path is on your clipboard.
+2. Turn on **Developer mode** (the switch in the left column of the Extensions page).
+3. Press **Load unpacked** (top right), paste the path and press **Select Folder**.
+
+The extension gets the same id in Edge as in Chrome, and CluadeX registers its native host for both browsers (`HKCU\Software\Google\Chrome\NativeMessagingHosts` and `HKCU\Software\Microsoft\Edge\NativeMessagingHosts`), so nothing else is needed. One browser is connected at a time: the first one opened with the extension. To move the agent from Chrome to Edge, close Chrome (or remove the extension there) and open Edge. The status line in Settings names the browser that is connected.
 
 - Your own tabs are never attached to. The agent gets its own window, which opens without taking the focus.
 - Sites still ask once per chat, as in the built-in browser.
 - To stop the agent, click the CluadeX icon in Chrome's toolbar. It stays paused until you click again.
 - The extension refuses to read cookies or clear site data, and `fresh=true` does nothing here, so the agent cannot sign you out of a site that way.
 
-เครื่องมือเบราว์เซอร์ทำงานใน Chrome จริงของคุณได้ พร้อมการล็อกอินของคุณ ในหน้าต่างแยก ไม่ต้องใช้บัญชี Claude และไม่ต้องมี `claude.exe` ใช้ได้กับทุกโมเดลรวมถึงโมเดลบนเครื่อง และอยู่ภายใต้ Dev Preview เหมือนเบราว์เซอร์ในตัว
+เครื่องมือเบราว์เซอร์ทำงานใน Chrome หรือ Microsoft Edge จริงของคุณได้ พร้อมการล็อกอินของคุณ ในหน้าต่างแยก ไม่ต้องใช้บัญชี Claude และไม่ต้องมี `claude.exe` ใช้ได้กับทุกโมเดลรวมถึงโมเดลบนเครื่อง และอยู่ภายใต้ Dev Preview เหมือนเบราว์เซอร์ในตัว
 
-1. ที่ **ตั้งค่า > เอเจนต์ > Chrome ของคุณ** เปิด **ควบคุม Chrome ด้วย extension ของ CluadeX เอง**
+1. ที่ **ตั้งค่า > เอเจนต์ > Chrome / Edge ของคุณ** เปิด **ควบคุม Chrome หรือ Edge ด้วย extension ของ CluadeX เอง**
 2. กด **เพิ่ม extension เข้า Chrome** Chrome จะเปิดหน้า extensions และคัดลอก path ของโฟลเดอร์ไว้ให้แล้ว
 3. เปิด **Developer mode** กด **Load unpacked** วาง path แล้วกด **Select Folder**
 
 ขั้นตอนนี้ต้องทำเองครั้งเดียว เพราะ Chrome ไม่ยอมให้โปรแกรมติดตั้ง extension เอง หลังจากนั้น CluadeX กับ Chrome จะหากันเองทุกครั้งที่เปิดทั้งคู่ และต้องเปิด Developer mode ค้างไว้ ถ้าปิด Chrome จะปิด extension นี้ด้วย
+
+**Microsoft Edge** ใช้โฟลเดอร์ extension เดียวกัน:
+
+1. ที่ **ตั้งค่า > เอเจนต์ > Chrome / Edge ของคุณ** กด **เพิ่ม extension เข้า Edge** Edge จะเปิดหน้า `edge://extensions` และคัดลอก path ของโฟลเดอร์ไว้ให้แล้ว
+2. เปิด **Developer mode / โหมดนักพัฒนา** (สวิตช์ที่แถบซ้ายของหน้า Extensions)
+3. กด **Load unpacked / โหลดที่คลายแพ็กแล้ว** (มุมขวาบน) วาง path แล้วกด **Select Folder**
+
+extension ได้ id เดียวกันทั้งใน Edge และ Chrome และ CluadeX ลงทะเบียน native host ให้ทั้งสองเบราว์เซอร์แล้ว จึงไม่ต้องทำอะไรเพิ่ม เชื่อมต่อได้ทีละเบราว์เซอร์ คือตัวที่มี extension และเปิดขึ้นมาก่อน ถ้าจะย้ายเอเจนต์จาก Chrome ไป Edge ให้ปิด Chrome (หรือลบ extension ใน Chrome) แล้วเปิด Edge บรรทัดสถานะในหน้าตั้งค่าจะบอกว่าเบราว์เซอร์ไหนเชื่อมต่ออยู่
 
 - เอเจนต์ไม่แตะแท็บของคุณ และทำงานในหน้าต่างของตัวเองที่เปิดโดยไม่แย่งโฟกัส
 - แต่ละเว็บยังถามก่อนหนึ่งครั้งต่อแชต เหมือนเบราว์เซอร์ในตัว

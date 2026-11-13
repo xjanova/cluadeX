@@ -275,7 +275,7 @@ button.b:hover{filter:brightness(1.15)}
     parts.forEach((p, i) => {
       const u = new SpeechSynthesisUtterance(p);
       u.lang = l; if (voice) u.voice = voice;
-      u.rate = rate; u.pitch = pitch;
+      u.rate = rate; u.pitch = pitch; u.volume = VOL;
       u.onend = () => { if (gen === talkGen && i === parts.length - 1) doneTalking(gen); };
       u.onerror = e => {
         if (gen !== talkGen) return;
@@ -287,6 +287,8 @@ button.b:hover{filter:brightness(1.15)}
   }
   // A reply another engine spoke (ElevenLabs, OpenAI, Windows): CluadeX hands the audio over at /audio.
   let clip = null;
+  // how loud replies are read (0-1): the app's volume setting, sent with every state (say.vol)
+  let VOL = 1;
   function stopClip() {
     if (!clip) return;
     const a = clip; clip = null;
@@ -302,6 +304,7 @@ button.b:hover{filter:brightness(1.15)}
     show(M.speaking, M.speakingHint); hushBtn.textContent = M.hush; hushBtn.hidden = false;
     post('/event', { type: 'speaking', detail: l });
     const a = new Audio('/audio?t=' + encodeURIComponent(T) + '&id=' + encodeURIComponent(id));
+    a.volume = VOL;
     clip = a;
     a.onended = () => { if (clip === a) clip = null; doneTalking(gen); };
     a.onerror = () => {
@@ -511,6 +514,8 @@ button.b:hover{filter:brightness(1.15)}
         if (sentSeen !== null && st.sent !== sentSeen) { finals = ''; interim = ''; if (!LIVE) render(); }
         sentSeen = st.sent; since = st.v;
         if (st.say) {
+          // how loud she is (the app's volume setting): the clip being read follows at once
+          if (typeof st.say.vol === 'number') { VOL = Math.min(1, Math.max(0, st.say.vol)); if (clip) clip.volume = VOL; }
           if (lastHush !== null && st.hush !== lastHush && talking) hushNow();
           lastHush = st.hush;
           // CluadeX empties the text when a session starts or is hushed, so text here is a reply of this window's.

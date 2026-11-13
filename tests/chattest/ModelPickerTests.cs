@@ -400,6 +400,44 @@ internal static partial class Program
             Check("MB8 a new chat has nothing to re-read: no warning, no cost lines",
                 !picker.HasSwitchWarning && picker.Providers.SelectMany(p => p.Models).All(m => !m.HasSwitchCost));
             picker.Close();
+
+            // ── MB9: the pick ran out and a run went on with another provider by itself (owner 2026-11-13: "การสลับโมเดล
+            //    อัตโนมัติ ควรเปลี่ยนโมเดลในช่องกรอกแชทด้านล่างให้ตรงด้วยและขึ้นป้ายไว้") ──
+            var mb9Pick = Providers.PickedProviderType;
+            string mb9Before = Vm.ModelButtonText;
+            try
+            {
+                Check("MB9 a chat on its pick shows no badge", !Vm.HasAutoSwitch && Vm.AutoSwitchBadge == "", Vm.AutoSwitchBadge);
+                CluadeX.Services.Agents.QuotaBook.Shared.Note(mb9Pick, CluadeX.Services.Agents.ProviderErrorKind.QuotaExhausted, DateTime.UtcNow);
+                var hop = new AgentRunScope("mb9", null);
+                hop.NoteAutoSwitch(mb9Pick, "Ollama · mb-model", AiProviderType.Anthropic, "Anthropic Claude · claude-opus-5-5", "claude-opus-5-5");
+                await Render();
+                Check("MB9 the composer's model button names the stand-in, not the pick that ran out",
+                    Vm.HasAutoSwitch && Vm.ModelButtonText == LiveModelReport.FriendlyModel("claude-opus-5-5") && Vm.ModelButtonText != mb9Before,
+                    $"badge {Vm.HasAutoSwitch} · button '{Vm.ModelButtonText}' (was '{mb9Before}')");
+                Check("MB9 the badge says it was switched by itself and names what it stands in for",
+                    Vm.AutoSwitchBadge.Contains("mb-model") && !Vm.AutoSwitchBadge.StartsWith("chat."), Vm.AutoSwitchBadge);
+                Check("MB9 its tip says from what to what, when the pick is tried again, and that the stand-in bills per token",
+                    Vm.AutoSwitchTip.Contains("Ollama · mb-model") && Vm.AutoSwitchTip.Contains("Anthropic Claude · claude-opus-5-5")
+                    && Vm.AutoSwitchTip.Contains("⚠") && Vm.AutoSwitchTip.Split('\n').Length >= 4 && !Vm.AutoSwitchTip.Contains("chat.autoSwitch"), Vm.AutoSwitchTip.Replace("\n", " ¦ "));
+                var chip = Find<System.Windows.FrameworkElement>(View).FirstOrDefault(e => System.Windows.Automation.AutomationProperties.GetAutomationId(e) == "CxChat.AutoSwitch");
+                Check("MB9 the badge is on screen in the composer, beside the model button", chip is { IsVisible: true }, chip == null ? "not found" : $"visible {chip.IsVisible}");
+                var sub = new AgentRunScope("mb9", null).CreateChild();
+                sub.NoteAutoSwitch(AiProviderType.Anthropic, "Anthropic Claude", AiProviderType.OpenAI, "OpenAI · gpt-6.1", "gpt-6.1");
+                await Render();
+                Check("MB9 a sub-agent's own hop does not change the chat's button", Vm.ModelButtonText == LiveModelReport.FriendlyModel("claude-opus-5-5"), Vm.ModelButtonText);
+                hop.ClearAutoSwitch();   // the owner picked a model themselves / the run is back on the pick
+                await Render();
+                Check("MB9 back on the pick: the badge goes and the button names the pick again",
+                    !Vm.HasAutoSwitch && Vm.AutoSwitchBadge == "" && Vm.ModelButtonText == mb9Before && chip is { IsVisible: false }, $"{Vm.HasAutoSwitch} '{Vm.ModelButtonText}'");
+                hop.NoteAutoSwitch(mb9Pick, "Ollama · mb-model", AiProviderType.Anthropic, "Anthropic Claude · claude-opus-5-5", "claude-opus-5-5");
+                await Render();
+                CluadeX.Services.Agents.QuotaBook.Shared.Clear(mb9Pick);   // the cooldown is over
+                await FreshChat();   // any redraw after that: the idle chat is on its pick again
+                Check("MB9 once the pick is no longer passed over, an idle chat drops the badge by itself",
+                    !Vm.HasAutoSwitch && Vm.ModelButtonText == mb9Before, $"{Vm.HasAutoSwitch} '{Vm.ModelButtonText}'");
+            }
+            finally { CluadeX.Services.Agents.QuotaBook.Shared.Clear(mb9Pick); }
         }
         finally
         {

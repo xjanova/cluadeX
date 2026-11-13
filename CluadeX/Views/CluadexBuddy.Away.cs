@@ -33,6 +33,8 @@ public partial class CluadexBuddy
     {
         SoundsChanged -= OnSoundsChanged;
         SoundsChanged += OnSoundsChanged;
+        VolumeChanged -= OnVolumeChanged;
+        VolumeChanged += OnVolumeChanged;
         if (_awayTimer != null) return;
         _awayTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(30) };
         _awayTimer.Tick += (_, _) => AwayTick(UserInputClock.Idle());
@@ -42,6 +44,7 @@ public partial class CluadexBuddy
     private void StopAway()
     {
         SoundsChanged -= OnSoundsChanged;
+        VolumeChanged -= OnVolumeChanged;
         _awayTimer?.Stop();
         _awayTimer = null;
         _forcePlay = false;

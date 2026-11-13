@@ -22,8 +22,15 @@ namespace CluadeX;
 /// </summary>
 public partial class MainWindow
 {
-    /// <summary>Her width beside the chat list in a window of normal height (her height is twice it).</summary>
-    public const double HeroBig = 150;
+    /// <summary>Her width beside the chat list in a window of normal height (her height is twice it). 105 since
+    /// 2026-11-13 (owner: "ย่อกล่องน้องอวาต้า ให้เล็กลงอีก 30% … มันยังเห็นห้องแชทน้อยไป"): it was 150, and the chats start
+    /// under her feet, so a third less of her is 90 px — about three more chats in view.</summary>
+    public const double HeroBig = 105;
+
+    /// <summary>Her width in a window of middling height (560–720), and in a short one: the same 30 % down from 110 / 80
+    /// (the short one stops at the rail's width, the least she ever is).</summary>
+    public const double HeroMid = 77;
+    public const double HeroSmall = 60;
 
     /// <summary>The rail's width (MainWindow.xaml, column 0 of MainContentGrid).</summary>
     public const double RailWidth = 60;
@@ -53,7 +60,7 @@ public partial class MainWindow
     public static double HeroSizeFor(double sidebarWidth, double contentHeight)
     {
         if (sidebarWidth <= 0) return RailWidth;
-        double big = contentHeight >= 720 ? HeroBig : contentHeight >= 560 ? 110 : 80;
+        double big = contentHeight >= 720 ? HeroBig : contentHeight >= 560 ? HeroMid : HeroSmall;
         double room = RailWidth + Math.Max(0, sidebarWidth - BesideMin);
         return Math.Max(RailWidth, Math.Min(big, room));
     }

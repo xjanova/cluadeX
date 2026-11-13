@@ -470,6 +470,47 @@ MSBuild, cargo, go and the project's `node_modules\.bin\tsc.cmd` run only on a C
   `SWITCH_SPLIT=1`, `SWITCH_HANDLERS=1`). Point the copy's `project_path`s at throwaway folders first.
 - Not done: row containers are not reused across a switch (a new `Messages` collection = a new ItemsSource).
 
+## Tidy-up from the v3.0.319 logs (2026-11-13)
+What 22 hours of `~/.cluadex/logs` + `usage-log.jsonl` on 3.0.319 showed, and what changed. Numbers: 817 Anthropic requests,
+$59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at $5/M: 25× a read), output 0.59M ($11.7).
+- **A switch the app makes by itself is on screen.** `AgentRunScope.AutoSwitch` (`NoteAutoSwitch` / `ClearAutoSwitch`, event
+  `AutoSwitchChanged`) is set at every automatic hop (turn-start routing, a CLI out of its limit, a failed native step, the
+  native → CLI handoff) and cleared by the owner's own pick. `ChatViewModel.AutoSwitch.cs`: the composer's model button names
+  the stand-in (face, colour, price), the `AutoSwitchChip` beside it says what it stands in for, and its tip says since when,
+  when the pick is tried again (`QuotaBook.Until`) and whether the stand-in bills per token. An idle chat keeps the badge
+  while the pick is still cooling. Proven by `tests/apitest --failover` and `tests/chattest` MB9 (`CHATTEST_ONLY=PICK`).
+- **A CLI login that ran out goes to the other logins first** (`FailoverPolicy.Chain`: plan-priced before pay-per-token; an
+  API that failed still goes to the other APIs first; `Settings.FailoverOrder` goes before either). Five chats whose Codex
+  login ran out had gone on with the Anthropic API for about $40 while a signed-in Claude login stood by.
+- **"auto" effort reads the owner's words only.** `AutoEffortPolicy.OwnWords` now also stops at the picked-skills block
+  (`SkillPick.BlockMarkTh/En`) and at a failover's handoff note (`HandoffMarkTh/En`): the skill list's "- name: text" lines
+  read as a five-item spec and "debug" in a description as a bug, so 14 of 15 native turns started at xhigh.
+- **`browser_*` schemas are deferred** like `desktop_*` (tool search loads them on demand; other providers get them in full).
+- **message_chat: 6 per pair per 30 minutes** (was 10; eleven chats sent 102 in a night, one pair ten in 28 minutes).
+- **Stop hook**: `{model}` is the run's label, not the provider's class name; its timeout is 8 s (PowerShell start alone took
+  over 3 s under load).
+- **Her volume**: `AppSettings.BuddyVolume` (0–100, 50 = the old level) through `Services/Voice/BuddyVolume.cs` to her clips
+  (`CluadexBuddy.SoundVolume`, its own event — not `SoundsChanged`), the read-aloud player (`VoicePlayer.MasterVolume`) and
+  the mic window's page (`say.vol`). Sliders: her right-click menu, Settings › General › Appearance, Settings › Voice. Not
+  tied to `BuddySounds`: with her clip sounds off she still reads replies. She is 30 % smaller beside the chat list
+  (`HeroBig` 105, `HeroMid` 77, `HeroSmall` 60). Proven by `tests/themetest --hero`, `tests/voicetest`.
+- **Notes into a chat have a box**: a row with `IsNotice` is drawn by the notice card (`CxChat.NoticeCard`, a `LazyRowPart`),
+  not the System bubble (no fill, no border). `IsChatNote` (it carries `ToolOutput` for the model: a split's report, a
+  message_chat) gets the accent stripe and "note from another chat". Proven by `tests/chattest` SR1n (`CHATTEST_ONLY=SPLIT`).
+- **Chat list**: the chats take 2.2 parts of the height to the files' 1, rows are 2 px tighter each side, Ctrl+K finds a chat
+  by its name or project (300 newest), Ctrl+Tab / Ctrl+Shift+Tab step through the list (`ChatViewModel.StepChat`).
+- **Microsoft Edge** takes the same extension: `ChromeBridgeInstall.HostKeys` registers the host under Chrome's key and
+  `HKCU\Software\Microsoft\Edge\NativeMessagingHosts`; Settings has "Add the extension to Edge" with Edge's own steps, and
+  the status line names the browser connected (`ChromeBridgeConnector.IsEdgeUserAgent`). `tests/chrometest/edge-probe.mjs`
+  loads the folder into real Edge on a temp profile (fixed id, every API, window + tab group + debugger + screenshot); it
+  touches no registry and no pipe. **Not yet:** a real connection from Edge through the native host. `chrometest` now puts
+  back the host registration it found (it used to leave the owner's connection cut until CluadeX started again) — and it
+  must not be run while the owner's own Chrome with the extension is open: that Chrome can take the harness's pipe.
+- **Found, not changed** (each needs a live API run to tune): the conversation's cache marks live 5 minutes, so one tool
+  that runs longer (a build, a wait for approval) re-writes the whole conversation (104k tokens = $0.52 once, step 82);
+  the image hard cap re-wrote 95k tokens to drop 24k (step 92); the tools have no cache mark of their own, so a chat with
+  another system prompt re-writes the same 30k of tool schemas; `ReplyVoiceQueue` let 9 replies wait behind the one read.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

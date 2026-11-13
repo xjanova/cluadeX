@@ -2830,6 +2830,9 @@ public partial class CodeAgentService
             string note = $"\n\n> {line}{(isThai ? $" (ต่อจากขั้นที่ {result.Steps.Count})" : $" (from step {result.Steps.Count})")}\n\n";
             OnAgentStatus?.Invoke(line);
             OnAgenticStreamingToken?.Invoke(note, result.Steps.Count + 1);
+            // The chat's model button follows: a stand-in after a failure, the owner's own pick after their switch.
+            if (ownerSwitch) AgentRunScope.Current?.ClearAutoSwitch();
+            else AgentRunScope.Current?.NoteAutoSwitch(failedType, fromLabel, t, ModelLabelFor(fallback), ModelIdFor(fallback));
 
             AgentLoopResult delegatedResult;
             if (result.NativeTranscript is { Count: > 0 } transcript)
@@ -2876,10 +2879,13 @@ public partial class CodeAgentService
             if (p == null) continue;
             scope.Provider = p;
             scope.ProviderType = c.Type;
+            scope.NoteAutoSwitch(cliType, fromLabel, c.Type, ModelLabelFor(p), ModelIdFor(p));
             string line = FailoverLine(isThai, kind, fromLabel, ModelLabelFor(p), handoff: true);
             OnAgentStatus?.Invoke(line);
             OnAgenticStreamingToken?.Invoke($"\n\n> {line}\n\n", cliResult.Steps.Count + 1);
             _debugLog?.Warn("Failover", $"{cliType} out of its usage limit after {cliResult.Steps.Count} step(s) — the turn goes on with {c.Type}");
+            // The note opens with AutoEffortPolicy.HandoffMark*: the effort pick reads the owner's words, not this note
+            // ("ค้าง" / "ran out" read as a bug and sent every taken-over turn to the top effort).
             string carry = userMessage + "\n\n[" + (isThai
                 ? $"เอเจนต์ก่อนหน้า ({fromLabel}) หมดโควต้ากลางงาน ขั้นที่มันทำไปแล้วอยู่ในประวัติด้านบน — ตรวจสถานะไฟล์ตอนนี้แล้วทำต่อจากจุดที่ค้าง อย่าทำงานที่เสร็จแล้วซ้ำ"
                 : $"The previous agent ({fromLabel}) ran out of its usage limit mid-task; its steps are in the history above. Check the current state of the files and carry on from where it stopped — do not redo finished work.") + "]";
@@ -4145,8 +4151,11 @@ public partial class CodeAgentService
                     catch (Exception ex) { _debugLog?.Warn("Failover", $"{wanted.Type} did not start: {ex.Message}"); }
                 }
                 if (swapTo.IsReady)
+                {
                     await AdoptProviderAsync(swapTo, wanted.Type,
                         FailoverLine(isThai, Agents.ProviderErrorKind.None, fromLabel, ModelLabelFor(swapTo), false), iteration + 1);
+                    AgentRunScope.Current?.ClearAutoSwitch();   // the owner's own pick is no stand-in
+                }
                 else
                     OnAgentStatus?.Invoke(isThai ? $"{ModelLabelFor(swapTo)} ยังไม่พร้อม — ทำต่อด้วย {fromLabel}" : $"{ModelLabelFor(swapTo)} is not ready — carrying on with {fromLabel}");
             }
@@ -4533,7 +4542,9 @@ public partial class CodeAgentService
                             break;
                         }
                         if (await ReadyProviderAsync(c, ct) is not { } nextProvider) continue;
+                        var leftType = convType;
                         await AdoptProviderAsync(nextProvider, c.Type, FailoverLine(isThai, failKind, failLabel, ModelLabelFor(nextProvider), false), iteration + 1);
+                        AgentRunScope.Current?.NoteAutoSwitch(leftType, failLabel, c.Type, ModelLabelFor(nextProvider), convModel);
                         moved = true;
                         break;
                     }
@@ -5792,7 +5803,9 @@ public partial class CodeAgentService
                 await _hookService.ExecuteStopHooksAsync(
                     new HookSessionContext
                     {
-                        Model = _providerManager.ActiveProvider?.GetType().Name ?? "unknown",
+                        // "Anthropic Claude · claude-opus-5-5", the run's own provider — it used to be the class
+                        // name ("AnthropicProvider"), which is what session-costs.csv has under "model" to this day.
+                        Model = ModelLabelFor(_providerManager.ActiveProvider) is { Length: > 0 } stopLabel ? stopLabel : "unknown",
                         SessionCostUsd = (double)totalCost,
                         SessionTokens = totalTokens,
                         TurnCount = result.TurnCount,

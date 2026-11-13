@@ -76,6 +76,22 @@ public sealed class VoiceSettingsViewModel : ViewModelBase
 
     private VoiceSettings V => _settings.Settings.Voice ??= new VoiceSettings();
 
+    /// <summary>How loud she reads, 0–100: AppSettings.BuddyVolume (not a voice-engine setting), saved as the slider
+    /// moves and heard at once — MainWindow passes it to the players (Services.Voice.BuddyVolume). The same setting as
+    /// her right-click menu and Settings › General › Appearance.</summary>
+    public double Volume   // a double: the Slider's Value binds to it both ways
+    {
+        get => _settings.Settings.BuddyVolume;
+        set
+        {
+            int v = double.IsNaN(value) ? Services.Voice.BuddyVolume.Default : (int)Math.Round(Math.Clamp(value, 0, 100));
+            if (_settings.Settings.BuddyVolume == v) return;
+            try { _settings.UpdateSettings(s => s.BuddyVolume = v); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Voice] volume: {ex.Message}"); }
+            OnPropertyChanged();
+        }
+    }
+
     public VoiceSettingsViewModel(SettingsService settings, Func<string, string> t)
     {
         _settings = settings;

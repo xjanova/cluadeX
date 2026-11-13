@@ -185,6 +185,34 @@ public partial class CluadexBuddy
     private static bool _soundsOn = true;
     private static event Action? SoundsChanged;
 
+    /// <summary>How loud her clips are, 0–1 (AppSettings.BuddyVolume through Services.Voice.BuddyVolume; 0.5 = the level
+    /// they always had). MainWindow keeps it in step; a clip that is playing follows at once.</summary>
+    public static double SoundVolume
+    {
+        get => _soundVolume;
+        set
+        {
+            double v = double.IsNaN(value) ? 0.5 : Math.Clamp(value, 0, 1);
+            if (Math.Abs(_soundVolume - v) < 0.0001) return;
+            _soundVolume = v;
+            VolumeChanged?.Invoke();
+        }
+    }
+    private static double _soundVolume = 0.5;
+    /// <summary>Its own event, not <see cref="SoundsChanged"/>: a new level only turns the players that are heard up or
+    /// down. Asking the sound again (ResyncSound) also closes a player that is neither on screen nor opening — more than
+    /// a slider that fires on every step of a drag should set off.</summary>
+    private static event Action? VolumeChanged;
+
+    /// <summary>The level changed: the clip that is heard now follows; a muted one stays silent.</summary>
+    private void OnVolumeChanged()
+    {
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(OnVolumeChanged); return; }
+        if (!_clipsHooked) return;
+        foreach (var me in new[] { ClipA, ClipB })
+            if (me.Source != null && !me.IsMuted) me.Volume = AudioAllowed ? SoundVolume : 0;
+    }
+
     /// <summary>Off in tests that need the same picture every time (themetest's renders).</summary>
     public static bool ClipsAllowed { get; set; } = true;
 
@@ -478,7 +506,7 @@ public partial class CluadexBuddy
     {
         bool muted = me != _front || !(SoundsOn && (Spoken.Contains(name) || _forcePlay || _window is not { IsActive: false }));
         me.IsMuted = muted;
-        me.Volume = muted || !AudioAllowed ? 0 : 0.5;   // a second guard: silent even if the player missed the mute
+        me.Volume = muted || !AudioAllowed ? 0 : SoundVolume;   // a second guard: silent even if the player missed the mute
     }
 
     /// <summary>

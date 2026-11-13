@@ -171,6 +171,53 @@ internal static class FailoverWire
         var owner = FailoverPolicy.Chain(AiProviderType.Anthropic, avail, new[] { "ollama/llama3", " DeepSeek ", "nonsense", "-ClaudeDev" });
         check("failover", "Chain (owner's order): their names first (case, spaces and a /model ignored), \"-Name\" leaves one out, an unknown name is skipped",
             Names(owner) == "Ollama,DeepSeek,OpenAI,OpenAIDev", Names(owner));
+        var afterCli = FailoverPolicy.Chain(AiProviderType.OpenAIDev, avail);
+        check("failover", "Chain (a CLI login ran out): the other logins first — a plan before a pay-per-token API — then the APIs, then this PC",
+            Names(afterCli) == "ClaudeDev,Anthropic,OpenAI,DeepSeek,Ollama", Names(afterCli));
+        var afterCliOwner = FailoverPolicy.Chain(AiProviderType.OpenAIDev, avail, new[] { "Anthropic" });
+        check("failover", "Chain (a CLI login ran out): the owner's own order still goes before it",
+            Names(afterCliOwner) == "Anthropic,ClaudeDev,OpenAI,DeepSeek,Ollama", Names(afterCliOwner));
+        // The run's own record of a switch it made by itself: what the chat's model button and its badge read.
+        {
+            var scope = new CluadeX.Services.AgentRunScope("failover-wire", null);
+            var seen = new List<string>();
+            void OnSwitch(CluadeX.Services.AgentRunScope sc) { if (ReferenceEquals(sc, scope)) seen.Add(sc.AutoSwitch?.ToLabel ?? "(cleared)"); }
+            CluadeX.Services.AgentRunScope.AutoSwitchChanged += OnSwitch;
+            try
+            {
+                check("failover", "AutoSwitch: a run on its pick records none", scope.AutoSwitch == null, "");
+                scope.NoteAutoSwitch(AiProviderType.OpenAIDev, "OpenAI Dev · gpt-6.1-sol", AiProviderType.ClaudeDev, "Claude Dev · claude-opus-5-5", "claude-opus-5-5");
+                check("failover", "AutoSwitch: the hop is recorded with both labels and the stand-in's model",
+                    scope.AutoSwitch is { From: AiProviderType.OpenAIDev, To: AiProviderType.ClaudeDev, FromLabel: "OpenAI Dev · gpt-6.1-sol", ToModel: "claude-opus-5-5" }, scope.AutoSwitch?.ToString() ?? "null");
+                scope.NoteAutoSwitch(AiProviderType.ClaudeDev, "Claude Dev · claude-opus-5-5", AiProviderType.Anthropic, "Anthropic Claude · claude-opus-5-5", null);
+                check("failover", "AutoSwitch: a second hop keeps what the owner picked as \"from\" (not the stand-in in between)",
+                    scope.AutoSwitch is { From: AiProviderType.OpenAIDev, FromLabel: "OpenAI Dev · gpt-6.1-sol", To: AiProviderType.Anthropic, ToModel: "" }, scope.AutoSwitch?.ToString() ?? "null");
+                scope.NoteAutoSwitch(AiProviderType.Anthropic, "Anthropic Claude", AiProviderType.OpenAIDev, "OpenAI Dev · gpt-6.1-sol", "gpt-6.1-sol");
+                check("failover", "AutoSwitch: back on the pick = no stand-in", scope.AutoSwitch == null, scope.AutoSwitch?.ToString() ?? "null");
+                scope.NoteAutoSwitch(AiProviderType.OpenAIDev, "OpenAI Dev", AiProviderType.Anthropic, "Anthropic Claude", null);
+                scope.ClearAutoSwitch();
+                scope.ClearAutoSwitch();   // nothing to clear: no second event
+                check("failover", "AutoSwitch: the owner's own pick clears it, and every change is told once",
+                    scope.AutoSwitch == null && string.Join("|", seen) == "Claude Dev · claude-opus-5-5|Anthropic Claude · claude-opus-5-5|(cleared)|Anthropic Claude|(cleared)", string.Join("|", seen));
+            }
+            finally { CluadeX.Services.AgentRunScope.AutoSwitchChanged -= OnSwitch; }
+
+            var book = new QuotaBook();
+            var t0 = new DateTime(2026, 11, 13, 3, 0, 0, DateTimeKind.Utc);
+            book.Note(AiProviderType.OpenAIDev, ProviderErrorKind.QuotaExhausted, t0);
+            check("failover", "QuotaBook.Until: when the pick is tried again (the badge's \"back about HH:mm\"), null once it is",
+                book.Until(AiProviderType.OpenAIDev, t0.AddMinutes(10)) == t0.AddMinutes(60)
+                && book.Until(AiProviderType.OpenAIDev, t0.AddMinutes(61)) == null && book.Until(AiProviderType.Anthropic, t0) == null, "");
+        }
+
+        // How loud she is: one 0–100 setting for her clips, the read-aloud player and the mic window's page.
+        check("volume", "BuddyVolume: 50 is the level she always had (0.5 in the app, full in the mic window's page)",
+            CluadeX.Services.Voice.BuddyVolume.Level(50) == 0.5 && CluadeX.Services.Voice.BuddyVolume.PageLevelOf(50) == 1.0, "");
+        check("volume", "BuddyVolume: 0 is silent, 100 is full, and a value out of range counts as its nearest end",
+            CluadeX.Services.Voice.BuddyVolume.Level(0) == 0 && CluadeX.Services.Voice.BuddyVolume.Level(100) == 1.0
+            && CluadeX.Services.Voice.BuddyVolume.Level(-5) == 0 && CluadeX.Services.Voice.BuddyVolume.Level(400) == 1.0
+            && CluadeX.Services.Voice.BuddyVolume.PageLevelOf(20) == 0.4 && CluadeX.Services.Voice.BuddyVolume.PageLevelOf(0) == 0, "");
+        check("volume", "the setting starts at that level", new CluadeX.Models.AppSettings().BuddyVolume == CluadeX.Services.Voice.BuddyVolume.Default, "");
         var cool = FailoverPolicy.Chain(AiProviderType.Anthropic, avail, null, t => t == AiProviderType.OpenAI);
         check("failover", "Chain: a provider that ran out recently (cooling) is passed over", Names(cool) == "DeepSeek,ClaudeDev,OpenAIDev,Ollama", Names(cool));
         var native = FailoverPolicy.Chain(AiProviderType.Anthropic, avail, null, null, nativeOnly: true);
