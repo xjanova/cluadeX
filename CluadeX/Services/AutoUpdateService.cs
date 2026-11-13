@@ -842,6 +842,16 @@ public class AutoUpdateService : IAppShutdownHook
         return null;
     }
 
+    /// <summary>The update the site announces is the installer (CluadeX-win-Setup.exe — the only download since
+    /// 3.0.325), not a zip of files: a copy that Velopack does not update (a developer build) cannot unpack it over
+    /// itself. Looked at before 170 MB are downloaded for nothing.</summary>
+    public static bool IsInstallerFile(string? fileName, string? downloadUrl = null)
+    {
+        string name = !string.IsNullOrWhiteSpace(fileName) ? fileName!.Trim()
+            : Uri.TryCreate(downloadUrl, UriKind.Absolute, out var uri) ? Path.GetFileName(uri.AbsolutePath) : "";
+        return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Download the portable zip (portable / dev builds — an installed build never takes this path: Velopack
     /// updates it). Resumes after a drop and has no total time cap (<see cref="ResumableDownloader"/>); the old loop
     /// here had the check client's 30-second cap, so 470 MB on a normal line was always cut off.</summary>

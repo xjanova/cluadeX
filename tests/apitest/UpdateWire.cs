@@ -27,6 +27,13 @@ internal static class UpdateWire
         check("update", "has_update false → no update", none == null, "");
         var old = AutoUpdateService.ParseXmanCheck("""{"update_available":true,"version":"9.9.9","download_url":"https://xman4289.com/x","download_filename":"a.zip"}""", "1.0.0");
         check("update", "the old flat shape is still read", old is { NewVersion: "9.9.9", FileName: "a.zip" }, old?.NewVersion ?? "null");
+        // No portable zip since 3.0.325 (owner 2026-11-13): the site announces the installer. A copy Velopack does not
+        // update must not download it as if it were a zip of files.
+        check("update", "an announced installer is told from a zip of files — by its name, else by the link",
+            AutoUpdateService.IsInstallerFile("CluadeX-win-Setup.exe") && AutoUpdateService.IsInstallerFile(null, "https://xman4289.com/cluadex/download/CluadeX-win-Setup.exe?v=3.0.325")
+            && AutoUpdateService.IsInstallerFile(" CluadeX.MSI ") && !AutoUpdateService.IsInstallerFile("CluadeX-win-Portable.zip")
+            && !AutoUpdateService.IsInstallerFile("", "https://xman4289.com/cluadex/download") && !AutoUpdateService.IsInstallerFile(null, null)
+            && !AutoUpdateService.IsInstallerFile("a.zip", "https://x/Setup.exe"), "");
         var notFound = AutoUpdateService.ParseXmanCheck("""{"success":false,"error":"Product not found"}""", "1.0.0");
         check("update", "the store's 404 body → no update (and the caller offers none — there is no GitHub fallback)", notFound == null, "");
         return Task.CompletedTask;

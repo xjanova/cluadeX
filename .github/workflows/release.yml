@@ -99,11 +99,9 @@ jobs:
           [IO.File]::WriteAllText("$PWD/notes.md", $notes, [Text.UTF8Encoding]::new($false))
           $install = @(
             '', '### Install',
-            '- **First time / switching from portable:** download **`CluadeX-win-Setup.exe`** and run it.',
-            '  Installed builds update themselves from then on — new versions download in the',
-            '  background as deltas and apply on restart.',
-            '- **Portable:** download `CluadeX-win-Portable.zip`, extract, run `CluadeX.exe`.',
-            '  Portable builds detect new releases but cannot self-update.',
+            '- Download **`CluadeX-win-Setup.exe`** and run it. Installed builds update themselves from then on —',
+            '  new versions download in the background as deltas and apply on restart.',
+            '- There is no portable zip any more (3.0.325 on). A copy unpacked from an earlier one keeps updating itself.',
             '', '### Requirements', '- Windows 10 1809+ (x64)', '- Local mode: a GGUF model, or Ollama', ''
           ) -join "`n"
           [IO.File]::WriteAllText("$PWD/release-body.md", "## CluadeX v${{ steps.version.outputs.VERSION }}`n`n$notes$install", [Text.UTF8Encoding]::new($false))
@@ -112,12 +110,13 @@ jobs:
 
       - name: Velopack pack (self-update assets)
         # Produces Releases/ — *-full.nupkg, *-delta.nupkg, CluadeX-win-Setup.exe
-        # and RELEASES. xman4289.com mirrors these assets and AutoUpdateService's SimpleWebSource reads
+        # and RELEASES (no CluadeX-win-Portable.zip). xman4289.com mirrors these assets and AutoUpdateService's SimpleWebSource reads
         # them from there to self-update (never from GitHub).
         #
-        # NOTE: only builds INSTALLED from Setup.exe can auto-update. Moving off
-        # the portable zip is a ONE-TIME manual install; every version after that
-        # arrives on its own, as a delta.
+        # No portable zip (--noPortable; owner 2026-11-13: "เราไม่ออกรุ่น portable แล้ว"): the only download is the
+        # installer. Copies unpacked from an earlier CluadeX-win-Portable.zip carry Update.exe and keep updating
+        # themselves from the same feed. xman4289.com's download button must point at CluadeX-win-Setup.exe (its
+        # asset_pattern) BEFORE the first release without the zip, or its sync finds no file for the button.
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false   # a failed pack is handled below, not thrown
@@ -133,6 +132,7 @@ jobs:
               --splashImage CluadeX/Assets/Installer/setup-splash.png `
               --packTitle "CluadeX" `
               --packAuthors "Xman Studio" `
+              --noPortable true `
               --releaseNotes notes.md `
               --outputDir Releases
           }

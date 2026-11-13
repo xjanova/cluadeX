@@ -1443,6 +1443,15 @@ public class MainViewModel : ViewModelBase
 
         if (_pendingUpdate == null) return;
 
+        // The site's download is the installer now (no zip of files since 3.0.325): this copy is not one Velopack
+        // updates, so it says where the installer is instead of downloading it and failing to unpack it.
+        if (AutoUpdateService.IsInstallerFile(_pendingUpdate.FileName, _pendingUpdate.DownloadUrl))
+        {
+            EndRestartForUpdate();
+            UpdateMessage = L("update.needsInstaller");
+            return;
+        }
+
         // Tabs still dirty now were answered "Discard". The download below takes a while — a tab edited during it
         // gets asked about again before the restart.
         var answeredDirty = CodeEditorVM.Tabs.Where(t => t.IsDirty).ToHashSet();
