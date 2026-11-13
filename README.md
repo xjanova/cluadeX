@@ -490,6 +490,8 @@ That is the one step Chrome keeps for you: it does not let a program install an 
 
 The extension gets the same id in Edge as in Chrome, and CluadeX registers its native host for both browsers (`HKCU\Software\Google\Chrome\NativeMessagingHosts` and `HKCU\Software\Microsoft\Edge\NativeMessagingHosts`), so nothing else is needed. One browser is connected at a time. With the extension in both, press **Let the agent use Edge** (or **Let the agent use Chrome**) in the same card: the choice is kept, the other browser lets go at once, and at every start the chosen one goes first. If the chosen browser is not open, the other one is used meanwhile. The status line in Settings names the browser that is connected.
 
+You can also just say it in the chat: **"use Edge"**, **"open it in Chrome"**, **"which browser are you using?"**. The agent has two tools for that on every provider — `browser_status` (which browser it drives now: the built-in pane, your Chrome or your Edge) and `browser_use` (switches to `edge`, `chrome` or back to the built-in pane; a closed browser is started). This is CluadeX's own connection. Claude in Chrome stays a second route: the agent uses it when you ask for it by name, or when CluadeX's own connection cannot be used, and says so.
+
 - Your own tabs are never attached to. The agent gets its own window, which opens without taking the focus.
 - Sites still ask once per chat, as in the built-in browser.
 - To stop the agent, click the CluadeX icon in Chrome's toolbar. It stays paused until you click again.
@@ -510,6 +512,8 @@ The extension gets the same id in Edge as in Chrome, and CluadeX registers its n
 3. กด **Load unpacked / โหลดที่คลายแพ็กแล้ว** (มุมขวาบน) วาง path แล้วกด **Select Folder**
 
 extension ได้ id เดียวกันทั้งใน Edge และ Chrome และ CluadeX ลงทะเบียน native host ให้ทั้งสองเบราว์เซอร์แล้ว จึงไม่ต้องทำอะไรเพิ่ม เชื่อมต่อได้ทีละเบราว์เซอร์ ถ้าลง extension ไว้ทั้งสองตัว ให้กด **ให้เอเจนต์ใช้ Edge** (หรือ **ให้เอเจนต์ใช้ Chrome**) ในการ์ดเดียวกัน ระบบจะจำตัวที่เลือกไว้ อีกตัวจะปล่อยการเชื่อมต่อทันที และทุกครั้งที่เปิดโปรแกรมตัวที่เลือกจะได้เชื่อมก่อน ถ้าตัวที่เลือกไม่ได้เปิดอยู่จะใช้อีกตัวไปก่อน บรรทัดสถานะในหน้าตั้งค่าจะบอกว่าเบราว์เซอร์ไหนเชื่อมต่ออยู่
+
+สั่งในแชทได้เลยด้วย เช่น **"ใช้ Edge"**, **"เปิดใน Chrome"**, **"ตอนนี้ใช้เบราว์เซอร์อะไรอยู่"** เอเจนต์มีเครื่องมือสองตัวสำหรับเรื่องนี้กับทุก provider คือ `browser_status` (บอกว่ากำลังใช้เบราว์เซอร์ไหน: ในตัว, Chrome หรือ Edge ของคุณ) และ `browser_use` (สลับไป `edge`, `chrome` หรือกลับไปเบราว์เซอร์ในตัว ถ้าเบราว์เซอร์ปิดอยู่จะเปิดให้) ทางนี้เป็นการเชื่อมต่อของ CluadeX เอง ส่วน Claude in Chrome ยังเป็นทางสำรอง เอเจนต์จะใช้เมื่อคุณสั่งโดยระบุชื่อ หรือเมื่อทางของ CluadeX ใช้ไม่ได้ และจะบอกว่ากำลังใช้ตัวไหน
 
 - เอเจนต์ไม่แตะแท็บของคุณ และทำงานในหน้าต่างของตัวเองที่เปิดโดยไม่แย่งโฟกัส
 - แต่ละเว็บยังถามก่อนหนึ่งครั้งต่อแชต เหมือนเบราว์เซอร์ในตัว

@@ -174,6 +174,56 @@ internal static class PreviewKeys
             ["en"] = "Closed the built-in browser. Background servers keep running; browser_open starts a fresh page.",
             ["th"] = "ปิดเบราว์เซอร์ในตัวแล้ว เซิร์ฟเวอร์เบื้องหลังยังทำงานอยู่ — browser_open จะเริ่มหน้าใหม่",
         },
+        // ═══════ which browser the tools drive, and switching it (browser_status / browser_use) ═══════
+        ["browser.status.builtin"] = new() { ["en"] = "In use: CluadeX's built-in browser pane.", ["th"] = "ที่ใช้อยู่: เบราว์เซอร์ในตัวของ CluadeX (แผง Preview)" },
+        ["browser.status.own"] = new() { ["en"] = "In use: the user's own {0}, through CluadeX's own extension (CluadeX Bridge {1}).", ["th"] = "ที่ใช้อยู่: {0} ของผู้ใช้ ผ่าน extension ของ CluadeX เอง (CluadeX Bridge {1})" },
+        ["browser.status.ownNone"] = new()
+        {
+            ["en"] = "Set to the user's own browser through CluadeX's own extension, but no browser is connected right now: it is closed, or the CluadeX Bridge extension is not added to it (Settings › Agent › Chrome / Edge).",
+            ["th"] = "ตั้งให้ใช้เบราว์เซอร์ของผู้ใช้ผ่าน extension ของ CluadeX เอง แต่ตอนนี้ยังไม่มีเบราว์เซอร์ไหนเชื่อมต่อ: เบราว์เซอร์ปิดอยู่ หรือยังไม่ได้เพิ่ม extension CluadeX Bridge (ตั้งค่า › Agent › Chrome / Edge)",
+        },
+        ["browser.status.chosen"] = new() { ["en"] = "Chosen by the user: {0}.", ["th"] = "ที่ผู้ใช้เลือกไว้: {0}" },
+        ["browser.status.chosenAny"] = new() { ["en"] = "whichever connects first", ["th"] = "ตัวไหนเชื่อมต่อก่อนก็ได้" },
+        ["browser.status.installed"] = new() { ["en"] = "On this PC: Chrome {0} · Edge {1}.", ["th"] = "ในเครื่องนี้: Chrome {0} · Edge {1}" },
+        ["browser.status.found"] = new() { ["en"] = "installed", ["th"] = "มี" },
+        ["browser.status.notFound"] = new() { ["en"] = "not installed", ["th"] = "ไม่มี" },
+        ["browser.status.page"] = new() { ["en"] = "Page open: {0}", ["th"] = "หน้าที่เปิดอยู่: {0}" },
+        ["browser.status.noPage"] = new() { ["en"] = "No page is open.", ["th"] = "ยังไม่ได้เปิดหน้าใด" },
+        ["browser.status.how"] = new()
+        {
+            ["en"] = "Switch with browser_use target=\"edge\" | \"chrome\" | \"builtin\". This is CluadeX's own connection — not Claude in Chrome; that one is for when the user asks for it or this one cannot be used.",
+            ["th"] = "สลับด้วย browser_use target=\"edge\" | \"chrome\" | \"builtin\" ทางนี้เป็นการเชื่อมต่อของ CluadeX เอง ไม่ใช่ Claude in Chrome ซึ่งใช้เมื่อผู้ใช้สั่ง หรือเมื่อทางนี้ใช้ไม่ได้",
+        },
+        ["browser.use.nowOwn"] = new()
+        {
+            ["en"] = "Now using {0} (CluadeX Bridge {1}). browser_open opens pages there, in a window of the agent's own; the user's sign-ins in that browser apply.",
+            ["th"] = "ตอนนี้ใช้ {0} (CluadeX Bridge {1}) browser_open จะเปิดหน้าในเบราว์เซอร์นั้น ในหน้าต่างของเอเจนต์เอง และใช้การล็อกอินของผู้ใช้ในเบราว์เซอร์นั้น",
+        },
+        ["browser.use.nowBuiltin"] = new()
+        {
+            ["en"] = "Now using CluadeX's built-in browser pane. The connection to the user's own browser is switched off; browser_use target=edge|chrome switches it back on.",
+            ["th"] = "ตอนนี้ใช้เบราว์เซอร์ในตัวของ CluadeX การเชื่อมต่อกับเบราว์เซอร์ของผู้ใช้ปิดอยู่ ใช้ browser_use target=edge|chrome เพื่อเปิดกลับ",
+        },
+        ["browser.use.started"] = new() { ["en"] = "{0} was closed and has been started.", ["th"] = "{0} ปิดอยู่ จึงเปิดให้แล้ว" },
+        ["browser.use.notConnected"] = new()
+        {
+            ["en"] = "{0} is chosen, but its extension did not connect within {1} s.{2} Most likely the CluadeX Bridge extension is not added to it yet (Settings › Agent › Chrome / Edge › Add the extension), or it is still waking up (it retries within a minute). Connected meanwhile: {3}. Call browser_status to look again; if the user needs the page now, another browser tool (Claude in Chrome) may stand in — say that you are using it.",
+            ["th"] = "เลือก {0} ไว้แล้ว แต่ extension ของมันยังไม่เชื่อมต่อภายใน {1} วินาที{2} น่าจะยังไม่ได้เพิ่ม extension CluadeX Bridge ในเบราว์เซอร์นั้น (ตั้งค่า › Agent › Chrome / Edge › เพิ่ม extension) หรือ extension กำลังตื่น (ลองใหม่เองภายในหนึ่งนาที) ที่เชื่อมต่ออยู่ตอนนี้: {3} เรียก browser_status เพื่อดูอีกครั้ง ถ้าผู้ใช้ต้องการหน้านั้นเดี๋ยวนี้ ใช้เครื่องมือเบราว์เซอร์อื่น (Claude in Chrome) แทนได้ โดยบอกว่ากำลังใช้ตัวไหน",
+        },
+        ["browser.use.none"] = new() { ["en"] = "none", ["th"] = "ไม่มี" },
+        ["browser.use.ownBrowser"] = new() { ["en"] = "the user's own browser", ["th"] = "เบราว์เซอร์ของผู้ใช้" },
+        ["browser.use.notInstalled"] = new() { ["en"] = "{0} is not installed on this PC.", ["th"] = "เครื่องนี้ไม่มี {0}" },
+        ["browser.use.badTarget"] = new()
+        {
+            ["en"] = "target must be \"edge\", \"chrome\", \"any\" (the user's own browser, whichever connects) or \"builtin\" (CluadeX's own pane).",
+            ["th"] = "target ต้องเป็น \"edge\", \"chrome\", \"any\" (เบราว์เซอร์ของผู้ใช้ ตัวไหนเชื่อมต่อก็ได้) หรือ \"builtin\" (เบราว์เซอร์ในตัวของ CluadeX)",
+        },
+        ["browser.use.failed"] = new() { ["en"] = "The connection to the user's own browser could not be changed: {0}", ["th"] = "เปลี่ยนการเชื่อมต่อกับเบราว์เซอร์ของผู้ใช้ไม่ได้: {0}" },
+        ["browser.use.ask"] = new()
+        {
+            ["en"] = "Let the agent work in {0}? Your sign-ins there apply. Each site outside this PC still asks before it is opened.",
+            ["th"] = "ให้เอเจนต์ทำงานใน {0} ไหม การล็อกอินของคุณในเบราว์เซอร์นั้นจะถูกใช้ด้วย เว็บนอกเครื่องนี้ยังถามก่อนเปิดทีละเว็บเหมือนเดิม",
+        },
         // ═══════ Preview pane ═══════
         ["preview.title"] = new() { ["en"] = "PREVIEW", ["th"] = "พรีวิว" },
         ["preview.toggleTip"] = new()

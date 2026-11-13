@@ -135,6 +135,8 @@ public enum ToolType
     BrowserEval,       // Run JavaScript in the page
     BrowserResize,     // Emulate a viewport (mobile / tablet / desktop)
     BrowserClose,      // Close the browser session
+    BrowserStatus,     // Which browser the browser_* tools drive now (built-in pane, the user's Chrome or Edge)
+    BrowserUse,        // Switch that browser when the user names one (edge / chrome / builtin)
 
     // Project (Services/Tools/ProjectToolModule)
     OpenProject,       // Open a project folder for the run (works with no project open)
@@ -234,7 +236,7 @@ public class ToolCall
         or ToolType.ListSymbols or ToolType.FindSymbol
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
-        or ToolType.BrowserRead or ToolType.BrowserFind
+        or ToolType.BrowserRead or ToolType.BrowserFind or ToolType.BrowserStatus
         or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead
         or ToolType.FindReferences or ToolType.ImpactOf or ToolType.CheckpointList or ToolType.CheckpointDiff
         or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow
@@ -257,7 +259,7 @@ public class ToolCall
         or ToolType.ListSymbols or ToolType.FindSymbol
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
-        or ToolType.BrowserRead or ToolType.BrowserFind
+        or ToolType.BrowserRead or ToolType.BrowserFind or ToolType.BrowserStatus
         or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead
         or ToolType.FindReferences or ToolType.ImpactOf or ToolType.CheckpointList or ToolType.CheckpointDiff
         or ToolType.GhPrView or ToolType.GhPrChecks or ToolType.GhRunLog or ToolType.GitBlame or ToolType.GitShow

@@ -329,8 +329,9 @@ internal static partial class Program
     {
         var names = Svc.BuildNativeToolSchemas().Select(s => s.Name).ToList();
         string[] all = { "browser_open", "browser_screenshot", "browser_console", "browser_network", "browser_read", "browser_find", "browser_click",
-                         "browser_pointer", "browser_type", "browser_key", "browser_scroll", "browser_eval", "browser_resize", "browser_close" };
-        Check("G2", "all 14 browser_* tools are offered through AgentToolService (gate open, project open)", all.All(names.Contains),
+                         "browser_pointer", "browser_type", "browser_key", "browser_scroll", "browser_eval", "browser_resize", "browser_close",
+                         "browser_status", "browser_use" };
+        Check("G2", "all 16 browser_* tools are offered through AgentToolService (gate open, project open)", all.All(names.Contains),
             string.Join(",", all.Where(n => !names.Contains(n))));
         Check("G2b", "names and aliases resolve to the module (browser_navigate → open, browser_evaluate → eval)",
             Svc.ResolveToolTypePublic("browser_navigate") == ToolType.BrowserOpen && Svc.ResolveToolTypePublic("BROWSER_EVALUATE") == ToolType.BrowserEval
@@ -453,7 +454,8 @@ internal static partial class Program
         return Task.CompletedTask;
     }
 
-    static bool IsLatinOk(string key) => key is "preview.title";
+    // "ide.termShell" is the shell's own name ("PowerShell") — the same in Thai (it failed X1 since the editor terminal's look, 3.0.31x)
+    static bool IsLatinOk(string key) => key is "preview.title" or "ide.termShell";
 
     static string? FindRepo()
     {

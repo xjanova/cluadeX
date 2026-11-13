@@ -140,6 +140,108 @@ internal static class BridgeChoiceWire
                 connector.Use("");
                 check("bridge-connector", "back to \"the first to connect\": saved, and nobody is turned away any more",
                     settings.Settings.BridgeBrowser == "" && connector.Preferred == BridgeBrowserChoice.Any, settings.Settings.BridgeBrowser);
+
+                // 5. the agent's own tools on this connection: browser_status says which browser, browser_use switches it
+                // (owner 2026-11-13: "ใช้งาน Edge หรือ Chrome ผ่าน extension ตัวเองได้อิสระตามสั่ง และรู้ว่าใช้บราวเซอร์อะไรอยู่").
+                // The engine stays "chrome" throughout: switching the connection on or off writes the real host
+                // registration, which a harness must never do — so target "builtin" is not run here.
+                string T(string key) => LocalizedResources.Instance[key];
+                var module = new BrowserToolModule(new BrowserService(settings), settings, null, null, null, null, null, _ => null, connector);
+                var ctx = new CluadeX.Services.Tools.ToolModuleContext { SessionKey = "bridge-tools" };
+                CluadeX.Models.ToolCall Call(CluadeX.Models.ToolType type, string name, string? target = null) => new()
+                {
+                    Type = type, ToolName = name, Arguments = target == null ? new() : new() { ["target"] = target },
+                };
+                var waitBefore = BrowserToolModule.UseWait;
+                var started = new List<string>();
+                module.StartBrowserOverride = b => { started.Add(b); return true; };   // never a real browser
+                BrowserToolModule.UseWait = TimeSpan.FromSeconds(3);
+                try
+                {
+                    var none = await module.ExecuteAsync(Call(CluadeX.Models.ToolType.BrowserStatus, "browser_status"), ctx, CancellationToken.None);
+                    check("bridge-tools", "browser_status with nothing connected: says so, names the user's choice and how to switch",
+                        none.Success && none.Output.Contains(T("browser.status.ownNone"))
+                        && none.Output.Contains(string.Format(T("browser.status.chosen"), T("browser.status.chosenAny"))) && none.Output.Contains("browser_use"), none.Output);
+
+                    await using (var edge = await ConnectAsync(pipeName))
+                    {
+                        await SendHelloAsync(edge, EdgeUa);
+                        await ReadFrameAsync(edge, 5000);
+                        await server.WaitForConnectionAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+                        var onEdge = await module.ExecuteAsync(Call(CluadeX.Models.ToolType.BrowserStatus, "browser_status"), ctx, CancellationToken.None);
+                        check("bridge-tools", "browser_status with Edge connected: names Microsoft Edge and CluadeX's own extension",
+                            onEdge.Success && onEdge.Output.Contains(string.Format(T("browser.status.own"), "Microsoft Edge", ChromeBridgeInstall.BundledVersion)), onEdge.Output);
+
+                        // the user says "use Chrome": Edge lets go, Chrome (its host was waiting) gets in, the tool answers with it
+                        var chromeComes = Task.Run(async () =>
+                        {
+                            await ReadUntilClosedAsync(edge, 5000);
+                            var c = await ConnectAsync(pipeName);
+                            await SendHelloAsync(c, ChromeUa);
+                            await ReadFrameAsync(c, 5000);
+                            return c;
+                        });
+                        var toChrome = await module.ExecuteAsync(Call(CluadeX.Models.ToolType.BrowserUse, "browser_use", "chrome"), ctx, CancellationToken.None);
+                        await using var chromeNow = await chromeComes;
+                        check("bridge-tools", "browser_use target=chrome while Edge is connected: the choice is kept, Edge lets go, and the answer names Google Chrome",
+                            toChrome.Success && toChrome.Output.Contains("Google Chrome") && settings.Settings.BridgeBrowser == "chrome"
+                            && connector.Connected == BridgeBrowserChoice.Chrome, $"{toChrome.Success} · {toChrome.Output}{toChrome.Error} · connected '{connector.Connected}'");
+
+                        var any = await module.ExecuteAsync(Call(CluadeX.Models.ToolType.BrowserUse, "browser_use", "any"), ctx, CancellationToken.None);
+                        check("bridge-tools", "browser_use target=any with a browser connected: it stays, at once, and the choice goes back to \"the first to connect\"",
+                            any.Success && any.Output.Contains("Google Chrome") && settings.Settings.BridgeBrowser == "" && connector.Connected == BridgeBrowserChoice.Chrome, any.Output);
+
+                        // the user says "use Edge" but Edge never comes
+                        started.Clear();
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        var noEdge = await module.ExecuteAsync(Call(CluadeX.Models.ToolType.BrowserUse, "browser_use", "edge"), ctx, CancellationToken.None);
+                        string edgeDetail = $"{noEdge.Success} · {noEdge.Output}{noEdge.Error} · {sw.ElapsedMilliseconds} ms · started [{string.Join(",", started)}]";
+                        if (connector.EdgeFound)
+                            check("bridge-tools", "browser_use target=edge when Edge's extension never connects: a failure that says why and how to fix it, after the wait — no real browser is started by the harness",
+                                !noEdge.Success && (noEdge.Error ?? noEdge.Output).Contains("Microsoft Edge") && (noEdge.Error ?? noEdge.Output).Contains("browser_status")
+                                && sw.ElapsedMilliseconds >= 2500 && sw.ElapsedMilliseconds < 15000 && settings.Settings.BridgeBrowser == "edge", edgeDetail);
+                        else
+                            check("bridge-tools", "browser_use target=edge on a PC without Edge: refused at once", !noEdge.Success && sw.ElapsedMilliseconds < 2000, edgeDetail);
+                    }
+                    await WaitUntilAsync(() => !server.IsConnected, 5000);
+
+                    var bad = await module.ExecuteAsync(Call(CluadeX.Models.ToolType.BrowserUse, "browser_use", "firefox"), ctx, CancellationToken.None);
+                    check("bridge-tools", "browser_use with a browser CluadeX cannot drive is refused with the choices", !bad.Success && (bad.Error ?? bad.Output).Contains("builtin"), bad.Error ?? bad.Output);
+
+                    // permission: free between the user's own browsers and back to the pane; from the pane to the user's own
+                    // browser asks once per chat, whatever the permission switch says
+                    var free = module.DescribePermission(Call(CluadeX.Models.ToolType.BrowserUse, "browser_use", "edge"), ctx);
+                    var statusPerm = module.DescribePermission(Call(CluadeX.Models.ToolType.BrowserStatus, "browser_status"), ctx);
+                    settings.UpdateSettings(s => s.BrowserEngine = "auto");
+                    var asks = module.DescribePermission(Call(CluadeX.Models.ToolType.BrowserUse, "browser_use", "edge"), ctx);
+                    var back = module.DescribePermission(Call(CluadeX.Models.ToolType.BrowserUse, "browser_use", "builtin"), ctx);
+                    settings.UpdateSettings(s => s.BrowserEngine = BrowserService.ChromeEngine);
+                    check("bridge-tools", "permission: status is free; a switch between the user's own browsers is free; from the pane to the user's browser asks once per chat even with permissions off; back to the pane is free",
+                        statusPerm.IsFree && free.IsFree && !asks.IsFree && asks.AskEvenWhenPermissionsOff && asks.OnceKey == "browser-use-own"
+                        && (asks.Detail ?? "").Contains("Microsoft Edge") && back.IsFree, $"free={free.IsFree} asks={!asks.IsFree}/{asks.AskEvenWhenPermissionsOff}/{asks.OnceKey} back={back.IsFree}");
+
+                    // every agent hears about them: the native schemas, the names a CLI is told, the aliases
+                    var schemaNames = BrowserToolModule.Schemas().Select(s => s.Name).ToList();
+                    string hint = CluadeX.Services.Tools.ChatToolBridge.BrowserHint(null, claudeNames: true);
+                    string down = CluadeX.Services.Tools.ChatToolBridge.BrowserHint("Dev Preview is off");
+                    check("bridge-tools", "both tools are in the schemas and in what a CLI agent is told; aliases resolve",
+                        schemaNames.Contains("browser_status") && schemaNames.Contains("browser_use")
+                        && hint.Contains("mcp__cluadex__browser_status") && hint.Contains("mcp__cluadex__browser_use") && hint.Contains("target=edge|chrome|builtin")
+                        && BrowserToolModule.TypeOf("browser_switch") == CluadeX.Models.ToolType.BrowserUse && BrowserToolModule.TypeOf("BROWSER_WHICH") == CluadeX.Models.ToolType.BrowserStatus, "");
+                    check("bridge-tools", "the order of browser routes: CluadeX's own first; Claude in Chrome when the user names it, or when CluadeX's own cannot be used",
+                        hint.Contains("before any other browser tool") && hint.Contains("unless the user names one") && hint.Contains("only then may another browser tool")
+                        && down.Contains("unavailable") && down.Contains("may then be used") && !down.Contains("do not switch") && !hint.Contains('\n') && !down.Contains('\n'), down);
+                    string promptText = module.GetPromptSection(new CluadeX.Services.Tools.PromptSectionContext { OfferedToolNames = Array.Empty<string>() }) ?? "";
+                    check("bridge-tools", "the native loop's prompt says the same: browser_status / browser_use, and when another route may be used",
+                        promptText.Contains("browser_status") && promptText.Contains("browser_use target=edge|chrome|builtin") && promptText.Contains("Claude in Chrome")
+                        && promptText.Length <= 1400,   // browsertest G2c's ceiling: the section rides on every request
+                        $"{promptText.Length} chars");
+                }
+                finally
+                {
+                    BrowserToolModule.UseWait = waitBefore;
+                    module.StartBrowserOverride = null;
+                }
             }
             finally { settings.UpdateSettings(s => { s.BrowserEngine = engineBefore; s.BridgeBrowser = choiceBefore; }); }
         }
