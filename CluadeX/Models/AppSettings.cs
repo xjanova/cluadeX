@@ -109,7 +109,9 @@ public class AppSettings
     // ─── Claude in Chrome connector (through Claude Code) ───
     /// <summary>The user switched the "Browser (Claude in Chrome)" connector on.</summary>
     public bool ChromeConnectorEnabled { get; set; } = false;
-    /// <summary>Full path of claude.exe (or cli.js) to use instead of the one CluadeX finds. Empty = find it.</summary>
+    /// <summary>Full path of claude.exe (or cli.js) to use instead of the one CluadeX finds. Empty = find it: Claude Dev
+    /// then runs the newest install on the PC (ClaudeDevProvider.FindCli). Claude Dev takes a claude.exe from here;
+    /// a cli.js is for Claude in Chrome only.</summary>
     public string ClaudeCodePathOverride { get; set; } = "";
     /// <summary>The browser the connector drives when several are connected (the extension's device id). Empty = ask.</summary>
     public string ChromePairedDeviceId { get; set; } = "";

@@ -17,6 +17,112 @@ internal static class CliParityWire
     const string Folder = @"C:\work\demo";
     const string BrainJson = """{"type":"stdio","command":"C:\\b\\brainx-mcp.exe","args":["G:\\Vault"],"env":{"BRAINX_VAULT":"G:\\Vault"}}""";
 
+    /// <summary>Which Claude Code CLI Claude Dev runs when the PC has several (2026-11-13: npm's 2.1.296 won over the
+    /// desktop app's 2.1.321, so the alias "fable" was still Claude Fable 5.1). A made-up disk: nothing is started.</summary>
+    public static Task RunCliFind(Action<string, string, bool, string> check, Action<string> section)
+    {
+        section("offline · Claude Dev runs the newest Claude Code CLI on the PC");
+        const string app = @"C:\Users\x\AppData\Roaming", home = @"C:\Users\x";
+        const string npmShim = app + @"\npm\claude.cmd";
+        const string npmExe = app + @"\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe";
+        const string npmPackage = app + @"\npm\node_modules\@anthropic-ai\claude-code\package.json";
+        const string appRoot = app + @"\Claude\claude-code";
+        const string app321 = appRoot + @"\2.1.321\d5ce1b2d9\claude.exe";
+        const string app30 = appRoot + @"\2.1.30\claude.exe";
+        const string native = home + @"\.local\bin\claude.exe";
+        const string onPathExe = @"C:\tools\claude.exe";
+
+        // a disk: the files that exist, and the folders under the desktop app's root
+        string? Find(IEnumerable<string> files, string where, Func<string, Version?>? versionOf = null, string npmVersion = "2.1.296")
+        {
+            var have = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
+            IEnumerable<string> Sub(string dir) => have
+                .Where(f => f.StartsWith(dir + "\\", StringComparison.OrdinalIgnoreCase))
+                .Select(f => dir + "\\" + f[(dir.Length + 1)..].Split('\\')[0])
+                .Where(d => !have.Contains(d)).Distinct(StringComparer.OrdinalIgnoreCase);
+            return ClaudeDevProvider.FindCli(where, app, home, have.Contains,
+                d => have.Any(f => f.StartsWith(d + "\\", StringComparison.OrdinalIgnoreCase)), Sub,
+                versionOf ?? (exe => ClaudeDevProvider.CliVersionAt(exe,
+                    p => p.Equals(npmPackage, StringComparison.OrdinalIgnoreCase) ? "{\"name\":\"@anthropic-ai/claude-code\",\"version\":\"" + npmVersion + "\"}" : null,
+                    _ => null)));
+        }
+
+        check("claude-find", "the owner's PC: npm's 2.1.296 on PATH and the desktop app's 2.1.321 → the desktop app's (the newer) runs",
+            Find(new[] { npmExe, app321 }, npmShim) == app321, Find(new[] { npmExe, app321 }, npmShim) ?? "null");
+        check("claude-find", "npm updated past the desktop app's copy → npm's runs",
+            Find(new[] { npmExe, app321 }, npmShim, npmVersion: "2.1.323") == npmExe, Find(new[] { npmExe, app321 }, npmShim, npmVersion: "2.1.323") ?? "null");
+        check("claude-find", "the same version in both → the one on PATH (the order of preference decides a tie)",
+            Find(new[] { npmExe, app321 }, npmShim, npmVersion: "2.1.321") == npmExe, "");
+        check("claude-find", "a claude.exe on PATH that says nothing about its version is used, as before (never passed over for a number)",
+            Find(new[] { onPathExe, app321 }, onPathExe) == onPathExe, Find(new[] { onPathExe, app321 }, onPathExe) ?? "null");
+        check("claude-find", "…but one that says it is older gives way, and one that says it is newer stays",
+            Find(new[] { onPathExe, app321 }, onPathExe, e => e == onPathExe ? new Version(2, 1, 100) : ClaudeDevProvider.CliVersionAt(e, _ => null, _ => null)) == app321
+            && Find(new[] { onPathExe, app321 }, onPathExe, e => e == onPathExe ? new Version(2, 2, 0) : ClaudeDevProvider.CliVersionAt(e, _ => null, _ => null)) == onPathExe, "");
+        check("claude-find", "a later copy with no version is never taken over an earlier one that has it",
+            Find(new[] { npmExe, native }, npmShim) == npmExe, Find(new[] { npmExe, native }, npmShim) ?? "null");
+        check("claude-find", "only the desktop app's copies: versions compare as versions (2.1.321 > 2.1.30), the hash folder is looked into",
+            Find(new[] { app30, app321 }, "") == app321, Find(new[] { app30, app321 }, "") ?? "null");
+        check("claude-find", "a half-written version folder (no exe yet) is skipped",
+            Find(new[] { app30, appRoot + @"\2.1.400\partial.tmp" }, "") == app30, Find(new[] { app30, appRoot + @"\2.1.400\partial.tmp" }, "") ?? "null");
+        check("claude-find", "a version read that throws (a locked file) counts as unknown, not as a crash",
+            Find(new[] { npmExe, app321 }, npmShim, e => e == npmExe ? throw new IOException("locked") : new Version(2, 1, 321)) == npmExe, "");
+        check("claude-find", "only the native installer's copy → that one; nothing installed → null",
+            Find(new[] { native }, "") == native && Find(Array.Empty<string>(), "") == null && Find(new[] { npmShim }, npmShim) == null, "");
+        var all = ClaudeDevProvider.CliCandidates(onPathExe + "\n" + npmShim, app, home, new HashSet<string> { onPathExe, npmExe, app321, native }.Contains,
+            d => d == appRoot, d => d == appRoot ? new[] { appRoot + @"\2.1.321" } : d.EndsWith("2.1.321") ? new[] { appRoot + @"\2.1.321\d5ce1b2d9" } : Array.Empty<string>());
+        check("claude-find", "every install is a candidate, in the order of preference: PATH, npm's, the desktop app's, the native installer's",
+            string.Join("|", all) == string.Join("|", onPathExe, npmExe, app321, native), string.Join(" | ", all));
+
+        // ─── reading a copy's version without starting it ───
+        check("claude-version", "the desktop app's copy: its version folder (with or without the hash folder)",
+            ClaudeDevProvider.CliVersionAt(app321, _ => null, _ => null) == new Version(2, 1, 321)
+            && ClaudeDevProvider.CliVersionAt(app30, _ => null, _ => null) == new Version(2, 1, 30), "");
+        check("claude-version", "npm's copy: package.json beside bin\\ (not the \"claude-code\" folder's name)",
+            ClaudeDevProvider.CliVersionAt(npmExe, p => p == npmPackage ? "{\"version\":\"2.1.296\"}" : null, _ => "9.9.9") == new Version(2, 1, 296), "");
+        check("claude-version", "a broken or missing package.json falls back to the exe's own version; \"0.0.0\" and nothing are unknown",
+            ClaudeDevProvider.CliVersionAt(npmExe, _ => "{not json", _ => "2.1.310 (Claude Code)") == new Version(2, 1, 310)
+            && ClaudeDevProvider.CliVersionAt(native, _ => null, _ => "2.1.305") == new Version(2, 1, 305)
+            && ClaudeDevProvider.CliVersionAt(native, _ => null, _ => "0.0.0.0") == null
+            && ClaudeDevProvider.CliVersionAt(native, _ => null, _ => null) == null
+            && ClaudeDevProvider.CliVersionAt("", _ => null, _ => "2.1.1") == null, "");
+
+        // ─── the owner's own choice ───
+        check("claude-override", "Settings.ClaudeCodePathOverride: a claude.exe that exists is used (quotes and spaces trimmed)",
+            ClaudeDevProvider.CliOverride("  \"" + onPathExe + "\" ", p => p == onPathExe) == onPathExe, "");
+        check("claude-override", "an empty one, a file that is gone, or a cli.js (Claude in Chrome's) leaves the search to decide",
+            ClaudeDevProvider.CliOverride("", _ => true) == null && ClaudeDevProvider.CliOverride(onPathExe, _ => false) == null
+            && ClaudeDevProvider.CliOverride(@"C:\x\cli.js", _ => true) == null && ClaudeDevProvider.CliOverride(null, _ => true) == null, "");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The same search on THIS PC's real disk (`--clifind-real`): every install with the version read from it,
+    /// and the one Claude Dev would run. Read-only — `where.exe claude` and file reads; no CLI is started.</summary>
+    public static Task RunCliFindReal(Action<string, string, bool, string> check, Action<string> section)
+    {
+        section("this PC · the Claude Code CLI installs and the one Claude Dev runs");
+        string where = "";
+        try
+        {
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("where.exe", "claude")
+                { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+            if (p != null) { where = p.StandardOutput.ReadToEnd(); p.WaitForExit(5000); }
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var all = ClaudeDevProvider.CliCandidates(where, appData, home, File.Exists, Directory.Exists, d => Directory.GetDirectories(d));
+        string? pick = ClaudeDevProvider.FindCli(where, appData, home, File.Exists, Directory.Exists, d => Directory.GetDirectories(d));
+        foreach (string exe in all)
+            Console.WriteLine($"  {(exe == pick ? "→" : " ")} {ClaudeDevProvider.CliVersionAt(exe)?.ToString() ?? "version unknown",-16} {exe}");
+        var versions = all.Select(ClaudeDevProvider.CliVersionAt).Where(v => v != null).ToList();
+        var picked = pick == null ? null : ClaudeDevProvider.CliVersionAt(pick);
+        check("claude-real", "the install Claude Dev runs is the newest one whose version can be read (or the preferred copy, when that one cannot say)",
+            all.Count == 0 ? pick == null
+                : pick != null && (ClaudeDevProvider.CliVersionAt(all[0]) == null ? pick == all[0] : picked != null && picked == versions.Max()),
+            pick == null ? "no Claude Code CLI on this PC" : $"{picked?.ToString() ?? "version unknown"} · {pick}");
+        return Task.CompletedTask;
+    }
+
     public static Task Run(Action<string, string, bool, string> check, Action<string> section)
     {
         section("offline · CLI parity: chat tools, split guide, brain tools, Codex pictures");

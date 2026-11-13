@@ -418,7 +418,7 @@ public class FileSystemService
         }
 
         // Other ecosystems: a single project folder below the root.
-        foreach (var marker in new[] { "Cargo.toml", "go.mod", "package.json", "pom.xml", "build.gradle", "build.gradle.kts", "pyproject.toml" })
+        foreach (var marker in new[] { "Cargo.toml", "go.mod", "pubspec.yaml", "artisan", "package.json", "pom.xml", "build.gradle", "build.gradle.kts", "pyproject.toml" })
         {
             var hits = FindBelow(root, marker, 2);
             if (hits.Count != 1) continue;
@@ -446,6 +446,10 @@ public class FileSystemService
             if (HasFile("Cargo.toml")) return "cargo test";
             if (HasFile("go.mod")) return "go test ./...";
             if (HasFile("pyproject.toml") || HasFile("pytest.ini") || HasFile("tox.ini") || HasFile("setup.py")) return "pytest -q";
+            // Flutter / Dart and PHP before package.json: a Laravel app has one for its front end, and "npm test" there
+            // is a script that mostly does not exist. A pubspec with no test folder falls through to "no tests".
+            if (HasFile("pubspec.yaml") && DartCommand(dir, test: true) is { } dartTest) return dartTest;
+            if (PhpTestCommand(dir, FindPhpExe()) is { } phpTest) return phpTest;
             if (HasFile("package.json")) return "npm test";
             if (HasFile("pom.xml")) return "mvn -q test";
             if (HasFile("build.gradle") || HasFile("build.gradle.kts")) return "gradle test";
@@ -456,6 +460,7 @@ public class FileSystemService
         if (HasGlob("*.csproj") || HasGlob("*.fsproj")) return "dotnet build";
         if (HasFile("Cargo.toml")) return "cargo build";
         if (HasFile("go.mod")) return "go build ./...";
+        if (HasFile("pubspec.yaml") && DartCommand(dir, test: false) is { } dartBuild) return dartBuild;
         if (HasFile("tsconfig.json")) return "npx tsc --noEmit";
         if (HasFile("package.json")) return "npm run build";
         if (HasFile("pom.xml")) return "mvn -q -DskipTests compile";
@@ -463,6 +468,84 @@ public class FileSystemService
         if (HasFile("Makefile") || HasFile("makefile")) return "make";
         if (HasFile("CMakeLists.txt")) return "cmake --build build";
         return PythonCompileCommand(dir);
+    }
+
+    /// <summary>
+    /// The build or the tests of a Flutter / Dart project (a folder with pubspec.yaml), or null when the tool is not on
+    /// PATH. Owner 2026-11-13: run_build answered "couldn't detect a build system" in their Flutter apps (3 of 13
+    /// calls), so the model guessed at commands and the check after an edit never ran there.
+    /// <para>The "build" is the analyzer: it type-checks every file in seconds and names the file and line, where a real
+    /// `flutter build` takes minutes and needs a device target. Only errors fail it — a project's lints (infos and
+    /// warnings) are not a red build. Tests need a <c>test</c> folder; without one there are none to run.</para>
+    /// </summary>
+    public static string? DartCommand(string dir, bool test) => DartCommand(dir, test,
+        FirstOnPath("flutter.bat") ?? FirstOnPath("flutter.exe"), FirstOnPath("dart.bat") ?? FirstOnPath("dart.exe"));
+
+    /// <summary><see cref="DartCommand(string, bool)"/> with what is on PATH handed in (tests): the paths of flutter and
+    /// dart, null when missing.</summary>
+    public static string? DartCommand(string dir, bool test, string? flutterOnPath, string? dartOnPath)
+    {
+        string pubspec;
+        try { pubspec = File.ReadAllText(Path.Combine(dir, "pubspec.yaml")); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        bool flutter = Regex.IsMatch(pubspec, @"sdk:\s*flutter");
+        if (test)
+        {
+            bool hasTests;
+            try { hasTests = Directory.Exists(Path.Combine(dir, "test")) && Directory.EnumerateFiles(Path.Combine(dir, "test"), "*_test.dart", SearchOption.AllDirectories).Any(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { hasTests = false; }
+            if (!hasTests) return null;
+            if (flutter) return flutterOnPath != null ? "flutter test" : null;   // (a Flutter app's tests do not run under plain dart)
+            return dartOnPath != null ? "dart test" : null;
+        }
+        if (flutter && flutterOnPath != null) return "flutter analyze --no-fatal-infos --no-fatal-warnings";
+        return dartOnPath != null ? "dart analyze --no-fatal-warnings" : null;
+    }
+
+    /// <summary>
+    /// The tests of a PHP project, run with <paramref name="phpExe"/> (null = PHP is not on this PC: no command, so a
+    /// test run that cannot start is never offered). Laravel's <c>artisan test</c> when there is an artisan file,
+    /// else PHPUnit when the project has its config and its vendor copy. A bare "php" is PHP on PATH; a full path is
+    /// quoted.
+    /// </summary>
+    public static string? PhpTestCommand(string dir, string? phpExe)
+    {
+        if (string.IsNullOrEmpty(phpExe)) return null;
+        string php = phpExe.Contains(' ') || phpExe.Contains('\\') || phpExe.Contains('/') ? $"\"{phpExe}\"" : phpExe;
+        try
+        {
+            if (File.Exists(Path.Combine(dir, "artisan")) && File.Exists(Path.Combine(dir, "composer.json"))) return $"{php} artisan test";
+            bool config = File.Exists(Path.Combine(dir, "phpunit.xml")) || File.Exists(Path.Combine(dir, "phpunit.xml.dist"));
+            if (config && File.Exists(Path.Combine(dir, "vendor", "bin", "phpunit"))) return $"{php} vendor/bin/phpunit";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return null;
+    }
+
+    /// <summary>PHP on this PC: "php" when it is on PATH, else the newest one Laragon keeps
+    /// (<c>C:\laragon\bin\php\php-8.x…\php.exe</c> — Laragon does not put it on PATH for other programs), else XAMPP's.
+    /// Null = none.</summary>
+    public static string? FindPhpExe()
+    {
+        if (FirstOnPath("php.exe") != null) return "php";
+        try
+        {
+            foreach (string drive in new[] { "C:", "D:" })
+            {
+                string root = Path.Combine(drive + Path.DirectorySeparatorChar, "laragon", "bin", "php");
+                if (!Directory.Exists(root)) continue;
+                string? newest = Directory.GetDirectories(root)
+                    .Select(d => (Exe: Path.Combine(d, "php.exe"), Ver: Regex.Match(Path.GetFileName(d), @"(\d+)\.(\d+)\.(\d+)")))
+                    .Where(x => x.Ver.Success && File.Exists(x.Exe))
+                    .OrderByDescending(x => new Version(int.Parse(x.Ver.Groups[1].Value), int.Parse(x.Ver.Groups[2].Value), int.Parse(x.Ver.Groups[3].Value)))
+                    .Select(x => x.Exe).FirstOrDefault();
+                if (newest != null) return newest;
+            }
+            string xampp = Path.Combine("C:" + Path.DirectorySeparatorChar, "xampp", "php", "php.exe");
+            if (File.Exists(xampp)) return xampp;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return null;
     }
 
     /// <summary>
