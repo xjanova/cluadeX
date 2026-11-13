@@ -19,6 +19,50 @@ public sealed class ChromeBridgeConnector : IAppShutdownHook
     {
         _settings = settings;
         _bridge = bridge;
+        _bridge.AcceptBrowser = AcceptHello;
+    }
+
+    // ─── which browser, when both have the extension (BridgeBrowserChoice) ───
+
+    private DateTime _preferUntilUtc = DateTime.MinValue;
+    private int _refusedInWindow;
+
+    /// <summary>The browser the owner chose for the agent: "" (the first to connect), "chrome" or "edge".</summary>
+    public string Preferred => BridgeBrowserChoice.Normalize(_settings.Settings.BridgeBrowser);
+
+    /// <summary>The browser connected now ("chrome" / "edge"), or "" when none is.</summary>
+    public string Connected => _bridge.IsConnected ? BridgeBrowserChoice.Of(_bridge.UserAgent) : "";
+
+    /// <summary>A browser was chosen, and the one connected is the other: the chosen one did not come (closed, or the
+    /// extension is not in it yet).</summary>
+    public bool PreferredNotConnected => Preferred != BridgeBrowserChoice.Any && _bridge.IsConnected && Connected != Preferred;
+
+    private bool AcceptHello(string? userAgent)
+    {
+        bool welcome = BridgeBrowserChoice.Accept(Preferred, userAgent, DateTime.UtcNow, _preferUntilUtc, _refusedInWindow);
+        if (!welcome) Interlocked.Increment(ref _refusedInWindow);
+        return welcome;
+    }
+
+    private void OpenWindow()
+    {
+        Interlocked.Exchange(ref _refusedInWindow, 0);
+        _preferUntilUtc = DateTime.UtcNow + BridgeBrowserChoice.Window;
+    }
+
+    /// <summary>The owner chose a browser ("chrome", "edge", or "" for the first to connect): kept, and acted on at once —
+    /// when the other one is connected it lets go, and for a short while only the chosen one is let in.</summary>
+    public void Use(string browser)
+    {
+        string wanted = BridgeBrowserChoice.Normalize(browser);
+        _settings.UpdateSettings(s => s.BridgeBrowser = wanted);
+        if (wanted == BridgeBrowserChoice.Any || !Enabled) return;
+        OpenWindow();
+        if (_bridge.IsConnected && Connected != wanted)
+        {
+            _bridge.Post("close");   // the agent's window in the browser it leaves
+            _bridge.DropConnection();
+        }
     }
 
     public ChromeBridgeServer Bridge => _bridge;
@@ -59,6 +103,7 @@ public sealed class ChromeBridgeConnector : IAppShutdownHook
         if (SettingsService.IsTrialCopy) throw new InvalidOperationException("A trial copy does not connect Chrome — the installed CluadeX keeps that connection.");
         ChromeBridgeInstall.Install(_settings.DataRoot, Environment.ProcessPath ?? throw new InvalidOperationException("No path for this program."));
         _bridge.ExpectedVersion = ChromeBridgeInstall.BundledVersion;
+        OpenWindow();   // at the start the chosen browser goes first, whichever says hello first
         _bridge.Start();
     }
 

@@ -794,14 +794,23 @@
                                         <TextBlock Text="{services:Loc settings.chromeBridgeDesc}" Style="{StaticResource SettingDesc}"/>
                                         <TextBlock Text="{Binding ChromeBridgeStatus}" Style="{StaticResource SettingDesc}" Margin="0,4,0,0"/>
                                         <!-- one button per installed browser: the same extension folder, each browser's own extensions page -->
-                                        <WrapPanel Orientation="Horizontal" Margin="0,8,0,0"
-                                                   Visibility="{Binding ChromeBridgeNeedsExtension, Converter={StaticResource BoolVis}}">
+                                        <!-- (each button has its own rule: "add" for a browser that is not the one connected, also while
+                                             the other one is; "let the agent use …" to choose between the two) -->
+                                        <WrapPanel Orientation="Horizontal" Margin="0,8,0,0">
                                             <Button Style="{StaticResource SecondaryButton}" Command="{Binding AddChromeExtensionCommand}" Padding="10,5" Margin="0,0,8,4"
                                                     AutomationProperties.AutomationId="ChromeBridgeAddChrome" Content="{services:Loc settings.chromeBridgeAdd}"
                                                     Visibility="{Binding ChromeBridgeCanAddToChrome, Converter={StaticResource BoolVis}}"/>
                                             <Button Style="{StaticResource SecondaryButton}" Command="{Binding AddEdgeExtensionCommand}" Padding="10,5" Margin="0,0,8,4"
                                                     AutomationProperties.AutomationId="ChromeBridgeAddEdge" Content="{services:Loc settings.edgeBridgeAdd}"
                                                     Visibility="{Binding ChromeBridgeCanAddToEdge, Converter={StaticResource BoolVis}}"/>
+                                            <Button Style="{StaticResource SecondaryButton}" Command="{Binding UseEdgeBridgeCommand}" Padding="10,5" Margin="0,0,8,4"
+                                                    AutomationProperties.AutomationId="BridgeUseEdge" Content="{services:Loc settings.bridgeUseEdge}"
+                                                    ToolTip="{services:Loc settings.bridgeUseTip}"
+                                                    Visibility="{Binding BridgeCanUseEdge, Converter={StaticResource BoolVis}}"/>
+                                            <Button Style="{StaticResource SecondaryButton}" Command="{Binding UseChromeBridgeCommand}" Padding="10,5" Margin="0,0,8,4"
+                                                    AutomationProperties.AutomationId="BridgeUseChrome" Content="{services:Loc settings.bridgeUseChrome}"
+                                                    ToolTip="{services:Loc settings.bridgeUseTip}"
+                                                    Visibility="{Binding BridgeCanUseChrome, Converter={StaticResource BoolVis}}"/>
                                         </WrapPanel>
                                         <!-- the part Chrome keeps for the user, beside them until the extension connects -->
                                         <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="8" BorderThickness="1"

@@ -547,6 +547,22 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
   **Not yet:** `php artisan test` run for real, and a Flutter chat in the running app.
 - Not looked at: tools a CLI agent (Codex, Claude Dev) runs itself — they are not in CluadeX's log line by line.
 
+## Edge while Chrome is connected, and choosing the browser (2026-11-13, after 3.0.322)
+- Owner: "จะติดตั้ง edge extension ยังไง … เราต้องไปกดไม่ใช่เหรอ". 3.0.320–3.0.322 showed "Add the extension" only while
+  NO browser was connected, so with Chrome connected (the owner's case) there was nothing to press for Edge. Now each
+  browser's button shows while that browser is not the one connected (`ChromeBridgeCanAddToChrome/Edge`), and each
+  browser's steps stay up until that browser has connected.
+- The pipe takes one client, so with the extension in both it was always Chrome. `Services/Chrome/BridgeBrowserChoice.cs`
+  + `AppSettings.BridgeBrowser` ("" = the first to connect, "chrome", "edge"): Settings has "Let the agent use Edge /
+  Chrome". `ChromeBridgeConnector.Use` saves it, lets the other browser go (`ChromeBridgeServer.DropConnection`) and for
+  20 s — also after every start — a hello from the other browser is turned away without a welcome
+  (`ChromeBridgeServer.AcceptBrowser`), at most 4 times, so the chosen one's waiting native host gets the pipe. The
+  chosen browser not there = the other is let in after the window, and the row says the chosen one is not connected.
+- The bridge is not an MCP server (nothing on the MCP page): it is the engine under the `browser_*` tools.
+- Proven by `tests/apitest --bridge` (15 checks: the rule, and the real server + connector on a named pipe of its own
+  with made-up Chrome and Edge clients) and `tests/themetest --settings`. **Not yet:** the two real browsers switching in
+  the running app, and `chrometest` (not run: the owner's Chrome with the extension was open).
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

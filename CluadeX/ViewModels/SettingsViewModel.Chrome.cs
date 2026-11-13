@@ -38,9 +38,35 @@ public partial class SettingsViewModel
     /// <summary>Until the extension has connected: the button is the way in, so it also works with the switch still off.</summary>
     public bool ChromeBridgeNeedsExtension => _chromeBridge is { } b && !b.Bridge.IsConnected;
 
-    /// <summary>Each browser's "add the extension" button shows only where that browser is installed.</summary>
-    public bool ChromeBridgeCanAddToChrome => ChromeBridgeNeedsExtension && _chromeBridge!.ChromeFound;
-    public bool ChromeBridgeCanAddToEdge => ChromeBridgeNeedsExtension && _chromeBridge!.EdgeFound;
+    /// <summary>Each browser's "add the extension" button shows where that browser is installed and is not the one
+    /// connected now — also while the OTHER browser is connected. 3.0.320–3.0.322 hid both once any browser was
+    /// connected, so with Chrome connected there was nothing to press for Edge (owner 2026-11-13: "จะติดตั้ง edge
+    /// extension ยังไง … เราต้องไปกดไม่ใช่เหรอ").</summary>
+    public bool ChromeBridgeCanAddToChrome => _chromeBridge is { ChromeFound: true } b && b.Connected != BridgeBrowserChoice.Chrome;
+    public bool ChromeBridgeCanAddToEdge => _chromeBridge is { EdgeFound: true } b && b.Connected != BridgeBrowserChoice.Edge;
+
+    /// <summary>"Let the agent use Edge": the connection is on, Edge is on this PC and is not the browser chosen yet.</summary>
+    public bool BridgeCanUseEdge => _chromeBridge is { Enabled: true, EdgeFound: true } b && b.Preferred != BridgeBrowserChoice.Edge;
+    /// <summary>"Let the agent use Chrome": the way back once Edge was chosen.</summary>
+    public bool BridgeCanUseChrome => _chromeBridge is { Enabled: true, ChromeFound: true } b && b.Preferred == BridgeBrowserChoice.Edge;
+
+    private ICommand? _useEdgeBridge, _useChromeBridge;
+    public ICommand UseEdgeBridgeCommand => _useEdgeBridge ??= new RelayCommand(() => UseBridgeBrowser(BridgeBrowserChoice.Edge));
+    public ICommand UseChromeBridgeCommand => _useChromeBridge ??= new RelayCommand(() => UseBridgeBrowser(BridgeBrowserChoice.Chrome));
+
+    /// <summary>The owner chose the browser: kept, the other one lets go at once, and the row says where it stands.</summary>
+    private void UseBridgeBrowser(string browser)
+    {
+        if (_chromeBridge == null) return;
+        try { _chromeBridge.Use(browser); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            _log?.Warn("Chrome", "choosing the browser for the agent failed", ex);
+            ChromeBridgeStatus = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
+            return;
+        }
+        RefreshChromeBridgeStatus();
+    }
 
     private bool _chromeBridgeGuideOpen;
     /// <summary>The user pressed the button. The steps stay up through every status change until the browser connects.</summary>
@@ -56,8 +82,9 @@ public partial class SettingsViewModel
     /// <summary>The steps on screen are Edge's (its Developer mode switch and Load unpacked button sit elsewhere).</summary>
     private bool _chromeBridgeGuideForEdge;
 
-    public bool ChromeBridgeGuideVisible => _chromeBridgeGuideOpen && !_chromeBridgeGuideForEdge && ChromeBridgeNeedsExtension;
-    public bool EdgeBridgeGuideVisible => _chromeBridgeGuideOpen && _chromeBridgeGuideForEdge && ChromeBridgeNeedsExtension;
+    // Each browser's steps stay up until THAT browser has connected (the other one being connected does not close them).
+    public bool ChromeBridgeGuideVisible => _chromeBridgeGuideOpen && !_chromeBridgeGuideForEdge && _chromeBridge?.Connected != BridgeBrowserChoice.Chrome;
+    public bool EdgeBridgeGuideVisible => _chromeBridgeGuideOpen && _chromeBridgeGuideForEdge && _chromeBridge?.Connected != BridgeBrowserChoice.Edge;
 
     private void RaiseChromeBridgeGuide()
     {
@@ -128,11 +155,15 @@ public partial class SettingsViewModel
             : bridge.LastError is { } error ? $"{T("settings.failedPrefix")}: {error}"
             : !bridge.IsConnected ? T("chromeBridge.status.waiting")
             : bridge.Paused ? T(_chromeBridge.ConnectedIsEdge ? "chromeBridge.status.pausedEdge" : "chromeBridge.status.paused")
+            // the browser the owner chose did not come: the other one works meanwhile, and the row says so
+            : _chromeBridge.PreferredNotConnected ? T(_chromeBridge.ConnectedIsEdge ? "chromeBridge.status.wantChrome" : "chromeBridge.status.wantEdge")
             : T(_chromeBridge.ConnectedIsEdge ? "chromeBridge.status.connectedEdge" : "chromeBridge.status.connected");
         OnPropertyChanged(nameof(ChromeBridgeOn));
         OnPropertyChanged(nameof(ChromeBridgeNeedsExtension));
         OnPropertyChanged(nameof(ChromeBridgeCanAddToChrome));
         OnPropertyChanged(nameof(ChromeBridgeCanAddToEdge));
+        OnPropertyChanged(nameof(BridgeCanUseEdge));
+        OnPropertyChanged(nameof(BridgeCanUseChrome));
         RaiseChromeBridgeGuide();
     }
 
