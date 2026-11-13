@@ -65,6 +65,48 @@ public sealed class ChromeBridgeConnector : IAppShutdownHook
         }
     }
 
+    /// <summary>Is <paramref name="browser"/> ("chrome" / "edge") running on this PC? Its extension can only connect
+    /// from a running browser.</summary>
+    public static bool IsRunning(string browser)
+    {
+        try
+        {
+            var found = Process.GetProcessesByName(browser == BridgeBrowserChoice.Edge ? "msedge" : "chrome");
+            foreach (var p in found) p.Dispose();
+            return found.Length > 0;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Start <paramref name="browser"/> ("chrome" / "edge") so its extension can connect — on an empty tab (the
+    /// agent asked for that browser by name: browser_use). False when it is not on this PC or would not start.</summary>
+    public bool StartBrowser(string browser)
+    {
+        var found = BrowserEngineProbe.Probe();
+        string? exe = browser == BridgeBrowserChoice.Edge ? found.EdgePath : found.ChromePath;
+        if (exe == null) return false;
+        try
+        {
+            Process.Start(new ProcessStartInfo(exe, "about:blank") { UseShellExecute = false })?.Dispose();
+            return true;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or System.IO.IOException) { return false; }
+    }
+
+    /// <summary>Wait until the wanted browser is the one connected ("" = any). False when the time ran out.</summary>
+    public async Task<bool> WaitForAsync(string browser, TimeSpan wait, CancellationToken ct)
+    {
+        string wanted = BridgeBrowserChoice.Normalize(browser);
+        var until = DateTime.UtcNow + wait;
+        while (true)
+        {
+            string now = Connected;
+            if (wanted == BridgeBrowserChoice.Any ? now.Length > 0 : now == wanted) return true;
+            if (DateTime.UtcNow >= until) return false;
+            await Task.Delay(200, ct);
+        }
+    }
+
     public ChromeBridgeServer Bridge => _bridge;
     public bool Enabled => BrowserService.IsChromeEngine(_settings.Settings.BrowserEngine);
     public string ExtensionFolder => ChromeBridgeInstall.ExtensionFolder(_settings.DataRoot);

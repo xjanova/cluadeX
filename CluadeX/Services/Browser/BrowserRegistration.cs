@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("browsertest")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("chrometest")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("apitest")]   // browser_status / browser_use on a pipe of its own (BridgeChoiceWire)
 
 namespace CluadeX.Services.Browser;
 
@@ -42,7 +43,8 @@ public static class BrowserRegistration
             sp.GetRequiredService<Vision.ToolImageStore>(),
             sp.GetRequiredService<FileSystemService>(),
             sp.GetServices<IBrowserUrlResolver>(),
-            sp.GetService<IPreviewPresenter>()));
+            sp.GetService<IPreviewPresenter>(),
+            sp.GetService<Chrome.ChromeBridgeConnector>()));
         services.AddSingleton<Tools.IAgentToolModule>(sp => sp.GetRequiredService<BrowserToolModule>());
         return services;
     }

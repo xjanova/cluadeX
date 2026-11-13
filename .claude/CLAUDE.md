@@ -657,6 +657,29 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
 - Proven by `tests/apitest --newchat` (21) and `tests/chattest` NA1–NA6 (`CHATTEST_ONLY=NA`, 20). Not yet driven by hand
   in the running app.
 
+## The agent says which browser it drives and switches it on command (2026-11-13, after 3.0.328)
+- Owner: "โปรแกรมต้องสามารถใช้งาน Edge หรือ Chrome ผ่าน extension ตัวเองได้อิสระตามสั่ง และรู้ว่าใช้บราวเซอร์อะไรอยู่ โดยไม่ได้อาศัย
+  mcp ของ claude code", then "ใช้ mcp claude เมื่อสั่ง หรืออย่างอื่นใช้ไม่ได้". Until now only the owner could pick the browser
+  (Settings ▸ Agent), and no tool said which one was in use.
+- Two tools in `BrowserToolModule` (so every provider has them — the native loop, and each CLI through ChatToolBridge):
+  - `browser_status` (read-only, free): the built-in pane, or the user's own Chrome / Edge through CluadeX's own extension
+    with its version; the user's choice; which browsers are installed; the open page; how to switch.
+  - `browser_use target=edge|chrome|any|builtin`: keeps the choice (`ChromeBridgeConnector.Use`), closes the page of the
+    browser it leaves, starts the wanted browser when it is closed (`StartBrowser`), waits for its extension
+    (`UseWait` 25 s, + 40 s when the connection was off until that call: the extension finds the host again on a
+    one-minute alarm) and answers with the browser now in use — or a failure that says why. `builtin` is the same switch
+    as Settings' (it removes the host registration).
+- Permission: free between the user's own browsers and back to the pane; **from the pane to the user's own browser asks
+  once per chat, even with permissions off** (their sign-ins). Sites still ask one by one as before.
+- Order of routes, said in the browser prompt section and in `ChatToolBridge.BrowserHint`: CluadeX's own tools first;
+  Claude in Chrome (the `cluadex-chrome` managed MCP entry, a `chrome__*` bridge) only when the user names it, or when a
+  CluadeX browser call answers that its browser cannot be used — and the agent says which one it uses. The Claude in
+  Chrome connector is NOT switched off: the owner keeps it as the second route.
+- Proven by `tests/apitest --bridge` (25: the real server + connector + module on a pipe of its own with made-up Chrome
+  and Edge clients; the harness never starts a browser and never runs `builtin`, which would write the real host
+  registration), `tests/browsertest` (the 16 tools offered) and `tests/safetytest --chattools`. **Not yet:** the two real
+  browsers switched by a chat command in the running app.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

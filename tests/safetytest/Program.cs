@@ -986,13 +986,16 @@ internal static class Program
     {
         var names = CluadeX.Services.Tools.ChatToolBridge.QualifiedToolNames;
         var tools = CluadeX.Services.Browser.BrowserToolModule.ToolNames;
-        Check("browser: all 14 tools are in the CLI's list and in tools/list",
-            tools.Count == 14 && tools.All(n => names.Contains("mcp__cluadex__" + n) && list.Contains($"\"name\":\"{n}\"")), list.Length.ToString());
+        Check("browser: all 16 tools (browser_status and browser_use among them) are in the CLI's list and in tools/list",
+            tools.Count == 16 && tools.Contains("browser_status") && tools.Contains("browser_use") && tools.All(n => names.Contains("mcp__cluadex__" + n) && list.Contains($"\"name\":\"{n}\"")), list.Length.ToString());
         Check("browser: Claude Dev's args allow them and its prompt puts them first",
             CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "opus", "high", "c.json").Contains("mcp__cluadex__browser_eval")
             && CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "opus", "high", "c.json").Contains("before any other browser tool"));
         Check("browser: no cluadex server, no browser line", !CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "opus", "high").Contains("browser_open"));
-        Check("browser: a refused browser says why and forbids switching tools",
+        // Owner 2026-11-13: CluadeX's own extension first; Claude in Chrome "เมื่อสั่ง หรืออย่างอื่นใช้ไม่ได้".
+        Check("browser: a refused browser lets another route stand in only then, and the agent says which",
+            CluadeX.Services.Tools.ChatToolBridge.BrowserHint("Dev Preview is off") is var fallback && fallback.Contains("may then be used") && fallback.Contains("say which one you are using"));
+        Check("browser: a refused browser says why",
             CluadeX.Services.Tools.ChatToolBridge.BrowserHint("Dev Preview is off") is var h && h.Contains("Dev Preview is off") && h.Contains("unavailable") && !h.Contains('\n'));
         Check("browser: Codex runs them unasked, waits on a card, calls them directly",
             codex.Any(o => o.Contains("browser_click={approval_mode='approve'}") && o.Contains("tool_timeout_sec=14400") && o.Contains("omit_tools_from")), string.Join("\n", codex));
