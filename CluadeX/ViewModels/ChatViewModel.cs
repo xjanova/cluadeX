@@ -338,10 +338,14 @@ public partial class ChatViewModel : ViewModelBase
         }
         else if (projectFilter != null)
         {
-            // The project's chats; a split chat follows its parent in, as above.
+            // The project's chats, and the chats in no project — those always show (owner 2026-11-13): they have no row
+            // of their own to be reached through. A split chat follows its parent in, as above.
             var shown = new HashSet<string>(StringComparer.Ordinal);
             foreach (var s in rest)
-                if (ProjectOf(s) == projectFilter) shown.Add(s.Id);
+            {
+                string of = ProjectOf(s);
+                if (of == projectFilter || of.Length == 0) shown.Add(s.Id);
+            }
             for (bool grew = true; grew;)
             {
                 grew = false;

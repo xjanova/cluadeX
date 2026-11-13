@@ -623,6 +623,19 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
   and `try-branch.ps1` live on it.
 - Proven by `tests/apitest --update` (33, localhost only). The pack flag itself is proven by the PR's build run.
 
+## Chats in no project always show (2026-11-13, after 3.0.326)
+- Owner: "แชทที่ไม่ได้อยู่ในโปรเจค ควรแสดงเสมอ ไม่ต้องจัดเป็นหมวดไม่ได้อยู่ในโปรเจค เพราะหาแชทไม่เจอเมื่อพับโปรเจค". With a project
+  picked the list held that project's chats only; a chat nobody filed was reachable through the "No project" row alone,
+  and that row is hidden with the project list.
+- The "No project" row and its filter (`ProjectFilterId == ""`) are gone. A picked project shows its chats **and** the
+  chats in no project (`RebuildVisibleSessions`; the history search follows). Another project's chats are still left out.
+- Folded with a project picked, the Projects header names it (`FoldedProjectFilterText`, in the accent colour) beside the
+  × that shows every chat again — a filtered list must not look like chats went missing.
+- A chat leaves its project by the row's menu ("นำออกจากโปรเจกต์") or by a drop on the Projects header (it was a drop on
+  the row that is gone).
+- Proven by `tests/chattest` PJ14 (`CHATTEST_ONLY=PROJ`, 60 checks). The header's text is read off the view model there:
+  the sidebar is MainWindow's, which that harness does not host.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

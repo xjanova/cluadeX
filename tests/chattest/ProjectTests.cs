@@ -268,23 +268,52 @@ internal static partial class Program
             && Persist.LoadSession(c1.Id)?.Messages.Count == 2, $"{row.ProjectPath} {row.UpdatedAt:o} vs {updatedBefore:o}");
         Check("PJ13 the project row counts it", alpha.ChatCount >= 1, alpha.ChatCount.ToString());
 
-        // PJ14 — the filter: only the project's chats (pinned ones stay on top); again = all; "No project".
-        var outsider = ChatInDb("pj14 outsider", "q", "a");
+        // PJ14 — the filter: the project's chats (pinned ones stay on top) and, always, the chats in no project (owner
+        // 2026-11-13: they had a "No project" row of their own, hidden with the project list — so they could not be
+        // found); another project's chats are left out; again = all.
+        var outsider = ChatInDb("pj14 chat in no project", "q", "a");
+        var inBeta = ChatInDb("pj14 chat in beta", "q", "a");
+        Vm.MoveChatToProject(inBeta.Id, beta.Id);
         var pinned = ChatInDb("pj14 pinned outsider", "q", "a");
         Vm.TogglePinCommand.Execute(pinned.Id);
         Vm.SelectProjectFilterCommand.Execute(alpha.Id);
         await Render();
-        Check("PJ14 picking a project shows its chats and not others; a pinned chat stays first",
+        Check("PJ14 picking a project shows its chats and leaves another project's out; a pinned chat stays first",
             Vm.ProjectFilterId == alpha.Id && alpha.IsSelected && Vm.VisibleSessions.Any(s => s.Id == c1.Id)
-            && !Vm.VisibleSessions.Any(s => s.Id == outsider.Id) && Vm.VisibleSessions.FirstOrDefault()?.Id == pinned.Id,
+            && !Vm.VisibleSessions.Any(s => s.Id == inBeta.Id) && Vm.VisibleSessions.FirstOrDefault()?.Id == pinned.Id,
             string.Join(" | ", Vm.VisibleSessions.Select(s => s.Title)));
-        Check("PJ14 the line above the list names the project", Vm.SidebarFilterText.Contains("Alpha"), Vm.SidebarFilterText);
-        Vm.SelectProjectFilterCommand.Execute("");
+        Check("PJ14 the chats in no project show too, whatever project is picked", Vm.VisibleSessions.Any(s => s.Id == outsider.Id),
+            string.Join(" | ", Vm.VisibleSessions.Select(s => s.Title)));
+        Check("PJ14 the line above the list names the project and says the chats in no project are with it",
+            Vm.SidebarFilterText.Contains("Alpha") && Vm.SidebarFilterText.Contains("+"), Vm.SidebarFilterText);
+        Vm.SelectProjectFilterCommand.Execute(beta.Id);
         await Render();
-        Check("PJ14 'No project' shows the chats in none (not the moved one)",
-            Vm.IsUngroupedSelected && Vm.VisibleSessions.Any(s => s.Id == outsider.Id) && !Vm.VisibleSessions.Any(s => s.Id == c1.Id));
-        Vm.SelectProjectFilterCommand.Execute("");
-        Check("PJ14 picking it again shows every chat", Vm.ProjectFilterId == null && !alpha.IsSelected);
+        Check("PJ14 with the other project picked: its chat and the chats in no project, not the first project's",
+            Vm.VisibleSessions.Any(s => s.Id == inBeta.Id) && Vm.VisibleSessions.Any(s => s.Id == outsider.Id) && !Vm.VisibleSessions.Any(s => s.Id == c1.Id),
+            string.Join(" | ", Vm.VisibleSessions.Select(s => s.Title)));
+        // the project list folded with a project picked: the header names it, and the chats in no project are still there
+        bool wasOpen = Vm.IsProjectsExpanded;
+        Vm.IsProjectsExpanded = false;
+        await Render();
+        // (the sidebar itself is MainWindow's; this harness hosts the chat page, so the header's text is read off the view model)
+        Check("PJ14 folded with a project picked: the header names it, and the chats in no project stay in the list",
+            Vm.HasFoldedProjectFilter && Vm.FoldedProjectFilterText.Contains("Beta") && Vm.VisibleSessions.Any(s => s.Id == outsider.Id),
+            $"folded={Vm.HasFoldedProjectFilter} text='{Vm.FoldedProjectFilterText}'");
+        Vm.IsProjectsExpanded = true;
+        await Render();
+        Check("PJ14 unfolded: the header is plain again (the picked row shows it)", !Vm.HasFoldedProjectFilter && Vm.FoldedProjectFilterText == "");
+        Vm.ClearProjectFilterCommand.Execute(null);
+        Vm.IsProjectsExpanded = false;
+        Check("PJ14 folded with no project picked: nothing beside the header", !Vm.HasFoldedProjectFilter && Vm.FoldedProjectFilterText == "");
+        Vm.SelectProjectFilterCommand.Execute(beta.Id);
+        Vm.IsProjectsExpanded = wasOpen;
+        Check("PJ14 there is no 'No project' group to pick: asking for it shows every chat",
+            ((Func<bool>)(() => { Vm.SelectProjectFilterCommand.Execute(""); return Vm.ProjectFilterId == null && !beta.IsSelected; }))()
+            && Vm.VisibleSessions.Any(s => s.Id == c1.Id) && Vm.VisibleSessions.Any(s => s.Id == inBeta.Id));
+        Vm.SelectProjectFilterCommand.Execute(alpha.Id);
+        Vm.SelectProjectFilterCommand.Execute(alpha.Id);
+        Check("PJ14 picking a project again shows every chat", Vm.ProjectFilterId == null && !alpha.IsSelected);
+        Vm.MoveChatToProject(inBeta.Id, "");
         Vm.TogglePinCommand.Execute(pinned.Id);
 
         // PJ15 — search: by the chat's name and by the project's name; a picked project limits it.
