@@ -623,6 +623,40 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
   and `try-branch.ps1` live on it.
 - Proven by `tests/apitest --update` (33, localhost only). The pack flag itself is proven by the PR's build run.
 
+## Chats in no project always show (2026-11-13, after 3.0.326)
+- Owner: "แชทที่ไม่ได้อยู่ในโปรเจค ควรแสดงเสมอ ไม่ต้องจัดเป็นหมวดไม่ได้อยู่ในโปรเจค เพราะหาแชทไม่เจอเมื่อพับโปรเจค". With a project
+  picked the list held that project's chats only; a chat nobody filed was reachable through the "No project" row alone,
+  and that row is hidden with the project list.
+- The "No project" row and its filter (`ProjectFilterId == ""`) are gone. A picked project shows its chats **and** the
+  chats in no project (`RebuildVisibleSessions`; the history search follows). Another project's chats are still left out.
+- Folded with a project picked, the Projects header names it (`FoldedProjectFilterText`, in the accent colour) beside the
+  × that shows every chat again — a filtered list must not look like chats went missing.
+- A chat leaves its project by the row's menu ("นำออกจากโปรเจกต์") or by a drop on the Projects header (it was a drop on
+  the row that is gone).
+- Proven by `tests/chattest` PJ14 (`CHATTEST_ONLY=PROJ`, 60 checks). The header's text is read off the view model there:
+  the sidebar is MainWindow's, which that harness does not host.
+
+## A task of its own can go to a new chat — the owner's call (2026-11-13, after 3.0.326)
+- Owner: "ถ้าคำสั่งที่เข้ามากลางแชทมันคนละ effort หรือควรเปลี่ยนโมเดล ก็แยกแชทไปดีกว่าไหม ใช้ได้กับทุก provider เลยด้วย". What a
+  long chat costs is the conversation, not the effort level: every step of an unrelated task re-reads it, and another
+  model reads all of it from nothing. A new chat starts from the task alone. **Nothing is split off unasked.**
+- `Services/Agents/NewChatAdvice.cs` (pure): `IsOwnTask` = real work by `AutoEffortPolicy` (not chat / question / retry /
+  carry-on), ≥ 40 chars, no word that points back at the conversation ("เมื่อกี้", "ที่เพิ่งแก้", "above", "continue" …);
+  "long" = `BigChatTokens` (80 000). Conservative on purpose: a card for a follow-up costs a click every time.
+- `ViewModels/ChatViewModel.NewChatAdvice.cs`, three places:
+  - a message typed while the reply runs: its row has **↗ ทำในแชทใหม่** beside Send now, always (no guess). It leaves
+    the run's queue (`AgentRunScope.WithdrawUserNote`; read already = refused with the reason) and starts a new chat;
+  - a task of its own sent in a long chat: a two-button card (`AskChoiceAsync`, in `SendMessageCore`). "In this chat"
+    sends it as usual and that chat is not asked again in this run of the app. Not for a skill, a message with
+    attachments, or while a card is already open;
+  - another model picked in a long chat with no run: a card — switch here, or a new chat with that model (asked before
+    `_switchingModel` is set, so the card can wait; the box shows the model that answers until then).
+- The new chat (`OpenOwnTaskChat`) is the owner's own, **not a split chat**: same folder, project and model, no parent
+  link, so it never reports back or wakes the first one. Its first turn starts off screen (`StartInternalTurnAsync`).
+- Settings ▸ Agent ▸ `SuggestNewChat` (on) turns the two cards off; the button stays.
+- Proven by `tests/apitest --newchat` (21) and `tests/chattest` NA1–NA6 (`CHATTEST_ONLY=NA`, 20). Not yet driven by hand
+  in the running app.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

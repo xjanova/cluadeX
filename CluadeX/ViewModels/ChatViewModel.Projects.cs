@@ -31,7 +31,10 @@ public partial class ChatViewModel
     // ─── the filter ───
 
     private string? _projectFilterId;
-    /// <summary>The sidebar shows one project's chats: its id, "" = the chats in no project, null = no project filter.</summary>
+    /// <summary>The sidebar shows one project's chats — and, always, the chats in no project: its id, null = no project
+    /// filter. There is no "No project" group any more (owner 2026-11-13: "แชทที่ไม่ได้อยู่ในโปรเจค ควรแสดงเสมอ ไม่ต้องจัดเป็น
+    /// หมวดไม่ได้อยู่ในโปรเจค เพราะหาแชทไม่เจอเมื่อพับโปรเจค"): a chat nobody filed was reachable only through that row, and
+    /// the row is hidden with the project list.</summary>
     public string? ProjectFilterId
     {
         get => _projectFilterId;
@@ -41,8 +44,8 @@ public partial class ChatViewModel
             _projectFilterId = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(HasProjectFilter));
-            OnPropertyChanged(nameof(IsUngroupedSelected));
             OnPropertyChanged(nameof(ProjectFilterName));
+            RaiseFoldedProjectFilter();
             foreach (var p in ChatProjects) p.IsSelected = p.Id == value;
             RebuildVisibleSessions();
             // A search in progress follows the filter.
@@ -51,16 +54,21 @@ public partial class ChatViewModel
     }
 
     public bool HasProjectFilter => _projectFilterId != null;
-    public bool IsUngroupedSelected => _projectFilterId == "";
 
     /// <summary>The filter's name for the line above the list.</summary>
     public string ProjectFilterName => _projectFilterId == null ? ""
-        : _projectFilterId.Length == 0 ? Loc("sidebar.project.none")
         : ChatProjects.FirstOrDefault(p => p.Id == _projectFilterId)?.Name ?? "";
 
-    private int _ungroupedChatCount;
-    /// <summary>Chats in no project (the "No project" row's number).</summary>
-    public int UngroupedChatCount { get => _ungroupedChatCount; private set => SetProperty(ref _ungroupedChatCount, value); }
+    /// <summary>A project is picked and the project list is folded: its row is out of sight, so the header names it —
+    /// a filtered list must never look like chats went missing.</summary>
+    public bool HasFoldedProjectFilter => HasProjectFilter && !IsProjectsExpanded;
+    public string FoldedProjectFilterText => HasFoldedProjectFilter ? "· " + ProjectFilterName : "";
+
+    private void RaiseFoldedProjectFilter()
+    {
+        OnPropertyChanged(nameof(HasFoldedProjectFilter));
+        OnPropertyChanged(nameof(FoldedProjectFilterText));
+    }
 
     public bool HasChatProjects => ChatProjects.Count > 0;
 
@@ -73,6 +81,7 @@ public partial class ChatViewModel
             if (value == IsProjectsExpanded) return;
             _settingsService.UpdateSettings(s => s.SidebarProjectsExpanded = value);
             OnPropertyChanged();
+            RaiseFoldedProjectFilter();
             if (value) RefreshProjectFolders();
         }
     }
@@ -115,14 +124,15 @@ public partial class ChatViewModel
             counts[pid] = counts.GetValueOrDefault(pid) + 1;
         }
         foreach (var p in ChatProjects) p.ChatCount = counts.GetValueOrDefault(p.Id);
-        UngroupedChatCount = counts.GetValueOrDefault("");
         OnPropertyChanged(nameof(HasChatProjects));
+        RaiseFoldedProjectFilter();   // (a picked project renamed elsewhere)
     }
 
-    /// <summary>Sidebar: show this project's chats ("" = the chats in no project); the same one again shows all.</summary>
+    /// <summary>Sidebar: show this project's chats (with the chats in no project, which always show); the same one again
+    /// — or anything that is not a project — shows all.</summary>
     public ICommand SelectProjectFilterCommand => _selectProjectFilterCommand ??= new RelayCommand<string>(id =>
-        ProjectFilterId = id == null || id == _projectFilterId ? null
-            : id.Length == 0 || ChatProjects.Any(p => p.Id == id) ? id : null);
+        ProjectFilterId = string.IsNullOrEmpty(id) || id == _projectFilterId ? null
+            : ChatProjects.Any(p => p.Id == id) ? id : null);
     private ICommand? _selectProjectFilterCommand;
 
     public ICommand ClearProjectFilterCommand => _clearProjectFilterCommand ??= new RelayCommand(() => ProjectFilterId = null);
@@ -432,7 +442,8 @@ public partial class ChatViewModel
             }
         if (_projectFilterId != null)
             list = list.Where(r => refHits.Contains(r.SessionId)
-                || Sessions.FirstOrDefault(s => s.Id == r.SessionId) is { } s && ProjectOf(s) == _projectFilterId).ToList();
+                // the picked project's chats, and the chats in no project: what the list itself shows
+                || Sessions.FirstOrDefault(s => s.Id == r.SessionId) is { } s && (ProjectOf(s) == _projectFilterId || ProjectOf(s).Length == 0)).ToList();
         return list;
     }
 }

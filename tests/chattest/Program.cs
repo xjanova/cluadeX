@@ -465,6 +465,15 @@ internal static partial class Program
             return Fail == 0 ? 0 : 1;
         }
 
+        // CHATTEST_ONLY=NA: a task goes to a new chat when the owner says so (NewChatAdviceTests.cs).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "NA")
+        {
+            await TestNewChatAdvice();
+            Log($"{Environment.NewLine}## Result (CHATTEST_ONLY=NA): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // CHATTEST_ONLY=PICK: just the full-screen model picker.
         if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PICK")
         {
@@ -567,6 +576,7 @@ internal static partial class Program
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
+        await TestNewChatAdvice();            // NA: a task of its own can go to a new chat (button on a queued message, two cards)
         await TestChatModels();               // CM: each chat keeps its own provider and model
         await TestConnectWizardJump();        // CW: a model that is not connected opens its wizard
         await TestModelPicker();              // PK: the full-screen model picker (provider → models, status, a pick applies)

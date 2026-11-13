@@ -368,6 +368,19 @@ public partial class ChatViewModel
     private async Task SwitchChatModelAsync(ChatModelChoice c, bool carryOnNow = false)
     {
         if (_switchingModel) return;
+        // The owner's pick in a chat that is already long: the new model would read the whole conversation from nothing.
+        // Asked first — before the box is marked as switching, so the card can wait as long as it likes.
+        if (carryOnNow && !c.NeedsKey && c.Provider is not (AiProviderType.Local or AiProviderType.LlamaServer))
+        {
+            var place = await AskModelPickPlaceAsync(c);
+            if (place == ModelPickPlace.Cancelled || _switchingModel)
+            {
+                RefreshChatModelChoices();
+                OnPropertyChanged(nameof(SelectedChatModel));
+                return;
+            }
+            if (place == ModelPickPlace.NewChat) { CancelPendingChatLoad(); NewSession(); }   // the pick below is the new chat's
+        }
         _switchingModel = true;
         var pickedIn = CurrentSession;   // the chat this pick is for (each chat keeps its own — ChatViewModel.ChatModel.cs)
         try

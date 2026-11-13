@@ -600,6 +600,15 @@
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.suggestNewChat}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.suggestNewChatDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SuggestNewChat}" VerticalAlignment="Center" Margin="16,0,0,0"
+                                              AutomationProperties.AutomationId="SuggestNewChat"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
                                         <TextBlock Text="{services:Loc settings.splitAutoContinue}" Style="{StaticResource SettingLabel}"/>
                                         <TextBlock Text="{services:Loc settings.splitAutoContinueDesc}" Style="{StaticResource SettingDesc}"/>
                                     </StackPanel>

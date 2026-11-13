@@ -290,6 +290,11 @@ public class AppSettings
     /// there with the result. Off = a notice row only, and the owner sends when they want.</summary>
     public bool WatchAutoContinue { get; set; } = true;
 
+    /// <summary>In a chat that is already long, a new task of its own — or another model — asks first whether to go to a
+    /// new chat (Services/Agents/NewChatAdvice.cs). Off = always in the chat on screen; the "do it in a new chat" button
+    /// on a queued message stays.</summary>
+    public bool SuggestNewChat { get; set; } = true;
+
     /// <summary>A split chat the AI opened (new_chat) that ends its turn while its parent chat sits idle starts a turn in the
     /// parent with its report, once the last of the parent's split chats is done — as a Claude Code session is woken by
     /// its side sessions. Off = the report waits in the parent as a notice row until the owner sends.</summary>

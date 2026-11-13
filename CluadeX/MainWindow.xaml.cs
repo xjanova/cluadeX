@@ -260,7 +260,7 @@ public partial class MainWindow : Window
 
     private void ProjectRow_DragOver(object sender, DragEventArgs e) => Views.SidebarMenus.ProjectRowDragOver(e);
 
-    /// <summary>A chat dropped on a project row — or on the "No project" row (no project behind it: out of any).</summary>
+    /// <summary>A chat dropped on a project row — or on the Projects header (no project behind it: out of any).</summary>
     private void ProjectRow_Drop(object sender, DragEventArgs e) =>
         Views.SidebarMenus.ProjectRowDrop(_viewModel.ChatVM, ((sender as FrameworkElement)?.DataContext as Models.ChatProject)?.Id ?? "", e);
 

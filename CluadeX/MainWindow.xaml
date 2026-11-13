@@ -912,7 +912,8 @@
                             <!-- Projects: named groups of chats (owner 2026-11-01). A row shows only its chats (again = all); a chat
                                  dropped on it moves in; right-click for a new chat in it, rename, its folder, delete. -->
                             <StackPanel Margin="10,0,10,6">
-                                <Grid Margin="2,0,4,2">
+                                <!-- a chat dropped on the header leaves its project (the chats in no project have no row: they always show in the list) -->
+                                <Grid Margin="2,0,4,2" Background="Transparent" AllowDrop="True" DragOver="ProjectRow_DragOver" Drop="ProjectRow_Drop">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
@@ -930,6 +931,11 @@
                                                        Visibility="{Binding ChatVM.IsProjectsExpanded, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                                             <TextBlock Text="{services:Loc sidebar.projects}" FontSize="11" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                            <!-- folded with a project picked: its name stays in view, so a filtered list never looks like chats went missing -->
+                                            <TextBlock x:Name="FoldedProjectFilter" Text="{Binding ChatVM.FoldedProjectFilterText}" FontSize="11" Margin="6,0,0,0"
+                                                       MaxWidth="130" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Accent.1}"
+                                                       Visibility="{Binding ChatVM.HasFoldedProjectFilter, Converter={StaticResource BoolVis}}"/>
                                         </StackPanel>
                                     </Button>
                                     <!-- a project is picked: back to every chat -->
@@ -1005,37 +1011,6 @@
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
                                     </ScrollViewer>
-                                    <!-- the chats in no project: pick them, or drop a chat here to take it out of its project -->
-                                    <Button Command="{Binding ChatVM.SelectProjectFilterCommand}" CommandParameter=""
-                                            Template="{StaticResource SidebarProjectRowTemplate}"
-                                            Background="Transparent" BorderThickness="0" Cursor="Hand" Padding="8,4" Margin="0,1"
-                                            HorizontalContentAlignment="Stretch" AllowDrop="True"
-                                            DragOver="ProjectRow_DragOver" Drop="ProjectRow_Drop"
-                                            ToolTip="{services:Loc sidebar.project.noneTip}"
-                                            Visibility="{Binding ChatVM.HasChatProjects, Converter={StaticResource BoolVis}}">
-                                        <Button.Style>
-                                            <Style TargetType="Button">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding ChatVM.IsUngroupedSelected}" Value="True">
-                                                        <Setter Property="Tag" Value="picked"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Button.Style>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="&#xE8BD;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"
-                                                       Foreground="{DynamicResource Text.Faint}"/>
-                                            <TextBlock Grid.Column="1" Text="{services:Loc sidebar.project.none}" FontSize="12" VerticalAlignment="Center"
-                                                       Foreground="{DynamicResource Text.Secondary}" TextTrimming="CharacterEllipsis"/>
-                                            <TextBlock Grid.Column="2" Text="{Binding ChatVM.UngroupedChatCount}" FontSize="10.5" Margin="6,0,0,0"
-                                                       VerticalAlignment="Center" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"/>
-                                        </Grid>
-                                    </Button>
                                 </StackPanel>
                             </StackPanel>
                             </StackPanel>
