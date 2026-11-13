@@ -354,8 +354,10 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
         bool worker = grant is { Edit: true } || grant is { Run: true };
         var sink = worker ? ClaudeDevProvider.StreamSink.Value : null;
         var extras = ClaudeDevProvider.Extras.Value;
-        string model = _settingsService.Settings.ProviderConfigs.TryGetValue(Id, out var cfg)
-            && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId! : "";
+        // The chat's own model first (each chat keeps its own: Services/ChatModelStore.cs), else the one in Settings.
+        string model = AgentRunScope.Current?.ModelFor(Id) is { Length: > 0 } pinned ? pinned
+            : _settingsService.Settings.ProviderConfigs.TryGetValue(Id, out var cfg)
+              && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId! : "";
 
         // The turn's plugin: the guard (every turn — it is the permission system), the chat tools, the brain.
         var userServers = UserServers();

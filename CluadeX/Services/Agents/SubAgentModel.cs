@@ -27,6 +27,13 @@ public static class SubAgentModel
     /// <summary>The configured model, unless this flow is a sub-agent routed to another or a chat with its own.</summary>
     public static string Pick(string configured) => Override ?? ChatModel ?? configured;
 
+    /// <summary>The model for a request of provider <paramref name="providerId"/>: a sub-agent routed to another, else the
+    /// Fable chat's own, else the model the run's chat is pinned to ON THAT PROVIDER (each chat keeps its own —
+    /// Services/ChatModelStore.cs), else what Settings hold. Every provider asks here, so a model picked in one chat
+    /// never reaches another chat's requests.</summary>
+    public static string PickFor(string providerId, string configured) =>
+        Override ?? ChatModel ?? AgentRunScope.Current?.ModelFor(providerId) ?? configured;
+
     /// <summary>A task budget (tokens) for this flow's Fable requests (<c>output_config.task_budget</c>), or null.</summary>
     public static int? TaskBudget => BudgetSlot.Value;
 

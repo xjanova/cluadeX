@@ -1271,9 +1271,14 @@ public partial class CodeAgentService
 
     // ─── Tool images (vision) ───
 
-    /// <summary>The model id configured for <paramref name="p"/> ("" = the provider's own default).</summary>
+    /// <summary>The model id <paramref name="p"/> answers this run with: the one the run's chat is pinned to on that
+    /// provider (each chat keeps its own), else the one configured in Settings ("" = the provider's own default).</summary>
     private string ModelIdFor(Services.Providers.IAiProvider? p)
     {
+        // The loop compares this with the model its conversation was built for, and re-writes the conversation when
+        // they differ. Read from Settings alone, a model picked in ANOTHER chat on the same provider did that to
+        // every run in progress.
+        if (p != null && AgentRunScope.Current?.ModelFor(p.ProviderId) is { Length: > 0 } pinned) return pinned;
         try
         {
             if (p != null && _settingsService.Settings.ProviderConfigs.TryGetValue(p.ProviderId, out var cfg))
@@ -2177,7 +2182,22 @@ public partial class CodeAgentService
         // from "the user never sent anything".
         var prov = _providerManager.ActiveProvider;
         _debugLog?.Info("Agent", $"turn start · provider={prov?.ProviderId ?? "null"} ready={prov?.IsReady} "
-            + $"nativeTools={prov?.SupportsNativeToolUse} msgLen={userMessage?.Length ?? 0} history={history.Count}");
+            + $"nativeTools={prov?.SupportsNativeToolUse} msgLen={userMessage?.Length ?? 0} history={history.Count}"
+            + (AgentRunScope.Current?.PinnedProviderId is { } pinId ? $" · chat pinned to {pinId}/{AgentRunScope.Current?.PinnedModel ?? "(its default)"}" : ""));
+
+        // A chat keeps its own provider, which need not be the app's pick: one that was never started in this run of
+        // the app is started now (the readiness check before a turn looks at the app's pick only).
+        if (prov is { IsReady: false } && AgentRunScope.Current?.PinnedProviderId != null)
+        {
+            try
+            {
+                using var starting = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                starting.CancelAfter(TimeSpan.FromSeconds(20));
+                await prov.InitializeAsync(starting.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { _debugLog?.Warn("Agent", $"{prov.ProviderId} did not start in 20 s"); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _debugLog?.Warn("Agent", $"{prov.ProviderId} did not start: {ex.Message}"); }
+        }
 
         // ─── "Are you connected to the brain?" — answered by the app, not the model ───
         // Any answer a program can compute must never be generated. This one is a C#

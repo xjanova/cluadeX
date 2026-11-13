@@ -563,6 +563,28 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
   with made-up Chrome and Edge clients) and `tests/themetest --settings`. **Not yet:** the two real browsers switching in
   the running app, and `chrometest` (not run: the owner's Chrome with the extension was open).
 
+## Each chat keeps its own provider and model (2026-11-13)
+- Owner: "บางแชทใช้ fable บางแชทใช้ opus หรือ codex มันกลายเป็นใช้ร่วมกันทั้งหมด … แชทใครแชทมัน … เลยกลายเป็นสลับโมเดลกลางแชท
+  ซึ่งทำให้เสียโทเค็นหนัก". The pick was one for the whole app (`Settings.ActiveProvider` + each provider's `SelectedModel`)
+  and every provider read the model from Settings on every request: a model picked in chat B reached chat A's next turn,
+  and on the same provider chat A's run in progress — whose loop then re-wrote its conversation for the new model.
+- `Services/ChatModelStore.cs` (`<data root>\chat-models.json`): chat id → provider + model. Not pinned: Local, LlamaServer
+  (one set of weights for the app) and the BrainX room.
+- A run carries the pin (`AgentRunScope.PinModel` / `ModelFor(providerId)`, copied to sub-agents) and **every provider reads
+  it before Settings** (`SubAgentModel.PickFor`, the CLI providers, Ollama; `CodeAgentService.ModelIdFor`). The pin names one
+  provider: a run that goes on with a failover stand-in gets that one's model from Settings.
+- `ViewModels/ChatViewModel.ChatModel.cs`: a turn begins (`PinChatModel`, in `BeginTurnFor`) on the chat's own provider and
+  model — a chat with none takes the pick of that moment (a chat another chat's agent opened: that chat's pin) and keeps
+  it. The model box / picker stamps the chat on screen and re-pins its run (`RememberChatPick`). Opening a chat makes the
+  app's pick that chat's (`FollowChatPick`, nothing stopped or carried over), so the composer shows what THIS chat runs
+  on. Rule for the chat on screen: what the composer shows is what runs (`AppPickIsFor`) — a pick changed on the Settings
+  page is the chat's from its next turn. A chat off screen runs on the pick it keeps, whatever is on screen.
+- The app's pick still exists: it is what a new chat starts with. `AiProviderManager.FindProvider` = the registered provider
+  or null (GetProvider hands back the active one instead).
+- Proven by `tests/apitest --chatmodel` (21: the store, the pin, the real OpenAI provider asked under two runs against a
+  localhost server that records each request's model) and `tests/chattest` CM1–CM11 (`CHATTEST_ONLY=CM`, with MS).
+  **Not yet:** two real chats on Claude Dev (fable / opus) and Codex side by side in the running app.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

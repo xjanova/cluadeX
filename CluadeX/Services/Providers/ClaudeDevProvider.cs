@@ -679,7 +679,9 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         bool worker = grant is { Edit: true } || grant is { Run: true };
         var sink = worker ? StreamSink.Value : null;
         // A chat with a model of its own (a Fable split chat) runs on it; every other chat on the pick.
+        // (and a chat pinned to a Claude Dev model keeps it: another chat's pick in Settings does not reach this turn)
         string model = Agents.SubAgentModel.ChatModel is { Length: > 0 } own ? own
+            : AgentRunScope.Current?.ModelFor(ProviderId) is { Length: > 0 } pinned ? pinned
             : _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
               && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
         var effortScope = AgentRunScope.Current;

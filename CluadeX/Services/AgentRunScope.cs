@@ -42,6 +42,29 @@ public sealed class AgentRunScope
     public Providers.IAiProvider? Provider { get; set; }
     public Models.AiProviderType? ProviderType { get; set; }
 
+    /// <summary>The provider id ("Anthropic", "OpenAIDev" …) and the model this run's chat is pinned to
+    /// (Services/ChatModelStore.cs): each chat keeps its own, and a provider asked for a request reads it here before
+    /// Settings (<see cref="ModelFor"/>). Null = the chat follows the app's pick. It names ONE provider: a run that
+    /// goes on with another one (a failover stand-in) gets that one's model from Settings.</summary>
+    public string? PinnedProviderId => _pin?.ProviderId;
+    public string? PinnedModel => _pin?.Model;
+
+    /// <summary>The pin as one object: the owner's pick (UI thread) replaces it whole, so the run's thread never reads a
+    /// new provider with the old model.</summary>
+    private sealed record ModelPin(string ProviderId, string? Model);
+    private volatile ModelPin? _pin;
+
+    /// <summary>Pin this run to <paramref name="model"/> on <paramref name="providerId"/> (null / empty = no pin).</summary>
+    public void PinModel(string? providerId, string? model) =>
+        _pin = string.IsNullOrWhiteSpace(providerId) ? null
+            : new ModelPin(providerId!.Trim(), string.IsNullOrWhiteSpace(model) ? null : model!.Trim());
+
+    /// <summary>The model this run's chat keeps for <paramref name="providerId"/>, or null when it is pinned to another
+    /// provider, to none, or to the provider's own default.</summary>
+    public string? ModelFor(string? providerId) =>
+        _pin is { Model: { } model } pin && providerId != null && string.Equals(pin.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
+            ? model : null;
+
     /// <summary>The run left the provider it started on BY ITSELF (out of quota, refused, not answering, or the pick was
     /// still cooling when the turn began) and goes on with a stand-in. The chat's model button then names what really
     /// answers and a badge says it was switched (owner 2026-11-13: "การสลับโมเดลอัตโนมัติ ควรเปลี่ยนโมเดลในช่องกรอกแชท
@@ -320,6 +343,7 @@ public sealed class AgentRunScope
             EffortWhy = EffortWhy,
         };
         foreach (var f in ExtraFolders) child.AddExtraFolder(f);
+        child.PinModel(PinnedProviderId, PinnedModel);   // a sub-agent on the same provider runs on the chat's model
         return child;
     }
 
