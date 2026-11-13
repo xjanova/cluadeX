@@ -527,6 +527,26 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
   only: it prints each with its version and the one picked). **Not yet:** a real Claude Dev turn on the newer copy, and
   the model id its `fable` alias reports — the harness's shell is not signed in to the CLI.
 
+## Failed tools: what is normal, and the two that were not (2026-11-13)
+- Owner: "เครื่องมือที่ล้มเหลว หลายอย่าง มันปกติหรือต้องแก้". 1–13 Nov, native loop: 2,041 tool calls, 92 failed (4.5 %;
+  1–5 % on an ordinary day). Most are the tool telling the truth — a command's exit code, a red build or test, a port in
+  use, a file outside the project, message_chat's cap. The 4 Nov spike (53 %) was one model reading a file that did not
+  exist 16 times: the loop guard (6 Nov) ends that.
+- **run_build / run_tests know Flutter / Dart and Laravel** (`FileSystemService.DartCommand`, `PhpTestCommand`,
+  `FindPhpExe`). They answered "couldn't detect a build system" in the owner's Flutter apps (3 of 13 run_build calls).
+  A Flutter project's build is `flutter analyze --no-fatal-infos --no-fatal-warnings` (a plain Dart package:
+  `dart analyze --no-fatal-warnings`): the analyzer type-checks in seconds and names the file and line, only errors fail
+  it. Tests are `flutter test` / `dart test` when the project has a `test\*_test.dart`. A Laravel app's tests are
+  `php artisan test` (PHPUnit with its config otherwise), before package.json's `npm test`; PHP is "php" on PATH, else
+  Laragon's newest (`C:\laragon\bin\php\…`), else XAMPP's. No tool on the PC = no command, never one that cannot start.
+- **An MCP call that timed out says so in full** (`AgentToolService.McpFailureText`): no answer in 180 s is not a
+  refusal, the work may still be running on the other side, check with a call that only reads (ssh_run: ssh_tail)
+  before sending it again. Five ssh_run calls ended as a bare "timed out" on 5 Nov — a deploy sent twice is the risk.
+- Proven by `tests/apitest --buildfind` (16 checks; S3b–S3i are these) and `tests/tooltest`. The Flutter command was
+  run for real on a two-file project: a warning alone exits 0, a type error exits 1 with `lib\main.dart:2:23`.
+  **Not yet:** `php artisan test` run for real, and a Flutter chat in the running app.
+- Not looked at: tools a CLI agent (Codex, Claude Dev) runs itself — they are not in CluadeX's log line by line.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

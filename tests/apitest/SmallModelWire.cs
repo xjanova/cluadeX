@@ -95,6 +95,66 @@ internal static class SmallModelWire
             Check("S3 DetectProjectCommand finds the Python build at the project root (when Python is installed)",
                 pythonHere ? det?.Command == a : det == null, det?.Command ?? "null");
 
+            // ── a Flutter / Dart project and a Laravel one have a build and tests (2026-11-13: "couldn't detect a build
+            //    system" in the owner's Flutter apps) ──
+            string app = Path.Combine(root, "flutterapp"), lib = Path.Combine(root, "dartlib"), web = Path.Combine(root, "laravel"),
+                plainPhp = Path.Combine(root, "phplib");
+            Directory.CreateDirectory(Path.Combine(app, "test"));
+            File.WriteAllText(Path.Combine(app, "pubspec.yaml"), "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n");
+            File.WriteAllText(Path.Combine(app, "test", "widget_test.dart"), "void main() {}");
+            Directory.CreateDirectory(lib);
+            File.WriteAllText(Path.Combine(lib, "pubspec.yaml"), "name: lib\nenvironment:\n  sdk: ^3.0.0\n");
+            const string F = @"D:\SDK\Flutter\bin\flutter.bat", D = @"D:\SDK\Flutter\bin\dart.bat";
+            Check("S3b a Flutter app builds with the analyzer (errors only, not its lints) and tests with flutter test",
+                FileSystemService.DartCommand(app, false, F, D) == "flutter analyze --no-fatal-infos --no-fatal-warnings"
+                && FileSystemService.DartCommand(app, true, F, D) == "flutter test",
+                $"{FileSystemService.DartCommand(app, false, F, D)} · {FileSystemService.DartCommand(app, true, F, D)}");
+            Check("S3c a plain Dart package: dart analyze; no test folder = no tests to run (not a command that fails)",
+                FileSystemService.DartCommand(lib, false, F, D) == "dart analyze --no-fatal-warnings" && FileSystemService.DartCommand(lib, true, F, D) == null,
+                $"{FileSystemService.DartCommand(lib, false, F, D)} · {FileSystemService.DartCommand(lib, true, F, D) ?? "null"}");
+            Check("S3d no Flutter and no Dart on PATH → nothing is offered (a command that cannot start is no check); a Flutter app with only Dart still analyzes, but its tests need Flutter",
+                FileSystemService.DartCommand(app, false, null, null) == null && FileSystemService.DartCommand(app, true, null, null) == null
+                && FileSystemService.DartCommand(app, false, null, D) == "dart analyze --no-fatal-warnings" && FileSystemService.DartCommand(app, true, null, D) == null
+                && FileSystemService.DartCommand(Path.Combine(root, "nowhere"), false, F, D) == null, "");
+            Directory.CreateDirectory(web);
+            File.WriteAllText(Path.Combine(web, "artisan"), "<?php");
+            File.WriteAllText(Path.Combine(web, "composer.json"), "{}");
+            File.WriteAllText(Path.Combine(web, "package.json"), "{}");
+            Directory.CreateDirectory(Path.Combine(plainPhp, "vendor", "bin"));
+            File.WriteAllText(Path.Combine(plainPhp, "phpunit.xml.dist"), "<phpunit/>");
+            File.WriteAllText(Path.Combine(plainPhp, "vendor", "bin", "phpunit"), "#!/usr/bin/env php");
+            const string Laragon = @"C:\laragon\bin\php\php-8.3.33-Win32-vs16-x64\php.exe";
+            Check("S3e a Laravel app tests with artisan test (PHP on PATH as \"php\", Laragon's by its quoted path); PHPUnit with its config and vendor copy",
+                FileSystemService.PhpTestCommand(web, "php") == "php artisan test"
+                && FileSystemService.PhpTestCommand(web, Laragon) == "\"" + Laragon + "\" artisan test"
+                && FileSystemService.PhpTestCommand(plainPhp, "php") == "php vendor/bin/phpunit",
+                $"{FileSystemService.PhpTestCommand(web, Laragon)} · {FileSystemService.PhpTestCommand(plainPhp, "php")}");
+            Check("S3f no PHP on this PC, or a folder that is not a PHP project → no PHP test command",
+                FileSystemService.PhpTestCommand(web, null) == null && FileSystemService.PhpTestCommand(web, "") == null
+                && FileSystemService.PhpTestCommand(docs, "php") == null && FileSystemService.PhpTestCommand(app, "php") == null, "");
+            // through the detector, on what this PC really has
+            var fsApp = new FileSystemService { WorkingDirectory = app };
+            string? realBuild = FileSystemService.DartCommand(app, false), realTest = FileSystemService.DartCommand(app, true);
+            Check("S3g the detector hands a Flutter project's build and tests to run_build / run_tests (when Flutter is on PATH), from the root and from one folder up",
+                fsApp.DetectProjectCommand(test: false)?.Command == realBuild && fsApp.DetectProjectCommand(test: true)?.Command == realTest
+                && (realBuild == null || new FileSystemService { WorkingDirectory = Path.Combine(root, "holder") }.DetectProjectCommand(test: false) == null),
+                $"flutter on PATH: {realBuild != null} · {fsApp.DetectProjectCommand(test: false)?.Command ?? "null"} · {fsApp.DetectProjectCommand(test: true)?.Command ?? "null"}");
+            var fsWeb = new FileSystemService { WorkingDirectory = web };
+            string? php = FileSystemService.FindPhpExe();
+            Check("S3h a Laravel app's tests are artisan's, not \"npm test\" (when PHP is on this PC; else npm's, as before)",
+                fsWeb.DetectProjectCommand(test: true)?.Command == (php != null ? FileSystemService.PhpTestCommand(web, php) : "npm test"),
+                $"php: {php ?? "none"} · {fsWeb.DetectProjectCommand(test: true)?.Command ?? "null"}");
+
+            // ── an MCP call that timed out is not a refusal: the model is told to look before sending it again ──
+            string timedOut = AgentToolService.McpFailureText("brainx-brain", "ssh_run", new TimeoutException("MCP request 'tools/call' timed out after 180000ms"));
+            string refused = AgentToolService.McpFailureText("brainx-brain", "ssh_run", new InvalidOperationException("host_key_mismatch"));
+            string otherTool = AgentToolService.McpFailureText("xdreamer", "render", new TimeoutException("MCP request 'tools/call' timed out after 180000ms"));
+            Check("S3i a timed-out MCP call says the work may still be running and to check before sending it again (ssh: ssh_tail); another failure stays as it was",
+                timedOut.StartsWith("MCP call failed (brainx-brain/ssh_run): MCP request 'tools/call' timed out after 180000ms")
+                && timedOut.Contains("NOT a refusal") && timedOut.Contains("may still be running") && timedOut.Contains("Do not send the same call again") && timedOut.Contains("ssh_tail")
+                && otherTool.Contains("NOT a refusal") && !otherTool.Contains("ssh_tail")
+                && refused == "MCP call failed (brainx-brain/ssh_run): host_key_mismatch", timedOut);
+
             // ── run_tests with no tests: says so, and says how to check instead of hunting for pytest ──
             string pyMsg = AgentToolService.NoTestsMessage(pkg), docMsg = AgentToolService.NoTestsMessage(docs),
                 noDir = AgentToolService.NoTestsMessage(null);

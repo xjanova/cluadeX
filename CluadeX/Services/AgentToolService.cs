@@ -3004,7 +3004,7 @@ public class AgentToolService : IDisposable
         }
         BuildRun Failed(string msg) => new(Fail(call, msg), "", "", Array.Empty<CluadeX.Helpers.LockedFiles.LockedOutput>(), null);
         if (string.IsNullOrEmpty(cmd))
-            return Failed($"{call.ToolName}: {NothingToRunMarker} build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/*.py…). Nothing was built, so this says nothing about your change. Pass an explicit 'command', or use run_command.");
+            return Failed($"{call.ToolName}: {NothingToRunMarker} build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/pubspec.yaml/package.json/pom.xml/Makefile/*.py…). Nothing was built, so this says nothing about your change. Pass an explicit 'command', or use run_command.");
 
         string? scratchDir = null;
         if (scratch)
@@ -4312,8 +4312,25 @@ public class AgentToolService : IDisposable
         }
         catch (Exception ex)
         {
-            return (Fail(call, $"MCP call failed ({serverName}/{toolName}): {ex.Message}"), key, null);
+            return (Fail(call, McpFailureText(serverName, toolName, ex)), key, null);
         }
+    }
+
+    /// <summary>
+    /// What the model reads when an MCP call did not come back. A timeout is not a refusal: the server took the call
+    /// and may still be doing the work — a deploy or a migration over ssh_run went on running on the server while the
+    /// model, told only "timed out", was free to send it again (owner's log, 2026-11-05: five ssh_run calls ended this
+    /// way at the 180 s limit). So a timeout says that the work may be under way and to look before sending it again.
+    /// </summary>
+    public static string McpFailureText(string serverName, string toolName, Exception ex)
+    {
+        string text = $"MCP call failed ({serverName}/{toolName}): {ex.Message}";
+        if (ex is not TimeoutException) return text;
+        bool ssh = toolName.Contains("ssh", StringComparison.OrdinalIgnoreCase);
+        return text + ". No answer in time is NOT a refusal: what this call started may still be running on the other side, or may have "
+            + "finished. Do not send the same call again yet — first check what happened with a call that only reads"
+            + (ssh ? " (ssh_tail on that host, or a short status command)" : "")
+            + ", then decide. A long job is better started in the background and looked at afterwards.";
     }
 
     /// <summary>

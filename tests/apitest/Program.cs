@@ -140,6 +140,8 @@ internal static class Program
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--routines")) { await RoutinesWire.Run(Check, Section); return Finish(); }
         // which Claude Code CLI Claude Dev runs when the PC has several (the newest), on a made-up disk
+        // what run_build / run_tests find to run (Python, Flutter / Dart, Laravel) and what a failed tool says
+        if (args.Contains("--buildfind")) { SmallModelWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--clifind-real")) { await CliParityWire.RunCliFindReal(Check, Section); return Finish(); }
         if (args.Contains("--clifind")) { await CliParityWire.RunCliFind(Check, Section); return Finish(); }
         // the automatic change of provider (order, the run's record of it, the cooldown) and where "auto" effort starts
