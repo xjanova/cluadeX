@@ -128,6 +128,8 @@ internal static class VoiceKeys
             "สาวที่ตอบเป็นคนอ่านเอง — CluadeX นุ่ม ๆ เขิน ๆ, Grok ทะเล้น, Codex คูล… ใช้เสียงประจำตัว (ด้านล่าง) และอารมณ์ของเธอทับค่าที่ตั้งไว้"),
         ["voice.ui.maxChars"] = L("Longest reply read", "อ่านยาวสุด (ตัวอักษร)"),
         ["voice.ui.maxCharsDesc"] = L("ElevenLabs and OpenAI bill per character; longer replies are cut here.", "ElevenLabs และ OpenAI คิดเงินตามตัวอักษร คำตอบที่ยาวกว่านี้จะถูกตัด"),
+        ["voice.ui.volume"] = new() { ["en"] = "Volume", ["th"] = "ระดับเสียง" },
+        ["voice.ui.volumeDesc"] = new() { ["en"] = "How loud she reads replies (and her clips). 50% is the level it always had; the same slider is in her right-click menu.", ["th"] = "ความดังของเสียงอ่านคำตอบ (และเสียงในคลิปของน้อง) 50% คือระดับเดิม ปรับได้จากเมนูคลิกขวาที่ตัวน้องเช่นกัน" },
         ["voice.ui.elevenKey"] = L("ElevenLabs API key", "ElevenLabs API key"),
         ["voice.ui.showKey"] = L("Show", "แสดง"),
         ["voice.ui.check"] = L("Check key", "ตรวจคีย์"),

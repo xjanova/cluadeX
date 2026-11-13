@@ -112,7 +112,9 @@ static partial class Program
 
             // ── E: the owner's real registry and BrainX entries are not this fake folder's ──
             const string hostKey = @"Software\Google\Chrome\NativeMessagingHosts\com.xmanstudio.cluadex_chrome";
+            const string edgeHostKey = @"Software\Microsoft\Edge\NativeMessagingHosts\com.xmanstudio.cluadex_chrome";
             string? hostBefore = Registry.CurrentUser.OpenSubKey(hostKey)?.GetValue(null) as string;
+            string? edgeHostBefore = Registry.CurrentUser.OpenSubKey(edgeHostKey)?.GetValue(null) as string;
             string? vault = CluadeX.Services.Connections.BrainXBridges.ResolveVault();
             string? bridges = vault != null ? CluadeX.Services.Connections.BrainXBridges.FileFor(vault) : null;
             string? bridgesHash = bridges != null && File.Exists(bridges) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(bridges))) : null;
@@ -121,8 +123,9 @@ static partial class Program
             int removed = cE.RemoveLinks();
             string? hostAfter = Registry.CurrentUser.OpenSubKey(hostKey)?.GetValue(null) as string;
             string? bridgesHashAfter = bridges != null && File.Exists(bridges) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(bridges))) : null;
-            Check("U16", "a run on another data folder leaves the real Chrome host key and BrainX bridges exactly as they were",
-                hostBefore == hostAfter && bridgesHash == bridgesHashAfter && removed == 1 && !Directory.Exists(Path.Combine(rootE, "chrome")),
+            string? edgeHostAfter = Registry.CurrentUser.OpenSubKey(edgeHostKey)?.GetValue(null) as string;
+            Check("U16", "a run on another data folder leaves the real Chrome and Edge host keys and BrainX bridges exactly as they were",
+                hostBefore == hostAfter && edgeHostBefore == edgeHostAfter && bridgesHash == bridgesHashAfter && removed == 1 && !Directory.Exists(Path.Combine(rootE, "chrome")),
                 $"host {hostBefore} → {hostAfter} · bridges {(bridgesHash == bridgesHashAfter ? "same" : "CHANGED")} · removed {removed}");
 
             // ── F: the Installed-apps row ──
@@ -168,8 +171,9 @@ static partial class Program
 
             string liveHost = Registry.CurrentUser.OpenSubKey(hostKey)?.GetValue(null) as string;
             bool removedLive = CluadeX.Services.Chrome.ChromeBridgeInstall.UnregisterIfFor(inst);
-            Check("U19", "Velopack's uninstall hook of another copy leaves the Chrome host of the copy in use alone",
-                !removedLive && liveHost == Registry.CurrentUser.OpenSubKey(hostKey)?.GetValue(null) as string, $"live host: {liveHost ?? "(none on this PC)"}");
+            Check("U19", "Velopack's uninstall hook of another copy leaves the Chrome and Edge host of the copy in use alone",
+                !removedLive && liveHost == Registry.CurrentUser.OpenSubKey(hostKey)?.GetValue(null) as string
+                && edgeHostBefore == Registry.CurrentUser.OpenSubKey(edgeHostKey)?.GetValue(null) as string, $"live host: {liveHost ?? "(none on this PC)"}");
 
             // ── G: v3.0.275 on the owner's PC freed 0 bytes — the data folder IS ~/.cluadex and the turn folders sit in
             //    %TEMP%, both protected, so every delete was refused. Decisions only against the real paths (nothing deleted). ──

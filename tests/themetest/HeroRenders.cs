@@ -62,7 +62,7 @@ internal static partial class Program
                                                          ((FrameworkElement)MainWin.FindName("MainContentGrid")).ActualHeight) * scale;
                 Check($"hero [{tag}]: her size is {(chat ? "big beside the list" : "the rail's")}, twice as tall as wide",
                       Math.Abs(her.Width - expected) < 1.5 && Math.Abs(her.Height - 2 * her.Width) < 1.5
-                      && (chat ? her.Width >= 80 * scale - 1 : Math.Abs(her.Width - 60 * scale) < 1.5),
+                      && (chat ? her.Width >= CluadeX.MainWindow.HeroSmall * scale - 1 : Math.Abs(her.Width - 60 * scale) < 1.5),
                       $"{her.Width:0.#}×{her.Height:0.#} px, expected {expected:0.#} wide");
                 Check($"hero [{tag}]: she sits right under the title bar at the left edge",
                       Math.Abs(her.X) < 1.5 && Math.Abs(her.Y - 42 * scale) < 2.5, $"{her.X:0.#},{her.Y:0.#}");
@@ -389,6 +389,27 @@ internal static partial class Program
             prop.SetValue(svm, was);
         }
 
+        // ---- her volume (2026-11-13): the menu's slider saves the level, and her clips and the read-aloud player follow at
+        // once. Here, before the startle: the checks after it are timed from her jump.
+        if (MainWin.FindName("BuddyMenuVolume") is Slider volume)
+        {
+            var volCfg = Sp.GetRequiredService<SettingsService>();
+            volume.Value = 20;
+            await Idle(120);
+            Check("volume: the menu's slider saves the level", volCfg.Settings.BuddyVolume == 20, $"{volCfg.Settings.BuddyVolume}");
+            Check("volume: her clips and the reply player follow at once (20 % → 0.2), the mic window's page too (0.4)",
+                Math.Abs(CluadexBuddy.SoundVolume - 0.2) < 0.001 && Math.Abs(CluadeX.Services.Voice.Tts.VoicePlayer.MasterVolume - 0.2) < 0.001
+                && Math.Abs(CluadeX.Services.Voice.BuddyVolume.PageLevel - 0.4) < 0.001,
+                $"clips {CluadexBuddy.SoundVolume} · player {CluadeX.Services.Voice.Tts.VoicePlayer.MasterVolume} · page {CluadeX.Services.Voice.BuddyVolume.PageLevel}");
+            bool soundsBefore = volCfg.Settings.BuddySounds;
+            volume.Value = 50;
+            await Idle(120);
+            Check("volume: back at 50 % it is the level she always had, and her clip sounds switch is left as it was",
+                volCfg.Settings.BuddyVolume == 50 && Math.Abs(CluadexBuddy.SoundVolume - 0.5) < 0.001 && volCfg.Settings.BuddySounds == soundsBefore,
+                $"{volCfg.Settings.BuddyVolume} · {CluadexBuddy.SoundVolume}");
+        }
+        else Check("volume: the menu has the slider", false, "BuddyMenuVolume not found");
+
         // ---- a click on her: now and then she jumps, then goes back to what she was doing
         await Mood(BuddyMood.Idle);
         await Idle(150);
@@ -399,7 +420,7 @@ internal static partial class Program
         // ---- her right-click menu: sound, and clips / stills / the girls' slideshow — each saved
         var menu = heroBtn.ContextMenu;
         var items = menu?.Items.OfType<MenuItem>().ToList() ?? new();
-        Check("menu: right-click has her sound and three ways to show", items.Count == 4, $"{items.Count}");
+        Check("menu: right-click has her sound, her volume and three ways to show", items.Count == 5, $"{items.Count}");
         void Choose(string mode) => items.First(i => (i.Tag as string) == mode).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         var cfg = Sp.GetRequiredService<SettingsService>().Settings;
         var stills = (FrameworkElement)buddy.FindName("Stills");

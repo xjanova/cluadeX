@@ -26,6 +26,11 @@
                     Command="{Binding TogglePaletteCommand}"/>
         <KeyBinding Modifiers="Control" Key="L"
                     Command="{Binding ChatVM.ClearChatCommand}"/>
+        <!-- the next / the previous chat in the list, as it is ordered there (Ctrl+K finds one by name) -->
+        <KeyBinding Modifiers="Control" Key="Tab"
+                    Command="{Binding NextChatCommand}"/>
+        <KeyBinding Modifiers="Control+Shift" Key="Tab"
+                    Command="{Binding PreviousChatCommand}"/>
         <KeyBinding Modifiers="Control" Key="N"
                     Command="{Binding ChatVM.NewChatAndShowCommand}"/>
         <KeyBinding Modifiers="Control" Key="OemComma"
@@ -774,7 +779,10 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>  <!-- Beside her: title, buttons, search box -->
                                 <RowDefinition Height="Auto"/>  <!-- Projects -->
-                                <RowDefinition Height="*" MinHeight="80"/>     <!-- Sessions list -->
+                                <!-- The chats get the larger share (owner 2026-11-13: "มันยังเห็นห้องแชทน้อยไป"): it was half
+                                     and half with the files, and nothing remembers the drag line, so every start gave the
+                                     chats half of what was left under her. -->
+                                <RowDefinition Height="2.2*" MinHeight="80"/>     <!-- Sessions list -->
                                 <RowDefinition Height="Auto"/>  <!-- Drag line between the chats and the files -->
                                 <RowDefinition Height="*" MinHeight="60"/>     <!-- The project's files -->
                             </Grid.RowDefinitions>
@@ -1158,7 +1166,7 @@
                                                     <Button.Style>
                                                         <Style TargetType="Button">
                                                             <Setter Property="Margin" Value="0,1"/>
-                                                            <Setter Property="Padding" Value="10,7"/>
+                                                            <Setter Property="Padding" Value="10,5"/>
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding IsSplit}" Value="True">
                                                                     <Setter Property="Margin" Value="0,0"/>
@@ -1666,6 +1674,23 @@
                             <Button.ContextMenu>
                                 <ContextMenu Opened="BuddyMenu_Opened">
                                     <MenuItem x:Name="BuddyMenuSound" Header="{services:Loc buddy.menu.sound}" Click="BuddyMenuSound_Click"/>
+                                    <!-- how loud she is (owner 2026-11-13: "เสียงน้องอวาต้าควรปรับโวลุ่มได้"): her clips and the
+                                         replies she reads; the same setting as Settings › General › Appearance. The menu stays
+                                         open while the slider moves. -->
+                                    <MenuItem StaysOpenOnClick="True" Focusable="False">
+                                        <MenuItem.Header>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{services:Loc buddy.menu.volume}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                                <Slider x:Name="BuddyMenuVolume" Width="130" Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
+                                                        TickFrequency="5" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                                        AutomationProperties.AutomationId="BuddyMenuVolume"
+                                                        AutomationProperties.Name="{services:Loc buddy.menu.volume}"
+                                                        ValueChanged="BuddyMenuVolume_ValueChanged"/>
+                                                <TextBlock x:Name="BuddyMenuVolumeText" Width="38" TextAlignment="Right" VerticalAlignment="Center"
+                                                           Margin="8,0,0,0" Foreground="{DynamicResource Text.Secondary}"/>
+                                            </StackPanel>
+                                        </MenuItem.Header>
+                                    </MenuItem>
                                     <Separator/>
                                     <MenuItem x:Name="BuddyMenuClips" Header="{services:Loc buddy.menu.clips}" Tag="clips" Click="BuddyMenuDisplay_Click"/>
                                     <MenuItem x:Name="BuddyMenuStills" Header="{services:Loc buddy.menu.stills}" Tag="stills" Click="BuddyMenuDisplay_Click"/>

@@ -783,7 +783,7 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Your own Chrome for the agent: CluadeX's own extension, or the Claude in Chrome extension -->
+                        <!-- Your own Chrome or Edge for the agent: CluadeX's own extension (both browsers), or the Claude in Chrome extension -->
                         <Border Style="{StaticResource Card}" Visibility="{Binding HasChromeConnector, Converter={StaticResource BoolVis}}">
                             <StackPanel>
                                 <TextBlock Text="{services:Loc settings.card.chrome}" Style="{StaticResource CardTitle}"/>
@@ -793,9 +793,16 @@
                                         <TextBlock Text="{services:Loc settings.chromeBridge}" Style="{StaticResource SettingLabel}"/>
                                         <TextBlock Text="{services:Loc settings.chromeBridgeDesc}" Style="{StaticResource SettingDesc}"/>
                                         <TextBlock Text="{Binding ChromeBridgeStatus}" Style="{StaticResource SettingDesc}" Margin="0,4,0,0"/>
-                                        <Button Style="{StaticResource SecondaryButton}" Command="{Binding AddChromeExtensionCommand}" Padding="10,5" Margin="0,8,0,0"
-                                                HorizontalAlignment="Left" Content="{services:Loc settings.chromeBridgeAdd}"
-                                                Visibility="{Binding ChromeBridgeNeedsExtension, Converter={StaticResource BoolVis}}"/>
+                                        <!-- one button per installed browser: the same extension folder, each browser's own extensions page -->
+                                        <WrapPanel Orientation="Horizontal" Margin="0,8,0,0"
+                                                   Visibility="{Binding ChromeBridgeNeedsExtension, Converter={StaticResource BoolVis}}">
+                                            <Button Style="{StaticResource SecondaryButton}" Command="{Binding AddChromeExtensionCommand}" Padding="10,5" Margin="0,0,8,4"
+                                                    AutomationProperties.AutomationId="ChromeBridgeAddChrome" Content="{services:Loc settings.chromeBridgeAdd}"
+                                                    Visibility="{Binding ChromeBridgeCanAddToChrome, Converter={StaticResource BoolVis}}"/>
+                                            <Button Style="{StaticResource SecondaryButton}" Command="{Binding AddEdgeExtensionCommand}" Padding="10,5" Margin="0,0,8,4"
+                                                    AutomationProperties.AutomationId="ChromeBridgeAddEdge" Content="{services:Loc settings.edgeBridgeAdd}"
+                                                    Visibility="{Binding ChromeBridgeCanAddToEdge, Converter={StaticResource BoolVis}}"/>
+                                        </WrapPanel>
                                         <!-- the part Chrome keeps for the user, beside them until the extension connects -->
                                         <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="8" BorderThickness="1"
                                                 BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource State.Fill.Faint}"
@@ -815,6 +822,27 @@
                                                             Padding="10,4" Margin="8,0,0,0" Content="{services:Loc chromeBridge.guide.copy}"/>
                                                 </Grid>
                                                 <TextBlock Text="{services:Loc chromeBridge.guide.keep}" Style="{StaticResource SettingDesc}" Margin="0,8,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <!-- the same step in Microsoft Edge: its Developer mode switch is in the left column, Load unpacked at the top right -->
+                                        <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="8" BorderThickness="1"
+                                                BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource State.Fill.Faint}"
+                                                Visibility="{Binding EdgeBridgeGuideVisible, Converter={StaticResource BoolVis}}">
+                                            <StackPanel>
+                                                <TextBlock Text="{services:Loc edgeBridge.guide.title}" Style="{StaticResource SettingLabel}"/>
+                                                <TextBlock Text="{services:Loc edgeBridge.guide.step1}" Style="{StaticResource SettingDesc}" Margin="0,6,0,0"/>
+                                                <TextBlock Text="{services:Loc edgeBridge.guide.step2}" Style="{StaticResource SettingDesc}" Margin="0,4,0,0"/>
+                                                <TextBlock Text="{services:Loc edgeBridge.guide.step3}" Style="{StaticResource SettingDesc}" Margin="0,4,0,0"/>
+                                                <Grid Margin="0,6,0,0">
+                                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                    <TextBox Text="{Binding ChromeBridgeExtensionFolder, Mode=OneWay}" IsReadOnly="True" Padding="6,4"
+                                                             VerticalContentAlignment="Center" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                                                             Background="Transparent" Foreground="{DynamicResource Text.Primary}"
+                                                             CaretBrush="{DynamicResource Text.Primary}"/>
+                                                    <Button Grid.Column="1" Style="{StaticResource SecondaryButton}" Command="{Binding CopyChromeExtensionFolderCommand}"
+                                                            Padding="10,4" Margin="8,0,0,0" Content="{services:Loc chromeBridge.guide.copy}"/>
+                                                </Grid>
+                                                <TextBlock Text="{services:Loc edgeBridge.guide.keep}" Style="{StaticResource SettingDesc}" Margin="0,8,0,0"/>
                                             </StackPanel>
                                         </Border>
                                     </StackPanel>
@@ -1418,6 +1446,18 @@
                                     <TextBlock Grid.Column="1" Text="{services:Loc buddy.sounds}" TextWrapping="Wrap" Margin="6,1,0,0"
                                                Foreground="{DynamicResource Text.Primary}" Cursor="Hand"
                                                MouseLeftButtonUp="BuddySoundsText_Click"/>
+                                </Grid>
+                                <!-- how loud she is: her clips, the lines she says and the replies she reads aloud (AppSettings.BuddyVolume).
+                                     Not tied to the box above: with her clip sounds off she still reads replies aloud. -->
+                                <Grid Margin="22,6,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Text="{services:Loc buddy.volume}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}"/>
+                                    <Slider x:Name="BuddyVolumeSlider" Grid.Column="1" Width="200" Margin="12,0,0,0" Minimum="0" Maximum="100"
+                                            SmallChange="5" LargeChange="10" TickFrequency="5" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                            Value="{Binding BuddyVolume}" AutomationProperties.AutomationId="BuddyVolumeSlider"
+                                            AutomationProperties.Name="{services:Loc buddy.volume}" ToolTip="{services:Loc buddy.volumeTip}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding BuddyVolumeText}" Width="40" TextAlignment="Right" VerticalAlignment="Center"
+                                               Margin="8,0,0,0" Foreground="{DynamicResource Accent.1}" FontFamily="{DynamicResource Font.Mono}"/>
                                 </Grid>
                                 <Grid Margin="0,8,0,0">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>

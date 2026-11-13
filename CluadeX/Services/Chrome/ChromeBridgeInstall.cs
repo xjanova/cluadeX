@@ -6,10 +6,11 @@ using Microsoft.Win32;
 namespace CluadeX.Services.Chrome;
 
 /// <summary>
-/// What CluadeX puts on this PC for its own Chrome connection: the extension's files (a folder the user loads once
-/// with "Load unpacked") and the native-messaging host registration (per user, no admin rights), which names
-/// CluadeX.exe itself. Written again at every start, so an update or a moved portable copy can never leave Chrome
-/// pointing at a program that is gone.
+/// What CluadeX puts on this PC for its own Chrome / Edge connection: the extension's files (a folder the user loads
+/// once with "Load unpacked") and the native-messaging host registration (per user, no admin rights), which names
+/// CluadeX.exe itself. Written again at every start, so an update or a moved portable copy can never leave the browser
+/// pointing at a program that is gone. Edge is Chromium: the same folder, the same extension id (it follows from the
+/// manifest's "key") and the same <c>chrome-extension://</c> origin, with its own registry key for the host.
 /// </summary>
 public static class ChromeBridgeInstall
 {
@@ -20,7 +21,12 @@ public static class ChromeBridgeInstall
     public const string ExtensionId = "dcgjpajonelpldhmhealmiipjgkliglm";
 
     private const string ResourcePrefix = "ChromeExtension/";
-    private const string HostsKey = @"Software\Google\Chrome\NativeMessagingHosts\";
+    private const string ChromeHostsKey = @"Software\Google\Chrome\NativeMessagingHosts\";
+    private const string EdgeHostsKey = @"Software\Microsoft\Edge\NativeMessagingHosts\";
+
+    /// <summary>Every per-user key (HKCU) the host is registered under, Chrome's first. Edge also reads Chrome's key
+    /// when its own is missing, but only its own is certain on a PC that never had Chrome.</summary>
+    public static IReadOnlyList<string> HostKeys { get; } = new[] { ChromeHostsKey + HostName, EdgeHostsKey + HostName };
 
     /// <summary>Per Windows user: the extension of one user can never reach the CluadeX of another.</summary>
     public static string PipeName =>
@@ -52,8 +58,12 @@ public static class ChromeBridgeInstall
     {
         get
         {
-            using var key = Registry.CurrentUser.OpenSubKey(HostsKey + HostName);
-            return key?.GetValue(null) is string path && File.Exists(path);
+            foreach (string name in HostKeys)
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(name);
+                if (key?.GetValue(null) is string path && File.Exists(path)) return true;
+            }
+            return false;
         }
     }
 
@@ -77,14 +87,17 @@ public static class ChromeBridgeInstall
         WriteIfChanged(manifest, JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object>
         {
             ["name"] = HostName,
-            ["description"] = "CluadeX Chrome connection",
+            ["description"] = "CluadeX Chrome / Edge connection",
             ["path"] = hostExe,
             ["type"] = "stdio",
             ["allowed_origins"] = new[] { $"chrome-extension://{ExtensionId}/" },
         }, new JsonSerializerOptions { WriteIndented = true }));
 
-        using var key = Registry.CurrentUser.CreateSubKey(HostsKey + HostName);
-        key.SetValue(null, manifest);
+        foreach (string name in HostKeys)
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(name);
+            key.SetValue(null, manifest);
+        }
     }
 
     /// <summary>Remove the host: the extension then finds nothing to connect to. Its files stay, because Chrome still
@@ -97,7 +110,10 @@ public static class ChromeBridgeInstall
     }
 
     /// <summary>The registry half of <see cref="Uninstall"/> (the app's own uninstaller has no data folder to hand).</summary>
-    public static void Unregister() => Registry.CurrentUser.DeleteSubKey(HostsKey + HostName, throwOnMissingSubKey: false);
+    public static void Unregister()
+    {
+        foreach (string name in HostKeys) Registry.CurrentUser.DeleteSubKey(name, throwOnMissingSubKey: false);
+    }
 
     /// <summary>
     /// The registry half for one install being removed (Velopack's uninstall hook): only when the host names a program
@@ -107,10 +123,17 @@ public static class ChromeBridgeInstall
     /// </summary>
     public static bool UnregisterIfFor(string installRoot)
     {
+        bool removed = false;
+        foreach (string name in HostKeys) removed |= UnregisterIfFor(name, installRoot);
+        return removed;
+    }
+
+    private static bool UnregisterIfFor(string hostKey, string installRoot)
+    {
         try
         {
             string? manifest;
-            using (var key = Registry.CurrentUser.OpenSubKey(HostsKey + HostName))
+            using (var key = Registry.CurrentUser.OpenSubKey(hostKey))
             {
                 if (key == null) return false;
                 manifest = key.GetValue(null) as string;
@@ -123,7 +146,7 @@ public static class ChromeBridgeInstall
                 dead = string.IsNullOrWhiteSpace(exe) || !File.Exists(exe);
                 if (!dead && !Safety.ProtectedPaths.IsInside(Path.GetFullPath(exe!), installRoot)) return false;
             }
-            Unregister();
+            Registry.CurrentUser.DeleteSubKey(hostKey, throwOnMissingSubKey: false);
             return true;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or System.Security.SecurityException) { return false; }

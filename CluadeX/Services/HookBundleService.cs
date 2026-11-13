@@ -463,7 +463,8 @@ public class HookBundleService
             Phase = "Stop", Matcher = "*",
             ScriptFile = "stop-cost-summary-toast.ps1",
             SubstitutionTokens = new() { "{model}", "{cost}", "{tokens}", "{turn_count}" },
-            Category = "telemetry", Risk = "low", TimeoutMs = 3000,
+            // 8 s: starting PowerShell alone took over 3 s while five chats worked (2026-11-12, timed out twice).
+            Category = "telemetry", Risk = "low", TimeoutMs = 8000,
             DefaultEnabled = true,
         },
         new HookBundle
@@ -474,7 +475,7 @@ public class HookBundleService
             Phase = "Stop", Matcher = "*",
             ScriptFile = "stop-desktop-notify.ps1",
             SubstitutionTokens = new() { "{model}", "{cost}" },
-            Category = "dx", Risk = "low", TimeoutMs = 3000,
+            Category = "dx", Risk = "low", TimeoutMs = 8000,
         },
 
         // ── SessionStart (2) ──────────────────────────────────────────

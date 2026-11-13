@@ -1798,6 +1798,37 @@
                                     </ContentControl.ContentTemplate>
                                 </ContentControl>
 
+                                <!-- ═══ Notice card: a note that came into this chat — a split chat's report, a message from another
+                                     chat (accent stripe + "note from another chat"), or the app's own notice (a watch that ended,
+                                     a worktree made; muted stripe). Owner 2026-11-13: "การส่งโน๊ตกลับมาในห้องแชทของแชทย่อย ควรมี
+                                     กล่องข้อความที่แตกต่างด้วยไม่ใช่ไม่มีกล่องอะไรเลย" — it used to be the System role's bubble, which
+                                     has no fill, no border and no padding, so a report read like stray text between two replies. ═══ -->
+                                <ContentControl Grid.Row="1" Style="{StaticResource LazyRowPart}" Visibility="{Binding IsNotice, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <ContentControl.ContentTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="20,6,24,4" CornerRadius="8" BorderThickness="1" SnapsToDevicePixels="True"
+                                                    Background="{DynamicResource State.Fill.Faint}" BorderBrush="{DynamicResource Border.Subtle}"
+                                                    AutomationProperties.AutomationId="CxChat.NoticeCard">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="4"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                    <Border x:Name="NoticeStripe" CornerRadius="7,0,0,7" Background="{DynamicResource Text.Faint}"/>
+                                                    <StackPanel Grid.Column="1" Margin="12,8,12,8">
+                                                        <TextBlock x:Name="NoticeCaption" Text="{services:Loc chat.note.fromChat}" FontSize="11" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource Accent.1}" Margin="0,0,0,3" Visibility="Collapsed"/>
+                                                        <StackPanel helpers:MarkdownHelper.Markdown="{Binding Content}"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsChatNote}" Value="True">
+                                                    <Setter TargetName="NoticeStripe" Property="Background" Value="{DynamicResource Accent.1}"/>
+                                                    <Setter TargetName="NoticeCaption" Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                </ContentControl>
+
                                 <!-- ═══ Next-step box (wrap_up): recap, one question, one or two answers ═══ -->
                                 <ContentControl Grid.Row="1" Style="{StaticResource LazyRowPart}" Visibility="{Binding ShowsNextStep, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                     <ContentControl.ContentTemplate>
@@ -2329,6 +2360,10 @@
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsOrchestrationCard}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <!-- a notice has its own box (the notice card above) -->
+                                                <DataTrigger Binding="{Binding IsNotice}" Value="True">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
@@ -4133,6 +4168,17 @@
                                                VerticalAlignment="Center" Margin="12,0,30,0" IsHitTestVisible="False" TextTrimming="CharacterEllipsis"
                                                Visibility="{Binding ShowModelPlaceholder, Converter={StaticResource BoolVis}}"/>
                                 </Grid>
+
+                                <!-- The chat runs on a stand-in: its pick ran out (quota, credit, no answer) and CluadeX switched
+                                     by itself. The model button already names the stand-in; this says what it stands in for. -->
+                                <Border x:Name="AutoSwitchChip" CornerRadius="6" Padding="8,3" Margin="0,2,8,2" VerticalAlignment="Center"
+                                        Background="{DynamicResource State.Fill.Faint}" BorderThickness="1" BorderBrush="{DynamicResource Status.Warning}"
+                                        ToolTip="{Binding AutoSwitchTip}" ToolTipService.ShowDuration="30000"
+                                        AutomationProperties.AutomationId="CxChat.AutoSwitch"
+                                        Visibility="{Binding HasAutoSwitch, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <TextBlock Text="{Binding AutoSwitchBadge}" FontSize="12" Foreground="{DynamicResource Status.Warning}"
+                                               FontFamily="{DynamicResource Font.Mono}" TextTrimming="CharacterEllipsis" MaxWidth="320"/>
+                                </Border>
 
                                 <!-- A model on this PC (GGUF): only while one answers the chat — shown for every provider, it
                                      let a Claude chat load a GGUF and switch itself to Local without a word. -->

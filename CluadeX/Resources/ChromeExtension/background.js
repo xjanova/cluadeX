@@ -4,7 +4,7 @@
 // user's own tabs are never attached to.
 
 const HOST = 'com.xmanstudio.cluadex_chrome';
-const PAUSED_TEXT = 'Paused from the CluadeX icon in Chrome.';
+const PAUSED_TEXT = 'Paused from the CluadeX icon in the browser.';
 const AGENT_LABEL = 'CluadeX agent';
 
 // Exactly what CluadeX's browser tools send. This is the user's real profile: reading cookies and clearing a site's

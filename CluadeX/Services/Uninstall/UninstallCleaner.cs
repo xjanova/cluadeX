@@ -261,7 +261,14 @@ public sealed class UninstallCleaner
     /// <summary>HKCU\…\NativeMessagingHosts\com.xmanstudio.cluadex_chrome — only when it names this data folder's manifest.</summary>
     private int RemoveChromeHost()
     {
-        const string key = @"Software\Google\Chrome\NativeMessagingHosts\" + Chrome.ChromeBridgeInstall.HostName;
+        // one registration, written under Chrome's key and Edge's: counted once however many were removed
+        int n = 0;
+        foreach (string key in Chrome.ChromeBridgeInstall.HostKeys) n += RemoveBrowserHost(key);
+        return n > 0 ? 1 : 0;
+    }
+
+    private int RemoveBrowserHost(string key)
+    {
         try
         {
             using (var k = Registry.CurrentUser.OpenSubKey(key))

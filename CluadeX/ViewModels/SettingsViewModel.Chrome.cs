@@ -38,24 +38,41 @@ public partial class SettingsViewModel
     /// <summary>Until the extension has connected: the button is the way in, so it also works with the switch still off.</summary>
     public bool ChromeBridgeNeedsExtension => _chromeBridge is { } b && !b.Bridge.IsConnected;
 
+    /// <summary>Each browser's "add the extension" button shows only where that browser is installed.</summary>
+    public bool ChromeBridgeCanAddToChrome => ChromeBridgeNeedsExtension && _chromeBridge!.ChromeFound;
+    public bool ChromeBridgeCanAddToEdge => ChromeBridgeNeedsExtension && _chromeBridge!.EdgeFound;
+
     private bool _chromeBridgeGuideOpen;
-    /// <summary>The user pressed the button. The steps stay up through every status change until Chrome connects.</summary>
+    /// <summary>The user pressed the button. The steps stay up through every status change until the browser connects.</summary>
     public bool ChromeBridgeGuideOpen
     {
         get => _chromeBridgeGuideOpen;
         set
         {
-            if (SetProperty(ref _chromeBridgeGuideOpen, value)) OnPropertyChanged(nameof(ChromeBridgeGuideVisible));
+            if (SetProperty(ref _chromeBridgeGuideOpen, value)) RaiseChromeBridgeGuide();
         }
     }
 
-    public bool ChromeBridgeGuideVisible => _chromeBridgeGuideOpen && ChromeBridgeNeedsExtension;
+    /// <summary>The steps on screen are Edge's (its Developer mode switch and Load unpacked button sit elsewhere).</summary>
+    private bool _chromeBridgeGuideForEdge;
+
+    public bool ChromeBridgeGuideVisible => _chromeBridgeGuideOpen && !_chromeBridgeGuideForEdge && ChromeBridgeNeedsExtension;
+    public bool EdgeBridgeGuideVisible => _chromeBridgeGuideOpen && _chromeBridgeGuideForEdge && ChromeBridgeNeedsExtension;
+
+    private void RaiseChromeBridgeGuide()
+    {
+        OnPropertyChanged(nameof(ChromeBridgeGuideVisible));
+        OnPropertyChanged(nameof(EdgeBridgeGuideVisible));
+    }
 
     /// <summary>What "Load unpacked" asks for, shown as well as copied: the clipboard can be overwritten before Chrome is reached.</summary>
     public string ChromeBridgeExtensionFolder => _chromeBridge?.ExtensionFolder ?? "";
 
     private ICommand? _addChromeExtension;
-    public ICommand AddChromeExtensionCommand => _addChromeExtension ??= new RelayCommand(AddChromeExtension);
+    public ICommand AddChromeExtensionCommand => _addChromeExtension ??= new RelayCommand(() => AddBridgeExtension(edge: false));
+
+    private ICommand? _addEdgeExtension;
+    public ICommand AddEdgeExtensionCommand => _addEdgeExtension ??= new RelayCommand(() => AddBridgeExtension(edge: true));
 
     private ICommand? _copyChromeExtensionFolder;
     public ICommand CopyChromeExtensionFolderCommand => _copyChromeExtensionFolder ??= new RelayCommand(() => CopyChromeExtensionFolder());
@@ -71,9 +88,9 @@ public partial class SettingsViewModel
         }
     }
 
-    /// <summary>Everything an app may do of the one step Chrome keeps for the user: switch on, copy the folder, open the
-    /// page, then stay beside them with the steps until the extension connects.</summary>
-    private void AddChromeExtension()
+    /// <summary>Everything an app may do of the one step the browser keeps for the user: switch on, copy the folder, open
+    /// the extensions page (Chrome's or Edge's), then stay beside them with that browser's steps until the extension connects.</summary>
+    private void AddBridgeExtension(bool edge)
     {
         if (_chromeBridge == null) return;
         ChromeBridgeOn = true;
@@ -82,12 +99,14 @@ public partial class SettingsViewModel
         OnPropertyChanged(nameof(ChromeBridgeExtensionFolder));
         try
         {
-            if (!_chromeBridge.OpenExtensionsPage()) { ChromeBridgeStatus = T("chromeBridge.status.noChrome"); return; }
+            if (!_chromeBridge.OpenExtensionsPage(edge)) { ChromeBridgeStatus = T(edge ? "chromeBridge.status.noEdge" : "chromeBridge.status.noChrome"); return; }
+            _chromeBridgeGuideForEdge = edge;
             ChromeBridgeGuideOpen = true;
+            RaiseChromeBridgeGuide();   // the other browser's steps may have been up already
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
-            _log?.Warn("Chrome", "opening Chrome's extensions page failed", ex);
+            _log?.Warn("Chrome", $"opening {(edge ? "Edge" : "Chrome")}'s extensions page failed", ex);
             ChromeBridgeStatus = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
         }
     }
@@ -105,14 +124,16 @@ public partial class SettingsViewModel
         if (_chromeBridge == null) return;
         var bridge = _chromeBridge.Bridge;
         ChromeBridgeStatus = !_chromeBridge.Enabled ? T("chrome.status.off")
-            : !_chromeBridge.ChromeFound ? T("chromeBridge.status.noChrome")
+            : !_chromeBridge.ChromeFound && !_chromeBridge.EdgeFound ? T("chromeBridge.status.noBrowser")
             : bridge.LastError is { } error ? $"{T("settings.failedPrefix")}: {error}"
             : !bridge.IsConnected ? T("chromeBridge.status.waiting")
-            : bridge.Paused ? T("chromeBridge.status.paused")
-            : T("chromeBridge.status.connected");
+            : bridge.Paused ? T(_chromeBridge.ConnectedIsEdge ? "chromeBridge.status.pausedEdge" : "chromeBridge.status.paused")
+            : T(_chromeBridge.ConnectedIsEdge ? "chromeBridge.status.connectedEdge" : "chromeBridge.status.connected");
         OnPropertyChanged(nameof(ChromeBridgeOn));
         OnPropertyChanged(nameof(ChromeBridgeNeedsExtension));
-        OnPropertyChanged(nameof(ChromeBridgeGuideVisible));
+        OnPropertyChanged(nameof(ChromeBridgeCanAddToChrome));
+        OnPropertyChanged(nameof(ChromeBridgeCanAddToEdge));
+        RaiseChromeBridgeGuide();
     }
 
     public bool ChromeConnectorOn

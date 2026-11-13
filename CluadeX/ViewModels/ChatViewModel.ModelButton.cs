@@ -46,6 +46,8 @@ public partial class ChatViewModel
     {
         get
         {
+            // The run switched provider by itself (the pick ran out): the button names what answers now.
+            if (ShownAutoSwitch is { } sw) return AutoSwitchModelText(sw);
             // A chat on a model of its own (a Fable chat) names that model, not the app's pick.
             if (ShownOwnModel is { } own)
                 return LiveSnapshot()?.Model is { Length: > 0 } ran ? LiveModelReport.FriendlyModel(ran) : LiveModelReport.FriendlyModel(own);
@@ -63,7 +65,8 @@ public partial class ChatViewModel
     /// <summary>The placeholder ("a model on this PC — pick one…") only while the button has nothing to name.</summary>
     public bool ShowModelPlaceholder => !HasModelButtonText && ChatModelPlaceholder.Length > 0;
 
-    private ChatCharacter ModelButtonGirl => ChatCharacter.ForProvider(_selectedChatModel?.Provider ?? _providerManager.PickedProviderType);
+    private ChatCharacter ModelButtonGirl =>
+        ChatCharacter.ForProvider(ShownAutoSwitch?.To ?? _selectedChatModel?.Provider ?? _providerManager.PickedProviderType);
 
     /// <summary>Her face, round, beside the name.</summary>
     public Brush? ModelButtonFace => ModelButtonGirl.FaceBrush;
@@ -72,7 +75,8 @@ public partial class ChatViewModel
     public Color ModelButtonGlow => ModelButtonGirl.Accent;
 
     /// <summary>"$2 / $10" for a priced model, "" otherwise.</summary>
-    public string ModelButtonPrice => ShownOwnModel is { } own ? PriceLabelOf(own) : _selectedChatModel?.PriceLabel ?? "";
+    public string ModelButtonPrice => ShownAutoSwitch is { } sw ? AutoSwitchPrice(sw)
+        : ShownOwnModel is { } own ? PriceLabelOf(own) : _selectedChatModel?.PriceLabel ?? "";
 
     /// <summary>True while this chat's run works: the button glows and does not open the picker.</summary>
     public bool IsModelButtonLocked => IsGenerating;

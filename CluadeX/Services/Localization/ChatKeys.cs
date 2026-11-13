@@ -380,6 +380,11 @@ internal static class ChatKeys
         ["chat.tools.editGroupVerb"] = new() { ["en"] = "Edited {0} files", ["th"] = "แก้ไข {0} ไฟล์" },
         ["chat.model.stopping"] = new() { ["en"] = "Stopping this step to switch to {0}…", ["th"] = "กำลังหยุดขั้นนี้เพื่อเปลี่ยนเป็น {0}…" },
         ["chat.model.switchedLive"] = new() { ["en"] = "Switching to {0} — the task carries on from this step, nothing is redone", ["th"] = "กำลังสลับเป็น {0} — งานทำต่อจากขั้นนี้ ไม่เริ่มใหม่" },
+        ["chat.autoSwitch.badge"] = new() { ["en"] = "⤳ auto-switched · standing in for {0}", ["th"] = "⤳ สลับอัตโนมัติ · ใช้แทน {0}" },
+        ["chat.autoSwitch.tip"] = new() { ["en"] = "Your pick ({0}) ran out of quota or stopped answering, so CluadeX switched this chat to {1} by itself at {2}.", ["th"] = "ตัวที่คุณเลือกไว้ ({0}) หมดโควตาหรือไม่ตอบ CluadeX จึงสลับแชทนี้ไปใช้ {1} เองตั้งแต่ {2} น." },
+        ["chat.autoSwitch.back"] = new() { ["en"] = "It goes back to your pick by itself once the quota returns (tried again about {0}).", ["th"] = "จะกลับไปใช้ตัวที่เลือกไว้เองเมื่อโควตากลับมา (ลองใหม่ราว {0} น.)" },
+        ["chat.autoSwitch.paid"] = new() { ["en"] = "⚠ {0} is billed per token (your pick ran on a plan).", ["th"] = "⚠ {0} คิดเงินตามโทเคนที่ใช้จริง" },
+        ["chat.autoSwitch.pick"] = new() { ["en"] = "To choose yourself, click the model button (after this run ends).", ["th"] = "ถ้าจะเลือกเอง กดปุ่มโมเดล (หลังรอบนี้จบ)" },
         ["chat.model.carryOn"] = new() { ["en"] = "Switched to {0} mid-way: carrying on from where it stopped", ["th"] = "เปลี่ยนเป็น {0} กลางทาง ทำต่อจากจุดที่หยุด" },
         ["chat.plan.branchParent"] = new() { ["en"] = "⤴ Branched from", ["th"] = "⤴ แยกมาจาก" },
         ["chat.plan.branchChild"] = new() { ["en"] = "⑂ Branch at step {0}", ["th"] = "⑂ แยกที่ขั้น {0}" },
@@ -437,6 +442,9 @@ internal static class ChatKeys
         ["chat.review.failed"] = new() { ["en"] = "The review failed — details are in the Debug Log.", ["th"] = "รีวิวไม่สำเร็จ — ดูรายละเอียดที่หน้า Debug Log" },
 
         // ─── Command palette (Ctrl+K) ───
+        ["palette.kind.chat"] = new() { ["en"] = "Chat", ["th"] = "แชท" },
+        ["palette.chat.untitled"] = new() { ["en"] = "(untitled chat)", ["th"] = "(แชทยังไม่มีชื่อ)" },
+        ["chat.note.fromChat"] = new() { ["en"] = "Note from another chat", ["th"] = "โน้ตจากแชทอื่น" },
         ["palette.kind.command"] = new() { ["en"] = "Command", ["th"] = "คำสั่ง" },
         ["palette.cmd.newChat"] = new() { ["en"] = "New chat", ["th"] = "แชทใหม่" },
         ["palette.cmd.newChatSub"] = new() { ["en"] = "Start a fresh conversation", ["th"] = "เริ่มบทสนทนาใหม่" },

@@ -181,6 +181,8 @@ internal static class Program
         }
         LocalizedResources.Instance.Initialize(provider.GetRequiredService<LocalizationService>());
 
+        // Chrome only: Edge 157 does not answer on --remote-debugging-pipe, which this harness drives the browser
+        // through. What Edge needs proven is in edge-probe.mjs beside this file (its own temp profile, a loopback port).
         string? chrome = BrowserEngineProbe.Probe(refresh: true).ChromePath;
         if (chrome == null) { Console.WriteLine("ABORT: Chrome is not installed."); return 3; }
 
@@ -204,7 +206,15 @@ internal static class Program
         Console.WriteLine($"chrome    : {chrome}");
         Console.WriteLine($"fixtures  : {BaseUrl}/\n");
 
-        bool cleaned = false;
+        // The host registration is one per Windows user, so this harness takes the installed CluadeX's away while it
+        // runs. What was there is put back at the end: the owner's own Chrome / Edge connection used to stay cut until
+        // CluadeX was started again (2026-11-13: the switch was on, the key was gone).
+        var hostsBefore = new Dictionary<string, string?>();
+        foreach (string hostKey in ChromeBridgeInstall.HostKeys)
+            using (var was = Registry.CurrentUser.OpenSubKey(hostKey))
+                hostsBefore[hostKey] = was?.GetValue(null) as string;
+
+        bool cleaned = false, restored = true;
         try
         {
             Console.WriteLine("── the host, before Chrome ──");
@@ -278,12 +288,23 @@ internal static class Program
             Browser.Dispose();
             Bridge.Stop();
             ChromeBridgeInstall.Uninstall(Settings.DataRoot);
-            using (var left = Registry.CurrentUser.OpenSubKey(@"Software\Google\Chrome\NativeMessagingHosts\" + ChromeBridgeInstall.HostName))
-                cleaned = left == null;
+            cleaned = true;
+            foreach (string hostKey in ChromeBridgeInstall.HostKeys)   // Chrome's key and Edge's
+                using (var left = Registry.CurrentUser.OpenSubKey(hostKey))
+                    cleaned &= left == null;
+            foreach (var (hostKey, manifest) in hostsBefore)
+            {
+                if (manifest == null) continue;
+                using (var back = Registry.CurrentUser.CreateSubKey(hostKey)) back.SetValue(null, manifest);
+                using var now = Registry.CurrentUser.OpenSubKey(hostKey);
+                restored &= now?.GetValue(null) as string == manifest;
+            }
             Server.Dispose();
             try { if (Directory.Exists(udf)) Directory.Delete(udf, true); } catch (IOException) { }
         }
-        Check("Z4", "the native host key is gone from this user's registry", cleaned);
+        Check("Z4", "the harness's host keys (Chrome's and Edge's) are gone from this user's registry", cleaned);
+        Check("Z5", "and the registration that was there before the run is back as it was",
+            restored, string.Join(" | ", hostsBefore.Select(h => $"{h.Key} = {h.Value ?? "(none)"}")));
 
         Console.WriteLine($"\n{Pass} passed, {Fail} failed");
         foreach (string p in Problems) Console.WriteLine("  " + p);
@@ -340,6 +361,15 @@ internal static class Program
         vm.ChromeBridgeOn = true;
         Check("S1b", "on: the host is registered and the setting holds",
             connector.Enabled && ChromeBridgeInstall.IsRegistered && Browser.UsesChrome && Directory.Exists(connector.ExtensionFolder), connector.ExtensionFolder);
+        Check("S1b2", "the host is registered for Chrome and for Edge (each browser reads its own key)",
+            ChromeBridgeInstall.HostKeys.Count == 2 && ChromeBridgeInstall.HostKeys.All(k => { using var key = Registry.CurrentUser.OpenSubKey(k); return key?.GetValue(null) is string m && File.Exists(m); }),
+            string.Join(" | ", ChromeBridgeInstall.HostKeys));
+        Check("S1b3", "Edge is told from Chrome by its user agent",
+            ChromeBridgeConnector.IsEdgeUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0")
+            && !ChromeBridgeConnector.IsEdgeUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
+            && !ChromeBridgeConnector.IsEdgeUserAgent(null));
+        Check("S1b4", "each browser's Add button shows only where that browser is installed",
+            vm.ChromeBridgeCanAddToChrome == connector.ChromeFound && vm.ChromeBridgeCanAddToEdge == connector.EdgeFound, $"chrome {connector.ChromeFound} · edge {connector.EdgeFound}");
         Check("S1c", "and with nothing connected the row says so and offers the one step left", vm.ChromeBridgeNeedsExtension && vm.ChromeBridgeStatus == Text("chromeBridge.status.waiting"), vm.ChromeBridgeStatus);
         vm.ChromeBridgeGuideOpen = true;
         Check("S1c2", "the steps stay up through a status change, with the folder to paste", vm.ChromeBridgeGuideVisible && vm.ChromeBridgeExtensionFolder == connector.ExtensionFolder, vm.ChromeBridgeExtensionFolder);
@@ -352,9 +382,9 @@ internal static class Program
         Bridge.Stop();
 
         string xaml = File.ReadAllText(FindUp("CluadeX", "Views", "SettingsView.xaml"));
-        foreach (string name in new[] { "ChromeBridgeOn", "ChromeBridgeStatus", "ChromeBridgeNeedsExtension", "AddChromeExtensionCommand", "ChromeBridgeGuideVisible", "ChromeBridgeExtensionFolder", "CopyChromeExtensionFolderCommand" })
+        foreach (string name in new[] { "ChromeBridgeOn", "ChromeBridgeStatus", "ChromeBridgeNeedsExtension", "AddChromeExtensionCommand", "ChromeBridgeGuideVisible", "ChromeBridgeExtensionFolder", "CopyChromeExtensionFolderCommand", "AddEdgeExtensionCommand", "EdgeBridgeGuideVisible", "ChromeBridgeCanAddToChrome", "ChromeBridgeCanAddToEdge" })
             Check("S1f." + name, "the row binds to what the view model has", xaml.Contains("{Binding " + name) && typeof(CluadeX.ViewModels.SettingsViewModel).GetProperty(name) != null);
-        foreach (string key in new[] { "chromeBridge.guide.title", "chromeBridge.guide.step1", "chromeBridge.guide.step2", "chromeBridge.guide.step3", "chromeBridge.guide.copy", "chromeBridge.guide.keep", "settings.chromeBridge", "settings.chromeBridgeDesc", "settings.chromeBridgeAdd", "chromeBridge.status.waiting", "chromeBridge.status.connected", "chromeBridge.status.paused", "chromeBridge.status.noChrome", "browser.chrome.notConnected", "browser.chrome.paused", "browser.chrome.openFailed", "browser.open.realChrome" })
+        foreach (string key in new[] { "chromeBridge.guide.title", "chromeBridge.guide.step1", "chromeBridge.guide.step2", "chromeBridge.guide.step3", "chromeBridge.guide.copy", "chromeBridge.guide.keep", "settings.chromeBridge", "settings.chromeBridgeDesc", "settings.chromeBridgeAdd", "chromeBridge.status.waiting", "chromeBridge.status.connected", "chromeBridge.status.paused", "chromeBridge.status.noChrome", "browser.chrome.notConnected", "browser.chrome.paused", "browser.chrome.openFailed", "browser.open.realChrome", "settings.edgeBridgeAdd", "edgeBridge.guide.title", "edgeBridge.guide.step1", "edgeBridge.guide.step2", "edgeBridge.guide.step3", "edgeBridge.guide.keep", "chromeBridge.status.connectedEdge", "chromeBridge.status.pausedEdge", "chromeBridge.status.noEdge", "chromeBridge.status.noBrowser" })
             Check("S1g." + key, "text exists", Text(key) != key);
         await Task.CompletedTask;
     }
@@ -393,6 +423,10 @@ internal static class Program
         Check("C1b2", "the steps close by themselves once Chrome has connected", SettingsVm is { ChromeBridgeGuideVisible: false, ChromeBridgeNeedsExtension: false }, $"{SettingsVm?.ChromeBridgeGuideVisible}");
         Check("C1c", "hello carries the version and Chrome's user agent",
             Bridge.ExtensionVersion == ChromeBridgeInstall.BundledVersion && Bridge.UserAgent?.Contains("Chrome/") == true, $"{Bridge.ExtensionVersion} / {Bridge.UserAgent}");
+        Check("C1c2", "the browser is told apart by that user agent: this one is Chrome, not Edge, and the Settings row says Chrome",
+            !ChromeBridgeConnector.IsEdgeUserAgent(Bridge.UserAgent)
+            && SettingsVm?.ChromeBridgeStatus == LocalizedResources.Instance["chromeBridge.status.connected"],
+            $"{Bridge.UserAgent} · {SettingsVm?.ChromeBridgeStatus}");
         Check("C1d", "CluadeX.exe is the relay", RelayProcesses().Count == 1, string.Join(" | ", RelayProcesses()));
         Check("C1e", "the connection is not paused", !Bridge.Paused);
     }

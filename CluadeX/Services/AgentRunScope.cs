@@ -42,6 +42,40 @@ public sealed class AgentRunScope
     public Providers.IAiProvider? Provider { get; set; }
     public Models.AiProviderType? ProviderType { get; set; }
 
+    /// <summary>The run left the provider it started on BY ITSELF (out of quota, refused, not answering, or the pick was
+    /// still cooling when the turn began) and goes on with a stand-in. The chat's model button then names what really
+    /// answers and a badge says it was switched (owner 2026-11-13: "การสลับโมเดลอัตโนมัติ ควรเปลี่ยนโมเดลในช่องกรอกแชท
+    /// ด้านล่างให้ตรงด้วยและขึ้นป้ายไว้"). Null on the provider the run started on, and again once the owner picks one.</summary>
+    public AutoSwitchInfo? AutoSwitch { get; private set; }
+
+    /// <summary>Raised when <see cref="AutoSwitch"/> changes (on the run's own thread — marshal to the UI).</summary>
+    public static event Action<AgentRunScope>? AutoSwitchChanged;
+
+    /// <summary>The run now goes on with <paramref name="to"/> instead of <paramref name="from"/>. A second hop keeps the
+    /// first "from": the badge names what the owner picked, not the stand-in in between. Back on the pick = cleared.</summary>
+    public void NoteAutoSwitch(Models.AiProviderType from, string fromLabel, Models.AiProviderType to, string toLabel, string? toModel)
+    {
+        var first = AutoSwitch;
+        var origin = first?.From ?? from;
+        AutoSwitch = to == origin ? null
+            : new AutoSwitchInfo(origin, first?.FromLabel ?? fromLabel, to, toLabel, toModel ?? "", DateTime.Now);
+        RaiseAutoSwitch();
+    }
+
+    /// <summary>The owner picked a provider for this run themselves: it is no stand-in any more.</summary>
+    public void ClearAutoSwitch()
+    {
+        if (AutoSwitch == null) return;
+        AutoSwitch = null;
+        RaiseAutoSwitch();
+    }
+
+    private void RaiseAutoSwitch()
+    {
+        try { AutoSwitchChanged?.Invoke(this); }
+        catch { /* a badge must never break the run */ }
+    }
+
     /// <summary>Accept edits for THIS run only (a pipe task approved for its folder that runs in the background): the
     /// user's own switch stays on their project. Checked by PermissionService.AcceptsEditsIn; set only for a folder
     /// IsUnsafeAcceptEditsRoot allows.</summary>
@@ -441,3 +475,7 @@ public sealed class AgentRunScope
         return notes;
     }
 }
+
+/// <summary>An automatic change of provider inside one run (<see cref="AgentRunScope.AutoSwitch"/>): what the owner had
+/// picked, what answers instead, and when.</summary>
+public sealed record AutoSwitchInfo(Models.AiProviderType From, string FromLabel, Models.AiProviderType To, string ToLabel, string ToModel, DateTime At);

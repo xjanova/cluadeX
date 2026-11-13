@@ -102,6 +102,15 @@
                 <TextBox Text="{Binding MaxChars, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource Box}"
                          Width="96" VerticalAlignment="Center" Margin="16,0,0,0"/>
             </local:FitRow>
+            <!-- how loud she reads: AppSettings.BuddyVolume, the same setting as her right-click menu (every engine) -->
+            <local:FitRow Style="{StaticResource Line}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Label}"><Run Text="{services:Loc voice.ui.volume}"/><Run Text="  "/><Run Text="{Binding Volume, StringFormat='{}{0}%', Mode=OneWay}" Foreground="{DynamicResource Accent.1}"/></TextBlock>
+                    <TextBlock Text="{services:Loc voice.ui.volumeDesc}" Style="{StaticResource Desc}"/>
+                </StackPanel>
+                <Slider Style="{StaticResource Slide}" Value="{Binding Volume}" Minimum="0" Maximum="100" TickFrequency="5"
+                        AutomationProperties.AutomationId="VoiceVolumeSlider"/>
+            </local:FitRow>
 
             <!-- ═══ ElevenLabs ═══ -->
             <StackPanel Visibility="{Binding IsEleven, Converter={StaticResource BoolVis}}">

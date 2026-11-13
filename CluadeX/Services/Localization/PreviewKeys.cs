@@ -23,8 +23,8 @@ internal static class PreviewKeys
         },
         ["browser.chrome.notConnected"] = new()
         {
-            ["en"] = "Your Chrome is not connected. Open Chrome. If the CluadeX Bridge extension is not in it yet, add it from Settings ▸ Agent ▸ Your Chrome.",
-            ["th"] = "Chrome ของคุณยังไม่ได้เชื่อมต่อ เปิด Chrome ก่อน ถ้ายังไม่ได้ลง extension CluadeX Bridge ให้เพิ่มจาก การตั้งค่า ▸ เอเจนต์ ▸ Chrome ของคุณ",
+            ["en"] = "The user's browser (Chrome or Edge) is not connected. Ask them to open it. If the CluadeX Bridge extension is not in it yet, they add it from Settings ▸ Agent ▸ Your Chrome / Edge.",
+            ["th"] = "เบราว์เซอร์ของผู้ใช้ (Chrome หรือ Edge) ยังไม่ได้เชื่อมต่อ ให้ผู้ใช้เปิดเบราว์เซอร์ก่อน ถ้ายังไม่ได้ลง extension CluadeX Bridge ให้เพิ่มจาก การตั้งค่า ▸ เอเจนต์ ▸ Chrome / Edge ของคุณ",
         },
         ["browser.chrome.paused"] = new()
         {

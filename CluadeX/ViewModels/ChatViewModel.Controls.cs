@@ -831,6 +831,7 @@ public partial class ChatViewModel
         LocalizedResources.Instance.PropertyChanged += (_, _) => App.Current?.Dispatcher.BeginInvoke(RelabelControls);
         PropertyChanged += OnControlsSourceChanged;
         InitModelButton();
+        InitAutoSwitch();
         _costTracker.OnCostUpdated += _ => App.Current?.Dispatcher.BeginInvoke(RefreshSpend);
         _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(() =>
         {

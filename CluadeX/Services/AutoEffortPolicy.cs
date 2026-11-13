@@ -32,13 +32,21 @@ public static class AutoEffortPolicy
                 .TakeLast(EarlierLooked).Select(h => h.Content).ToList());
     }
 
-    /// <summary>The owner's own words: what the app put around them (the auto-recall block, its "recall was late" note) is
-    /// not the task. Read as the task it made every recalled turn a "bug" (2026-10-31: a 13-letter message at xhigh).</summary>
+    /// <summary>The owner's own words: what the app put around them (the auto-recall block, its "recall was late" note,
+    /// the picked-skills list, a failover's "the previous agent ran out" note) is not the task. Read as the task it made
+    /// every recalled turn a "bug" (2026-10-31: a 13-letter message at xhigh) — and the skill list did the same again
+    /// (2026-11-13: its five "- skill: description" lines read as a five-item spec and a description with "debug" as a
+    /// bug, so a 26-letter message on Opus started at xhigh; 14 of 15 native turns that day).</summary>
     public static string OwnWords(string? message)
     {
         string text = RecallBlock.Replace(message ?? "", "");
-        int late = text.IndexOf(RecallLateMark, StringComparison.Ordinal);
-        return (late >= 0 ? text[..late] : text).Trim();
+        int cut = text.Length;
+        foreach (string mark in AppNoteMarks)
+        {
+            int at = text.IndexOf(mark, StringComparison.Ordinal);
+            if (at >= 0 && at < cut) cut = at;
+        }
+        return text[..cut].Trim();
     }
 
     /// <summary>The level (0–3), its name, and why (a key under "auto.why.*").</summary>
@@ -147,6 +155,18 @@ public static class AutoEffortPolicy
 
     private const int EarlierLooked = 8;
     private const string RecallLateMark = "[The app's automatic BrainX recall did not answer in time.";
+
+    /// <summary>A CLI ran out mid-task and another provider takes the turn over: how the note after the owner's message
+    /// begins (CodeAgentService.MaybeFailOverFromCliAsync writes it with these).</summary>
+    public const string HandoffMarkTh = "[เอเจนต์ก่อนหน้า (";
+    public const string HandoffMarkEn = "[The previous agent (";
+
+    /// <summary>How each note the app appends AFTER the owner's words begins: everything from the first one on is the
+    /// app's, not the task.</summary>
+    private static readonly string[] AppNoteMarks =
+    {
+        RecallLateMark, Skills.SkillPick.BlockMarkTh, Skills.SkillPick.BlockMarkEn, HandoffMarkTh, HandoffMarkEn,
+    };
 
     private static readonly Regex RecallBlock = new(@"<brainx_recall_(\w+)>.*?</brainx_recall_\1>", RegexOptions.Singleline | RegexOptions.CultureInvariant);
 

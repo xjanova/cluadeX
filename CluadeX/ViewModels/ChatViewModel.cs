@@ -805,7 +805,8 @@ public partial class ChatViewModel : ViewModelBase
     /// A report for another model than the one picked (the user switched since) is not shown.</summary>
     private LiveModelReport.Snapshot? LiveSnapshot()
     {
-        var type = _providerManager.PickedProviderType;
+        // A run that switched provider by itself is answered by the stand-in: its report, not the pick's.
+        var type = ShownAutoSwitch?.To ?? _providerManager.PickedProviderType;
         var run = RunOf(CurrentSession);
         var snap = LiveModelReport.For(run?.Scope, type);
         if (snap != null && run == null && !ReportMatchesPick(type, snap.Model)) snap = null;
@@ -1897,6 +1898,24 @@ public partial class ChatViewModel : ViewModelBase
         _isDirty = true;
         AutoSave();
         if (FlowRun is { } run && !ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
+    }
+
+    /// <summary>Open the chat <paramref name="delta"/> rows below (+1) or above (−1) the one on screen, in the sidebar's
+    /// own order and filter, wrapping at the ends (Ctrl+Tab / Ctrl+Shift+Tab). Nothing on screen = the first / the last.</summary>
+    public void StepChat(int delta)
+    {
+        var list = VisibleSessions;
+        if (list.Count == 0 || delta == 0) return;
+        int at = CurrentSession == null ? -1 : IndexOfSession(list, CurrentSession.Id);
+        int next = at < 0 ? (delta > 0 ? 0 : list.Count - 1) : ((at + delta) % list.Count + list.Count) % list.Count;
+        if (next == at) return;
+        _ = LoadSessionReportingAsync(list[next].Id);
+    }
+
+    private static int IndexOfSession(IList<ChatSession> list, string id)
+    {
+        for (int i = 0; i < list.Count; i++) if (list[i].Id == id) return i;
+        return -1;
     }
 
     private async Task LoadSessionReportingAsync(string? sessionId)

@@ -72,6 +72,25 @@ public partial class SettingsViewModel
         }
     }
 
+    /// <summary>How loud she is, 0–100 (Appearance card and her right-click menu; AppSettings.BuddyVolume). Saved when it
+    /// changes; MainWindow passes it to her clips and the read-aloud player at once.</summary>
+    public double BuddyVolume   // a double: a Slider's Value binds to it both ways
+    {
+        get => _settingsService.Settings.BuddyVolume;
+        set
+        {
+            int v = double.IsNaN(value) ? Services.Voice.BuddyVolume.Default : (int)Math.Round(Math.Clamp(value, 0, 100));
+            if (_settingsService.Settings.BuddyVolume == v) return;
+            try { _settingsService.UpdateSettings(s => s.BuddyVolume = v); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Settings] buddy volume: {ex.Message}"); }
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(BuddyVolumeText));
+        }
+    }
+
+    /// <summary>"50%" beside the slider.</summary>
+    public string BuddyVolumeText => _settingsService.Settings.BuddyVolume + "%";
+
     /// <summary>The chime when a box waits for the owner's answer (Appearance card; AppSettings.AttentionChime). Turning it
     /// on rings it once, so the owner hears what it sounds like.</summary>
     public bool AttentionChime

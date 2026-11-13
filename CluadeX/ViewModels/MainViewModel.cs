@@ -353,6 +353,28 @@ public class MainViewModel : ViewModelBase
         // Core commands (new chat, open folder, clear, compact, updates, settings, license).
         items.AddRange(CommandPaletteViewModel.BuildCoreCommandItems(ChatVM, t => NavigateTo(t), CheckUpdateCommand, OpenLicenseCommand));
 
+        // Chats — every chat by its name and its project, newest first: a few letters and Enter open it, whatever the
+        // sidebar's filter shows (owner 2026-11-13: "ระบบเลือกแชท ควรทำให้น่าใช้มากกว่านี้").
+        try
+        {
+            foreach (var chat in ChatVM.Sessions.ToList().OrderByDescending(c => c.UpdatedAt).Take(300))
+            {
+                string id = chat.Id;
+                string title = string.IsNullOrWhiteSpace(chat.Title) ? L("palette.chat.untitled") : chat.Title;
+                string project = string.IsNullOrWhiteSpace(chat.ProjectPath) ? ""
+                    : System.IO.Path.GetFileName(chat.ProjectPath.TrimEnd('\\', '/'));
+                string when = chat.UpdatedAt.ToString(chat.UpdatedAt.Date == DateTime.Today ? "HH:mm" : "d MMM HH:mm");
+                items.Add(new PaletteItem
+                {
+                    Icon = "\uE8BD", Title = title, Subtitle = project.Length > 0 ? project + " · " + when : when,
+                    Kind = L("palette.kind.chat"), KindToken = "Status.Success",
+                    Haystack = (title + " " + project + " chat แชท").ToLowerInvariant(),
+                    Run = () => { NavigateTo("Chat"); ChatVM.LoadSessionCommand.Execute(id); },
+                });
+            }
+        }
+        catch { /* the list changed while it was read: the palette opens without the chats this once */ }
+
         if (_spark != null)
         {
             items.Add(new PaletteItem
@@ -400,6 +422,9 @@ public class MainViewModel : ViewModelBase
 
         return items;
     }
+    /// <summary>Ctrl+Tab / Ctrl+Shift+Tab: the chat below / above the one on screen in the sidebar's list (it wraps).</summary>
+    public ICommand NextChatCommand { get; }
+    public ICommand PreviousChatCommand { get; }
     public ICommand PetBuddyCommand { get; }
     public ICommand InstallUpdateCommand { get; }
     /// <summary>"อัปเดตเลย": download the release that was found, then install and restart.</summary>
@@ -615,6 +640,8 @@ public class MainViewModel : ViewModelBase
         Palette = new CommandPaletteViewModel(BuildPaletteItems);
         OpenPaletteCommand = new RelayCommand(() => Palette.Open());
         TogglePaletteCommand = new RelayCommand(() => Palette.Toggle());
+        NextChatCommand = new RelayCommand(() => { NavigateTo("Chat"); ChatVM.StepChat(+1); });
+        PreviousChatCommand = new RelayCommand(() => { NavigateTo("Chat"); ChatVM.StepChat(-1); });
         ClosePaletteCommand = new RelayCommand(() => Palette.Close());
         RunPaletteItemCommand = new RelayCommand<PaletteItem>(item =>
         {

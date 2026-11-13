@@ -70,12 +70,18 @@ public partial class MainWindow
     {
         CluadexBuddy.SoundsOn = _viewModel.Settings.Settings.BuddySounds;
         CluadexBuddy.Display = _viewModel.Settings.Settings.BuddyDisplay;
+        // how loud she is: her clips and the replies she reads aloud, both from the one setting
+        Services.Voice.BuddyVolume.Apply(_viewModel.Settings.Settings.BuddyVolume);
     }
 
     /// <summary>Her right-click menu: sound, and clips / stills / the girls' slideshow. The ticks show what is on now.</summary>
     private void BuddyMenu_Opened(object sender, RoutedEventArgs e)
     {
         BuddyMenuSound.IsChecked = _viewModel.SettingsVM.BuddySounds;
+        _buddyMenuVolumeSyncing = true;
+        try { BuddyMenuVolume.Value = _viewModel.SettingsVM.BuddyVolume; }
+        finally { _buddyMenuVolumeSyncing = false; }
+        BuddyMenuVolumeText.Text = _viewModel.SettingsVM.BuddyVolumeText;
         BuddyMenuClips.IsChecked = CluadexBuddy.Display == CluadexBuddy.DisplayClips;
         BuddyMenuStills.IsChecked = CluadexBuddy.Display == CluadexBuddy.DisplayStills;
         BuddyMenuSlides.IsChecked = CluadexBuddy.Display == CluadexBuddy.DisplaySlides;
@@ -83,6 +89,19 @@ public partial class MainWindow
 
     private void BuddyMenuSound_Click(object sender, RoutedEventArgs e) =>
         _viewModel.SettingsVM.BuddySounds = !_viewModel.SettingsVM.BuddySounds;
+
+    /// <summary>The menu's slider is being set to the saved level (not moved by the owner).</summary>
+    private bool _buddyMenuVolumeSyncing;
+
+    /// <summary>The volume slider in her right-click menu: saved as it moves, heard at once (the clip that is playing
+    /// and the reply being read follow). It never turns her clip sounds on: an owner who switched those off still has
+    /// her read replies aloud, and that voice is what the slider is for then.</summary>
+    private void BuddyMenuVolume_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_buddyMenuVolumeSyncing || _viewModel == null) return;
+        _viewModel.SettingsVM.BuddyVolume = e.NewValue;
+        BuddyMenuVolumeText.Text = _viewModel.SettingsVM.BuddyVolumeText;
+    }
 
     private void BuddyMenuDisplay_Click(object sender, RoutedEventArgs e)
     {

@@ -19,7 +19,34 @@ public sealed class VoicePlayer : IDisposable
     public event Action<string?>? Finished;
     public bool IsPlaying { get; private set; }
 
-    public VoicePlayer(string dataRoot) => _folder = Path.Combine(dataRoot, "voice", "tts");
+    /// <summary>How loud every player is, 0–1 (AppSettings.BuddyVolume through <see cref="BuddyVolume"/>; 0.5 is WPF's
+    /// own default, the level it always had). A sound that is playing follows at once.</summary>
+    public static double MasterVolume
+    {
+        get => _masterVolume;
+        set
+        {
+            double v = double.IsNaN(value) ? 0.5 : Math.Clamp(value, 0, 1);
+            if (Math.Abs(_masterVolume - v) < 0.0001) return;
+            _masterVolume = v;
+            MasterVolumeChanged?.Invoke();
+        }
+    }
+    private static double _masterVolume = 0.5;
+    private static event Action? MasterVolumeChanged;
+
+    private void OnMasterVolumeChanged()
+    {
+        // Set from the UI thread (the settings change there), where the player lives too.
+        try { if (_player is { } p) p.Volume = _masterVolume; }
+        catch (InvalidOperationException) { /* another thread: the next sound takes the new level */ }
+    }
+
+    public VoicePlayer(string dataRoot)
+    {
+        _folder = Path.Combine(dataRoot, "voice", "tts");
+        MasterVolumeChanged += OnMasterVolumeChanged;
+    }
 
     public void Play(SpeechAudio audio)
     {
@@ -45,6 +72,7 @@ public sealed class VoicePlayer : IDisposable
         _player = p;
         p.MediaEnded += (_, _) => { if (_player == p) End(null); };
         p.MediaFailed += (_, e) => { if (_player == p) End(e.ErrorException?.Message ?? "?"); };
+        p.Volume = _masterVolume;
         p.Open(uri);
         p.Play();
         IsPlaying = true;
@@ -91,6 +119,7 @@ public sealed class VoicePlayer : IDisposable
 
     public void Dispose()
     {
+        MasterVolumeChanged -= OnMasterVolumeChanged;
         Stop();
         _file = null;
         Sweep();

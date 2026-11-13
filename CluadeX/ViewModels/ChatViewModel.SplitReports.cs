@@ -25,8 +25,11 @@ namespace CluadeX.ViewModels;
 public partial class ChatViewModel
 {
     private readonly SplitWakeLimit _splitWakes = new();
-    /// <summary>message_chat from one chat to another: at most 10 in 30 minutes per pair (no endless back-and-forth).</summary>
-    private readonly SplitWakeLimit _chatMessages = new() { MaxWakes = 10, Window = TimeSpan.FromMinutes(30) };
+    /// <summary>message_chat from one chat to another: at most 6 in 30 minutes per pair (no endless back-and-forth).
+    /// It was 10, and chats ran at it: on 2026-11-12 eleven chats sent each other 102 messages in a night, one pair ten
+    /// in 28 minutes — each one a step of the sender on a 100k-token conversation and more to read for the receiver,
+    /// most of them progress notes the tool's own description rules out.</summary>
+    private readonly SplitWakeLimit _chatMessages = new() { MaxWakes = 6, Window = TimeSpan.FromMinutes(30) };
     /// <summary>How each chat's last turn ended — a stopped or failed parent is not woken.</summary>
     private readonly Dictionary<string, (bool Stopped, bool Failed)> _lastTurnEnd = new(StringComparer.Ordinal);
     /// <summary>Chats whose next turn an agent starts (a message_chat, a wake, a split opened in the background).</summary>

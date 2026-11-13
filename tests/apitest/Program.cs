@@ -139,6 +139,8 @@ internal static class Program
         if (args.Contains("--buddy")) { await RunBadgeWire.Run(Check, Section); await BuddyIdleWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--routines")) { await RoutinesWire.Run(Check, Section); return Finish(); }
+        // the automatic change of provider (order, the run's record of it, the cooldown) and where "auto" effort starts
+        if (args.Contains("--failover")) { await FailoverWire.Run(Check, Section); await EffortWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--triggers")) { await TriggersTelegramWire.Run(Check, Section); return Finish(); }
         // what each CLI is told about its sub-agents (CliAgentPolicy.PromptLine) and the args that carry it
         if (args.Contains("--agentlines")) { await GrokDevWire.Run(Check, Section); await UltraWire.Run(Check, Section); return Finish(); }

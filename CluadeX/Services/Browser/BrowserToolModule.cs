@@ -298,7 +298,10 @@ public sealed class BrowserToolModule : IAgentToolModule
         }
         var schema = new Dictionary<string, object> { ["type"] = "object", ["properties"] = properties, ["required"] = required };
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(schema));
-        return new ToolSchema { Name = name, Description = description, InputSchema = doc.RootElement.Clone() };
+        // Deferred, like desktop_*: a model with tool search loads them when a task needs the browser. The 14 schemas
+        // rode on every request of every chat (2026-11-13: 739 requests in a day, most of them plain coding turns);
+        // the system prompt's browser section still names them, so the model knows to ask.
+        return new ToolSchema { Name = name, Description = description, InputSchema = doc.RootElement.Clone(), DeferLoading = true };
     }
 
     // ─────────────────────────── permission ───────────────────────────
