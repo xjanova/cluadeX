@@ -404,6 +404,22 @@ public sealed class AgentRunScope
 
     public bool HasUserNotes => !_userNotes.IsEmpty;
 
+    /// <summary>The owner took a waiting note back (its bubble is <paramref name="tag"/>) — it goes to a new chat instead
+    /// (ChatViewModel.NewChatAdvice.cs). False when the agent has read it already. The notes that stay keep their order;
+    /// a look by the run in the middle of this finds fewer notes for a moment, never a lost one.</summary>
+    public bool WithdrawUserNote(object tag)
+    {
+        bool found = false;
+        var keep = new List<(string Text, object? Tag)>();
+        while (_userNotes.TryDequeue(out var note))
+        {
+            if (!found && ReferenceEquals(note.Tag, tag)) found = true;
+            else keep.Add(note);
+        }
+        foreach (var note in keep) _userNotes.Enqueue(note);
+        return found;
+    }
+
     /// <summary>Raised on the run's thread with the bubbles (tags) of the notes the agent just took, so the chat can stop
     /// showing them as waiting.</summary>
     public event Action<IReadOnlyList<object?>>? UserNotesTaken;

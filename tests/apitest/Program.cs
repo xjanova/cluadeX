@@ -146,6 +146,8 @@ internal static class Program
         if (args.Contains("--clifind")) { await CliParityWire.RunCliFind(Check, Section); return Finish(); }
         // the browser the agent uses when Chrome and Edge both have the extension (a pipe of its own, no browser)
         if (args.Contains("--bridge")) { await BridgeChoiceWire.Run(Check, Section); return Finish(); }
+        // when a task is offered a new chat (the rule, and a waiting message taken back from the run)
+        if (args.Contains("--newchat")) { await NewChatAdviceWire.Run(Check, Section); return Finish(); }
         // the update check's answer and the download (localhost only — never a real install)
         if (args.Contains("--update")) { await UpdateWire.Run(Check, Section); await UpdateDownloadWire.Run(Check, Section); return Finish(); }
         // each chat keeps its own provider and model (the store, the run's pin, the real OpenAI provider on localhost)

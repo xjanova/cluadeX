@@ -3918,6 +3918,15 @@ public partial class ChatViewModel : ViewModelBase
             return;
         }
 
+        // A task of its own, sent in a chat that is already long: every step of it would re-read the conversation. The
+        // owner is asked where to run it (Services/Agents/NewChatAdvice.cs) — a message with attachments or a skill goes
+        // on as it is.
+        if (fromBox && activeSkill == null && images + files == 0 && AdviseNewChat(input, out int carried))
+        {
+            ClearBox();
+            if (await AskWhereToRunAsync(input, carried)) return;
+        }
+
         _pet?.NoteMessage(input);
         _pet?.NoteTurnStarted();
         var userMsg = new ChatMessage

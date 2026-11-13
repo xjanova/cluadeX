@@ -50,6 +50,7 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(EnforceReadBeforeEdit)] = (vm, s) => s.EnforceReadBeforeEdit = vm.EnforceReadBeforeEdit,
         [nameof(AutoVerifyAfterEditEnabled)] = (vm, s) => s.AutoVerifyAfterEditEnabled = vm.AutoVerifyAfterEditEnabled,
         [nameof(WatchAutoContinue)] = (vm, s) => s.WatchAutoContinue = vm.WatchAutoContinue,
+        [nameof(SuggestNewChat)] = (vm, s) => s.SuggestNewChat = vm.SuggestNewChat,
         [nameof(SplitAutoContinue)] = (vm, s) => s.SplitAutoContinue = vm.SplitAutoContinue,
         [nameof(AutoVerifyCommand)] = (vm, s) => s.AutoVerifyCommand = vm.AutoVerifyCommand?.Trim() ?? "",
         [nameof(MaxAutoFixAttempts)] = (vm, s) => s.MaxAutoFixAttempts = Math.Clamp(vm.MaxAutoFixAttempts, 0, 20),
@@ -168,6 +169,8 @@ public partial class SettingsViewModel : ViewModelBase
     public bool AutoVerifyAfterEditEnabled { get => _autoVerifyAfterEdit; set => SetProperty(ref _autoVerifyAfterEdit, value); }
     private bool _watchAutoContinue = true;
     public bool WatchAutoContinue { get => _watchAutoContinue; set => SetProperty(ref _watchAutoContinue, value); }
+    private bool _suggestNewChat = true;
+    public bool SuggestNewChat { get => _suggestNewChat; set => SetProperty(ref _suggestNewChat, value); }
     private bool _splitAutoContinue = true;
     public bool SplitAutoContinue { get => _splitAutoContinue; set => SetProperty(ref _splitAutoContinue, value); }
     public string AutoVerifyCommand { get => _autoVerifyCommand; set => SetProperty(ref _autoVerifyCommand, value); }
@@ -734,6 +737,7 @@ public partial class SettingsViewModel : ViewModelBase
         EnforceReadBeforeEdit = src.EnforceReadBeforeEdit;
         AutoVerifyAfterEditEnabled = src.AutoVerifyAfterEditEnabled;
         WatchAutoContinue = src.WatchAutoContinue;
+        SuggestNewChat = src.SuggestNewChat;
         SplitAutoContinue = src.SplitAutoContinue;
         AutoVerifyCommand = src.AutoVerifyCommand ?? "";
         MaxAutoFixAttempts = src.MaxAutoFixAttempts;

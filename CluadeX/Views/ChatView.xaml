@@ -2565,27 +2565,50 @@
                                         </ContentControl>
 
                                         <!-- Typed during the run, not read yet: Send now has the agent read it at once (a user
-                                             bubble is never the running balloon, so the two never share this row) -->
-                                        <Button Grid.Row="7" Margin="0,6,0,0" Padding="9,2" Cursor="Hand" HorizontalAlignment="Left"
-                                                ToolTip="{services:Loc chat.steer.sendNowTip}"
-                                                Visibility="{Binding IsQueuedNote, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
-                                                Command="{Binding DataContext.SendNowCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
-                                                CommandParameter="{Binding}">
-                                            <Button.Template>
-                                                <ControlTemplate TargetType="Button">
-                                                    <Border x:Name="Chip" CornerRadius="9" Padding="{TemplateBinding Padding}" BorderThickness="1"
-                                                            BorderBrush="{DynamicResource Accent.1}" Background="{DynamicResource State.Fill.Faint}">
-                                                        <TextBlock Text="{services:Loc chat.steer.sendNow}" FontSize="11.5" FontWeight="SemiBold"
-                                                                   Foreground="{DynamicResource Accent.1}"/>
-                                                    </Border>
-                                                    <ControlTemplate.Triggers>
-                                                        <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="Chip" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
-                                                        </Trigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Button.Template>
-                                        </Button>
+                                             bubble is never the running balloon, so the two never share this row). Beside it: do it in a
+                                             new chat — the message leaves this run's queue and starts as its own task (NewChatAdvice) -->
+                                        <StackPanel Grid.Row="7" Orientation="Horizontal" Margin="0,6,0,0" HorizontalAlignment="Left"
+                                                    Visibility="{Binding IsQueuedNote, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <Button Padding="9,2" Cursor="Hand" Margin="0"
+                                                    ToolTip="{services:Loc chat.steer.sendNowTip}"
+                                                    Command="{Binding DataContext.SendNowCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Template>
+                                                    <ControlTemplate TargetType="Button">
+                                                        <Border x:Name="Chip" CornerRadius="9" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                BorderBrush="{DynamicResource Accent.1}" Background="{DynamicResource State.Fill.Faint}">
+                                                            <TextBlock Text="{services:Loc chat.steer.sendNow}" FontSize="11.5" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource Accent.1}"/>
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="Chip" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Button.Template>
+                                            </Button>
+                                            <Button Padding="9,2" Cursor="Hand" Margin="6,0,0,0"
+                                                    ToolTip="{services:Loc chat.newChatAdvice.buttonTip}"
+                                                    AutomationProperties.AutomationId="QueuedToNewChat"
+                                                    Command="{Binding DataContext.MoveQueuedToNewChatCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Template>
+                                                    <ControlTemplate TargetType="Button">
+                                                        <Border x:Name="Chip" CornerRadius="9" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                                BorderBrush="{DynamicResource Text.Secondary}" Background="{DynamicResource State.Fill.Faint}">
+                                                            <TextBlock Text="{services:Loc chat.newChatAdvice.button}" FontSize="11.5" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource Text.Secondary}"/>
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="Chip" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Button.Template>
+                                            </Button>
+                                        </StackPanel>
 
 
                                         <!-- Row 0: Role label + Tool Badge + Success/Fail + Hover Actions -->
