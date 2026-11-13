@@ -139,6 +139,9 @@ internal static class Program
         if (args.Contains("--buddy")) { await RunBadgeWire.Run(Check, Section); await BuddyIdleWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--bugreport")) { await BugReportWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--routines")) { await RoutinesWire.Run(Check, Section); return Finish(); }
+        // which Claude Code CLI Claude Dev runs when the PC has several (the newest), on a made-up disk
+        if (args.Contains("--clifind-real")) { await CliParityWire.RunCliFindReal(Check, Section); return Finish(); }
+        if (args.Contains("--clifind")) { await CliParityWire.RunCliFind(Check, Section); return Finish(); }
         // the automatic change of provider (order, the run's record of it, the cooldown) and where "auto" effort starts
         if (args.Contains("--failover")) { await FailoverWire.Run(Check, Section); await EffortWire.Run(Check, Section); return Finish(); }
         if (args.Contains("--triggers")) { await TriggersTelegramWire.Run(Check, Section); return Finish(); }
@@ -619,6 +622,7 @@ internal static class Program
         await ChimeWire.Run(Check, Section);
         await GrokDevWire.Run(Check, Section);
         await CliParityWire.Run(Check, Section);
+        await CliParityWire.RunCliFind(Check, Section);
         await DispatchWire.Run(Check, Section);
         await FailoverWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);

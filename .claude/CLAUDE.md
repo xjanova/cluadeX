@@ -511,6 +511,22 @@ $59 billed — cache reads 107.7M tokens ($21.5), cache writes 4.37M ($21.8, at 
   the image hard cap re-wrote 95k tokens to drop 24k (step 92); the tools have no cache mark of their own, so a chat with
   another system prompt re-writes the same 30k of tool schemas; `ReplyVoiceQueue` let 9 replies wait behind the one read.
 
+## Claude Dev runs the newest Claude Code CLI on the PC (2026-11-13)
+- Owner: "ทำไม fable ยัง 5.1 ยังไม่ล่าสุด". Claude Dev sends the CLI an alias ("fable", "opus" …) and the CLI turns it into
+  a model, so the model is as new as the CLI. `ClaudeDevProvider.FindCli` took the first install it met — PATH before
+  everything — and npm's copy was 2.1.296 (2026-10-20, before Fable 5.2 shipped on 2026-11-09) while the desktop app's
+  was 2.1.321. `claude-fable-5-2` is not in the 2.1.296 exe at all (0 hits; 25 in 2.1.321).
+- Now every install is a candidate (`CliCandidates`: PATH, npm's, the desktop app's newest folder first, the native
+  installer's) and the newest version wins; equal versions, or a preferred copy that cannot say its version, keep the old
+  order. `CliVersionAt` reads the version without starting anything: the desktop app's version folder, npm's
+  `package.json` beside `bin\`, else the exe's version resource.
+- `Settings.ClaudeCodePathOverride` (a claude.exe that exists) goes before the search (`CliOverride`): the way back when
+  the newest is not the one wanted. A copy that an update removed while CluadeX runs is looked for again at the next turn
+  (`InitializeAsync` re-checks `File.Exists`) — the desktop app replaces its versioned folder.
+- Proven by `tests/apitest --clifind` (16 checks on a made-up disk) and `--clifind-real` (this PC's real installs, read
+  only: it prints each with its version and the one picked). **Not yet:** a real Claude Dev turn on the newer copy, and
+  the model id its `fable` alias reports — the harness's shell is not signed in to the CLI.
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.

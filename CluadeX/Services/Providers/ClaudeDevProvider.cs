@@ -45,7 +45,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// aliases for the latest of each family. All four ran on the owner's subscription login with no credit error
     /// (CLI 2.1.296, 2026-10-20: haiku→claude-haiku-5-5, sonnet→claude-sonnet-5-5, opus→claude-opus-5-5,
     /// fable→claude-fable-5-1; Claude Fable 5.2 shipped 2026-11-09 and the alias follows the CLI's own releases).
-    /// Aliases, not full ids, so a new model generation needs no CluadeX release.</summary>
+    /// Aliases, not full ids, so a new model generation needs no CluadeX release — but it needs a CLI that knows the
+    /// generation, which is why <see cref="FindCli"/> takes the newest install on the PC, not the first it meets.</summary>
     public static readonly string[] KnownModels = ["default", "fable", "opus", "sonnet", "haiku"];
 
     /// <summary>Spawns sub-agents of its own; the dispatch policy reaches them through the CLI (Agents.CliAgentGate).</summary>
@@ -470,11 +471,14 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        if (_cliPath != null) return;
+        if (_cliPath != null && File.Exists(_cliPath)) return;
+        // The copy is gone: the desktop app replaces its versioned folder when it updates, and CluadeX may now be
+        // running that copy (the newest wins). Looked for again, with nothing kept from the old one.
+        if (_cliPath != null) { _cliPath = null; _versionProbed = false; ReportedCliVersion = null; }
         SetLoading(true);
         try
         {
-            _cliPath = await ResolveCliAsync(ct);
+            _cliPath = await ResolveCliAsync(_settingsService.Settings.ClaudeCodePathOverride, ct);
             SetStatus(_cliPath != null
                 ? $"Ready · {_cliPath}"
                 : "Claude Code CLI not found — install it or add 'claude' to PATH");
@@ -483,12 +487,14 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     }
 
     /// <summary>
-    /// `where.exe claude` first (respects however the user installed it), then the known install places. Only a real
-    /// .exe is ever returned: npm's extensionless `claude` shim is a bash script Process.Start refuses, and the .cmd
-    /// shim would need cmd.exe (and its quoting) in between.
+    /// The owner's own choice first (Settings.ClaudeCodePathOverride, a claude.exe that exists), else the newest of the
+    /// installs `where.exe claude` and the known places turn up (<see cref="FindCli"/>). Only a real .exe is ever
+    /// returned: npm's extensionless `claude` shim is a bash script Process.Start refuses, and the .cmd shim would need
+    /// cmd.exe (and its quoting) in between.
     /// </summary>
-    private static async Task<string?> ResolveCliAsync(CancellationToken ct)
+    private static async Task<string?> ResolveCliAsync(string? overridePath, CancellationToken ct)
     {
+        if (CliOverride(overridePath, File.Exists) is { } chosen) return chosen;
         string whereOut = "";
         try
         {
@@ -513,7 +519,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     }
 
     /// <summary>
-    /// Where the CLI is, from `where.exe claude` output and the known install places, newest first:
+    /// Where the CLI is: every install on this PC is looked at and the NEWEST is used. The installs, in the order they
+    /// are preferred when their versions are equal or cannot be read:
     /// <list type="number">
     /// <item>a claude.exe on PATH;</item>
     /// <item>the exe behind npm's shims on PATH (`npm\claude.cmd` runs `node_modules\@anthropic-ai\claude-code\bin\claude.exe`);</item>
@@ -523,19 +530,52 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// folder without its exe is skipped;</item>
     /// <item>the native installer's `~\.local\bin\claude.exe`.</item>
     /// </list>
+    /// It used to be the first of these that exists, so an npm install nobody updated won over a newer copy for good. On
+    /// the owner's PC npm had 2.1.296 (2026-10-20) and the desktop app 2.1.321, and the model alias "fable" still meant
+    /// Claude Fable 5.1 four days after 5.2 shipped (2026-11-13: "ทำไม fable ยัง 5.1 ยังไม่ล่าสุด") — the aliases follow
+    /// the CLI's own release, so an old CLI is an old model. When the preferred copy's version cannot be read it is used,
+    /// as before; a later copy that cannot say its version is never taken over one that can.
     /// </summary>
     public static string? FindCli(string? whereOutput, string appData, string userProfile,
+        Func<string, bool> fileExists, Func<string, bool> dirExists, Func<string, IEnumerable<string>> subdirs,
+        Func<string, Version?>? versionOf = null)
+    {
+        var found = CliCandidates(whereOutput, appData, userProfile, fileExists, dirExists, subdirs);
+        if (found.Count == 0) return null;
+        versionOf ??= CliVersionAt;
+        Version? Read(string exe)
+        {
+            try { return versionOf(exe); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+        }
+
+        string best = found[0];
+        var bestVersion = Read(best);
+        if (bestVersion == null) return best;   // the preferred copy says nothing about itself: it stays, as before
+        foreach (string candidate in found.Skip(1))
+            if (Read(candidate) is { } v && v > bestVersion) { best = candidate; bestVersion = v; }
+        return best;
+    }
+
+    /// <summary>Every claude.exe this PC has, in the order <see cref="FindCli"/> prefers them at equal versions.</summary>
+    public static List<string> CliCandidates(string? whereOutput, string appData, string userProfile,
         Func<string, bool> fileExists, Func<string, bool> dirExists, Func<string, IEnumerable<string>> subdirs)
     {
+        var found = new List<string>();
+        void Add(string exe)
+        {
+            if (!found.Contains(exe, StringComparer.OrdinalIgnoreCase)) found.Add(exe);
+        }
+
         var onPath = (whereOutput ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToList();
         foreach (var l in onPath)
-            if (l.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && fileExists(l)) return l;
+            if (l.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && fileExists(l)) Add(l);
         foreach (var l in onPath)
         {
             string? dir = Path.GetDirectoryName(l);
             if (string.IsNullOrEmpty(dir)) continue;
             string exe = Path.Combine(dir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
-            if (fileExists(exe)) return exe;
+            if (fileExists(exe)) Add(exe);
         }
 
         try
@@ -549,19 +589,64 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
                 foreach (var (dir, _) in versions)
                 {
                     string flat = Path.Combine(dir, "claude.exe");
-                    if (fileExists(flat)) return flat;
+                    if (fileExists(flat)) { Add(flat); continue; }
                     foreach (var hash in subdirs(dir))
                     {
                         string exe = Path.Combine(hash, "claude.exe");
-                        if (fileExists(exe)) return exe;
+                        if (fileExists(exe)) { Add(exe); break; }
                     }
                 }
             }
         }
-        catch { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* the other installs still count */ }
 
         string native = Path.Combine(userProfile, ".local", "bin", "claude.exe");
-        return fileExists(native) ? native : null;
+        if (fileExists(native)) Add(native);
+        return found;
+    }
+
+    /// <summary>The version of the CLI at <paramref name="exe"/>, read without starting it. Null = unknown.</summary>
+    public static Version? CliVersionAt(string exe) => CliVersionAt(exe,
+        path => File.Exists(path) ? File.ReadAllText(path) : null,
+        path =>
+        {
+            var info = FileVersionInfo.GetVersionInfo(path);
+            return info.ProductVersion ?? info.FileVersion;
+        });
+
+    /// <summary>
+    /// <see cref="CliVersionAt(string)"/> with the disk handed in (tests). Three places say it: the desktop app keeps each
+    /// copy in a folder named by its version, npm's package.json beside <c>bin\</c> states it, and else the exe's own
+    /// version resource (<paramref name="fileVersion"/>; "0.0.0" and nothing both mean unknown).
+    /// </summary>
+    public static Version? CliVersionAt(string exe, Func<string, string?> readText, Func<string, string?> fileVersion)
+    {
+        if (string.IsNullOrWhiteSpace(exe)) return null;
+        // …\Claude\claude-code\2.1.321\[<hash>\]claude.exe — npm's …\@anthropic-ai\claude-code\bin\claude.exe has "bin" there
+        string[] parts = exe.Split('\\', '/');
+        int at = Array.FindLastIndex(parts, p => p.Equals("claude-code", StringComparison.OrdinalIgnoreCase));
+        if (at >= 0 && at + 1 < parts.Length - 1 && Version.TryParse(parts[at + 1], out _) && ParseCliVersion(parts[at + 1]) is { } folder)
+            return folder;
+
+        string? bin = Path.GetDirectoryName(exe);
+        if (bin != null && Path.GetFileName(bin).Equals("bin", StringComparison.OrdinalIgnoreCase) && Path.GetDirectoryName(bin) is { } package)
+        {
+            try
+            {
+                if (readText(Path.Combine(package, "package.json")) is { Length: > 0 } json)
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && doc.RootElement.TryGetProperty("version", out var stated) && stated.ValueKind == System.Text.Json.JsonValueKind.String
+                        && ParseCliVersion(stated.GetString()) is { } npm)
+                        return npm;
+                }
+            }
+            catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or UnauthorizedAccessException) { /* the exe may still say */ }
+        }
+
+        try { return ParseCliVersion(fileVersion(exe)) is { } own && own > new Version(0, 0, 0) ? own : null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
     }
 
     public async IAsyncEnumerable<string> ChatAsync(
@@ -571,7 +656,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         LastTurnAuthRefused = false;
-        if (_cliPath == null) await InitializeAsync(ct);
+        if (_cliPath == null || !File.Exists(_cliPath)) await InitializeAsync(ct);   // (a copy an update removed is found again)
         if (_cliPath == null)
         {
             OnError?.Invoke("Claude Code CLI not found on this machine");
@@ -757,6 +842,14 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
             proc?.Dispose();
             try { File.Delete(effortReport); } catch { }
         }
+    }
+
+    /// <summary>The path the owner set (Settings.ClaudeCodePathOverride) when it is a claude.exe that exists; else null,
+    /// and the search decides. A cli.js there is Claude in Chrome's to run with node — Claude Dev starts an exe only.</summary>
+    public static string? CliOverride(string? overridePath, Func<string, bool> fileExists)
+    {
+        string path = (overridePath ?? "").Trim().Trim('"');
+        return path.Length > 0 && path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && fileExists(path) ? path : null;
     }
 
     private bool _versionProbed;
