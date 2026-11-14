@@ -153,7 +153,7 @@ const ICON = {
   prev:'M19 20 9 12l10-8zM5 19V5', next:'M5 4l10 8-10 8zM19 5v14', inpt:'M4 4v16M8 12h12M14 6l6 6-6 6', outpt:'M20 4v16M16 12H4M10 6l-6 6 6 6',
   save:'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8', over:'M12 3v12M7 10l5 5 5-5M5 21h14',
   code:'M16 18l6-6-6-6M8 6l-6 6 6 6', check:'M20 6 9 17l-5-5', x:'M18 6 6 18M6 6l12 12', zsel:'M3 7V3h4M21 7V3h-4M3 17v4h4M21 17v4h-4M8 12h8',
-  text:'M4 7V4h16v3M9 20h6M12 4v16', plus:'M12 5v14M5 12h14', bold:'M6 4h7a4 4 0 0 1 0 8H6zM6 12h8a4 4 0 0 1 0 8H6z', italic:'M19 4h-9M14 20H5M15 4 9 20',
+  shield:'M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3zM9 12l2 2 4-4', text:'M4 7V4h16v3M9 20h6M12 4v16', plus:'M12 5v14M5 12h14', bold:'M6 4h7a4 4 0 0 1 0 8H6zM6 12h8a4 4 0 0 1 0 8H6z', italic:'M19 4h-9M14 20H5M15 4 9 20',
   aleft:'M3 6h18M3 12h12M3 18h16', acenter:'M3 6h18M6 12h12M4 18h16', aright:'M3 6h18M9 12h12M5 18h16', layers:'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
 };
 function svg(name) { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', ICON[name] || ''); s.append(p); return s; }
@@ -249,6 +249,27 @@ async function cutWithFfmpeg(mode, start, end, savePath) {
     post({ t: 'cut', id, mode, start, end, path: savePath || null });
     return await waitFor(id, ['saveResult']);
   } finally { clearBusy(); }
+}
+/** Faces and licence plates covered in the whole file as it is on disk: the host runs the detectors and ffmpeg and
+ *  saves a new "-blurred" copy beside it (opened like any copy). */
+let privacyInfo = null;
+async function privacyBlur() {
+  if (busy || !INFO) return;
+  if (!INFO.ffmpeg) { say(L('media.page.privacyNoFfmpeg'), 'err'); return; }
+  const id = nextId++;
+  privacyInfo = null;
+  setBusy(L('media.page.privacyStart'), () => post({ t: 'cancel', id }));
+  burnProgress = { id, fn: (f, s) => {
+    if (s === 'download') { $('coverText').textContent = L('media.page.privacyDownload'); return; }
+    setProgress(f); $('coverText').textContent = L('media.page.privacyProgress', String(Math.round(f * 100)));
+  } };
+  try {
+    post({ t: 'privacy', id });
+    const r = await waitFor(id, ['saveResult']);
+    const info = privacyInfo && privacyInfo.id === id ? privacyInfo : null;
+    if (r && r.ok && info && !info.covered) say(L('media.page.privacyNone', r.name || ''));
+    else report(r, r && r.ok ? L('media.page.privacyDone', r.name || '', String(info ? info.faces : 0), String(info ? info.plates : 0)) : null);
+  } finally { burnProgress = null; privacyInfo = null; clearBusy(); }
 }
 function report(r, okText) {
   if (r && r.ok) say(okText || L('media.page.saved', r.name || ''), 'ok');
@@ -650,11 +671,12 @@ function ImageEditor() {
       tb.resize = btn('resize', 'media.page.resize', () => openTool('resize'), { label: true });
       tb.adjust = btn('sun', 'media.page.adjust', () => openTool('adjust'), { label: true });
       tb.text = btn('text', 'media.page.text', toggleText, { label: true, tip: 'media.page.textTip' });
+      tb.privacy = btn('shield', 'media.page.privacy', privacyBlur, { label: true, tip: 'media.page.privacyTip' });
       bar.append(el('div', { cls: 'grp' }, tb.undo, tb.redo), el('div', { cls: 'sep' }),
         el('div', { cls: 'grp' }, tb.crop, tb.resize,
           btn('rotl', 'media.page.rotateLeft', () => push({ t: 'rot', d: -90 })), btn('rotr', 'media.page.rotateRight', () => push({ t: 'rot', d: 90 })),
           btn('fliph', 'media.page.flipH', () => push({ t: 'flip', a: 'h' })), btn('flipv', 'media.page.flipV', () => push({ t: 'flip', a: 'v' })),
-          tb.adjust), el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.text), el('div', { cls: 'sep' }));
+          tb.adjust), el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.text, tb.privacy), el('div', { cls: 'sep' }));
     }
     bar.append(el('div', { cls: 'grp' }, btn('fit', 'media.page.fit', () => { fit = true; layout(); }), btn('zout', 'media.page.zoomOut', () => zoomBy(1 / 1.25)),
       tb.zoomLbl = el('button', { cls: 'btn', tip: 'media.page.actualSize', on: { click: () => { fit = false; zoomTo(1); } } }, '100%'), btn('zin', 'media.page.zoomIn', () => zoomBy(1.25))));
@@ -1448,10 +1470,11 @@ function VideoEditor() {
     tb.clear = btn('x', 'media.page.clearCut', () => { inT = 0; outT = D(); refresh(); });
     tb.snap = btn('camera', 'media.page.snapshot', snapshot, { label: true, tip: 'media.page.snapshotTip' });
     tb.text = btn('text', 'media.page.text', toggleText, { label: true, tip: 'media.page.textTip' });
+    tb.privacy = btn('shield', 'media.page.privacy', () => { if (!recording) { v.pause(); privacyBlur(); } }, { label: true, tip: 'media.page.privacyTip' });
     tb.undo = btn('undo', 'media.page.undo', () => { if (!busy && !recording) H.undo(); refresh(); });
     tb.redo = btn('redo', 'media.page.redo', () => { if (!busy && !recording) H.redo(); refresh(); });
     bar.append(el('div', { cls: 'grp' }, tb.in, tb.out, tb.playCut, tb.clear), el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.text, tb.undo, tb.redo),
-      el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.snap), el('div', { cls: 'spacer' }), saveGroup(false));
+      el('div', { cls: 'sep' }), el('div', { cls: 'grp' }, tb.snap, tb.privacy), el('div', { cls: 'spacer' }), saveGroup(false));
     applyStrings(bar);
     timeEl = el('span', { cls: 'time' }); cutEl = el('span', { cls: 'sel' });
     tb.play = btn('play', 'media.page.play', toggle, { tip: 'media.page.playTip' });
@@ -1809,7 +1832,8 @@ if (HOST) HOST.addEventListener('message', e => {
       if (m.def) DEF_FONT = cleanFont(m.def) || DEF_FONT;
       if (ED && ED.fontsChanged) ED.fontsChanged();
       break;
-    case 'progress': if (burnProgress && burnProgress.id === m.id && isFinite(m.f)) burnProgress.fn(clamp(+m.f, 0, 1)); break;
+    case 'progress': if (burnProgress && burnProgress.id === m.id && isFinite(m.f)) burnProgress.fn(clamp(+m.f, 0, 1), m.s); break;
+    case 'privacyInfo': privacyInfo = m; break;
     case 'pause': ED && ED.pause && ED.pause(); break;
     case 'release': ED && ED.release && ED.release(); post({ t: 'released', id: m.id }); break;
     case 'reattach': ED && ED.reattach && ED.reattach(); break;

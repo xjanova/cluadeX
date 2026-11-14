@@ -23,6 +23,9 @@ public partial class CodeEditorViewModel
     /// <summary>Where the media editor's WebView2 keeps its profile (beside the Node Graph's and the Studio's).</summary>
     public string MediaWebDataFolder => Path.Combine(_settings.DataRoot, "MediaEditor", "WebView2");
 
+    /// <summary>The data folder (the privacy blur keeps its two detector models under Models\privacy).</summary>
+    public string DataRoot => _settings.DataRoot;
+
     /// <summary>For the media host: localized text (the page gets all of its words from here), and the service whose
     /// LanguageChanged tells it to send them again.</summary>
     public string Loc(string key) => T(key);

@@ -1379,6 +1379,9 @@ public partial class App : Application
         // media_transcript: a video's subtitles (yt-dlp) or speech to text (ffmpeg + OpenAI Whisper, asks with the price).
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.MediaTranscriptToolModule(
             sp.GetService<SettingsService>(), sp.GetService<ActivationService>()));
+        // media_blur: faces and licence plates covered in a video or picture (ONNX detectors on this PC, a new file).
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.MediaBlurToolModule(
+            sp.GetService<SettingsService>()));
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 
