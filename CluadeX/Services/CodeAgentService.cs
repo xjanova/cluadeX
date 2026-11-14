@@ -2591,7 +2591,11 @@ public partial class CodeAgentService
                 _agentToolService.AskUserStepsAsync,
                 // Codex's sandbox cannot commit, push, run adb or reach https: run_as_user runs those few as the user, through
                 // run_command's gate — only on a turn the user let run commands.
-                userShell: delegated == AiProviderType.OpenAIDev && grant is { Run: true })
+                userShell: delegated == AiProviderType.OpenAIDev && grant is { Run: true },
+                // Codex, Gemini and Grok have no approval prompt that reaches CluadeX: mcp_call puts any other MCP tool
+                // (BrainX's ssh_run, agent_send…) to the same gate and card. Claude Dev has its permission prompt; the
+                // Antigravity chat is read-only.
+                mcpRelay: delegated is AiProviderType.OpenAIDev or AiProviderType.GeminiDev or AiProviderType.GrokDev)
             : null;
         if (cliAgent)
         {

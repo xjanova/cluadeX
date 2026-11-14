@@ -67,6 +67,46 @@ public static class ChatToolBridge
     /// TodoWrite can step along with advance.</summary>
     public const string PlanToolName = "update_plan";
 
+    /// <summary>
+    /// mcp_call — any tool of the MCP servers CluadeX itself runs (BrainX's ssh_run, agent_send, task_handoff, chrome__*,
+    /// the user's other servers), relayed through CluadeX's own MCP gate: the user's rules, the approval card, strict
+    /// approval for ssh_run and BrainX's needs_confirmation card. For Codex, Gemini and Grok, which run headless with no
+    /// approval prompt of their own: they were given BrainX's read tools only, and every other MCP call was refused outright
+    /// (owner 2026-11-14, a Codex chat could not deploy over ssh_run: "ผ่านการ์ดอนุมัติ" / "codex เหมือน ง่อยๆ มาตลอด").
+    /// Claude Dev does not need it: its --permission-prompt-tool already puts each MCP call to the same gate.
+    /// </summary>
+    public const string McpRelayToolName = "mcp_call";
+
+    /// <summary>Set (to "1") for the tools server of a turn that is offered <see cref="McpRelayToolName"/>.</summary>
+    public const string McpRelayEnv = "CLUADEX_TOOLS_MCPRELAY";
+
+    /// <summary>The tool's description (the MCP tools/list entry).</summary>
+    public const string McpRelayDescription =
+        "Call a tool of another MCP server that CluadeX runs (for example brainx-brain's ssh_run, agent_send, task_handoff, "
+        + "cowork_*, chrome__*, or the user's other servers) when your own MCP client refuses it or says it needs approval. "
+        + "CluadeX asks the user on its approval card exactly as for its own agent (BrainX's own confirmation card for a gated "
+        + "ssh_run command), runs it, and returns the result here. tool = server__tool (e.g. brainx-brain__ssh_run); "
+        + "arguments = that tool's own arguments as an object. A refusal is the user's answer: never try another way around it.";
+
+    /// <summary>The tool's input schema.</summary>
+    public static object McpRelaySchema => new
+    {
+        type = "object",
+        properties = new
+        {
+            tool = new { type = "string", description = "server__tool, e.g. brainx-brain__ssh_run (mcp__server__tool works too)" },
+            arguments = new { type = "object", description = "The tool's own arguments, e.g. {\"profile_id\": \"web\", \"command\": \"ls\"}", additionalProperties = true },
+        },
+        required = new[] { "tool" },
+    };
+
+    /// <summary>The wrapper line for a turn that has <see cref="McpRelayToolName"/>. One line. Pure.</summary>
+    public static string McpRelayHint(CliToolNames naming) =>
+        $"When your own MCP client refuses a tool of another MCP server or says it needs approval (\"requires approval\", "
+        + $"\"approval policy is never\", not trusted) — brainx-brain's ssh_run, agent_send, task_handoff, chrome__* and the "
+        + $"like — call {ToolRef(naming, McpRelayToolName)} with tool \"server__tool\" and arguments {{…}} instead: CluadeX asks "
+        + "the user on its approval card and runs it. Never tell the user to change your approval policy for that.";
+
     /// <summary>The line for each CLI's wrapper: it says which tool reaches the user's card.</summary>
     public const string AskHint = "When you need the user's answer or choice, call CluadeX's ask_user tool (MCP server cluadex) "
         + "if you have it: it shows a question card in the chat and waits for the answer. Several questions that belong "
@@ -185,7 +225,7 @@ public static class ChatToolBridge
     /// on one site show three permission cards where the first answer covers the rest.</summary>
     private sealed record Registration(AgentRunScope? Scope, Func<ToolCall, CancellationToken, Task<ToolResult>> Execute,
         CancellationTokenSource Cts, string? Cwd, McpApprover? Approve, QuestionAsker? Ask, Agents.CliAgentGate? Gate,
-        StepsAsker? AskSteps = null, bool UserShell = false)
+        StepsAsker? AskSteps = null, bool UserShell = false, bool McpRelay = false)
     {
         public SemaphoreSlim BrowserLane { get; } = new(1, 1);
 
@@ -222,10 +262,11 @@ public static class ChatToolBridge
     /// prompt (<see cref="ApproveToolName"/>); without it every such question is refused, as before.
     /// <paramref name="ask"/> opens the question card (<see cref="AskToolName"/>, Claude Code's AskUserQuestion).
     /// <paramref name="gate"/> answers the CLI's hook before each sub-agent it spawns (<see cref="AgentGateToolName"/>).
+    /// <paramref name="mcpRelay"/>: the server also lists <see cref="McpRelayToolName"/> (a CLI with no approval prompt).
     /// </summary>
     public static Ticket? Register(AgentRunScope? scope, Func<ToolCall, CancellationToken, Task<ToolResult>> execute,
         string? cwd, CancellationToken turn, McpApprover? approve = null, QuestionAsker? ask = null, Agents.CliAgentGate? gate = null,
-        StepsAsker? askSteps = null, bool userShell = false)
+        StepsAsker? askSteps = null, bool userShell = false, bool mcpRelay = false)
     {
         try
         {
@@ -234,8 +275,8 @@ public static class ChatToolBridge
             Directory.CreateDirectory(dir);
             SweepStale(dir);
             string file = Path.Combine(dir, $"claude-dev-tools-{token[..12]}.json");
-            File.WriteAllText(file, ConfigJson(Safety.GuardHook.ExePath(), token, PipeName, userShell), new UTF8Encoding(false));
-            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask, gate, askSteps, userShell);
+            File.WriteAllText(file, ConfigJson(Safety.GuardHook.ExePath(), token, PipeName, userShell, mcpRelay), new UTF8Encoding(false));
+            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask, gate, askSteps, userShell, mcpRelay);
             return new Ticket(token, file);
         }
         catch { return null; }
@@ -243,21 +284,20 @@ public static class ChatToolBridge
 
     /// <summary>The <c>--mcp-config</c> file: one stdio server, this exe in tools mode, the turn's token in its env.</summary>
     /// <paramref name="userShell"/>: the server also lists run_as_user (a Codex turn with the run grant).
-    public static string ConfigJson(string exe, string token, string pipe, bool userShell = false) => JsonSerializer.Serialize(new
+    /// <paramref name="mcpRelay"/>: the server also lists mcp_call (<see cref="McpRelayToolName"/>).
+    public static string ConfigJson(string exe, string token, string pipe, bool userShell = false, bool mcpRelay = false)
     {
-        mcpServers = new Dictionary<string, object>
+        var env = new Dictionary<string, string> { [TokenEnv] = token, [PipeEnv] = pipe };
+        if (userShell) env[UserShellEnv] = "1";
+        if (mcpRelay) env[McpRelayEnv] = "1";
+        return JsonSerializer.Serialize(new
         {
-            [ServerName] = new
+            mcpServers = new Dictionary<string, object>
             {
-                type = "stdio",
-                command = exe,
-                args = new[] { Flag },
-                env = userShell
-                    ? new Dictionary<string, string> { [TokenEnv] = token, [PipeEnv] = pipe, [UserShellEnv] = "1" }
-                    : new Dictionary<string, string> { [TokenEnv] = token, [PipeEnv] = pipe },
+                [ServerName] = new { type = "stdio", command = exe, args = new[] { Flag }, env },
             },
-        },
-    });
+        });
+    }
 
     /// <summary>Set (to "1") for the tools server of a turn that is offered run_as_user.</summary>
     private const string UserShellEnv = "CLUADEX_TOOLS_USERSHELL";
@@ -383,6 +423,8 @@ public static class ChatToolBridge
             return AnswerAgentGate(root, reg);
         if (tool == Providers.CodexUserShell.ToolName)
             return await RunAsUserAsync(root, reg, hungUp).ConfigureAwait(false);
+        if (tool == McpRelayToolName)
+            return await RelayMcpAsync(root, reg, hungUp).ConfigureAwait(false);
         bool browser = BrowserToolModule.ToolNames.Contains(tool);
         bool desktop = !browser && Desktop.DesktopToolModule.ToolNames.Contains(tool);
         bool engineering = !browser && !desktop && EngineeringToolModule.ToolNames.Contains(tool);
@@ -468,6 +510,58 @@ public static class ChatToolBridge
         catch (OperationCanceledException) { return (false, Stopped(tool, hungUp)); }
         if (!result.Success && ct.IsCancellationRequested) return (false, Stopped(tool, hungUp));
         return new Reply(result.Success, TextOf(result) + NotesFor(reg));
+    }
+
+    /// <summary>
+    /// mcp_call: the tool of another MCP server as one MCP call of the chat's own agent (ToolType.McpTool) — the agent's
+    /// ExecuteToolAsync puts it through CheckMcpPermissionAsync (rules, the approval card, strict approval, self-approval
+    /// refused) and shows BrainX's needs_confirmation card. Refused on a turn that was not offered it (Claude Dev, Antigravity).
+    /// </summary>
+    private static async Task<Reply> RelayMcpAsync(JsonElement request, Registration reg, CancellationToken hungUp)
+    {
+        if (!reg.McpRelay)
+            return (false, $"CluadeX: {McpRelayToolName} is only for a Codex, Gemini or Grok turn.");
+        var outer = request.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : default;
+        string target = outer.ValueKind == JsonValueKind.Object && outer.TryGetProperty("tool", out var t) && t.ValueKind == JsonValueKind.String
+            ? t.GetString()?.Trim() ?? "" : "";
+        if (McpRelayTarget(target) is not { } qualified)
+            return (false, $"CluadeX: {McpRelayToolName} needs tool as server__tool (e.g. brainx-brain__ssh_run), not '{target}'.");
+        if (qualified.StartsWith($"mcp__{ServerName}__", StringComparison.Ordinal))
+            return (false, $"CluadeX: call CluadeX's own tools directly, not through {McpRelayToolName}.");
+        // The tool's own arguments: an object (the schema), or a JSON object sent as a string by a model that flattened it.
+        JsonElement inner = default;
+        if (outer.ValueKind == JsonValueKind.Object && outer.TryGetProperty("arguments", out var ar))
+        {
+            if (ar.ValueKind == JsonValueKind.Object) inner = ar;
+            else if (ar.ValueKind == JsonValueKind.String && ar.GetString() is { Length: > 0 } text)
+                try { using var parsed = JsonDocument.Parse(text); inner = parsed.RootElement.Clone(); }
+                catch (JsonException) { return (false, $"CluadeX: {McpRelayToolName}'s arguments must be an object."); }
+        }
+        var call = new ToolCall { Type = ToolType.McpTool, ToolName = qualified, Arguments = ToolArguments(inner) };
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(reg.Cts.Token, hungUp);
+        var ct = linked.Token;
+        if (ct.IsCancellationRequested) return (false, TurnOver);
+        AgentRunScope.Enter(reg.Scope);
+        ToolResult result;
+        try { result = await reg.Execute(call, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return (false, Stopped(McpRelayToolName, hungUp)); }
+        if (!result.Success && ct.IsCancellationRequested) return (false, Stopped(McpRelayToolName, hungUp));
+        string reply = TextOf(result) + NotesFor(reg);
+        if (!result.Success || result.Images is not { Count: > 0 } shots) return new Reply(result.Success, reply);
+        var (images, notes) = ImagesForCli(shots);
+        if (notes.Count > 0) reply += "\n" + string.Join("\n", notes);
+        return new Reply(true, reply, images);
+    }
+
+    /// <summary>mcp_call's tool → mcp__server__tool: "server__tool" or "mcp__server__tool"; null when it names no server.
+    /// Pure.</summary>
+    public static string? McpRelayTarget(string? tool)
+    {
+        string t = (tool ?? "").Trim();
+        if (t.StartsWith("mcp__", StringComparison.Ordinal)) t = t[5..];
+        int sep = t.IndexOf("__", StringComparison.Ordinal);
+        if (sep <= 0 || sep + 2 >= t.Length || t.Any(char.IsWhiteSpace)) return null;
+        return "mcp__" + t;
     }
 
     /// <summary>What the user typed while this turn works (the input box, the plan window's add box), riding on the reply
@@ -853,9 +947,10 @@ public static class ChatToolBridge
     /// found Codex, Gemini and Antigravity were never told new_chat / close_chat existed, and no CLI was told about wrap_up,
     /// the engineering tools or add_code_comments, so they answered "I can't" for things CluadeX hands them.
     /// <paramref name="splitChats"/>: name new_chat / close_chat (Claude Dev and Grok Dev already have their own line).
-    /// <paramref name="plan"/>: name update_plan (Antigravity has no plan tool of its own). One line. Pure.
+    /// <paramref name="plan"/>: name update_plan (Antigravity has no plan tool of its own).
+    /// <paramref name="relay"/>: name mcp_call (<see cref="McpRelayHint"/>). One line. Pure.
     /// </summary>
-    public static string ChatToolsHint(CliToolNames naming, bool splitChats, bool plan = false)
+    public static string ChatToolsHint(CliToolNames naming, bool splitChats, bool plan = false, bool relay = false)
     {
         string T(string tool) => ToolRef(naming, tool);
         string server = naming switch
@@ -891,6 +986,7 @@ public static class ChatToolBridge
           .Append("adds comments to existing code without changing the code. ")
           .Append($"To wait for CI or a background process, call {T("watch_ci")} / {T("watch_process")} and END your turn — ")
           .Append($"CluadeX starts your next turn with the result; never poll or sleep ({T("watch_list")}, {T("watch_cancel")}).");
+        if (relay) sb.Append(' ').Append(McpRelayHint(naming));
         return sb.ToString();
     }
 
@@ -1002,7 +1098,8 @@ public static class ChatToolBridge
                 case "ping":
                     return Result(id, new { });
                 case "tools/list":
-                    return Result(id, new { tools = ToolList(Environment.GetEnvironmentVariable(UserShellEnv) == "1") });
+                    return Result(id, new { tools = ToolList(Environment.GetEnvironmentVariable(UserShellEnv) == "1",
+                                                             Environment.GetEnvironmentVariable(McpRelayEnv) == "1") });
                 case "tools/call":
                 {
                     string name = prm.ValueKind == JsonValueKind.Object && prm.TryGetProperty("name", out var nm)
@@ -1042,10 +1139,14 @@ public static class ChatToolBridge
     /// gate refuses right now answers the gate's reason when called, and the turn's prompt already says it), with
     /// open_project said the way it works for the CLI.</summary>
     /// <paramref name="userShell"/>: also list run_as_user (the server of a Codex turn with the run grant).
-    public static object[] ToolList(bool userShell = false) => ToolListBase().Concat(userShell
+    /// <paramref name="mcpRelay"/>: also list mcp_call (a Codex, Gemini or Grok turn).
+    public static object[] ToolList(bool userShell = false, bool mcpRelay = false) => ToolListBase().Concat(userShell
         ? new object[] { new { name = Providers.CodexUserShell.ToolName, description = Providers.CodexUserShell.Description,
                                inputSchema = Providers.CodexUserShell.InputSchema } }
-        : Array.Empty<object>()).ToArray();
+        : Array.Empty<object>())
+        .Concat(mcpRelay
+            ? new object[] { new { name = McpRelayToolName, description = McpRelayDescription, inputSchema = McpRelaySchema } }
+            : Array.Empty<object>()).ToArray();
 
     private static IEnumerable<object> ToolListBase() => new ProjectToolModule().GetToolSchemas().Select(s => (object)new
     {

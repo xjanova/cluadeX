@@ -439,12 +439,21 @@ public sealed class AgentRunScope
         // ("มีการเพิ่มเข้าแผนกลางทางพิจารณาได้ว่าจะเพิ่มอย่างไร"), not only after the whole plan. A correction or a "stop"
         // still applies at once, and a request that stands on its own still runs in parallel in its own chat (owner
         // 2026-10-18) — it shows under this chat in the sidebar, and close_chat puts it away once its result is in.
+        // Owner 2026-11-14: "การที่เราสั่งแทรกไปแล้ว ต้องรีบรับเข้าไปคิด ไม่ใช่รอนานไม่ยอมตอบ". A Claude Dev turn read
+        // "สรุป ปรับปรุงอะไรไปบ้าง" at once, filed the question as "adds to the work", wrote nothing, and answered it 12
+        // minutes later after a whole deploy. The user's message is answered in words BEFORE the next tool call: a question
+        // or "what did you do / where are you" is answered then and there, in full; anything else at least gets its line.
         return (urgent
                    ? "[The user pressed \"Send now\": your reply in progress, or tool calls not started yet, were stopped so you "
-                     + "read this first. Decide which it is, "
-                   : "[The user sent this while you were working. Decide which it is, ")
-               + "say so in one short line, then carry on:\n"
-               + "- It corrects the current work, or says stop/cancel: apply it now.\n"
+                     + "read this first. "
+                   : "[The user sent this while you were working. ")
+               + "Answer it NOW: before your next tool call, write a reply to the user as visible text in the chat (not only "
+               + "inside a tool call or a plan item) — the user is waiting and sees nothing until you write. Decide which it "
+               + "is, then carry on:\n"
+               + "- It asks a question, or wants a summary, a status or what you have done so far: answer it in full right "
+               + "now from what you already know, in the user's language, then carry on with your work. Never park a "
+               + "question in the plan to answer at the end.\n"
+               + "- It corrects the current work, or says stop/cancel: say so in one line and apply it now.\n"
                + "- It adds to the current work: put it into your plan with " + planTool + " where it belongs — next, when it "
                + "changes what you were about to do; otherwise after the items already there — say in one line where you put "
                + "it, and do it in this turn.\n"

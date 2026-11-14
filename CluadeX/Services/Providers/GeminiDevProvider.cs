@@ -197,7 +197,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
                   "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
         wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(noProject);
         wrapper += " " + Tools.ChatToolBridge.AskHint;
-        if (chatTools) wrapper += " " + Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Plain, splitChats: true);
+        // mcp_call rides the chat tools' server on every Gemini turn (CodeAgentService registers it so).
+        if (chatTools) wrapper += " " + Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Plain, splitChats: true, relay: true);
         if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
         if (worker && !string.IsNullOrWhiteSpace(agentLine)) wrapper += " " + agentLine;
         if (worker && chatTools && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();

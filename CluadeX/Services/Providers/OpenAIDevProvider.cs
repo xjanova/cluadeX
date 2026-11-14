@@ -197,7 +197,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         // `codex exec` runs with approval_policy=never, so every MCP call Codex would ask about is refused ("MCP tool call
         // requires approval, but approval policy is never" — every brain call of the 2026-10-25 AntiX turn). The brain
         // tools Claude Dev may call unasked are approved one by one; the rest of the brain (ssh_run, chrome…) stays
-        // refused. Only when Codex's own config defines the server: a key under an undefined server fails config loading.
+        // refused here and goes through CluadeX's mcp_call instead (ChatToolBridge.McpRelayToolName: the approval card,
+        // 2026-11-14). Only when Codex's own config defines the server: a key under an undefined server fails config loading.
         if (brainInCodexConfig)
             foreach (var tool in ClaudeDevProvider.BrainToolsFor(grant))
             {
@@ -273,9 +274,12 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                 {
                     // run_as_user too when this turn's server offers it: CluadeX's own permission card asks for each command.
                     bool userShell = s["env"] is JsonObject e2 && e2.ContainsKey("CLUADEX_TOOLS_USERSHELL");
+                    // mcp_call too: each relayed call is put to CluadeX's MCP gate (the approval card) inside the call.
+                    bool relay = s["env"] is JsonObject e3 && e3.ContainsKey(Tools.ChatToolBridge.McpRelayEnv);
                     parts.Add("tools={" + string.Join(", ", Tools.ChatToolBridge.QualifiedToolNames
                         .Select(q => q[$"mcp__{name}__".Length..])
                         .Concat(userShell ? new[] { CodexUserShell.ToolName } : Array.Empty<string>())
+                        .Concat(relay ? new[] { Tools.ChatToolBridge.McpRelayToolName } : Array.Empty<string>())
                         .Select(t => t + "={approval_mode='approve'}")) + "}");
                     // A call may wait on CluadeX's permission card or question card for as long as the user takes; Codex's
                     // own limit (60 s by default) would give up on it while the card still shows.
@@ -331,7 +335,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                   "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
         wrapper += " " + Tools.ChatToolBridge.OpenProjectHint(noProject);
         wrapper += " " + Tools.ChatToolBridge.AskHint;
-        if (chatTools) wrapper += " " + Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Plain, splitChats: true);
+        // mcp_call rides the chat tools' server on every Codex turn (CodeAgentService registers it so).
+        if (chatTools) wrapper += " " + Tools.ChatToolBridge.ChatToolsHint(Tools.ChatToolBridge.CliToolNames.Plain, splitChats: true, relay: true);
         if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
         if (worker && !string.IsNullOrWhiteSpace(agentLine)) wrapper += " " + agentLine;
         if (worker && chatTools && !string.IsNullOrWhiteSpace(splitGuide)) wrapper += " " + splitGuide.Trim();
