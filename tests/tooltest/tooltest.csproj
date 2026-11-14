@@ -37,6 +37,8 @@
   <!-- Versions must match what CluadeX was COMPILED against (Abstractions is unified to 10.x). -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.0" />
+    <!-- The privacy blur (PB9) runs the real detectors: the app's onnxruntime.dll must be here, not the older one in System32. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.28.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.5" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.5" />
     <PackageReference Include="AvalonEdit" Version="6.3.0.90" />

@@ -199,6 +199,8 @@ public enum ToolType
     // Chats talking to each other (Services/Tools/ProjectToolModule) — appended last: a ToolType is stored by number
     MessageChat,         // Send a message to the chat that opened this one, or to a chat this one split off
     ScheduleTask,        // List / add / remove / pause / resume / run a scheduled task (Services/Routines)
+    // Privacy blur (Services/Tools/MediaBlurToolModule) — appended last: a ToolType is stored by number
+    MediaBlur,           // Faces and licence plates covered in a video / picture (on-device detectors, a new file)
 }
 
 /// <summary>

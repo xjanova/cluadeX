@@ -236,6 +236,18 @@ internal static partial class Program
         Fs.WorkingDirectory = Root;
         Console.WriteLine($"project   : {Root}\n");
 
+        // TOOLTEST_ONLY=BLUR: just media_blur and the privacy blur behind the media editor's button.
+        if (Environment.GetEnvironmentVariable("TOOLTEST_ONLY") == "BLUR")
+        {
+            LocalizedResources.Instance.Initialize(provider.GetRequiredService<LocalizationService>());
+            Console.WriteLine("── media_blur: faces and licence plates covered (decoders, blur, ffmpeg pipe, module) ──");
+            await PrivacyBlurTests(provider.GetRequiredService<LocalizationService>());
+            Console.WriteLine($"\n═══ {Pass} pass · {Fail} FAIL · {Gap} GAP ═══ (TOOLTEST_ONLY=BLUR)");
+            foreach (var p in Problems) Console.WriteLine("   " + p);
+            ForceDelete(Root);
+            return Fail == 0 ? 0 : 1;
+        }
+
         // TOOLTEST_ONLY=ENG: just the engineering tools (verify_change, its test counts, references, checkpoints …), for a
         // change that touched only them — the owner's rule: test what changed, not the whole sweep.
         if (Environment.GetEnvironmentVariable("TOOLTEST_ONLY") == "ENG")
@@ -1641,6 +1653,9 @@ internal static partial class Program
 
             Console.WriteLine("\n── media_transcript: subtitles (stand-in yt-dlp), speech to text (real ffmpeg, stand-in Whisper) ──");
             await MediaTranscript(provider, loc);
+
+            Console.WriteLine("\n── media_blur: faces and licence plates covered (decoders, blur, ffmpeg pipe, module) ──");
+            await PrivacyBlurTests(loc);
 
             Console.WriteLine("\n── restore points (Time Machine / plan window) ──");
             await Checkpoints();

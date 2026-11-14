@@ -337,6 +337,7 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
                 case "burn": await BurnBeginAsync(m); break;
                 case "burnChunk": await BurnChunkAsync(m); break;
                 case "burnEnd": await BurnEndAsync(m); break;
+                case "privacy": await PrivacyAsync(m); break;
                 case "cancel":
                     _work?.Cancel();
                     if (_burn != null && !_cutRunning && Int(m, "id") == _uploadId) AbortWork();   // still sending pictures
@@ -380,7 +381,7 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
         }
     }
 
-    private static string SuffixFor(string purpose) => purpose switch { "frame" => "frame", "cut" => "cut", _ => "edit" };
+    private static string SuffixFor(string purpose) => purpose switch { "frame" => "frame", "cut" => "cut", "privacy" => "blurred", _ => "edit" };
 
     private async Task BeginUploadAsync(JsonElement m)
     {
@@ -538,6 +539,66 @@ public sealed class MediaEditorHost : Border, IMediaEditorSession
         try { result = await Task.Run(() => Ffmpeg.CutAsync(input, up.TempPath, start, end, Ffmpeg.TimeoutFor(Tab.ByteLength), ct)); }
         finally { _cutRunning = false; }
         await FinishFfmpegAsync(id, up, target, result, "cut", "cut");
+    }
+
+    /// <summary>"privacy": faces and licence plates covered in the whole video (or the picture) as it is on disk — the
+    /// detectors run here (ONNX, fetched once, pinned by SHA-256), ffmpeg decodes and re-encodes, the sound is copied.
+    /// The result is a new copy beside the original ("-blurred"), opened like any copy. Cancellable from the page.</summary>
+    private async Task PrivacyAsync(JsonElement m)
+    {
+        int id = Int(m, "id");
+        if (Occupied) { Result(id, ok: false, textKey: "media.status.busy"); return; }
+        string? exe = Ffmpeg.Locate();
+        if (exe == null || PrivacyBlur.LocateFfprobe(exe) == null)
+        {
+            Post(new { t = "ffmpeg", on = false });
+            Result(id, ok: false, textKey: "media.status.ffmpegMissing");
+            return;
+        }
+        if (!PrivacyBlur.CanBlur(Tab.FullPath)) { Result(id, ok: false, textKey: "media.status.privacyUnsupported"); return; }
+
+        string input = Tab.FullPath, root = _vm.DataRoot;
+        var up = new MediaUpload(input, PrivacyBlur.OutputExt(input), 0, openStream: false);
+        _upload = up;
+        _uploadId = id;
+        _work = new CancellationTokenSource();
+        Tab.IsBusy = true;
+        var ct = _work.Token;
+        var options = new PrivacyOptions();
+
+        double shown = -1;
+        void OnProgress(double f)
+        {
+            if (f < 1 && f - shown < 0.01) return;
+            shown = f;
+            Dispatcher.BeginInvoke(() => { if (ReferenceEquals(up, _upload)) Post(new { t = "progress", id, f, s = "blur" }); });
+        }
+
+        PrivacyResult r = new(FfmpegOutcome.Failed, "not run");
+        _cutRunning = true;
+        try
+        {
+            var models = PrivacyModels.All;
+            if (PrivacyModels.Missing(models, root).Count > 0) Post(new { t = "progress", id, f = 0.0, s = "download" });
+            string? fetch = await Task.Run(() => PrivacyModels.EnsureAsync(models, root, ct));
+            if (fetch == "cancelled") r = new PrivacyResult(FfmpegOutcome.Cancelled, "");
+            else if (fetch != null) r = new PrivacyResult(FfmpegOutcome.Failed, "models: " + fetch);
+            else
+            {
+                Post(new { t = "progress", id, f = 0.0, s = "blur" });
+                r = await Task.Run(async () =>
+                {
+                    using var detector = new PrivacyDetector(PrivacyModels.PathOf(PrivacyModels.Face, root), PrivacyModels.PathOf(PrivacyModels.Plate, root));
+                    return await PrivacyBlur.RunAsync(exe, input, up.TempPath, options, detector.Detect, OnProgress, ct);
+                });
+            }
+        }
+        catch (Exception ex) { r = new PrivacyResult(FfmpegOutcome.Failed, ex.GetType().Name + ": " + ex.Message); }
+        finally { _cutRunning = false; }
+        _vm.LogMedia($"privacy blur of {input}: {r.Outcome}, {r.Frames} frames, {r.FramesCovered} covered, faces ≤ {r.MostFaces}, plates ≤ {r.MostPlates}");
+        if (r.Outcome == FfmpegOutcome.Done)
+            Post(new { t = "privacyInfo", id, faces = r.MostFaces, plates = r.MostPlates, covered = r.FramesCovered });
+        await FinishFfmpegAsync(id, up, null, new FfmpegResult(r.Outcome, r.Detail), "privacy", "privacy blur");
     }
 
     /// <summary>An ffmpeg run is over: commit its file, or say why not. The temp files go either way.</summary>
